@@ -12,9 +12,11 @@
 
 const writeRunResourceMock = jest.fn();
 const readRunResourceMock = jest.fn();
+const getRunResourceLocalPathMock = jest.fn();
 jest.mock('@/backend/services/runResources', () => ({
   writeRunResource: (...args: unknown[]) => writeRunResourceMock(...args),
   readRunResource: (...args: unknown[]) => readRunResourceMock(...args),
+  getRunResourceLocalPath: (...args: unknown[]) => getRunResourceLocalPathMock(...args),
   parseRunResourceUri: (uri: unknown) => {
     const SCHEME = 'flujo://run/';
     if (typeof uri !== 'string' || !uri.startsWith(SCHEME)) return null;
@@ -55,6 +57,8 @@ const written = {
 beforeEach(() => {
   writeRunResourceMock.mockReset();
   writeRunResourceMock.mockResolvedValue(written);
+  getRunResourceLocalPathMock.mockReset();
+  getRunResourceLocalPathMock.mockResolvedValue(null);
 });
 
 describe('buildRunResourceTools', () => {
@@ -120,6 +124,24 @@ describe('read_resource execution (#168)', () => {
       type: 'resource:read', server: 'flujo', uri, source: 'tool-read',
     }));
     expect(outcome).toMatchObject({ success: true, data: { uri, content: 'FULL CONTENT' } });
+  });
+
+  it('returns a validated localPath for binary resources', async () => {
+    const localPath = 'C:\\data\\run-resources\\conv-1\\res-9.dat';
+    readRunResourceMock.mockResolvedValue({
+      entry: { uri, name: 'clip', mimeType: 'video/mp4', size: 42, kind: 'blob' },
+      contents: { contents: [{ uri, mimeType: 'video/mp4', blob: 'AAAA' }] },
+    });
+    getRunResourceLocalPathMock.mockResolvedValue(localPath);
+
+    const outcome = await executeRunResourceTool(
+      READ_RESOURCE_TOOL_NAME,
+      { uri },
+      { conversationId: 'conv-1', node },
+    );
+
+    expect(getRunResourceLocalPathMock).toHaveBeenCalledWith(uri);
+    expect(outcome).toMatchObject({ success: true, data: { uri, localPath } });
   });
 
   it('rejects a non-run URI', async () => {

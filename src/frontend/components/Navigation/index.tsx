@@ -41,8 +41,11 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 
 import BugReportButton from '@/frontend/components/BugReport/BugReportButton';
+import LanguageMenu from '@/frontend/components/LanguageMenu';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import { useTheme } from '@/frontend/contexts/ThemeContext';
+import type { TranslationKey } from '@/frontend/i18n';
 import { interceptNavigation } from '@/frontend/utils/navigationGuard';
 import { createLogger } from '@/utils/logger';
 
@@ -50,7 +53,7 @@ const log = createLogger('frontend/components/Navigation');
 
 interface NavLink {
   type: 'link';
-  name: string;
+  label: TranslationKey;
   path: string;
   tour: string;
   icon: ElementType;
@@ -60,7 +63,7 @@ interface NavLink {
 
 interface NavGroup {
   type: 'group';
-  name: string;
+  label: TranslationKey;
   icon: ElementType;
   children: NavLink[];
 }
@@ -68,18 +71,18 @@ interface NavGroup {
 type NavItem = NavLink | NavGroup;
 
 const navItems: NavItem[] = [
-  { type: 'link', name: 'AI Setup', path: '/models', tour: 'nav-models', icon: MemoryRounded },
-  { type: 'link', name: 'Connected Apps', path: '/mcp', tour: 'nav-mcp', icon: HubRounded },
-  { type: 'link', name: 'Agents', path: '/flows', tour: 'nav-flows', icon: AccountTreeRounded },
-  { type: 'link', name: 'Talk', path: '/chat', tour: 'nav-chat', icon: ChatBubbleRounded },
+  { type: 'link', label: 'nav.aiSetup', path: '/models', tour: 'nav-models', icon: MemoryRounded },
+  { type: 'link', label: 'nav.connectedApps', path: '/mcp', tour: 'nav-mcp', icon: HubRounded },
+  { type: 'link', label: 'nav.agents', path: '/flows', tour: 'nav-flows', icon: AccountTreeRounded },
+  { type: 'link', label: 'nav.talk', path: '/chat', tour: 'nav-chat', icon: ChatBubbleRounded },
   {
     type: 'group',
-    name: 'More',
+    label: 'nav.more',
     icon: MenuRounded,
     children: [
       {
         type: 'link',
-        name: 'Automations',
+        label: 'nav.automations',
         path: '/automation/triggers',
         aliases: ['/executions', '/automation/waves', '/waves'],
         tour: 'nav-executions',
@@ -87,20 +90,20 @@ const navItems: NavItem[] = [
       },
       {
         type: 'link',
-        name: 'Extensions',
+        label: 'nav.extensions',
         path: '/packages',
         tour: 'nav-packages',
         icon: Inventory2Rounded,
       },
       {
         type: 'link',
-        name: 'Activity',
+        label: 'nav.activity',
         path: '/statistics',
         tour: 'nav-statistics',
         icon: InsightsRounded,
       },
-      { type: 'link', name: 'Help', path: '/docs', tour: 'nav-docs', icon: MenuBookRounded },
-      { type: 'link', name: 'Settings', path: '/settings', tour: 'nav-settings', icon: SettingsRounded },
+      { type: 'link', label: 'nav.help', path: '/docs', tour: 'nav-docs', icon: MenuBookRounded },
+      { type: 'link', label: 'nav.settings', path: '/settings', tour: 'nav-settings', icon: SettingsRounded },
     ],
   },
 ];
@@ -117,6 +120,7 @@ interface NavigationEntriesProps {
 
 function NavigationEntries({ items, pathname, mobile = false, onNavigate }: NavigationEntriesProps) {
   const theme = useMuiTheme();
+  const { t } = useI18n();
 
   const renderLink = (item: NavLink, nested = false) => {
     const active = isActive(item, pathname);
@@ -147,7 +151,7 @@ function NavigationEntries({ items, pathname, mobile = false, onNavigate }: Navi
             <Icon fontSize="small" />
           </ListItemIcon>
           <ListItemText
-            primary={item.name}
+            primary={t(item.label)}
             primaryTypographyProps={{ fontWeight: active ? 700 : 590, fontSize: '0.92rem' }}
           />
           {active && (
@@ -211,7 +215,7 @@ function NavigationEntries({ items, pathname, mobile = false, onNavigate }: Navi
         }}
       >
         <Icon sx={{ fontSize: 17, color: active ? 'primary.light' : 'text.secondary' }} />
-        {item.name}
+        {t(item.label)}
       </Box>
     );
   };
@@ -223,7 +227,7 @@ function NavigationEntries({ items, pathname, mobile = false, onNavigate }: Navi
 
         if (mobile) {
           return (
-            <Fragment key={item.name}>
+            <Fragment key={item.label}>
               <ListSubheader
                 component="div"
                 disableSticky
@@ -240,7 +244,7 @@ function NavigationEntries({ items, pathname, mobile = false, onNavigate }: Navi
                   textTransform: 'uppercase',
                 }}
               >
-                {item.name}
+                {t(item.label)}
               </ListSubheader>
               {item.children.map((child) => renderLink(child, true))}
             </Fragment>
@@ -253,7 +257,7 @@ function NavigationEntries({ items, pathname, mobile = false, onNavigate }: Navi
 
         return (
           <Box
-            key={item.name}
+            key={item.label}
             component={Link}
             className={`living-watershed-nav-link living-watershed-nav-group-link${active ? ' is-active' : ''}`}
             href={landingPage.path}
@@ -295,7 +299,7 @@ function NavigationEntries({ items, pathname, mobile = false, onNavigate }: Navi
             }}
           >
             <Icon sx={{ fontSize: 17, color: active ? 'primary.light' : 'text.secondary' }} />
-            {item.name}
+            {t(item.label)}
           </Box>
         );
       })}
@@ -305,6 +309,7 @@ function NavigationEntries({ items, pathname, mobile = false, onNavigate }: Navi
 
 export default function Navigation() {
   const { toggleTheme, isDarkMode } = useTheme();
+  const { t } = useI18n();
   const theme = useMuiTheme();
   const pathname = usePathname();
   const router = useRouter();
@@ -372,7 +377,7 @@ export default function Navigation() {
         {isCompact && (
           <IconButton
             color="inherit"
-            aria-label="Open navigation menu"
+            aria-label={t('nav.openMenu')}
             onClick={() => setDrawerOpen(true)}
             sx={{ border: 1, borderColor: 'divider' }}
           >
@@ -385,7 +390,7 @@ export default function Navigation() {
           className="living-watershed-brand"
           href="/"
           onClick={handleNavClick('/')}
-          aria-label="FLUJO home"
+          aria-label={t('nav.homeAria')}
           sx={{
             display: 'flex',
             alignItems: 'center',
@@ -427,7 +432,7 @@ export default function Navigation() {
               FLUJO
             </Typography>
             <Typography sx={{ mt: 0.4, color: 'text.secondary', fontSize: '0.59rem', fontWeight: 700, letterSpacing: '0.13em', textTransform: 'uppercase' }}>
-              Private AI, made simple
+              {t('nav.tagline')}
             </Typography>
           </Box>
         </Box>
@@ -435,7 +440,7 @@ export default function Navigation() {
         {!isCompact && (
           <Box
             component="nav"
-            aria-label="Primary navigation"
+            aria-label={t('nav.primaryAria')}
             sx={{
               display: 'flex',
               flex: 1,
@@ -458,7 +463,7 @@ export default function Navigation() {
           {!isCompact && (
             <Chip
               size="small"
-              label="Private on this device"
+              label={t('nav.privateDevice')}
               icon={
                 <Box
                   component="span"
@@ -483,16 +488,18 @@ export default function Navigation() {
             />
           )}
 
+          <LanguageMenu />
+
           <BugReportButton variant="icon" />
 
-          <Tooltip title={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}>
+          <Tooltip title={isDarkMode ? t('nav.lightMode') : t('nav.darkMode')}>
             <IconButton
               onClick={() => {
                 log.debug(`Theme toggle clicked, current mode: ${isDarkMode ? 'dark' : 'light'}`);
                 toggleTheme();
               }}
               color="inherit"
-              aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+              aria-label={isDarkMode ? t('nav.lightMode') : t('nav.darkMode')}
               sx={{ border: 1, borderColor: 'divider' }}
             >
               {isDarkMode ? <Brightness7Rounded fontSize="small" /> : <Brightness4Rounded fontSize="small" />}
@@ -514,7 +521,7 @@ export default function Navigation() {
         >
           <Tabs
             value={activeSubtab}
-            aria-label={`${activeNavGroup.name} sections`}
+            aria-label={t('nav.groupSections', { group: t(activeNavGroup.label) })}
             sx={{ minHeight: 'var(--subnav-height)' }}
           >
             {activeNavGroup.children.map((child) => {
@@ -528,7 +535,7 @@ export default function Navigation() {
                   value={child.path}
                   icon={<Icon sx={{ fontSize: 16 }} />}
                   iconPosition="start"
-                  label={child.name}
+                  label={t(child.label)}
                   data-tour={child.tour}
                   onClick={handleNavClick(child.path)}
                   sx={{ minHeight: 'var(--subnav-height)', py: 0 }}
@@ -589,10 +596,10 @@ export default function Navigation() {
             </Box>
             <Box>
               <Typography sx={{ fontWeight: 800, lineHeight: 1 }}>FLUJO</Typography>
-              <Typography variant="caption" color="text.secondary">Private AI, made simple</Typography>
+              <Typography variant="caption" color="text.secondary">{t('nav.tagline')}</Typography>
             </Box>
           </Box>
-          <IconButton aria-label="Close navigation menu" onClick={() => setDrawerOpen(false)}>
+          <IconButton aria-label={t('nav.closeMenu')} onClick={() => setDrawerOpen(false)}>
             <CloseRounded />
           </IconButton>
         </Box>
@@ -601,7 +608,7 @@ export default function Navigation() {
           <Stack direction="row" alignItems="center" spacing={1}>
             <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'success.main', boxShadow: `0 0 12px ${theme.palette.success.main}` }} />
             <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-              Private workspace on this device
+              {t('nav.privateWorkspace')}
             </Typography>
           </Stack>
         </Box>

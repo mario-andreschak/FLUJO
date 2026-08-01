@@ -13,6 +13,7 @@
 
 import type { Wave } from '@/shared/types/waves/waves';
 import { Cron } from 'croner';
+import type { Translator } from '@/frontend/i18n/core';
 
 /** Selectable look-ahead windows for the timeline. */
 export type WaveWindowKey = '1h' | '6h' | '1d';
@@ -84,17 +85,20 @@ export function timelineFraction(runAt: number | null, now: number, windowMs: nu
 }
 
 /** Compact "in 2h 05m" / "due now" label for a future timestamp. */
-export function formatIn(runAt: number | null, now: number): string {
-  if (runAt == null || !Number.isFinite(runAt)) return 'no scheduled run';
+export function formatIn(runAt: number | null, now: number, t?: Translator): string {
+  if (runAt == null || !Number.isFinite(runAt)) return t ? t('waves.noScheduledRun') : 'no scheduled run';
   const diff = runAt - now;
-  if (diff <= 0) return 'due now';
+  if (diff <= 0) return t ? t('waves.dueNow') : 'due now';
   const totalMinutes = Math.floor(diff / 60000);
   const days = Math.floor(totalMinutes / 1440);
   const hours = Math.floor((totalMinutes % 1440) / 60);
   const minutes = totalMinutes % 60;
-  if (days > 0) return `in ${days}d ${hours}h`;
-  if (hours > 0) return `in ${hours}h ${String(minutes).padStart(2, '0')}m`;
-  return `in ${minutes}m`;
+  if (days > 0) return t ? t('waves.inDaysHours', { days, hours }) : `in ${days}d ${hours}h`;
+  if (hours > 0) {
+    const paddedMinutes = String(minutes).padStart(2, '0');
+    return t ? t('waves.inHoursMinutes', { hours, minutes: paddedMinutes }) : `in ${hours}h ${paddedMinutes}m`;
+  }
+  return t ? t('waves.inMinutes', { minutes }) : `in ${minutes}m`;
 }
 
 /* --------------------------------------------------------------------- */
@@ -129,8 +133,8 @@ export function timelineTickStep(windowMs: number): number {
 }
 
 /** Human-readable offset-from-now label for a tick. */
-function tickLabel(offsetMs: number): string {
-  if (offsetMs <= 0) return 'now';
+function tickLabel(offsetMs: number, t?: Translator): string {
+  if (offsetMs <= 0) return t ? t('waves.now') : 'now';
   const totalMinutes = Math.round(offsetMs / 60000);
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
@@ -146,7 +150,7 @@ function tickLabel(offsetMs: number): string {
  * a card scheduled at the same instant land at exactly the same x. Pure and
  * deterministic for a fixed `now`.
  */
-export function timelineTicks(now: number, windowMs: number, step?: number): TimelineTick[] {
+export function timelineTicks(now: number, windowMs: number, step?: number, t?: Translator): TimelineTick[] {
   if (!Number.isFinite(now) || !Number.isFinite(windowMs) || windowMs <= 0) return [];
   const s = step && step > 0 ? step : timelineTickStep(windowMs);
   const out: TimelineTick[] = [];
@@ -154,7 +158,7 @@ export function timelineTicks(now: number, windowMs: number, step?: number): Tim
     out.push({
       atMs: now + offset,
       fraction: Math.min(1, offset / windowMs),
-      label: tickLabel(offset),
+      label: tickLabel(offset, t),
     });
   }
   return out;

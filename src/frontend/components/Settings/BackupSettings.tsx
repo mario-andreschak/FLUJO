@@ -20,30 +20,33 @@ import {
 } from '@mui/material';
 import { createLogger } from '@/utils/logger';
 import { StorageKey } from '@/shared/types/storage';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { TranslationKey } from '@/frontend/i18n';
 
 const log = createLogger('frontend/components/Settings/BackupSettings');
 
 // Define backup options
 interface BackupOption {
   key: string;
-  label: string;
-  description: string;
+  labelKey: TranslationKey;
+  descriptionKey: TranslationKey;
   storageKey?: StorageKey;
   isFolder?: boolean;
 }
 
 const backupOptions: BackupOption[] = [
-  { key: 'models', label: 'Models', description: 'AI model configurations', storageKey: StorageKey.MODELS },
-  { key: 'mcpServers', label: 'MCP Servers Configuration', description: 'MCP server settings', storageKey: StorageKey.MCP_SERVERS },
-  { key: 'mcpServersFolder', label: 'MCP Servers Folder', description: 'MCP server code and files', isFolder: true },
-  { key: 'flows', label: 'Flows', description: 'Flow configurations', storageKey: StorageKey.FLOWS },
-  { key: 'chatHistory', label: 'Chat History', description: 'Conversation history', storageKey: StorageKey.CHAT_HISTORY },
-  { key: 'settings', label: 'Settings', description: 'Application settings', storageKey: StorageKey.THEME },
-  { key: 'globalEnvVars', label: 'Global Environment Variables', description: 'Global environment variables', storageKey: StorageKey.GLOBAL_ENV_VARS },
-  { key: 'encryptionKey', label: 'Encryption Key', description: 'Data encryption key', storageKey: StorageKey.ENCRYPTION_KEY },
+  { key: 'models', labelKey: 'settings.backup.option.models', descriptionKey: 'settings.backup.option.modelsDescription', storageKey: StorageKey.MODELS },
+  { key: 'mcpServers', labelKey: 'settings.backup.option.servers', descriptionKey: 'settings.backup.option.serversDescription', storageKey: StorageKey.MCP_SERVERS },
+  { key: 'mcpServersFolder', labelKey: 'settings.backup.option.serverFiles', descriptionKey: 'settings.backup.option.serverFilesDescription', isFolder: true },
+  { key: 'flows', labelKey: 'settings.backup.option.flows', descriptionKey: 'settings.backup.option.flowsDescription', storageKey: StorageKey.FLOWS },
+  { key: 'chatHistory', labelKey: 'settings.backup.option.history', descriptionKey: 'settings.backup.option.historyDescription', storageKey: StorageKey.CHAT_HISTORY },
+  { key: 'settings', labelKey: 'settings.backup.option.settings', descriptionKey: 'settings.backup.option.settingsDescription', storageKey: StorageKey.THEME },
+  { key: 'globalEnvVars', labelKey: 'settings.backup.option.globals', descriptionKey: 'settings.backup.option.globalsDescription', storageKey: StorageKey.GLOBAL_ENV_VARS },
+  { key: 'encryptionKey', labelKey: 'settings.backup.option.encryption', descriptionKey: 'settings.backup.option.encryptionDescription', storageKey: StorageKey.ENCRYPTION_KEY },
 ];
 
 export default function BackupSettings() {
+  const { t } = useI18n();
   // State for selected options
   const [backupSelections, setBackupSelections] = useState<Record<string, boolean>>(
     backupOptions.reduce((acc, option) => ({ ...acc, [option.key]: true }), {})
@@ -100,7 +103,7 @@ export default function BackupSettings() {
       if (selectedOptions.length === 0) {
         setMessage({
           type: 'error',
-          text: 'Please select at least one item to backup',
+          text: t('settings.backup.selectOne'),
         });
         setIsLoading(false);
         return;
@@ -116,7 +119,7 @@ export default function BackupSettings() {
       });
       
       if (!response.ok) {
-        throw new Error('Failed to create backup');
+        throw new Error(t('settings.backup.createFailed'));
       }
       
       // Get the backup as a blob
@@ -142,13 +145,13 @@ export default function BackupSettings() {
       
       setMessage({
         type: 'success',
-        text: 'Backup created successfully',
+        text: t('settings.backup.created'),
       });
     } catch (error) {
       log.error('Error creating backup:', error);
       setMessage({
         type: 'error',
-        text: error instanceof Error ? error.message : 'Failed to create backup',
+        text: error instanceof Error ? error.message : t('settings.backup.createFailed'),
       });
     } finally {
       setIsLoading(false);
@@ -160,7 +163,7 @@ export default function BackupSettings() {
     if (!selectedFile) {
       setMessage({
         type: 'error',
-        text: 'Please select a backup file',
+        text: t('settings.backup.fileRequired'),
       });
       return;
     }
@@ -173,7 +176,7 @@ export default function BackupSettings() {
     if (selectedOptions.length === 0) {
       setMessage({
         type: 'error',
-        text: 'Please select at least one item to restore',
+        text: t('settings.backup.selectRestoreOne'),
       });
       return;
     }
@@ -208,12 +211,12 @@ export default function BackupSettings() {
       
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to restore from backup');
+        throw new Error(errorData.error || t('settings.backup.restoreFailed'));
       }
       
       setMessage({
         type: 'success',
-        text: 'Restore completed successfully. You may need to refresh the page to see the changes.',
+        text: t('settings.backup.restored'),
       });
       
       // Reset file input
@@ -225,7 +228,7 @@ export default function BackupSettings() {
       log.error('Error restoring from backup:', error);
       setMessage({
         type: 'error',
-        text: error instanceof Error ? error.message : 'Failed to restore from backup',
+        text: error instanceof Error ? error.message : t('settings.backup.restoreFailed'),
       });
     } finally {
       setIsLoading(false);
@@ -252,11 +255,11 @@ export default function BackupSettings() {
   return (
     <Box sx={{ width: '100%' }}>
       <Typography variant="h6" gutterBottom>
-        Backup and Restore
+        {t('settings.backup.title')}
       </Typography>
       
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Create backups of your application data or restore from a previous backup.
+        {t('settings.backup.description')}
       </Typography>
 
       {message && (
@@ -268,11 +271,11 @@ export default function BackupSettings() {
       {/* Backup Section */}
       <Paper sx={{ p: 3, mb: 3 }}>
         <Typography variant="subtitle1" gutterBottom fontWeight="bold">
-          Create Backup
+          {t('settings.backup.create')}
         </Typography>
         
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Select the components you want to include in the backup.
+          {t('settings.backup.createHelp')}
         </Typography>
         
         <Box sx={{ mb: 2 }}>
@@ -281,13 +284,13 @@ export default function BackupSettings() {
             onClick={() => selectAllBackup(true)}
             sx={{ mr: 1 }}
           >
-            Select All
+            {t('settings.backup.selectAll')}
           </Button>
           <Button 
             size="small" 
             onClick={() => selectAllBackup(false)}
           >
-            Deselect All
+            {t('settings.backup.deselectAll')}
           </Button>
         </Box>
         
@@ -304,9 +307,9 @@ export default function BackupSettings() {
               }
               label={
                 <Box>
-                  <Typography variant="body1">{option.label}</Typography>
+                  <Typography variant="body1">{t(option.labelKey)}</Typography>
                   <Typography variant="body2" color="text.secondary">
-                    {option.description}
+                    {t(option.descriptionKey)}
                   </Typography>
                 </Box>
               }
@@ -320,18 +323,18 @@ export default function BackupSettings() {
           disabled={isLoading || Object.values(backupSelections).every(v => !v)}
           startIcon={isLoading ? <CircularProgress size={20} /> : null}
         >
-          {isLoading ? 'Creating Backup...' : 'Create Backup'}
+          {isLoading ? t('settings.backup.creating') : t('settings.backup.create')}
         </Button>
       </Paper>
 
       {/* Restore Section */}
       <Paper sx={{ p: 3 }}>
         <Typography variant="subtitle1" gutterBottom fontWeight="bold">
-          Restore from Backup
+          {t('settings.backup.restore')}
         </Typography>
         
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Select a backup file and choose which components to restore.
+          {t('settings.backup.restoreHelp')}
         </Typography>
         
         <Box sx={{ mb: 3 }}>
@@ -340,7 +343,7 @@ export default function BackupSettings() {
             component="label"
             sx={{ mb: 2 }}
           >
-            Select Backup File
+            {t('settings.backup.selectFile')}
             <input
               type="file"
               hidden
@@ -352,7 +355,7 @@ export default function BackupSettings() {
           
           {selectedFile && (
             <Typography variant="body2" sx={{ ml: 1 }}>
-              Selected file: {selectedFile.name}
+              {t('settings.backup.selectedFile', { name: selectedFile.name })}
             </Typography>
           )}
         </Box>
@@ -360,7 +363,7 @@ export default function BackupSettings() {
         <Divider sx={{ mb: 2 }} />
         
         <Typography variant="subtitle2" gutterBottom>
-          Restore Options
+          {t('settings.backup.restoreOptions')}
         </Typography>
         
         <Box sx={{ mb: 2 }}>
@@ -369,13 +372,13 @@ export default function BackupSettings() {
             onClick={() => selectAllRestore(true)}
             sx={{ mr: 1 }}
           >
-            Select All
+            {t('settings.backup.selectAll')}
           </Button>
           <Button 
             size="small" 
             onClick={() => selectAllRestore(false)}
           >
-            Deselect All
+            {t('settings.backup.deselectAll')}
           </Button>
         </Box>
         
@@ -392,9 +395,9 @@ export default function BackupSettings() {
               }
               label={
                 <Box>
-                  <Typography variant="body1">{option.label}</Typography>
+                  <Typography variant="body1">{t(option.labelKey)}</Typography>
                   <Typography variant="body2" color="text.secondary">
-                    {option.description}
+                    {t(option.descriptionKey)}
                   </Typography>
                 </Box>
               }
@@ -409,7 +412,7 @@ export default function BackupSettings() {
           disabled={isLoading || !selectedFile || Object.values(restoreSelections).every(v => !v)}
           startIcon={isLoading ? <CircularProgress size={20} /> : null}
         >
-          {isLoading ? 'Restoring...' : 'Restore from Backup'}
+          {isLoading ? t('settings.backup.restoring') : t('settings.backup.restore')}
         </Button>
       </Paper>
 
@@ -418,17 +421,16 @@ export default function BackupSettings() {
         open={showRestoreConfirm}
         onClose={() => setShowRestoreConfirm(false)}
       >
-        <DialogTitle>Confirm Restore</DialogTitle>
+        <DialogTitle>{t('settings.backup.confirmTitle')}</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            This will overwrite your existing data with the contents of the backup file.
-            This action cannot be undone. Are you sure you want to continue?
+            {t('settings.backup.confirmBody')}
           </DialogContentText>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setShowRestoreConfirm(false)}>Cancel</Button>
+          <Button onClick={() => setShowRestoreConfirm(false)}>{t('common.cancel')}</Button>
           <Button onClick={confirmRestore} color="warning" variant="contained">
-            Restore
+            {t('settings.backup.restoreAction')}
           </Button>
         </DialogActions>
       </Dialog>

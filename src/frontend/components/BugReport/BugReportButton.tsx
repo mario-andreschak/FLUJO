@@ -31,6 +31,8 @@ import {
 import { collectBugReportContext } from '@/frontend/utils/bugReportContext';
 import { openGitHubNewIssue } from '@/frontend/utils/openGitHubIssue';
 import { bugReportService } from '@/frontend/services/bugReport';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { TranslationKey } from '@/frontend/i18n';
 
 const log = createLogger('frontend/components/BugReport/BugReportButton');
 
@@ -52,6 +54,7 @@ export interface BugReportButtonProps {
  * every time the dialog opens, so it reflects the page the user was on.
  */
 export default function BugReportButton({ variant = 'icon' }: BugReportButtonProps) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -60,7 +63,10 @@ export default function BugReportButton({ variant = 'icon' }: BugReportButtonPro
   const [selectedModelId, setSelectedModelId] = useState('');
   const [labels, setLabels] = useState<BugReportLabel[]>(['bug']);
   const [enhancing, setEnhancing] = useState(false);
-  const [notice, setNotice] = useState<{ severity: 'info' | 'warning' | 'error' | 'success'; text: string } | null>(null);
+  const [notice, setNotice] = useState<{
+    severity: 'info' | 'warning' | 'error' | 'success';
+    message: TranslationKey;
+  } | null>(null);
 
   const loadDialogData = useCallback(async () => {
     try {
@@ -85,8 +91,8 @@ export default function BugReportButton({ variant = 'icon' }: BugReportButtonPro
   }, [open, loadDialogData]);
 
   const contextPreview = useMemo(
-    () => (context ? formatContextBlock(context) : 'Collecting app context…'),
-    [context]
+    () => (context ? formatContextBlock(context) : t('bugReport.collectingContext')),
+    [context, t]
   );
 
   const handleEnhance = useCallback(async () => {
@@ -105,12 +111,12 @@ export default function BugReportButton({ variant = 'icon' }: BugReportButtonPro
       setLabels(result.labels?.length ? result.labels : ['bug']);
       setNotice(
         result.enhanced
-          ? { severity: 'success', text: 'AI suggestion applied — review and edit before submitting.' }
-          : { severity: 'warning', text: 'AI enhancement was unavailable; your original text is unchanged.' }
+          ? { severity: 'success', message: 'bugReport.applied' }
+          : { severity: 'warning', message: 'bugReport.unavailable' }
       );
     } catch (err) {
       log.error('Bug-report enhancement failed', err);
-      setNotice({ severity: 'error', text: 'Enhancement failed — you can still submit your report as-is.' });
+      setNotice({ severity: 'error', message: 'bugReport.enhanceFailed' });
     } finally {
       setEnhancing(false);
     }
@@ -118,8 +124,8 @@ export default function BugReportButton({ variant = 'icon' }: BugReportButtonPro
 
   const handleSubmit = useCallback(() => {
     const body = context ? `${description.trim()}\n\n${formatContextBlock(context)}` : description.trim();
-    openGitHubNewIssue({ title: title.trim() || 'Bug report', body, labels });
-  }, [title, description, context, labels]);
+    openGitHubNewIssue({ title: title.trim() || t('bugReport.defaultTitle'), body, labels });
+  }, [title, description, context, labels, t]);
 
   const handleClose = useCallback(() => setOpen(false), []);
   const handleOpen = useCallback(() => setOpen(true), []);
@@ -127,65 +133,60 @@ export default function BugReportButton({ variant = 'icon' }: BugReportButtonPro
   return (
     <>
       {variant === 'icon' ? (
-        <Tooltip title="Report a bug">
-          <IconButton onClick={handleOpen} color="inherit" aria-label="Report a bug">
+        <Tooltip title={t('bugReport.action')}>
+          <IconButton onClick={handleOpen} color="inherit" aria-label={t('bugReport.action')}>
             <BugReportIcon />
           </IconButton>
         </Tooltip>
       ) : (
         <Button variant="contained" startIcon={<BugReportIcon />} onClick={handleOpen}>
-          Report a Bug
+          {t('bugReport.action')}
         </Button>
       )}
 
       <Dialog open={open} onClose={handleClose} maxWidth="md" fullWidth>
-        <DialogTitle>Report a Bug</DialogTitle>
+        <DialogTitle>{t('bugReport.title')}</DialogTitle>
         <DialogContent dividers>
           <Stack spacing={2}>
             <Typography variant="body2" color="text.secondary">
-              Found a problem? Describe it here. FLUJO attaches only safe, non-sensitive context
-              (app version, install mode, browser/OS, and the current page). No API keys,
-              environment variables, or secrets are ever
-              included. You can optionally polish the report with an AI model, then review it on
-              GitHub before submitting.
+              {t('bugReport.intro')}
             </Typography>
 
-            {notice && <Alert severity={notice.severity}>{notice.text}</Alert>}
+            {notice && <Alert severity={notice.severity}>{t(notice.message)}</Alert>}
 
             <TextField
-              label="Title"
+              label={t('common.title')}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               fullWidth
-              placeholder="Short summary of the problem"
+              placeholder={t('bugReport.titlePlaceholder')}
             />
 
             <TextField
-              label="Description"
+              label={t('common.description')}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               fullWidth
               multiline
               minRows={6}
-              placeholder="What happened? What did you expect? Steps to reproduce?"
+              placeholder={t('bugReport.descriptionPlaceholder')}
             />
 
             <Divider />
 
             <Box>
               <Typography variant="subtitle2" gutterBottom>
-                Enhance with AI (optional)
+                {t('bugReport.enhanceTitle')}
               </Typography>
               {models.length === 0 ? (
                 <Typography variant="body2" color="text.secondary">
-                  No models configured — add a model in the Models page to enable AI enhancement.
-                  You can still file the report without it.
+                  {t('bugReport.noModels')}
                 </Typography>
               ) : (
                 <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="center">
                   <TextField
                     select
-                    label="Model"
+                    label={t('common.model')}
                     value={selectedModelId}
                     onChange={(e) => setSelectedModelId(e.target.value)}
                     sx={{ minWidth: 220 }}
@@ -203,7 +204,7 @@ export default function BugReportButton({ variant = 'icon' }: BugReportButtonPro
                     onClick={handleEnhance}
                     disabled={enhancing || !selectedModelId || !description.trim() || !context}
                   >
-                    {enhancing ? 'Enhancing…' : 'Enhance with AI'}
+                    {enhancing ? t('bugReport.enhancing') : t('bugReport.enhance')}
                   </Button>
                 </Stack>
               )}
@@ -213,7 +214,7 @@ export default function BugReportButton({ variant = 'icon' }: BugReportButtonPro
 
             <Box>
               <Typography variant="subtitle2" gutterBottom>
-                Included app context (read-only)
+                {t('bugReport.contextTitle')}
               </Typography>
               <TextField
                 value={contextPreview}
@@ -226,9 +227,9 @@ export default function BugReportButton({ variant = 'icon' }: BugReportButtonPro
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleClose}>Cancel</Button>
+          <Button onClick={handleClose}>{t('common.cancel')}</Button>
           <Button variant="contained" onClick={handleSubmit} disabled={!description.trim()}>
-            Open on GitHub
+            {t('feedback.openGitHub')}
           </Button>
         </DialogActions>
       </Dialog>

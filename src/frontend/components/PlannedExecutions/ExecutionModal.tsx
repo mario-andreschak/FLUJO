@@ -54,6 +54,7 @@ import WatchToolPanel from './WatchToolPanel';
 import UrlWatchPanel from './UrlWatchPanel';
 import FlowEventPanel from './FlowEventPanel';
 import FlowSelector from '@/frontend/components/Chat/FlowSelector';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/PlannedExecutions/ExecutionModal');
 
@@ -103,6 +104,7 @@ interface ExecutionModalProps {
  * radio-card row below.
  */
 const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalProps) => {
+  const { t } = useI18n();
   const [name, setName] = useState('');
   const [flowId, setFlowId] = useState('');
   const [prompt, setPrompt] = useState('');
@@ -177,7 +179,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
       : await plannedExecutionsService.create(input);
     setSaving(false);
     if (!result.success) {
-      setSaveError(result.error || 'Failed to save');
+      setSaveError(result.error || t('automations.modal.saveFailed'));
       return;
     }
     onSaved();
@@ -202,9 +204,9 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
       <DialogTitle component="div">
         <Box display="flex" alignItems="center" justifyContent="space-between">
           <Typography variant="h6">
-            {execution ? 'Edit trigger' : 'New trigger'}
+            {execution ? t('automations.modal.editTitle') : t('automations.modal.newTitle')}
           </Typography>
-          <IconButton edge="end" color="inherit" onClick={onClose} aria-label="close">
+          <IconButton edge="end" color="inherit" onClick={onClose} aria-label={t('automations.modal.closeAria')}>
             <CloseIcon />
           </IconButton>
         </Box>
@@ -214,24 +216,22 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
 
       <DialogContent sx={{ p: 3 }}>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          An Automation trigger runs one of your flows automatically — on a
-          schedule or when something happens — without anyone sitting in the
-          chat. Results show up in its run history on the Triggers page.
+          {t('automations.modal.intro')}
         </Typography>
 
         <TextField
           fullWidth
-          label="Name"
+          label={t('automations.modal.name')}
           value={name}
           onChange={(e) => setName(e.target.value)}
           margin="normal"
-          placeholder="e.g. Morning news digest"
+          placeholder={t('automations.modal.namePlaceholder')}
         />
 
         <Typography variant="subtitle1" sx={{ mt: 3, mb: 1, fontWeight: 600 }}>
-          1 · When should it run?
+          {t('automations.modal.when')}
         </Typography>
-        <Box role="radiogroup" aria-label="Trigger type" sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+        <Box role="radiogroup" aria-label={t('automations.modal.triggerTypeAria')} sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
           <OptionCard
             selected={trigger.type === 'schedule'}
             onClick={() => {
@@ -242,8 +242,8 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
               }
             }}
             icon={<ScheduleIcon />}
-            title="On a schedule"
-            description="Run at fixed times — every few minutes, daily, on weekdays, or a custom rhythm."
+            title={t('automations.modal.scheduleTitle')}
+            description={t('automations.modal.scheduleDescription')}
           />
           <OptionCard
             selected={trigger.type === 'webhook'}
@@ -255,8 +255,8 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
               }
             }}
             icon={<WebhookIcon />}
-            title="When called (webhook)"
-            description="Other apps run this flow by calling a URL — GitHub, Stripe, Slack and most services can send webhooks."
+            title={t('automations.modal.webhookTitle')}
+            description={t('automations.modal.webhookDescription')}
           />
           <OptionCard
             selected={trigger.type === 'file-watch'}
@@ -268,8 +268,8 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
               }
             }}
             icon={<FolderOpenIcon />}
-            title="When files change"
-            description="Watch a folder on this computer and run when files appear, change, or disappear."
+            title={t('automations.modal.fileTitle')}
+            description={t('automations.modal.fileDescription')}
           />
           <OptionCard
             selected={trigger.type === 'mcp-poll'}
@@ -281,8 +281,8 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
               }
             }}
             icon={<TravelExploreIcon />}
-            title="Watch a tool"
-            description="Check one of your MCP tools regularly — run when its result changes, or let AI decide."
+            title={t('automations.modal.toolTitle')}
+            description={t('automations.modal.toolDescription')}
           />
           <OptionCard
             selected={trigger.type === 'url-watch'}
@@ -294,8 +294,8 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
               }
             }}
             icon={<LanguageIcon />}
-            title="When a website changes"
-            description="Check a URL regularly and run when its content is different from the last check."
+            title={t('automations.modal.urlTitle')}
+            description={t('automations.modal.urlDescription')}
           />
           <OptionCard
             selected={trigger.type === 'flow-event'}
@@ -307,8 +307,8 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
               }
             }}
             icon={<AltRouteIcon />}
-            title="When another flow finishes"
-            description="React to another flow completing or erroring — chain flows together or run triage when something fails."
+            title={t('automations.modal.flowEventTitle')}
+            description={t('automations.modal.flowEventDescription')}
           />
         </Box>
 
@@ -348,25 +348,25 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
         )}
 
         <FormControl fullWidth margin="normal">
-          <InputLabel id="overlap-strategy-label">If it&apos;s already running…</InputLabel>
+          <InputLabel id="overlap-strategy-label">{t('automations.modal.alreadyRunning')}</InputLabel>
           <Select
             labelId="overlap-strategy-label"
-            label="If it's already running…"
+            label={t('automations.modal.alreadyRunning')}
             value={overlapStrategy}
             onChange={(e) => setOverlapStrategy(e.target.value as OverlapStrategy)}
           >
-            <MenuItem value="skip">Skip the new run (default)</MenuItem>
-            <MenuItem value="queue">Queue it — run after the current one finishes</MenuItem>
-            <MenuItem value="parallel">Run in parallel — allow concurrent runs</MenuItem>
-            <MenuItem value="error">Reject it — record an error (webhook gets 409)</MenuItem>
+            <MenuItem value="skip">{t('automations.modal.overlapSkip')}</MenuItem>
+            <MenuItem value="queue">{t('automations.modal.overlapQueue')}</MenuItem>
+            <MenuItem value="parallel">{t('automations.modal.overlapParallel')}</MenuItem>
+            <MenuItem value="error">{t('automations.modal.overlapError')}</MenuItem>
           </Select>
           <FormHelperText>
             {overlapStrategy === 'parallel' &&
             (trigger.type === 'url-watch' || trigger.type === 'mcp-poll')
-              ? 'Heads up: parallel runs of a change-watching trigger can race each other — skip or queue is usually safer here.'
+              ? t('automations.modal.parallelWarning')
               : overlapStrategy === 'queue'
-                ? 'Queued fires run one at a time, in order. A burst is capped so it can’t grow without limit.'
-                : 'What happens when this trigger fires while a previous run of it is still going.'}
+                ? t('automations.modal.queueHelp')
+                : t('automations.modal.overlapHelp')}
           </FormHelperText>
         </FormControl>
 
@@ -378,36 +378,34 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
               onChange={(e) => setExclusive(e.target.checked)}
             />
           }
-          label="Exclusive — only run when nothing else is running, and block other runs while it does"
+          label={t('automations.modal.exclusive')}
         />
         {exclusive && (
           <FormControl fullWidth margin="normal">
             <InputLabel id="non-exclusive-behavior-label">
-              While this runs, other triggers…
+              {t('automations.modal.otherTriggers')}
             </InputLabel>
             <Select
               labelId="non-exclusive-behavior-label"
-              label="While this runs, other triggers…"
+              label={t('automations.modal.otherTriggers')}
               value={nonExclusiveBehavior}
               onChange={(e) =>
                 setNonExclusiveBehavior(e.target.value as 'queue' | 'skip' | 'error')
               }
             >
-              <MenuItem value="queue">Queue — run them after this finishes (default)</MenuItem>
-              <MenuItem value="skip">Skip — drop them</MenuItem>
-              <MenuItem value="error">Fail — reject them (webhook gets 423)</MenuItem>
+              <MenuItem value="queue">{t('automations.modal.othersQueue')}</MenuItem>
+              <MenuItem value="skip">{t('automations.modal.othersSkip')}</MenuItem>
+              <MenuItem value="error">{t('automations.modal.othersError')}</MenuItem>
             </Select>
             <FormHelperText>
-              An exclusive run waits until the scheduler is idle, then holds a
-              global lock so no other Automation trigger can start until it
-              finishes.
+              {t('automations.modal.exclusiveHelp')}
             </FormHelperText>
           </FormControl>
         )}
 
         <Divider sx={{ mt: 3 }} />
         <Typography variant="subtitle1" sx={{ mt: 2, mb: 0, fontWeight: 600 }}>
-          2 · What should it run?
+          {t('automations.modal.what')}
         </Typography>
 
         <Box sx={{ mt: 2 }}>
@@ -421,19 +419,19 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
 
         {selectedMissing && (
           <Alert severity="warning" sx={{ mt: 1 }}>
-            The previously selected flow no longer exists. Please choose another.
+            {t('automations.modal.flowMissing')}
           </Alert>
         )}
 
         <TextField
           fullWidth
-          label="What should the flow do?"
+          label={t('automations.modal.prompt')}
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           margin="normal"
           multiline
           rows={3}
-          helperText="Sent to the flow as the user message each time this runs. Run details are attached automatically: current time, what triggered it, the previous run, the next planned run, and any trigger data."
+          helperText={t('automations.modal.promptHelp')}
         />
 
         <FormControlLabel
@@ -444,7 +442,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
               onChange={(e) => setSaveConversations(e.target.checked)}
             />
           }
-          label="Save full conversations (each run appears in the chat sidebar — useful for debugging)"
+          label={t('automations.modal.saveConversations')}
         />
 
         {saveError && (
@@ -455,14 +453,14 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
       </DialogContent>
 
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose}>{t('common.cancel')}</Button>
         <Button
           onClick={handleSave}
           variant="contained"
           color="primary"
           disabled={saving || !name.trim() || !flowId}
         >
-          {saving ? 'Saving…' : 'Save trigger'}
+          {saving ? t('automations.modal.saving') : t('automations.modal.saveTrigger')}
         </Button>
       </DialogActions>
     </Dialog>

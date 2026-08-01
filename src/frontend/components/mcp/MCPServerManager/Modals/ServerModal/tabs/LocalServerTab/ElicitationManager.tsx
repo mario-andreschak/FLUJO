@@ -4,6 +4,7 @@ import React from 'react';
 import { Box, Typography, Switch, Alert } from '@mui/material';
 import QuizIcon from '@mui/icons-material/Quiz';
 import { MCPElicitationPolicy } from '@/shared/types/mcp';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface ElicitationManagerProps {
   policy?: MCPElicitationPolicy;
@@ -19,12 +20,13 @@ interface ElicitationManagerProps {
  */
 const ElicitationManager: React.FC<ElicitationManagerProps> = ({ policy, onChange }) => {
   const enabled = !!policy?.enabled;
+  const { t } = useI18n();
 
   return (
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
         <QuizIcon fontSize="small" sx={{ mr: 1, color: 'text.secondary' }} />
-        <Typography variant="subtitle1">Allow this tool to ask you questions</Typography>
+        <Typography variant="subtitle1">{t('mcp.local.elicitation.title')}</Typography>
         <Switch
           checked={enabled}
           onChange={(e) => onChange({ enabled: e.target.checked })}
@@ -33,14 +35,11 @@ const ElicitationManager: React.FC<ElicitationManagerProps> = ({ policy, onChang
         />
       </Box>
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-        Allows this server to request additional information from you mid-tool-call (MCP
-        elicitation). Off by default. Only enable for servers you trust. Unattended
-        (scheduled) runs auto-cancel elicitation requests. URL-mode is not yet supported.
+        {t('mcp.local.elicitation.help')}
       </Typography>
       {enabled && (
         <Alert severity="info" sx={{ mt: 0.5 }}>
-          When enabled, this server may pause execution and display a form asking for
-          your input. You can cancel at any time.
+          {t('mcp.local.elicitation.enabled')}
         </Alert>
       )}
     </Box>

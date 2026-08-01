@@ -7,6 +7,7 @@ import WifiIcon from '@mui/icons-material/Wifi';
 import StreamIcon from '@mui/icons-material/Stream';
 import HttpIcon from '@mui/icons-material/Http';
 import { useThemeUtils } from '@/frontend/utils/theme';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface TransportBadgeProps {
   transport: 'stdio' | 'websocket' | 'sse' | 'streamable';
@@ -15,44 +16,45 @@ interface TransportBadgeProps {
 
 const TransportBadge: React.FC<TransportBadgeProps> = ({ transport, size = 'small' }) => {
   const { colors } = useThemeUtils();
-  const t = colors.domain.transport;
+  const transportColors = colors.domain.transport;
+  const { t } = useI18n();
 
   const getTransportConfig = () => {
     switch (transport) {
       case 'stdio':
         return {
-          label: 'STDIO',
+          label: t('mcp.server.transport.stdio'),
           icon: <TerminalIcon fontSize="small" />,
-          color: t.stdio.fg,
-          bgColor: t.stdio.bg
+          color: transportColors.stdio.fg,
+          bgColor: transportColors.stdio.bg
         };
       case 'websocket':
         return {
-          label: 'WebSocket',
+          label: t('mcp.server.transport.websocket'),
           icon: <WifiIcon fontSize="small" />,
-          color: t.websocket.fg,
-          bgColor: t.websocket.bg
+          color: transportColors.websocket.fg,
+          bgColor: transportColors.websocket.bg
         };
       case 'sse':
         return {
-          label: 'SSE',
+          label: t('mcp.server.transport.sse'),
           icon: <StreamIcon fontSize="small" />,
-          color: t.sse.fg,
-          bgColor: t.sse.bg
+          color: transportColors.sse.fg,
+          bgColor: transportColors.sse.bg
         };
       case 'streamable':
         return {
-          label: 'HTTP Stream',
+          label: t('mcp.server.transport.streamable'),
           icon: <HttpIcon fontSize="small" />,
-          color: t.streamable.fg,
-          bgColor: t.streamable.bg
+          color: transportColors.streamable.fg,
+          bgColor: transportColors.streamable.bg
         };
       default:
         return {
-          label: 'UNKNOWN',
+          label: t('mcp.server.unknownError'),
           icon: <TerminalIcon fontSize="small" />,
-          color: t.default.fg,
-          bgColor: t.default.bg
+          color: transportColors.default.fg,
+          bgColor: transportColors.default.bg
         };
     }
   };

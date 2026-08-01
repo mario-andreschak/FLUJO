@@ -35,6 +35,7 @@ import {
 } from '@/utils/shared/debuggerFrames';
 import RunResourcesPanel from './RunResourcesPanel';
 import DebuggerConversation from './DebuggerConversation';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 // Import Canvas components if needed (or create simplified versions)
 // import { CanvasControls } from '@/frontend/components/Flow/FlowManager/FlowBuilder/Canvas/components/CanvasControls';
@@ -104,11 +105,6 @@ type FlowCacheEntry =
 // reloads, consistent with how the docked panel width is handled in Chat/index.
 type SectionKey = 'conversation' | 'tracker' | 'detail';
 const SECTION_KEYS: SectionKey[] = ['conversation', 'tracker', 'detail'];
-const SECTION_TITLES: Record<SectionKey, string> = {
-  conversation: 'Conversation',
-  tracker: 'Execution Tracker',
-  detail: 'Detail',
-};
 const CONV_WIDTH_DEFAULT = 480;
 const DETAIL_WIDTH_DEFAULT = 320;
 const SECTION_MIN_WIDTH = 240;
@@ -223,6 +219,12 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   executionEvents = EMPTY_EXECUTION_EVENTS,
 }) => {
   const theme = useTheme();
+  const { t, tp, formatDate: formatLocalizedDate } = useI18n();
+  const sectionTitles: Record<SectionKey, string> = {
+    conversation: t('chat.debug.section.conversation'),
+    tracker: t('chat.debug.section.tracker'),
+    detail: t('chat.debug.section.detail'),
+  };
   // Initialize step index safely, defaulting to -1 if no trace
   const [currentStepIndex, setCurrentStepIndex] = useState<number>(
     debugState.executionTrace && debugState.executionTrace.length > 0 ? debugState.executionTrace.length - 1 : -1
@@ -315,12 +317,12 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
         }));
       }).catch(err => {
         if (flowSessionRef.current !== session) return;
-        const message = err instanceof Error ? err.message : `Failed to load flow ${flowId}.`;
+        const message = err instanceof Error ? err.message : t('chat.debug.loadFlowFailed', { id: flowId });
         log.error('Error loading debugger flow definition:', err);
         setFlowCache(prev => ({ ...prev, [flowId]: { status: 'error', message } }));
       });
     }
-  }, [conversationId, debugState.flowId, frameFlowIds]);
+  }, [conversationId, debugState.flowId, frameFlowIds, t]);
 
   const selectedFrame = frameState.frames[selectedFrameKey]
     ?? frameState.frames[frameState.activeFrameKey]
@@ -340,17 +342,17 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   const flowLoading = !!debugState.flowId && !flowDefinition
     && (!rootFlowEntry || rootFlowEntry.status === 'loading');
   const flowError = !debugState.flowId
-    ? 'Flow ID is missing in debug state.'
+    ? t('chat.debug.flowMissingId')
     : rootFlowEntry?.status === 'missing'
-      ? `Flow with ID ${debugState.flowId} not found.`
+      ? t('chat.debug.flowNotFound', { id: debugState.flowId })
       : rootFlowEntry?.status === 'error'
         ? rootFlowEntry.message
         : null;
   const childFlowNotice = selectedFrame.key !== DEBUGGER_ROOT_FRAME_KEY
     && selectedFlowEntry?.status !== 'ready'
       ? selectedFlowEntry?.status === 'loading' || !selectedFlowEntry
-        ? `Loading ${selectedFrame.displayName}; showing its parent flow for now.`
-        : `Flow ${selectedFrame.displayName} is unavailable; showing its parent flow.`
+        ? t('chat.debug.loadingChild', { agent: selectedFrame.displayName })
+        : t('chat.debug.childUnavailable', { agent: selectedFrame.displayName })
       : null;
 
   // Initialize/Update React Flow nodes and edges when the selected frame's
@@ -585,24 +587,24 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
     const idx = visibleOrder.indexOf(key);
     return (
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 1, py: 0.5, borderBottom: `1px solid ${theme.palette.divider}` }}>
-        <Typography variant="subtitle2" noWrap>{SECTION_TITLES[key]}</Typography>
+        <Typography variant="subtitle2" noWrap>{sectionTitles[key]}</Typography>
         <Box sx={{ display: 'flex' }}>
-          <Tooltip title="Move left">
+          <Tooltip title={t('chat.debug.moveLeft', { section: sectionTitles[key] })}>
             <span>
-              <IconButton size="small" onClick={() => moveSection(key, -1)} disabled={idx <= 0} aria-label={`Move ${SECTION_TITLES[key]} left`}>
+              <IconButton size="small" onClick={() => moveSection(key, -1)} disabled={idx <= 0} aria-label={t('chat.debug.moveLeft', { section: sectionTitles[key] })}>
                 <ChevronLeftIcon fontSize="small" />
               </IconButton>
             </span>
           </Tooltip>
-          <Tooltip title="Move right">
+          <Tooltip title={t('chat.debug.moveRight', { section: sectionTitles[key] })}>
             <span>
-              <IconButton size="small" onClick={() => moveSection(key, 1)} disabled={idx < 0 || idx >= visibleOrder.length - 1} aria-label={`Move ${SECTION_TITLES[key]} right`}>
+              <IconButton size="small" onClick={() => moveSection(key, 1)} disabled={idx < 0 || idx >= visibleOrder.length - 1} aria-label={t('chat.debug.moveRight', { section: sectionTitles[key] })}>
                 <ChevronRightIcon fontSize="small" />
               </IconButton>
             </span>
           </Tooltip>
-          <Tooltip title="Hide section">
-            <IconButton size="small" onClick={() => toggleSection(key)} aria-label={`Hide ${SECTION_TITLES[key]}`}>
+          <Tooltip title={t('chat.debug.hideSection', { section: sectionTitles[key] })}>
+            <IconButton size="small" onClick={() => toggleSection(key)} aria-label={t('chat.debug.hideSection', { section: sectionTitles[key] })}>
               <CloseIcon fontSize="small" />
             </IconButton>
           </Tooltip>
@@ -622,28 +624,28 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
                 more than one captured model call this step. */}
             {modelInputs.length > 1 && (
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5, px: 1, py: 0.5, borderBottom: `1px solid ${theme.palette.divider}` }}>
-                <Tooltip title="Previous model call">
+                <Tooltip title={t('chat.debug.previousModelCall')}>
                   <span>
                     <IconButton
                       size="small"
                       onClick={() => setCallIndex((i) => Math.max(0, Math.min(i, modelInputs.length - 1) - 1))}
                       disabled={safeCallIndex <= 0}
-                      aria-label="Previous model call"
+                      aria-label={t('chat.debug.previousModelCall')}
                     >
                       <ChevronLeftIcon fontSize="small" />
                     </IconButton>
                   </span>
                 </Tooltip>
                 <Typography variant="caption" color="textSecondary">
-                  Model call {safeCallIndex + 1} / {modelInputs.length}
+                  {t('chat.debug.modelCall', { current: safeCallIndex + 1, total: modelInputs.length })}
                 </Typography>
-                <Tooltip title="Next model call">
+                <Tooltip title={t('chat.debug.nextModelCall')}>
                   <span>
                     <IconButton
                       size="small"
                       onClick={() => setCallIndex((i) => Math.min(modelInputs.length - 1, Math.min(i, modelInputs.length - 1) + 1))}
                       disabled={safeCallIndex >= modelInputs.length - 1}
-                      aria-label="Next model call"
+                      aria-label={t('chat.debug.nextModelCall')}
                     >
                       <ChevronRightIcon fontSize="small" />
                     </IconButton>
@@ -657,12 +659,12 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
           </Box>
         ) : (
           <Typography variant="body2" color="textSecondary" sx={{ p: 2 }}>
-            No model call for this step.
+            {t('chat.debug.noModelCall')}
           </Typography>
         )
       ) : (
         <Typography variant="body2" color="textSecondary" sx={{ p: 2 }}>
-          Select a step from the execution tracker.
+          {t('chat.debug.selectStep')}
         </Typography>
       )}
     </Box>
@@ -671,7 +673,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   const trackerBody = (
     <Box sx={{ flexGrow: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
       <TracePanel>
-        <Typography variant="caption" color="textSecondary" gutterBottom sx={{ display: 'block' }}>Execution Trace</Typography>
+        <Typography variant="caption" color="textSecondary" gutterBottom sx={{ display: 'block' }}>{t('chat.debug.executionTrace')}</Typography>
         <List dense disablePadding>
           {debugState.executionTrace?.map((step, index) => (
             <ListItem key={step.stepIndex} disablePadding>
@@ -695,11 +697,11 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
           <Box sx={{ px: 1, py: 0.5, borderBottom: `1px solid ${theme.palette.divider}`, flexShrink: 0 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, overflowX: 'auto' }}>
               {selectedFrame.parentKey && (
-                <Tooltip title="Back to parent flow">
+                <Tooltip title={t('chat.debug.backToParent')}>
                   <IconButton
                     size="small"
                     onClick={() => setSelectedFrameKey(selectedFrame.parentKey ?? DEBUGGER_ROOT_FRAME_KEY)}
-                    aria-label="Back to parent flow"
+                    aria-label={t('chat.debug.backToParent')}
                   >
                     <ChevronLeftIcon fontSize="small" />
                   </IconButton>
@@ -721,7 +723,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
             </Box>
             {frameState.order.length > 1 && (
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.25, overflowX: 'auto' }}>
-                <Typography variant="caption" color="textSecondary" sx={{ flexShrink: 0 }}>Frames:</Typography>
+                <Typography variant="caption" color="textSecondary" sx={{ flexShrink: 0 }}>{t('chat.debug.frames')}</Typography>
                 {frameState.order.slice(1).map(key => {
                   const frame = frameState.frames[key];
                   return (
@@ -792,10 +794,10 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
     <Box sx={{ flexGrow: 1, overflowY: 'auto', minHeight: 0, p: 2 }}>
       {currentStepData ? (
         <Box>
-          <Typography variant="body2"><b>Node:</b> {currentStepData.nodeName} ({currentStepData.nodeId})</Typography>
-          <Typography variant="body2"><b>Type:</b> {currentStepData.nodeType}</Typography>
-          <Typography variant="body2"><b>Timestamp:</b> {new Date(currentStepData.timestamp).toLocaleString()}</Typography>
-          <Typography variant="body2"><b>Action Taken:</b> {currentStepData.actionTaken}</Typography>
+          <Typography variant="body2"><b>{t('chat.debug.node')}</b> {currentStepData.nodeName} ({currentStepData.nodeId})</Typography>
+          <Typography variant="body2"><b>{t('chat.debug.type')}</b> {currentStepData.nodeType}</Typography>
+          <Typography variant="body2"><b>{t('chat.debug.timestamp')}</b> {formatLocalizedDate(new Date(currentStepData.timestamp), { dateStyle: 'medium', timeStyle: 'medium' })}</Typography>
+          <Typography variant="body2"><b>{t('chat.debug.actionTaken')}</b> {currentStepData.actionTaken}</Typography>
 
           {/* Model Input moved to the Conversation section (issue #162). The raw
               JSON accordions below remain as the power-user fallback. */}
@@ -803,7 +805,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
           {/* Accordion for Prep Result */}
           <Accordion sx={{ mt: 2, boxShadow: 'none', '&:before': { display: 'none' } }}>
             <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ minHeight: '36px', '& .MuiAccordionSummary-content': { margin: '8px 0' } }}>
-              <Typography variant="caption">Prep Result</Typography>
+              <Typography variant="caption">{t('chat.debug.prepResult')}</Typography>
             </AccordionSummary>
             <AccordionDetails sx={{ p: 0 }}>
               <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: '200px', overflowY: 'auto', background: 'var(--surface-raised)', color: 'var(--foreground)', padding: '8px', borderRadius: '4px', fontSize: '0.75rem', margin: 0 }}>
@@ -816,14 +818,14 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
           <Accordion sx={{ boxShadow: 'none', '&:before': { display: 'none' } }}>
             <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ minHeight: '36px', '& .MuiAccordionSummary-content': { margin: '8px 0' } }}>
               <Typography variant="caption" color={currentStepData.execResultSnapshot?.success === false ? 'error' : 'inherit'}>
-                Exec Result {currentStepData.execResultSnapshot?.success === false ? '(Error)' : ''}
+                {currentStepData.execResultSnapshot?.success === false ? t('chat.debug.execResultError') : t('chat.debug.execResult')}
               </Typography>
             </AccordionSummary>
             <AccordionDetails sx={{ p: 0 }}>
               {currentStepData.execResultSnapshot?.success === false ? (
                 <Box sx={{ p: 1, background: theme.palette.error.light, borderRadius: 1 }}>
                   <Typography variant="body2" color="error" gutterBottom>
-                    <b>Error:</b> {currentStepData.execResultSnapshot.error || 'Unknown error'}
+                    <b>{t('chat.debug.error')}</b> {currentStepData.execResultSnapshot.error || t('chat.debug.unknownError')}
                   </Typography>
                   {currentStepData.execResultSnapshot.errorDetails && (
                      <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: '150px', overflowY: 'auto', background: 'var(--surface-raised)', color: 'var(--foreground)', padding: '4px', borderRadius: '4px', fontSize: '0.75rem', margin: 0 }}>
@@ -842,7 +844,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
           {/* Accordion for State Before */}
           <Accordion sx={{ boxShadow: 'none', '&:before': { display: 'none' } }}>
             <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ minHeight: '36px', '& .MuiAccordionSummary-content': { margin: '8px 0' } }}>
-              <Typography variant="caption">State Before</Typography>
+              <Typography variant="caption">{t('chat.debug.stateBefore')}</Typography>
             </AccordionSummary>
             <AccordionDetails sx={{ p: 0 }}>
               <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: '200px', overflowY: 'auto', background: 'var(--surface-raised)', color: 'var(--foreground)', padding: '8px', borderRadius: '4px', fontSize: '0.75rem', margin: 0 }}>
@@ -854,7 +856,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
           {/* Accordion for State After */}
           <Accordion sx={{ boxShadow: 'none', '&:before': { display: 'none' } }}>
             <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ minHeight: '36px', '& .MuiAccordionSummary-content': { margin: '8px 0' } }}>
-              <Typography variant="caption">State After</Typography>
+              <Typography variant="caption">{t('chat.debug.stateAfter')}</Typography>
             </AccordionSummary>
             <AccordionDetails sx={{ p: 0 }}>
               <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: '200px', overflowY: 'auto', background: 'var(--surface-raised)', color: 'var(--foreground)', padding: '8px', borderRadius: '4px', fontSize: '0.75rem', margin: 0 }}>
@@ -864,7 +866,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
           </Accordion>
         </Box>
       ) : (
-        <Typography variant="body2" color="textSecondary">Select a step from the execution tracker.</Typography>
+        <Typography variant="body2" color="textSecondary">{t('chat.debug.selectStep')}</Typography>
       )}
 
       {/* Run data (Tier 3): the run-scoped resources captured so far —
@@ -872,7 +874,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
           Refetches whenever a resource:write arrives (resourceVersion). */}
       <Accordion defaultExpanded sx={{ mt: 2, boxShadow: 'none', '&:before': { display: 'none' } }}>
         <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ minHeight: '36px', '& .MuiAccordionSummary-content': { margin: '8px 0' } }}>
-          <Typography variant="caption">Run Data</Typography>
+          <Typography variant="caption">{t('chat.debug.runData')}</Typography>
         </AccordionSummary>
         <AccordionDetails sx={{ p: 0 }}>
           <RunResourcesPanel
@@ -929,7 +931,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
       <SectionResizer
         key={`resizer-${left}-${right}`}
         onPointerDown={(e) => startResize(target, sign, e)}
-        aria-label={`Resize ${SECTION_TITLES[target]} section`}
+        aria-label={t('chat.debug.resizeSection', { section: sectionTitles[target] })}
       />
     );
   };
@@ -938,54 +940,54 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
     <DebuggerContainer elevation={2}>
       <Header sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
         <Box>
-          <Typography variant="h6">Flow Debugger</Typography>
+          <Typography variant="h6">{t('chat.debug.title')}</Typography>
           <Typography variant="caption" color="textSecondary" display="block">
-            Click a node to toggle a breakpoint
-            {breakpoints && breakpoints.length > 0 ? ` · ${breakpoints.length} active` : ''}
+            {t('chat.debug.breakpointHelp')}
+            {breakpoints && breakpoints.length > 0 ? ` · ${tp('chat.debug.activeBreakpoints', breakpoints.length)}` : ''}
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
           {/* Section visibility toggles */}
-          <Tooltip title={visible.conversation ? 'Hide Conversation' : 'Show Conversation'}>
+          <Tooltip title={visible.conversation ? t('chat.debug.hideSection', { section: sectionTitles.conversation }) : t('chat.debug.showSection', { section: sectionTitles.conversation })}>
             <IconButton
               size="small"
               onClick={() => toggleSection('conversation')}
               color={visible.conversation ? 'primary' : 'default'}
-              aria-label={visible.conversation ? 'Hide Conversation' : 'Show Conversation'}
+              aria-label={visible.conversation ? t('chat.debug.hideSection', { section: sectionTitles.conversation }) : t('chat.debug.showSection', { section: sectionTitles.conversation })}
             >
               <ForumOutlinedIcon fontSize="small" />
             </IconButton>
           </Tooltip>
-          <Tooltip title={visible.tracker ? 'Hide Execution Tracker' : 'Show Execution Tracker'}>
+          <Tooltip title={visible.tracker ? t('chat.debug.hideSection', { section: sectionTitles.tracker }) : t('chat.debug.showSection', { section: sectionTitles.tracker })}>
             <IconButton
               size="small"
               onClick={() => toggleSection('tracker')}
               color={visible.tracker ? 'primary' : 'default'}
-              aria-label={visible.tracker ? 'Hide Execution Tracker' : 'Show Execution Tracker'}
+              aria-label={visible.tracker ? t('chat.debug.hideSection', { section: sectionTitles.tracker }) : t('chat.debug.showSection', { section: sectionTitles.tracker })}
             >
               <AccountTreeOutlinedIcon fontSize="small" />
             </IconButton>
           </Tooltip>
-          <Tooltip title={visible.detail ? 'Hide Detail' : 'Show Detail'}>
+          <Tooltip title={visible.detail ? t('chat.debug.hideSection', { section: sectionTitles.detail }) : t('chat.debug.showSection', { section: sectionTitles.detail })}>
             <IconButton
               size="small"
               onClick={() => toggleSection('detail')}
               color={visible.detail ? 'primary' : 'default'}
-              aria-label={visible.detail ? 'Hide Detail' : 'Show Detail'}
+              aria-label={visible.detail ? t('chat.debug.hideSection', { section: sectionTitles.detail }) : t('chat.debug.showSection', { section: sectionTitles.detail })}
             >
               <InfoOutlinedIcon fontSize="small" />
             </IconButton>
           </Tooltip>
           {onToggleExpand && (
-            <Tooltip title={isExpanded ? 'Exit full screen' : 'Expand to full screen'}>
-              <IconButton size="small" onClick={onToggleExpand} aria-label={isExpanded ? 'Exit full screen' : 'Expand to full screen'}>
+            <Tooltip title={isExpanded ? t('chat.debug.exitFullscreen') : t('chat.debug.enterFullscreen')}>
+              <IconButton size="small" onClick={onToggleExpand} aria-label={isExpanded ? t('chat.debug.exitFullscreen') : t('chat.debug.enterFullscreen')}>
                 {isExpanded ? <FullscreenExitIcon fontSize="small" /> : <FullscreenIcon fontSize="small" />}
               </IconButton>
             </Tooltip>
           )}
           {onClose && (
-            <Tooltip title="Close debugger">
-              <IconButton size="small" onClick={onClose} aria-label="Close debugger">
+            <Tooltip title={t('chat.debug.close')}>
+              <IconButton size="small" onClick={onClose} aria-label={t('chat.debug.close')}>
                 <CloseIcon fontSize="small" />
               </IconButton>
             </Tooltip>
@@ -996,7 +998,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
         {visibleOrder.length === 0 ? (
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', p: 3 }}>
             <Typography variant="body2" color="textSecondary">
-              All sections are hidden — use the toolbar toggles above to show a section.
+              {t('chat.debug.allHidden')}
             </Typography>
           </Box>
         ) : (
@@ -1010,21 +1012,21 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
       </ContentArea>
        <ControlsPanel>
             <Button variant="outlined" size="small" onClick={handlePreviousStep} disabled={isLoading || currentStepIndex <= 0}>
-                Previous
+                {t('chat.debug.previous')}
             </Button>
             <Button variant="contained" size="small" onClick={handleNextStep} disabled={isLoading || currentStepIndex === -1}>
                 {/* Adjust button text based on whether we are at the end of the current trace */}
-                {debugState.executionTrace && currentStepIndex < debugState.executionTrace.length - 1 ? 'Next Trace Step' : 'Step Next'}
+                {debugState.executionTrace && currentStepIndex < debugState.executionTrace.length - 1 ? t('chat.debug.nextTrace') : t('chat.debug.stepNext')}
             </Button>
             {onStepOver && (
               <Button variant="outlined" size="small" onClick={onStepOver} disabled={isLoading}>
-                Step Over
+                {t('chat.debug.stepOver')}
               </Button>
             )}
             <Button variant="contained" color="secondary" size="small" onClick={onContinue} disabled={isLoading}>
-                Continue
+                {t('chat.debug.continue')}
             </Button>
-            <Button variant="outlined" color="error" size="small" onClick={onCancel} disabled={isLoading}>Stop</Button>
+            <Button variant="outlined" color="error" size="small" onClick={onCancel} disabled={isLoading}>{t('chat.debug.stop')}</Button>
        </ControlsPanel>
     </DebuggerContainer>
   );

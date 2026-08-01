@@ -40,6 +40,8 @@ import { flowService } from '@/frontend/services/flow';
 import { modelService } from '@/frontend/services/model';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import { createLogger } from '@/utils/logger';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { Translator } from '@/frontend/i18n/core';
 
 const log = createLogger('frontend/components/Flow/FlowManager/GenerateFlowDialog');
 const DEFAULT_SUBFLOW_DEPTH = 2;
@@ -185,21 +187,27 @@ function extractInstalledServers(
   return [...found.values()];
 }
 
-function draftSummary(draft: DraftPayload, revised: boolean): string {
-  const action = revised ? 'I updated your agent' : 'Your agent is ready';
+function draftSummary(
+  draft: DraftPayload,
+  revised: boolean,
+  t: Translator,
+  tp: ReturnType<typeof useI18n>['tp'],
+): string {
+  const action = revised
+    ? t('flows.generator.updated', { name: draft.flow.name })
+    : t('flows.generator.readyNamed', { name: draft.flow.name });
   const helperCount = Math.max(0, draft.flows.length - 1);
-  const helperNote = helperCount
-    ? ` It includes ${helperCount} helper agent${helperCount === 1 ? '' : 's'}.`
-    : '';
+  const helperNote = helperCount ? tp('flows.generator.helper', helperCount) : '';
   const reviewCount = draft.errorCount + draft.warningCount;
   const reviewNote = reviewCount
-    ? ` I found ${reviewCount} thing${reviewCount === 1 ? '' : 's'} worth reviewing before you try it.`
-    : ' It is ready for you to review and try.';
-  return `${action}: ${draft.flow.name}.${helperNote}${reviewNote}`;
+    ? tp('flows.generator.review', reviewCount)
+    : t('flows.generator.readyReview');
+  return [action, helperNote, reviewNote].filter(Boolean).join(' ');
 }
 
 const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogProps) => {
   const { settings, settingsHydrated } = useStorage();
+  const { t, tp } = useI18n();
   const flowBasedExperimental = (
     settingsHydrated &&
     settings?.experimental?.enabled === true &&
@@ -228,12 +236,12 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
       })
       .catch((cause) => {
         log.warn('Failed to load generator models', cause);
-        if (!cancelled) setError('Could not load your models. Configure a model first.');
+        if (!cancelled) setError(t('flows.generator.modelsFailed'));
       });
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, t]);
 
   useEffect(() => {
     if (!open) return;
@@ -257,7 +265,7 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
     const now = Date.now();
     await chatService.createConversation({
       id,
-      title: 'Experimental Flow generation',
+      title: t('flows.generator.conversationTitle'),
       flowId: flow.id,
       flowSnapshot: flow,
       createdAt: now,
@@ -265,7 +273,7 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
     });
     setConversationId(id);
     return id;
-  }, [allowInstall, conversationId, modelId]);
+  }, [allowInstall, conversationId, modelId, t]);
 
   const handleSend = useCallback(async (content: string) => {
     const trimmed = content.trim();
@@ -290,10 +298,7 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
         setWireMessages(canonical);
         const proposed = extractFlowDraft(canonical);
         if (!proposed) {
-          setError(
-            'The experimental Generation Flow finished without calling draft_generated_flow. ' +
-            'You can revise the editable “Experimental Flow Generator” system Flow or try another model.'
-          );
+          setError(t('flows.generator.experimentalNoDraft'));
           return;
         }
         const generatedByFlow: DraftPayload = {
@@ -345,7 +350,7 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
           installedServers: generated.installedServers.length,
         });
         setDraft(generated);
-        setWireMessages([...nextMessages, message('assistant', draftSummary(generated, false))]);
+        setWireMessages([...nextMessages, message('assistant', draftSummary(generated, false, t, tp))]);
         return;
       }
 
@@ -378,7 +383,7 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
         installedServers: revised.installedServers.length,
       });
       setDraft(revised);
-      setWireMessages([...nextMessages, message('assistant', draftSummary(revised, true))]);
+      setWireMessages([...nextMessages, message('assistant', draftSummary(revised, true, t, tp))]);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -391,6 +396,8 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
     isWorking,
     modelId,
     startFlowSession,
+    t,
+    tp,
     wireMessages,
   ]);
 
@@ -429,10 +436,10 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <AutoAwesomeIcon color="primary" />
         <Box sx={{ flex: 1 }}>
-          Create an agent
+          {t('flows.generator.title')}
           {flowBasedExperimental && (
             <Chip
-              label="Experimental · Flow-based"
+              label={t('flows.generator.experimentalChip')}
               size="small"
               color="warning"
               variant="outlined"
@@ -441,15 +448,15 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
           )}
           <Typography variant="body2" color="text.secondary">
             {flowBasedExperimental
-              ? 'The editable multi-stage Generation Flow handles drafting and revisions.'
-              : 'Describe what you need in your own words. You can refine it together before saving.'}
+              ? t('flows.generator.experimentalDescription')
+              : t('flows.generator.description')}
           </Typography>
         </Box>
         {flowBasedExperimental && (
-          <Tooltip title="Restore the bundled experimental Generation Flow">
+          <Tooltip title={t('flows.generator.restore')}>
             <span>
               <IconButton
-                aria-label="Restore experimental Generation Flow"
+                aria-label={t('flows.generator.restore')}
                 onClick={() => { void handleRestoreExperimentalFlow(); }}
                 disabled={isWorking || isRestoring}
               >
@@ -468,8 +475,7 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
           )}
           {flowBasedExperimental && (
             <Alert severity="warning" sx={{ mb: 1.5 }}>
-              Experimental mode runs entirely through the editable System Flow. It does not
-              fall back to the production generator if that Flow fails to submit a draft.
+              {t('flows.generator.experimentalWarning')}
             </Alert>
           )}
           <Box
@@ -494,17 +500,17 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
                 fontWeight: 700,
               }}
             >
-              Advanced options
+              {t('flows.generator.advanced')}
             </Box>
             <FormControl
               size="small"
               fullWidth
               disabled={isWorking || (flowBasedExperimental && !!conversationId)}
             >
-              <InputLabel id="flow-generator-model-label">AI used to build it</InputLabel>
+              <InputLabel id="flow-generator-model-label">{t('flows.generator.model')}</InputLabel>
               <Select
                 labelId="flow-generator-model-label"
-                label="AI used to build it"
+                label={t('flows.generator.model')}
                 value={modelId}
                 onChange={(event) => setModelId(event.target.value)}
               >
@@ -524,16 +530,15 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
                   disabled={isWorking || (flowBasedExperimental && !!conversationId)}
                 />
               }
-              label="Allow adding new connected tools"
+              label={t('flows.generator.allowTools')}
             />
             <Typography variant="caption" color="text.secondary" display="block">
-              Leave this off unless the agent truly needs an app or service that is not connected yet.
-              {flowBasedExperimental && ` Expert generation may also create helper flows up to ${DEFAULT_SUBFLOW_DEPTH} levels deep.`}
+              {t('flows.generator.allowToolsHelp')}
+              {flowBasedExperimental && ` ${t('flows.generator.depth', { count: DEFAULT_SUBFLOW_DEPTH })}`}
             </Typography>
             {allowInstall && (
               <Alert severity="warning" sx={{ mt: 1 }}>
-                FLUJO may download and run third-party connectors on this device. They remain
-                installed after the agent is created.
+                {t('flows.generator.installWarning')}
               </Alert>
             )}
           </Box>
@@ -542,9 +547,9 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
         <Box sx={{ minHeight: 360, maxHeight: '55vh', overflowY: 'auto', p: 2 }}>
           {visibleMessages.length === 0 ? (
             <Box sx={{ py: 8, textAlign: 'center', color: 'text.secondary' }}>
-              <Typography variant="h6">What should your agent help with?</Typography>
+              <Typography variant="h6">{t('flows.generator.question')}</Typography>
               <Typography variant="body2">
-                Try: “Turn my rough notes into a warm, clear email” or “Research a topic and give me the important points.”
+                {t('flows.generator.example')}
               </Typography>
             </Box>
           ) : (
@@ -560,8 +565,8 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
         {draft && (
           <Alert severity={draft.errorCount ? 'warning' : 'success'} sx={{ mx: 2, mb: 1 }}>
             {draft.errorCount
-              ? `The draft is ready, but ${draft.errorCount} thing${draft.errorCount === 1 ? '' : 's'} still need attention.`
-              : 'Your draft is ready. You can ask for changes or continue to the simple builder.'}
+              ? tp('flows.generator.draftAttention', draft.errorCount)
+              : t('flows.generator.draftReady')}
           </Alert>
         )}
 
@@ -569,28 +574,28 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
           <ChatInput
             onSendMessage={(content) => { void handleSend(content); }}
             disabled={isWorking || !modelId}
-            placeholder="Describe the helper you want…"
+            placeholder={t('flows.generator.placeholder')}
           />
           {isWorking && (
             <Typography variant="caption" color="text.secondary">
               {draft
-                ? 'Applying your changes and checking the agent…'
+                ? t('flows.generator.applying')
                 : flowBasedExperimental
-                  ? 'Running the Flow Architect and Generation Compiler…'
-                  : 'Building your agent and checking that it is ready…'}
+                  ? t('flows.generator.runningExperimental')
+                  : t('flows.generator.building')}
             </Typography>
           )}
         </Box>
       </DialogContent>
       <DialogActions>
-        <Button onClick={handleClose} disabled={isWorking || isRestoring}>Close</Button>
+        <Button onClick={handleClose} disabled={isWorking || isRestoring}>{t('flows.generator.close')}</Button>
         <Button
           variant="contained"
           onClick={handleOpenDraft}
           disabled={!draft || isWorking}
           startIcon={<AutoAwesomeIcon />}
         >
-          Continue to simple builder
+          {t('flows.generator.continue')}
         </Button>
       </DialogActions>
     </Dialog>

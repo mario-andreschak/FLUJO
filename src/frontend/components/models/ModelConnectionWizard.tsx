@@ -49,6 +49,8 @@ import {
   GuidedConnectionKind,
   guidedBundleNames,
 } from './connectionWizardCatalog';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { TranslationKey } from '@/frontend/i18n/messages';
 
 type Experience = 'beginner' | 'familiar';
 type WizardStep =
@@ -103,71 +105,71 @@ const pop = keyframes`
 `;
 
 const setupCopy: Record<Exclude<GuidedConnectionKind, 'ollama'>, {
-  eyebrow: string;
-  title: string;
-  summary: string;
+  eyebrow: TranslationKey;
+  title: TranslationKey;
+  summary: TranslationKey;
   accountUrl?: string;
-  accountLabel?: string;
-  keyLabel?: string;
-  note: string;
+  accountLabel?: TranslationKey;
+  keyLabel?: TranslationKey;
+  note: TranslationKey;
 }> = {
   'openrouter-free': {
-    eyebrow: 'Free · online',
-    title: 'Meet your free AI router',
-    summary: 'OpenRouter will pick an available zero-cost model for every request. It is ideal for learning and light use.',
+    eyebrow: 'models.wizard.copy.freeOnline',
+    title: 'models.wizard.openrouterFree.title',
+    summary: 'models.wizard.openrouterFree.summary',
     accountUrl: 'https://openrouter.ai/settings/keys',
-    accountLabel: 'Create an OpenRouter key',
-    keyLabel: 'OpenRouter API key',
-    note: 'Free models have lower rate limits and can change as availability shifts. FLUJO creates the exact technical model openrouter/free.',
+    accountLabel: 'models.wizard.openrouterFree.account',
+    keyLabel: 'models.wizard.openrouterKey',
+    note: 'models.wizard.openrouterFree.note',
   },
   'requesty-free': {
-    eyebrow: 'Free · online',
-    title: 'Connect through Requesty',
-    summary: 'Requesty gives you one gateway for many providers. This starter connection targets OpenRouter’s free router.',
+    eyebrow: 'models.wizard.copy.freeOnline',
+    title: 'models.wizard.requestyFree.title',
+    summary: 'models.wizard.requestyFree.summary',
     accountUrl: 'https://app.requesty.ai/api-keys',
-    accountLabel: 'Create a Requesty key',
-    keyLabel: 'Requesty API key',
-    note: 'The target model is free, but Requesty account terms and routing limits still apply. Check the dashboard before heavier use.',
+    accountLabel: 'models.wizard.requestyFree.account',
+    keyLabel: 'models.wizard.requestyKey',
+    note: 'models.wizard.requestyFree.note',
   },
   'openrouter-paid': {
-    eyebrow: 'Pay as you go · online',
-    title: 'One key, a useful starter team',
-    summary: 'Add credits when you need them—no monthly subscription. FLUJO will create an automatic router, a cost-conscious model, and a high-capability model.',
+    eyebrow: 'models.wizard.copy.paygOnline',
+    title: 'models.wizard.openrouterPaid.title',
+    summary: 'models.wizard.openrouterPaid.summary',
     accountUrl: 'https://openrouter.ai/settings/keys',
-    accountLabel: 'Open OpenRouter keys',
-    keyLabel: 'OpenRouter API key',
-    note: 'Provider usage is metered. Set a spending limit in OpenRouter before connecting if you want a hard ceiling.',
+    accountLabel: 'models.wizard.openrouterPaid.account',
+    keyLabel: 'models.wizard.openrouterKey',
+    note: 'models.wizard.openrouterPaid.note',
   },
   'requesty-paid': {
-    eyebrow: 'Pay as you go · online',
-    title: 'Route a starter team with Requesty',
-    summary: 'Use a single funded account for DeepSeek, Claude, and OpenAI models, with Requesty handling the gateway.',
+    eyebrow: 'models.wizard.copy.paygOnline',
+    title: 'models.wizard.requestyPaid.title',
+    summary: 'models.wizard.requestyPaid.summary',
     accountUrl: 'https://app.requesty.ai/api-keys',
-    accountLabel: 'Open Requesty keys',
-    keyLabel: 'Requesty API key',
-    note: 'Usage is billed through your Requesty account. Add budgets or policies in Requesty when you need tighter controls.',
+    accountLabel: 'models.wizard.requestyPaid.account',
+    keyLabel: 'models.wizard.requestyKey',
+    note: 'models.wizard.requestyPaid.note',
   },
   'claude-subscription': {
-    eyebrow: 'Existing subscription · Claude',
-    title: 'Bring your Claude plan to FLUJO',
-    summary: 'Claude Code signs in to your Pro or Max plan. One setup token powers four useful aliases in FLUJO.',
-    keyLabel: 'Token from claude setup-token',
-    note: 'The token is stored using FLUJO’s normal encrypted model-key storage. Your plan’s usage limits still apply.',
+    eyebrow: 'models.wizard.copy.claudeSubscription',
+    title: 'models.wizard.claude.title',
+    summary: 'models.wizard.claude.summary',
+    keyLabel: 'models.wizard.claude.key',
+    note: 'models.wizard.claude.note',
   },
   'codex-subscription': {
-    eyebrow: 'Existing subscription · ChatGPT',
-    title: 'Bring your ChatGPT plan through Codex',
-    summary: 'Codex uses its local ChatGPT sign-in. FLUJO does not need your password or a copied browser token.',
-    note: 'Run codex login in a terminal and complete the browser flow. FLUJO then creates a balanced Codex model set.',
+    eyebrow: 'models.wizard.copy.chatgptSubscription',
+    title: 'models.wizard.codex.title',
+    summary: 'models.wizard.codex.summary',
+    note: 'models.wizard.codex.note',
   },
   'gemini-native': {
-    eyebrow: 'Google · native SDK',
-    title: 'Connect Gemini natively',
-    summary: 'FLUJO talks directly to Google’s GenAI SDK and creates light, balanced, and pro Gemini choices.',
+    eyebrow: 'models.wizard.copy.googleNative',
+    title: 'models.wizard.gemini.title',
+    summary: 'models.wizard.gemini.summary',
     accountUrl: 'https://aistudio.google.com/app/apikey',
-    accountLabel: 'Create a Gemini API key',
-    keyLabel: 'Gemini API key',
-    note: 'A Gemini app subscription and Gemini API billing are separate products. The API key controls this connection.',
+    accountLabel: 'models.wizard.gemini.account',
+    keyLabel: 'models.wizard.gemini.key',
+    note: 'models.wizard.gemini.note',
   },
 };
 
@@ -245,14 +247,15 @@ function ChoiceGrid({ children }: { children: React.ReactNode }) {
 
 function CommandRow({ command, copied, onCopy }: { command: string; copied: boolean; onCopy: () => void }) {
   const theme = useTheme();
+  const { t } = useI18n();
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 1, borderRadius: 2, bgcolor: alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.26 : 0.055) }}>
       <TerminalRoundedIcon fontSize="small" color="action" />
       <Typography component="code" variant="body2" sx={{ flex: 1, overflowWrap: 'anywhere', fontFamily: 'var(--font-geist-mono), ui-monospace, monospace' }}>
         {command}
       </Typography>
-      <Tooltip title={copied ? 'Copied' : 'Copy command'}>
-        <IconButton size="small" onClick={onCopy} aria-label={`Copy ${command}`}>
+      <Tooltip title={copied ? t('models.wizard.copied') : t('models.wizard.copyCommand')}>
+        <IconButton size="small" onClick={onCopy} aria-label={t('models.wizard.copyCommandAria', { command })}>
           {copied ? <CheckCircleRoundedIcon color="success" fontSize="small" /> : <ContentCopyRoundedIcon fontSize="small" />}
         </IconButton>
       </Tooltip>
@@ -267,6 +270,7 @@ export default function ModelConnectionWizard({
   onCreateModels,
 }: ModelConnectionWizardProps) {
   const theme = useTheme();
+  const { t, tp } = useI18n();
   const [step, setStep] = useState<WizardStep>('welcome');
   const [history, setHistory] = useState<WizardStep[]>([]);
   const [experience, setExperience] = useState<Experience>('beginner');
@@ -333,7 +337,7 @@ export default function ModelConnectionWizard({
       setCopiedCommand(command);
       window.setTimeout(() => setCopiedCommand((value) => value === command ? null : value), 1600);
     } catch {
-      setError('Could not copy automatically. Select the command and copy it manually.');
+      setError(t('models.wizard.copyFailed'));
     }
   };
 
@@ -342,15 +346,15 @@ export default function ModelConnectionWizard({
     setError(null);
     try {
       const response = await fetch('/api/local-models/capability', { cache: 'no-store' });
-      if (!response.ok) throw new Error('Could not inspect this machine.');
+      if (!response.ok) throw new Error(t('models.wizard.inspectFailed'));
       setOllama(await response.json() as OllamaCapability);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'Could not inspect this machine.');
+      setError(loadError instanceof Error ? loadError.message : t('models.wizard.inspectFailed'));
     } finally {
       setOllamaChecked(true);
       setOllamaLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (open && step === 'setup' && kind === 'ollama' && !ollamaChecked && !ollamaLoading) {
@@ -371,7 +375,7 @@ export default function ModelConnectionWizard({
       });
       if (!response.ok) {
         const body = await response.json().catch(() => ({})) as { error?: string };
-        throw new Error(body.error || 'The installer could not be started.');
+        throw new Error(body.error || t('models.wizard.installerStartFailed'));
       }
       let terminalSuccess = false;
       let terminalError = '';
@@ -387,12 +391,12 @@ export default function ModelConnectionWizard({
           terminalError = event.error || '';
         }
       });
-      if (!terminalSuccess) throw new Error(terminalError || 'WinGet did not finish successfully.');
+      if (!terminalSuccess) throw new Error(terminalError || t('models.wizard.wingetFailed'));
       setInstallResult('success');
       if (tool === 'ollama') window.setTimeout(() => void loadOllama(), 1200);
     } catch (installError) {
       setInstallResult('error');
-      setError(installError instanceof Error ? installError.message : 'Installation failed.');
+      setError(installError instanceof Error ? installError.message : t('models.wizard.installFailed'));
     } finally {
       setInstallTool(null);
     }
@@ -403,12 +407,12 @@ export default function ModelConnectionWizard({
     setError(null);
     try {
       const result = await onCreateModels(models);
-      if (!result.success) throw new Error(result.error || 'FLUJO could not create the model connection.');
+      if (!result.success) throw new Error(result.error || t('models.wizard.createFailed'));
       setCreated(result.created);
       setExisting(result.existing);
       go('success');
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : 'FLUJO could not create the model connection.');
+      setError(saveError instanceof Error ? saveError.message : t('models.wizard.createFailed'));
     } finally {
       setBusy(false);
     }
@@ -419,12 +423,12 @@ export default function ModelConnectionWizard({
     const requiresKey = kind !== 'codex-subscription';
     if (requiresKey && !apiKey.trim()) {
       setError(kind === 'claude-subscription'
-        ? 'Paste the token produced by claude setup-token first.'
-        : 'Paste your API key first.');
+        ? t('models.wizard.pasteClaudeToken')
+        : t('models.wizard.pasteApiKey'));
       return;
     }
     if (kind === 'codex-subscription' && !confirmedLogin) {
-      setError('Confirm that codex login is complete before creating the models.');
+      setError(t('models.wizard.confirmCodexLogin'));
       return;
     }
     await finish(buildGuidedModels({ kind, apiKey }));
@@ -434,7 +438,7 @@ export default function ModelConnectionWizard({
     const modelName = ollama?.suggestedModel || 'llama3.2:3b';
     const alreadyInstalled = ollama?.installedModels?.some((name) => name === modelName);
     if (!ollama?.ollamaReachable) {
-      setError('Start Ollama, then use “Check again” before downloading a model.');
+      setError(t('models.wizard.startOllama'));
       return;
     }
 
@@ -448,7 +452,7 @@ export default function ModelConnectionWizard({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ model: modelName }),
         });
-        if (!response.ok) throw new Error('Ollama could not start the model download.');
+        if (!response.ok) throw new Error(t('models.wizard.ollamaDownloadStartFailed'));
         let terminalSuccess = false;
         let terminalError = '';
         await readNdjsonStream(response, (event) => {
@@ -460,9 +464,9 @@ export default function ModelConnectionWizard({
             terminalError = event.error || '';
           }
         });
-        if (!terminalSuccess) throw new Error(terminalError || `Could not download ${modelName}.`);
+        if (!terminalSuccess) throw new Error(terminalError || t('models.wizard.modelDownloadFailed', { model: modelName }));
       } catch (pullError) {
-        setError(pullError instanceof Error ? pullError.message : 'The model download failed.');
+        setError(pullError instanceof Error ? pullError.message : t('models.wizard.downloadFailed'));
         setOllamaPulling(false);
         return;
       }
@@ -493,12 +497,12 @@ export default function ModelConnectionWizard({
         onClick={() => void runInstaller(tool)}
         sx={{ alignSelf: 'flex-start' }}
       >
-        {installTool === tool ? 'Installing…' : 'Install with WinGet'}
+        {installTool === tool ? t('models.wizard.installing') : t('models.wizard.installWinget')}
       </Button>
       {authCommand ? (
         <CommandRow command={authCommand} copied={copiedCommand === authCommand} onCopy={() => void copyCommand(authCommand)} />
       ) : null}
-      {installResult === 'success' ? <Alert severity="success">Installed. Continue with the sign-in command below.</Alert> : null}
+      {installResult === 'success' ? <Alert severity="success">{t('models.wizard.installedContinue')}</Alert> : null}
       {installOutput.length ? (
         <Box component="pre" sx={{ m: 0, p: 1.4, maxHeight: 110, overflow: 'auto', borderRadius: 2, bgcolor: alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.3 : 0.06), color: 'text.secondary', whiteSpace: 'pre-wrap', fontSize: 11 }}>
           {installOutput.join('\n')}
@@ -511,15 +515,15 @@ export default function ModelConnectionWizard({
     if (step === 'welcome') {
       return (
         <>
-          <Chip icon={<AutoAwesomeRoundedIcon />} label="A two-minute setup" color="primary" variant="outlined" sx={{ mb: 2 }} />
-          <Typography variant="h4">Let’s connect your AI!</Typography>
+          <Chip icon={<AutoAwesomeRoundedIcon />} label={t('models.wizard.twoMinuteSetup')} color="primary" variant="outlined" sx={{ mb: 2 }} />
+          <Typography variant="h4">{t('models.wizard.welcomeTitle')}</Typography>
           <Typography variant="body1" color="text.secondary" sx={{ mt: 1, mb: 3, maxWidth: 680 }}>
-            Do you already know how model providers, API keys, and local AI work?
+            {t('models.wizard.welcomeQuestion')}
           </Typography>
           <ChoiceGrid>
-            <OptionCard icon={SchoolRoundedIcon} title="No idea" description="Explain the choices and guide me one small step at a time." badge="Gentle guide" onClick={() => { setExperience('beginner'); go('budget'); }} />
-            <OptionCard icon={BoltRoundedIcon} title="I know a bit" description="Give me the important tradeoffs, then let me move quickly." onClick={() => { setExperience('familiar'); go('budget'); }} />
-            <OptionCard icon={TuneRoundedIcon} title="I’m an expert" description="Skip the wizard and open every model setting." onClick={onManualCreation} />
+            <OptionCard icon={SchoolRoundedIcon} title={t('models.wizard.noIdea')} description={t('models.wizard.noIdeaDescription')} badge={t('models.wizard.gentleGuide')} onClick={() => { setExperience('beginner'); go('budget'); }} />
+            <OptionCard icon={BoltRoundedIcon} title={t('models.wizard.knowABit')} description={t('models.wizard.knowABitDescription')} onClick={() => { setExperience('familiar'); go('budget'); }} />
+            <OptionCard icon={TuneRoundedIcon} title={t('models.wizard.expert')} description={t('models.wizard.expertDescription')} onClick={onManualCreation} />
           </ChoiceGrid>
         </>
       );
@@ -528,17 +532,17 @@ export default function ModelConnectionWizard({
     if (step === 'budget') {
       return (
         <>
-          <Typography variant="overline" color="primary.main">First things first</Typography>
-          <Typography variant="h4">How would you like to pay for AI?</Typography>
+          <Typography variant="overline" color="primary.main">{t('models.wizard.firstThings')}</Typography>
+          <Typography variant="h4">{t('models.wizard.budgetTitle')}</Typography>
           {verbose ? (
             <Typography variant="body1" color="text.secondary" sx={{ mt: 1, mb: 3, maxWidth: 700 }}>
-              Free services are great for learning but have tighter limits. A subscription reuses a plan you already have. Pay-as-you-go APIs charge only for what your flows use and are usually the most flexible.
+              {t('models.wizard.budgetVerbose')}
             </Typography>
-          ) : <Typography color="text.secondary" sx={{ mt: 1, mb: 3 }}>Pick the billing style you want FLUJO to build around.</Typography>}
+          ) : <Typography color="text.secondary" sx={{ mt: 1, mb: 3 }}>{t('models.wizard.budgetBrief')}</Typography>}
           <ChoiceGrid>
-            <OptionCard icon={SavingsRoundedIcon} title="Let’s start free" description="No model usage bill; expect lower limits and changing availability." badge="Start here" onClick={() => go('location')} />
-            <OptionCard icon={WorkspacePremiumRoundedIcon} title="I already subscribe" description="Use Claude, ChatGPT/Codex, or a native Gemini developer key." onClick={() => go('subscription-provider')} />
-            <OptionCard icon={CreditCardRoundedIcon} title="I can pay—no subscription" description="Fund an API account and pay only for the requests you make." onClick={() => go('paid-provider')} />
+            <OptionCard icon={SavingsRoundedIcon} title={t('models.wizard.startFree')} description={t('models.wizard.startFreeDescription')} badge={t('models.wizard.startHere')} onClick={() => go('location')} />
+            <OptionCard icon={WorkspacePremiumRoundedIcon} title={t('models.wizard.alreadySubscribe')} description={t('models.wizard.alreadySubscribeDescription')} onClick={() => go('subscription-provider')} />
+            <OptionCard icon={CreditCardRoundedIcon} title={t('models.wizard.payNoSubscription')} description={t('models.wizard.payNoSubscriptionDescription')} onClick={() => go('paid-provider')} />
           </ChoiceGrid>
         </>
       );
@@ -547,16 +551,16 @@ export default function ModelConnectionWizard({
     if (step === 'location') {
       return (
         <>
-          <Typography variant="overline" color="primary.main">Free route</Typography>
-          <Typography variant="h4">Online or offline?</Typography>
+          <Typography variant="overline" color="primary.main">{t('models.wizard.freeRoute')}</Typography>
+          <Typography variant="h4">{t('models.wizard.locationTitle')}</Typography>
           <Typography color="text.secondary" sx={{ mt: 1, mb: 3 }}>
             {verbose
-              ? 'Online is easier and uses someone else’s hardware. Offline keeps prompts on this machine but downloads a model and uses your RAM or GPU.'
-              : 'Online is quickest; offline is private and uses this computer.'}
+              ? t('models.wizard.locationVerbose')
+              : t('models.wizard.locationBrief')}
           </Typography>
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 1.5 }}>
-            <OptionCard icon={CloudQueueRoundedIcon} title="Online" description="Fastest setup. Create a provider account and an API key." badge="Easy" onClick={() => go('free-provider')} />
-            <OptionCard icon={ComputerRoundedIcon} title="Offline" description="Install Ollama and download a model sized for this computer." badge="Private" onClick={() => selectSetup('ollama')} />
+            <OptionCard icon={CloudQueueRoundedIcon} title={t('models.wizard.online')} description={t('models.wizard.onlineDescription')} badge={t('models.wizard.easy')} onClick={() => go('free-provider')} />
+            <OptionCard icon={ComputerRoundedIcon} title={t('models.wizard.offline')} description={t('models.wizard.offlineDescription')} badge={t('models.wizard.private')} onClick={() => selectSetup('ollama')} />
           </Box>
         </>
       );
@@ -565,14 +569,14 @@ export default function ModelConnectionWizard({
     if (step === 'free-provider') {
       return (
         <>
-          <Typography variant="overline" color="primary.main">Free · online</Typography>
-          <Typography variant="h4">Choose your gateway</Typography>
+          <Typography variant="overline" color="primary.main">{t('models.wizard.copy.freeOnline')}</Typography>
+          <Typography variant="h4">{t('models.wizard.chooseGateway')}</Typography>
           <Typography color="text.secondary" sx={{ mt: 1, mb: 3 }}>
-            {verbose ? 'Both use the same free-router target; OpenRouter is the most direct route.' : 'OpenRouter is the direct route; Requesty adds gateway features.'}
+            {verbose ? t('models.wizard.freeGatewayVerbose') : t('models.wizard.freeGatewayBrief')}
           </Typography>
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 1.5 }}>
-            <OptionCard icon={RocketLaunchRoundedIcon} title="OpenRouter" description="Direct access to openrouter/free, with no model charges." badge="Recommended" onClick={() => selectSetup('openrouter-free')} />
-            <OptionCard icon={CloudQueueRoundedIcon} title="Requesty" description="A unified gateway that can grow into policies and paid models later." onClick={() => selectSetup('requesty-free')} />
+            <OptionCard icon={RocketLaunchRoundedIcon} title="OpenRouter" description={t('models.wizard.openrouterFreeDescription')} badge={t('models.wizard.recommended')} onClick={() => selectSetup('openrouter-free')} />
+            <OptionCard icon={CloudQueueRoundedIcon} title="Requesty" description={t('models.wizard.requestyFreeDescription')} onClick={() => selectSetup('requesty-free')} />
           </Box>
         </>
       );
@@ -581,15 +585,15 @@ export default function ModelConnectionWizard({
     if (step === 'subscription-provider') {
       return (
         <>
-          <Typography variant="overline" color="primary.main">Use what you already have</Typography>
-          <Typography variant="h4">Which service are you connecting?</Typography>
+          <Typography variant="overline" color="primary.main">{t('models.wizard.useExisting')}</Typography>
+          <Typography variant="h4">{t('models.wizard.whichService')}</Typography>
           <Typography color="text.secondary" sx={{ mt: 1, mb: 3 }}>
-            {verbose ? 'FLUJO will create a ready-to-use bundle, not just one empty model record.' : 'Pick the account you already use.'}
+            {verbose ? t('models.wizard.subscriptionVerbose') : t('models.wizard.subscriptionBrief')}
           </Typography>
           <ChoiceGrid>
-            <OptionCard icon={SmartToyRoundedIcon} title="Claude" description="Use a Claude Pro or Max plan through Claude Code." onClick={() => selectSetup('claude-subscription')} />
-            <OptionCard icon={TerminalRoundedIcon} title="ChatGPT / Codex" description="Use the local Codex sign-in attached to your ChatGPT plan." badge="No key paste" onClick={() => selectSetup('codex-subscription')} />
-            <OptionCard icon={AutoAwesomeRoundedIcon} title="Gemini Native" description="Use Google’s native GenAI SDK with a Gemini developer key." onClick={() => selectSetup('gemini-native')} />
+            <OptionCard icon={SmartToyRoundedIcon} title="Claude" description={t('models.wizard.claudeDescription')} onClick={() => selectSetup('claude-subscription')} />
+            <OptionCard icon={TerminalRoundedIcon} title="ChatGPT / Codex" description={t('models.wizard.codexDescription')} badge={t('models.wizard.noKeyPaste')} onClick={() => selectSetup('codex-subscription')} />
+            <OptionCard icon={AutoAwesomeRoundedIcon} title={t('models.wizard.geminiNative')} description={t('models.wizard.geminiDescription')} onClick={() => selectSetup('gemini-native')} />
           </ChoiceGrid>
         </>
       );
@@ -598,14 +602,14 @@ export default function ModelConnectionWizard({
     if (step === 'paid-provider') {
       return (
         <>
-          <Typography variant="overline" color="primary.main">Pay only for usage</Typography>
-          <Typography variant="h4">Choose your model gateway</Typography>
+          <Typography variant="overline" color="primary.main">{t('models.wizard.payUsage')}</Typography>
+          <Typography variant="h4">{t('models.wizard.chooseModelGateway')}</Typography>
           <Typography color="text.secondary" sx={{ mt: 1, mb: 3 }}>
-            {verbose ? 'You fund one account, and FLUJO creates several model choices that share its encrypted key.' : 'Both gateways share one encrypted key across the starter bundle.'}
+            {verbose ? t('models.wizard.paidVerbose') : t('models.wizard.paidBrief')}
           </Typography>
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 1.5 }}>
-            <OptionCard icon={RocketLaunchRoundedIcon} title="OpenRouter" description="Broad model catalog with direct auto-routing and spending limits." badge="Recommended" onClick={() => selectSetup('openrouter-paid')} />
-            <OptionCard icon={CloudQueueRoundedIcon} title="Requesty" description="Unified routing with policies, observability, and provider fallbacks." onClick={() => selectSetup('requesty-paid')} />
+            <OptionCard icon={RocketLaunchRoundedIcon} title="OpenRouter" description={t('models.wizard.openrouterPaidDescription')} badge={t('models.wizard.recommended')} onClick={() => selectSetup('openrouter-paid')} />
+            <OptionCard icon={CloudQueueRoundedIcon} title="Requesty" description={t('models.wizard.requestyPaidDescription')} onClick={() => selectSetup('requesty-paid')} />
           </Box>
         </>
       );
@@ -614,24 +618,24 @@ export default function ModelConnectionWizard({
     if (step === 'setup' && kind === 'ollama') {
       return (
         <>
-          <Typography variant="overline" color="primary.main">Free · offline</Typography>
-          <Typography variant="h4">Make this computer the AI provider</Typography>
+          <Typography variant="overline" color="primary.main">{t('models.wizard.freeOffline')}</Typography>
+          <Typography variant="h4">{t('models.wizard.ollamaTitle')}</Typography>
           <Typography color="text.secondary" sx={{ mt: 1, mb: 2.5 }}>
-            Ollama runs the model locally. The first model download can be several gigabytes; after that, prompts stay on this machine.
+            {t('models.wizard.ollamaDescription')}
           </Typography>
-          {ollamaLoading ? <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 3 }}><CircularProgress size={22} /><Typography>Checking Ollama and this machine…</Typography></Box> : null}
+          {ollamaLoading ? <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 3 }}><CircularProgress size={22} /><Typography>{t('models.wizard.checkingOllama')}</Typography></Box> : null}
           {!ollamaLoading && ollama ? (
             <Paper variant="outlined" sx={{ p: 2, mb: 2, borderRadius: 3 }}>
               <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" spacing={1.5}>
                 <Box>
-                  <Typography variant="subtitle1" sx={{ fontWeight: 720 }}>Recommended: {ollamaModel}</Typography>
+                  <Typography variant="subtitle1" sx={{ fontWeight: 720 }}>{t('models.wizard.recommendedModel', { model: ollamaModel })}</Typography>
                   <Typography variant="body2" color="text.secondary">
                     {ollama.ollamaReachable
-                      ? ollamaInstalled ? 'Ollama is ready and this model is already downloaded.' : 'Ollama is ready. FLUJO can download this model now.'
-                      : 'Ollama is not running yet. Install or start it, then check again.'}
+                      ? ollamaInstalled ? t('models.wizard.ollamaInstalled') : t('models.wizard.ollamaCanDownload')
+                      : t('models.wizard.ollamaNotRunningHelp')}
                   </Typography>
                 </Box>
-                <Chip color={ollama.ollamaReachable ? 'success' : 'warning'} label={ollama.ollamaReachable ? 'Ollama ready' : 'Not running'} />
+                <Chip color={ollama.ollamaReachable ? 'success' : 'warning'} label={ollama.ollamaReachable ? t('models.wizard.ollamaReady') : t('models.wizard.notRunning')} />
               </Stack>
             </Paper>
           ) : null}
@@ -639,14 +643,14 @@ export default function ModelConnectionWizard({
             <Box sx={{ mb: 2 }}>
               {installerPanel('ollama', 'winget install --id Ollama.Ollama -e --source winget')}
               <Button startIcon={<RefreshRoundedIcon />} onClick={() => void loadOllama()} disabled={ollamaLoading || Boolean(installTool)} sx={{ mt: 1 }}>
-                Check again
+                {t('models.wizard.checkAgain')}
               </Button>
             </Box>
           ) : null}
           {ollamaPulling ? (
             <Box sx={{ my: 2 }}>
               <LinearProgress />
-              <Typography variant="body2" sx={{ mt: 1 }}>Downloading {ollamaModel}… keep FLUJO open.</Typography>
+              <Typography variant="body2" sx={{ mt: 1 }}>{t('models.wizard.downloading', { model: ollamaModel })}</Typography>
               {ollamaProgress.length ? <Typography component="pre" variant="caption" color="text.secondary" sx={{ whiteSpace: 'pre-wrap' }}>{ollamaProgress.join('\n')}</Typography> : null}
             </Box>
           ) : null}
@@ -657,7 +661,7 @@ export default function ModelConnectionWizard({
             onClick={() => void connectOllama()}
             disabled={!ollama?.ollamaReachable || busy || ollamaPulling}
           >
-            {ollamaInstalled ? `Connect ${ollamaModel}` : `Download ${ollamaModel} & connect`}
+            {ollamaInstalled ? t('models.wizard.connectModel', { model: ollamaModel }) : t('models.wizard.downloadConnect', { model: ollamaModel })}
           </Button>
         </>
       );
@@ -668,31 +672,31 @@ export default function ModelConnectionWizard({
       const isCodex = kind === 'codex-subscription';
       return (
         <>
-          <Typography variant="overline" color="primary.main">{setup.eyebrow}</Typography>
-          <Typography variant="h4">{setup.title}</Typography>
-          <Typography color="text.secondary" sx={{ mt: 1, mb: 2.2, maxWidth: 720 }}>{setup.summary}</Typography>
+          <Typography variant="overline" color="primary.main">{t(setup.eyebrow)}</Typography>
+          <Typography variant="h4">{t(setup.title)}</Typography>
+          <Typography color="text.secondary" sx={{ mt: 1, mb: 2.2, maxWidth: 720 }}>{t(setup.summary)}</Typography>
 
           {isClaude ? (
             <Box sx={{ mb: 2 }}>
-              <Typography variant="subtitle2" sx={{ mb: 1 }}>1. Install Claude Code, then create a setup token</Typography>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>{t('models.wizard.installClaude')}</Typography>
               {installerPanel('claude', 'winget install --id Anthropic.ClaudeCode -e --source winget', 'claude setup-token')}
             </Box>
           ) : null}
           {isCodex ? (
             <Box sx={{ mb: 2 }}>
-              <Typography variant="subtitle2" sx={{ mb: 1 }}>1. Install Codex, then sign in with ChatGPT</Typography>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>{t('models.wizard.installCodex')}</Typography>
               {installerPanel('codex', 'winget install --id OpenAI.Codex -e --source winget', 'codex login')}
               <FormControlLabel
                 sx={{ mt: 1 }}
                 control={<Checkbox checked={confirmedLogin} onChange={(event) => setConfirmedLogin(event.target.checked)} />}
-                label="I completed the Codex browser sign-in"
+                label={t('models.wizard.codexLoginComplete')}
               />
             </Box>
           ) : null}
 
           {setup.accountUrl ? (
             <Button href={setup.accountUrl} target="_blank" rel="noreferrer" variant="outlined" startIcon={<OpenInNewRoundedIcon />} sx={{ mb: 2 }}>
-              {setup.accountLabel}
+              {setup.accountLabel ? t(setup.accountLabel) : null}
             </Button>
           ) : null}
 
@@ -701,17 +705,17 @@ export default function ModelConnectionWizard({
               fullWidth
               type="password"
               autoComplete="off"
-              label={`${isClaude ? '2. ' : ''}${setup.keyLabel}`}
+              label={`${isClaude ? '2. ' : ''}${setup.keyLabel ? t(setup.keyLabel) : ''}`}
               value={apiKey}
               onChange={(event) => { setApiKey(event.target.value); setError(null); }}
               InputProps={{ startAdornment: <KeyRoundedIcon color="action" sx={{ mr: 1 }} /> }}
-              helperText="Saved only when you finish; FLUJO encrypts it through the existing model-storage path."
+              helperText={t('models.wizard.keyStorageHelp')}
               sx={{ mb: 2 }}
             />
           ) : null}
 
-          <Alert severity="info" sx={{ mb: 2 }}>{setup.note}</Alert>
-          <Typography variant="subtitle2" sx={{ mb: 1 }}>FLUJO will add</Typography>
+          <Alert severity="info" sx={{ mb: 2 }}>{t(setup.note)}</Alert>
+          <Typography variant="subtitle2" sx={{ mb: 1 }}>{t('models.wizard.willAdd')}</Typography>
           <Stack direction="row" gap={0.8} flexWrap="wrap" sx={{ mb: 2.5 }}>
             {bundleNames.map((name) => <Chip key={name} label={name} variant="outlined" />)}
           </Stack>
@@ -722,7 +726,7 @@ export default function ModelConnectionWizard({
             onClick={() => void finishStandardSetup()}
             disabled={busy || Boolean(installTool)}
           >
-            Create {bundleNames.length === 1 ? 'my model' : `my ${bundleNames.length} models`}
+            {tp('models.wizard.createModels', bundleNames.length)}
           </Button>
         </>
       );
@@ -735,15 +739,15 @@ export default function ModelConnectionWizard({
           <Box sx={{ width: 78, height: 78, mx: 'auto', mb: 2, display: 'grid', placeItems: 'center', borderRadius: '50%', color: 'success.main', bgcolor: alpha(theme.palette.success.main, 0.13), animation: `${pop} 520ms cubic-bezier(.2,.8,.2,1) both` }}>
             <CheckCircleRoundedIcon sx={{ fontSize: 47 }} />
           </Box>
-          <Typography variant="h4">Your AI is ready to flow</Typography>
+          <Typography variant="h4">{t('models.wizard.successTitle')}</Typography>
           <Typography color="text.secondary" sx={{ mt: 1, mb: 2.2 }}>
-            {created.length ? `${created.length} new connection${created.length === 1 ? '' : 's'} created.` : 'Your matching connections were already here.'}
-            {existing.length ? ` ${existing.length} existing connection${existing.length === 1 ? ' was' : 's were'} kept.` : ''}
+            {created.length ? tp('models.wizard.created', created.length) : t('models.wizard.alreadyMatched')}
+            {existing.length ? ` ${tp('models.wizard.kept', existing.length)}` : ''}
           </Typography>
           <Stack direction="row" gap={0.8} justifyContent="center" flexWrap="wrap" sx={{ mb: 3 }}>
             {allNames.map((name) => <Chip icon={<SmartToyRoundedIcon />} key={name} label={name} color="primary" variant="outlined" />)}
           </Stack>
-          <Button variant="contained" size="large" onClick={onClose}>See my models</Button>
+          <Button variant="contained" size="large" onClick={onClose}>{t('models.wizard.seeModels')}</Button>
         </Box>
       );
     }
@@ -752,7 +756,7 @@ export default function ModelConnectionWizard({
   };
 
   return (
-    <Dialog open={open} onClose={busy || ollamaPulling || installTool ? undefined : onClose} fullWidth maxWidth="md" aria-label="Connect AI setup wizard">
+    <Dialog open={open} onClose={busy || ollamaPulling || installTool ? undefined : onClose} fullWidth maxWidth="md" aria-label={t('models.wizard.aria')}>
       <DialogContent sx={{ position: 'relative', minHeight: { xs: 560, sm: 590 }, p: { xs: 2.2, sm: 4 }, overflowX: 'hidden', overflowY: 'auto' }}>
         <Box aria-hidden sx={{ position: 'absolute', width: 220, height: 220, borderRadius: '50%', top: -120, right: -70, bgcolor: alpha(theme.palette.secondary.main, 0.12), filter: 'blur(1px)', animation: `${drift} 6s ease-in-out infinite` }} />
         <Box aria-hidden sx={{ position: 'absolute', width: 150, height: 150, borderRadius: 5, bottom: -100, left: -70, bgcolor: alpha(theme.palette.primary.main, 0.1), transform: 'rotate(24deg)', animation: `${drift} 7s ease-in-out -2s infinite` }} />
@@ -760,12 +764,12 @@ export default function ModelConnectionWizard({
         <Box sx={{ position: 'relative', zIndex: 1 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
             {history.length && step !== 'success' ? (
-              <IconButton onClick={back} aria-label="Back"><ArrowBackRoundedIcon /></IconButton>
+              <IconButton onClick={back} aria-label={t('models.wizard.backAria')}><ArrowBackRoundedIcon /></IconButton>
             ) : <Box sx={{ width: 40 }} />}
             <Box sx={{ flex: 1 }}>
-              <LinearProgress variant="determinate" value={progress} aria-label="Connection progress" />
+              <LinearProgress variant="determinate" value={progress} aria-label={t('models.wizard.progressAria')} />
             </Box>
-            <IconButton onClick={onClose} aria-label="Close connection wizard" disabled={busy || ollamaPulling || Boolean(installTool)}><CloseRoundedIcon /></IconButton>
+            <IconButton onClick={onClose} aria-label={t('models.wizard.closeAria')} disabled={busy || ollamaPulling || Boolean(installTool)}><CloseRoundedIcon /></IconButton>
           </Box>
 
           {error ? <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 2 }}>{error}</Alert> : null}

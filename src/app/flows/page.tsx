@@ -37,6 +37,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
 import { writeUiPreference } from '@/frontend/hooks/useUiPreference';
 import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('app/flows/page');
 
@@ -44,6 +45,7 @@ const FlowsPage = () => {
   log.debug('Rendering FlowsPage');
   const theme = useTheme();
   const router = useRouter();
+  const { t, tp, formatList } = useI18n();
   const [flows, setFlows] = useState<Flow[]>([]);
   const [selectedFlow, setSelectedFlow] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -95,19 +97,19 @@ const FlowsPage = () => {
             log.warn('Previously selected flow no longer exists', { flowId: selectedFlow });
             setSelectedFlow(null);
             setIsEditing(false);
-            showSnackbar('The previously selected flow is no longer available', 'warning');
+            showSnackbar(t('flows.page.previousMissing'), 'warning');
           }
         }
       } catch (error) {
         log.error('Error loading flows', error);
-        showSnackbar('Failed to load agents', 'error');
+        showSnackbar(t('flows.page.loadFailed'), 'error');
       } finally {
         setIsLoading(false);
       }
     };
 
     loadFlows();
-  }, [selectedFlow, draftFlow]);
+  }, [selectedFlow, draftFlow, t]);
   
   // Handle flow selection
   const handleSelectFlow = useCallback((flowId: string) => {
@@ -185,7 +187,7 @@ const FlowsPage = () => {
         setDraftDescendants([]);
         setSelectedFlow(null);
         showSnackbar(
-          hadDescendants ? 'Generated draft (and its subflows) discarded' : 'Generated draft discarded',
+          hadDescendants ? t('flows.page.draftBundleDiscarded') : t('flows.page.draftDiscarded'),
           'info'
         );
       }
@@ -195,7 +197,7 @@ const FlowsPage = () => {
     } else {
       leave();
     }
-  }, [draftFlow, draftDescendants, selectedFlow, showSnackbar]);
+  }, [draftFlow, draftDescendants, selectedFlow, showSnackbar, t]);
   
   // Handle banner close
   const handleSnackbarClose = useCallback(() => {
@@ -219,25 +221,25 @@ const FlowsPage = () => {
     // Check if name is empty
     if (!name.trim()) {
       log.debug('Flow name validation failed: empty name');
-      return "Agent name cannot be empty";
+      return t('flows.page.nameEmpty');
     }
     
     // Names are for people; the flow ID remains the stable machine identifier.
     if (!/^[\p{L}\p{N}_ -]+$/u.test(name.trim())) {
       log.debug('Flow name validation failed: invalid characters');
-      return "Use letters, numbers, spaces, underscores, or dashes";
+      return t('flows.page.nameCharacters');
     }
     
     // Check for duplicate names
     const isDuplicate = flows.some(flow => flow.name.trim().toLowerCase() === name.trim().toLowerCase());
     if (isDuplicate) {
       log.debug('Flow name validation failed: duplicate name');
-      return "An agent with this name already exists";
+      return t('flows.page.nameDuplicate');
     }
     
     log.debug('Flow name validation passed');
     return null;
-  }, [flows]);
+  }, [flows, t]);
 
   const handleSaveFlow = async (flow: Flow): Promise<boolean> => {
     log.info('Saving flow', { flowId: flow.id, flowName: flow.name });
@@ -254,7 +256,7 @@ const FlowsPage = () => {
             : await flowService.updateFlow(child);
           if (!childResult.success) {
             log.error('Failed to save a generated subflow', { error: childResult.error, childId: child.id });
-            showSnackbar(childResult.error || 'Failed to save a generated subflow', 'error');
+            showSnackbar(childResult.error || t('flows.page.saveSubflowFailed'), 'error');
             return false;
           }
         }
@@ -274,7 +276,7 @@ const FlowsPage = () => {
 
       if (!result.success) {
         log.error('Failed to save flow', { error: result.error });
-        showSnackbar(result.error || 'Failed to save flow', 'error');
+        showSnackbar(result.error || t('flows.page.saveFailed'), 'error');
         return false;
       }
       log.debug('Flow saved successfully');
@@ -301,11 +303,11 @@ const FlowsPage = () => {
       }
 
       setSelectedFlow(flow.id);
-      showSnackbar('Agent saved', 'success');
+      showSnackbar(t('flows.page.saved'), 'success');
       return true;
     } catch (error) {
       log.error('Error saving flow', error);
-      showSnackbar('Failed to save flow', 'error');
+      showSnackbar(t('flows.page.saveFailed'), 'error');
       return false;
     }
   };
@@ -318,8 +320,8 @@ const FlowsPage = () => {
       return [...withoutConverted, parentFlow, childFlow];
     });
     setSelectedFlow(parentFlow.id);
-    showSnackbar(`Created subflow "${childFlow.name}"`, 'success');
-  }, [showSnackbar]);
+    showSnackbar(t('flows.page.subflowCreated', { name: childFlow.name }), 'success');
+  }, [showSnackbar, t]);
 
   const handleDeleteFlow = async (flowId: string) => {
     log.info('Deleting flow', { flowId });
@@ -336,10 +338,10 @@ const FlowsPage = () => {
         setIsEditing(false);
       }
       
-      showSnackbar('Flow deleted', 'success');
+      showSnackbar(t('flows.page.deleted'), 'success');
     } catch (error) {
       log.error('Error deleting flow', error);
-      showSnackbar('Failed to delete flow', 'error');
+      showSnackbar(t('flows.page.deleteFailed'), 'error');
     }
   };
   
@@ -355,16 +357,16 @@ const FlowsPage = () => {
     try {
       const result = await flowService.updateFlow(updated);
       if (!result.success) {
-        showSnackbar(result.error || 'Failed to move flow to folder', 'error');
+        showSnackbar(result.error || t('flows.page.moveFailed'), 'error');
         return;
       }
       setFlows(prev => prev.map(f => (f.id === flowId ? updated : f)));
-      showSnackbar(updated.folder ? `Moved to "${updated.folder}"` : 'Removed from folder', 'success');
+      showSnackbar(updated.folder ? t('flows.page.moved', { folder: updated.folder }) : t('flows.page.removedFolder'), 'success');
     } catch (error) {
       log.error('Error setting flow folder', error);
-      showSnackbar('Failed to move flow to folder', 'error');
+      showSnackbar(t('flows.page.moveFailed'), 'error');
     }
-  }, [flows, showSnackbar]);
+  }, [flows, showSnackbar, t]);
 
   const handleToggleFavorite = useCallback(async (flowId: string) => {
     log.info('Toggling flow favorite', { flowId });
@@ -380,16 +382,16 @@ const FlowsPage = () => {
     try {
       const result = await flowService.updateFlow(updated);
       if (!result.success) {
-        showSnackbar(result.error || 'Failed to update favorite', 'error');
+        showSnackbar(result.error || t('flows.page.favoriteFailed'), 'error');
         return;
       }
       setFlows(prev => prev.map(f => (f.id === flowId ? updated : f)));
-      showSnackbar(nextFavorite ? 'Added to favorites' : 'Removed from favorites', 'success');
+      showSnackbar(nextFavorite ? t('flows.page.favoriteAdded') : t('flows.page.favoriteRemoved'), 'success');
     } catch (error) {
       log.error('Error toggling flow favorite', error);
-      showSnackbar('Failed to update favorite', 'error');
+      showSnackbar(t('flows.page.favoriteFailed'), 'error');
     }
-  }, [flows, showSnackbar]);
+  }, [flows, showSnackbar, t]);
 
   const handleCopyFlow = (flowId: string) => {
     log.info('Copying flow', { flowId });
@@ -397,11 +399,11 @@ const FlowsPage = () => {
     if (flowToCopy) {
       log.debug('Found flow to copy', { flowName: flowToCopy.name });
       setFlowToCopy(flowToCopy);
-      setNewFlowName(`${flowToCopy.name} copy`);
+      setNewFlowName(t('flows.page.copyName', { name: flowToCopy.name }));
       setCopyDialogOpen(true);
     } else {
       log.warn('Flow to copy not found', { flowId });
-      showSnackbar('Agent not found', 'error');
+      showSnackbar(t('flows.page.notFound'), 'error');
     }
   };
   
@@ -417,7 +419,7 @@ const FlowsPage = () => {
     log.info('Confirming flow copy');
     if (!flowToCopy) {
       log.warn('No flow to copy');
-      showSnackbar('No agent selected to copy', 'error');
+      showSnackbar(t('flows.page.noCopySelection'), 'error');
       return;
     }
     
@@ -453,7 +455,7 @@ const FlowsPage = () => {
     log.debug('Selecting newly copied flow');
     setSelectedFlow(newFlow.id);
     setIsEditing(true);
-    showSnackbar(`Created a copy named "${newFlowName}"`, 'success');
+    showSnackbar(t('flows.page.copyCreated', { name: newFlowName }), 'success');
   };
   
   const handleNewFlowNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -482,28 +484,29 @@ const FlowsPage = () => {
     setIsEditing(true);
     const freshInstalls = result.installedServers?.filter(s => !s.alreadyExisted) ?? [];
     const installNote = freshInstalls.length > 0
-      ? ` Connected ${freshInstalls.map(s => s.name).join(', ')}.`
+      ? t('flows.page.connectedServers', { servers: formatList(freshInstalls.map(s => s.name)) })
       : '';
     const subflowNote = descendants.length > 0
-      ? ` It also includes ${descendants.length} helper agent${descendants.length === 1 ? '' : 's'}.`
+      ? tp('flows.page.helper', descendants.length)
       : '';
+    const extraNotes = [subflowNote, installNote].filter(Boolean).join(' ');
     if (result.errorCount > 0) {
       showSnackbar(
-        `Your draft is ready, but ${result.errorCount} thing${result.errorCount === 1 ? '' : 's'} need attention before it can run. Review it here; Expert view has the detailed fixes.${subflowNote}${installNote}`,
+        `${tp('flows.page.draftAttention', result.errorCount)}${extraNotes ? ` ${extraNotes}` : ''}`,
         'warning'
       );
     } else if (result.warningCount > 0) {
-      showSnackbar(`Your agent draft is ready. Review the suggestions, then try it.${subflowNote}${installNote}`, 'info');
+      showSnackbar(`${t('flows.page.draftSuggestions')}${extraNotes ? ` ${extraNotes}` : ''}`, 'info');
     } else {
-      showSnackbar(`Your agent draft is ready. Review it, then choose Try it.${subflowNote}${installNote}`, 'success');
+      showSnackbar(`${t('flows.page.draftReady')}${extraNotes ? ` ${extraNotes}` : ''}`, 'success');
     }
-  }, [showSnackbar]);
+  }, [showSnackbar, t, tp, formatList]);
 
   // Create a new flow with a unique name
   const createNewFlow = useCallback((authoringMode: FlowAuthoringMode = 'guided') => {
     log.info('Creating new flow');
     // Generate a unique name for the new flow
-    const baseName = "Untitled agent";
+    const baseName = t('flows.page.untitled');
     let newName = baseName;
     let counter = 2;
     
@@ -528,11 +531,11 @@ const FlowsPage = () => {
     setIsEditing(true);
     showSnackbar(
       authoringMode === 'advanced'
-        ? 'Your new agent is ready in Expert view. Add and connect the nodes you need.'
-        : 'Your new agent is ready. Give it a name, add a task, then try it.',
+        ? t('flows.page.newExpert')
+        : t('flows.page.newGuided'),
       'info',
     );
-  }, [flows, showSnackbar]);
+  }, [flows, showSnackbar, t]);
 
   // The setup journey deep-links directly into easy creation. Wait for the
   // assistant list so the generated draft name is unique, consume the query
@@ -560,14 +563,14 @@ const FlowsPage = () => {
         return (
           <Box sx={{ p: 4, textAlign: 'center' }}>
             <Typography variant="h6" color="error">
-              Agent not found
+              {t('flows.page.notFound')}
             </Typography>
             <Button 
               variant="contained" 
               onClick={handleBackToDashboard}
               sx={{ mt: 2 }}
             >
-              Back to My Agents
+              {t('flows.page.back')}
             </Button>
           </Box>
         );
@@ -591,6 +594,7 @@ const FlowsPage = () => {
               onRelatedDraftFlowsChange={setDraftDescendants}
               isDraft={draftFlow?.id === selectedFlowData.id}
               onTry={handleOpenSelectedFlowInChat}
+              onNavigateToFlow={handleSelectFlow}
             />
           </Box>
         </Fade>
@@ -628,27 +632,27 @@ const FlowsPage = () => {
       }}
     >
       <PageHeader
-        eyebrow={isEditing ? 'My agents' : 'Create'}
+        eyebrow={isEditing ? t('flows.page.eyebrowMine') : t('flows.page.eyebrowCreate')}
         icon={AccountTreeRoundedIcon}
         compact={isEditing}
         title={
           isEditing && selectedFlow
             ? draftFlow?.id === selectedFlow
-              ? `${draftFlow.name} · Draft`
-              : flows.find(f => f.id === selectedFlow)?.name || 'Agent'
-            : 'My agents'
+              ? t('flows.page.draftSuffix', { name: draftFlow.name })
+              : flows.find(f => f.id === selectedFlow)?.name || t('flows.page.agent')
+            : t('flows.page.title')
         }
         description={
           isEditing
-            ? 'Choose what it should do, in order. You can always change it later.'
-            : 'Create helpful AI agents, keep them organized, and try them whenever you need them.'
+            ? t('flows.page.editDescription')
+            : t('flows.page.description')
         }
         leading={
           isEditing && selectedFlow ? (
             <IconButton
               color="primary"
               onClick={handleBackToDashboard}
-              aria-label="Back to my agents"
+              aria-label={t('flows.page.back')}
               sx={{ border: 1, borderColor: 'divider' }}
             >
               <ArrowBackIcon />
@@ -658,7 +662,7 @@ const FlowsPage = () => {
         actions={
           !isEditing ? (
             <>
-            <Tooltip title="Describe what you need in everyday language" describeChild>
+            <Tooltip title={t('flows.page.aiHelp')} describeChild>
               <Button
                 variant="contained"
                 color="primary"
@@ -666,10 +670,10 @@ const FlowsPage = () => {
                 onClick={() => setGenerateDialogOpen(true)}
                 data-tour="generate-flow"
               >
-                Create with AI
+                {t('flows.page.createAi')}
               </Button>
             </Tooltip>
-            <Tooltip title="Create an agent step by step in easy mode" describeChild>
+            <Tooltip title={t('flows.page.simpleHelp')} describeChild>
               <Button
                 variant="outlined"
                 color="primary"
@@ -677,10 +681,10 @@ const FlowsPage = () => {
                 onClick={() => createNewFlow('guided')}
                 data-tour="new-flow"
               >
-                Start simple
+                {t('flows.page.startSimple')}
               </Button>
             </Tooltip>
-            <Tooltip title="Build directly with the full node editor" describeChild>
+            <Tooltip title={t('flows.page.expertHelp')} describeChild>
               <Button
                 variant="outlined"
                 color="primary"
@@ -688,7 +692,7 @@ const FlowsPage = () => {
                 onClick={() => createNewFlow('advanced')}
                 data-tour="new-expert-flow"
               >
-                Start expert
+                {t('flows.page.startExpert')}
               </Button>
             </Tooltip>
             </>
@@ -715,15 +719,15 @@ const FlowsPage = () => {
       
       {/* Copy agent dialog */}
       <Dialog open={copyDialogOpen} onClose={handleCopyDialogClose}>
-        <DialogTitle>Copy agent</DialogTitle>
+        <DialogTitle>{t('flows.page.copyTitle')}</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            Give the copy a name:
+            {t('flows.page.copyPrompt')}
           </DialogContentText>
           <TextField
             autoFocus
             margin="dense"
-            label="Agent name"
+            label={t('flows.page.nameLabel')}
             type="text"
             fullWidth
             value={newFlowName}
@@ -733,14 +737,14 @@ const FlowsPage = () => {
           />
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleCopyDialogClose}>Cancel</Button>
+          <Button onClick={handleCopyDialogClose}>{t('common.cancel')}</Button>
           <Button 
             onClick={handleCopyConfirm} 
             variant="contained" 
             color="primary"
             disabled={!!nameError}
           >
-            Copy
+            {t('flows.page.copyAction')}
           </Button>
         </DialogActions>
       </Dialog>

@@ -19,6 +19,7 @@ import CapabilitiesManager from '../MCPCapabilitiesManager';
 import EnvEditor from '../MCPEnvManager/EnvEditor';
 import { EnvVarValue } from '@/shared/types/mcp';
 import { createLogger } from '@/utils/logger';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/mcp/MCPServerManager/ServerDetailsModal');
 
@@ -62,6 +63,7 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
   onServerRestart,
   toolPrefill,
 }) => {
+  const { t } = useI18n();
   const [tab, setTab] = useState<DetailsTab>('tools');
 
   // Reset to the Tools tab whenever a different server is opened.
@@ -71,6 +73,15 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
 
   const open = server !== null;
   const serverName = server?.name || '';
+  const statusLabel = (status: string) => {
+    switch (status) {
+      case 'connected': return t('mcp.status.connected');
+      case 'error': return t('mcp.status.error');
+      case 'connecting': return t('mcp.status.connecting');
+      case 'initialization': return t('mcp.status.initialization');
+      default: return t('mcp.status.disconnected');
+    }
+  };
 
   const handleSaveEnv = async (env: EnvRecord) => {
     if (server) {
@@ -93,19 +104,19 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
             <Typography variant="h6">{serverName}</Typography>
             {server && (
               <Typography variant="body2" sx={{ color: statusColor(server.status) }}>
-                {server.status}
+                {statusLabel(server.status)}
               </Typography>
             )}
           </Box>
-          <IconButton edge="end" onClick={onClose} aria-label="close">
+          <IconButton edge="end" onClick={onClose} aria-label={t('mcp.details.close')}>
             <CloseIcon />
           </IconButton>
         </Box>
         <Tabs value={tab} onChange={(_, v: DetailsTab) => setTab(v)} sx={{ mt: 1 }}>
-          <Tab label="Tools" value="tools" />
-          <Tab label="Resources" value="resources" />
-          <Tab label="Prompts" value="prompts" />
-          <Tab label="Environment Variables" value="env" />
+          <Tab label={t('mcp.details.tools')} value="tools" />
+          <Tab label={t('mcp.details.resources')} value="resources" />
+          <Tab label={t('mcp.details.prompts')} value="prompts" />
+          <Tab label={t('mcp.details.env')} value="env" />
         </Tabs>
       </DialogTitle>
       <Divider />

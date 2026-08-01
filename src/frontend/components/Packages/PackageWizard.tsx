@@ -55,12 +55,20 @@ import { buildManualProposal, SECRET_KINDS } from '@/shared/types/package/secret
 import { packageToWizardDraft, parseImportedPackage } from '@/shared/types/package/package.import';
 import type { WizardDraft } from '@/shared/types/package/package.import';
 import { createLogger } from '@/utils/logger';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import Trans from '@/frontend/components/shared/Trans';
 
 const log = createLogger('frontend/components/Packages/PackageWizard');
 
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-.]+)?(?:\+[0-9A-Za-z-.]+)?$/;
 
-const STEPS = ['Select contents', 'Resolve & validate', 'Secret review', 'Metadata', 'Export'];
+const STEP_KEYS = [
+  'packages.wizard.step.select',
+  'packages.wizard.step.resolve',
+  'packages.wizard.step.secrets',
+  'packages.wizard.step.metadata',
+  'packages.wizard.step.export',
+] as const;
 
 /** Keep the stable manifest identifier while hiding its redundant generated prefix in the wizard. */
 export function displaySecretName(name: string): string {
@@ -99,6 +107,7 @@ interface Props {
  */
 export default function PackageWizard({ open, onClose }: Props) {
   const theme = useTheme();
+  const { t, tp, formatNumber, formatList } = useI18n();
   const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
   const [activeStep, setActiveStep] = useState(0);
 
@@ -245,7 +254,7 @@ export default function PackageWizard({ open, onClose }: Props) {
       try {
         text = await file.text();
       } catch (err) {
-        setImportErrors([err instanceof Error ? err.message : 'Failed to read the file']);
+        setImportErrors([err instanceof Error ? err.message : t('packages.wizard.readFailed')]);
         return;
       }
       const parsed = parseImportedPackage(text);
@@ -287,7 +296,7 @@ export default function PackageWizard({ open, onClose }: Props) {
         missing: draft.missing.length,
       });
     },
-    [entities],
+    [entities, t],
   );
 
   const runResolve = useCallback(async () => {
@@ -308,11 +317,11 @@ export default function PackageWizard({ open, onClose }: Props) {
         Object.fromEntries((result.globals ?? []).map((entry) => [entry.name, entry.description ?? ''])),
       );
     } catch (err) {
-      setResolveError(err instanceof Error ? err.message : 'Failed to resolve dependencies');
+      setResolveError(err instanceof Error ? err.message : t('packages.wizard.resolveFailed'));
     } finally {
       setResolving(false);
     }
-  }, [selection]);
+  }, [selection, t]);
 
   /**
    * Run the content-secret derivation (issue #195). Heuristic-only unless a
@@ -359,13 +368,13 @@ export default function PackageWizard({ open, onClose }: Props) {
         });
         setDeriveWarnings(res.warnings ?? []);
       } catch (err) {
-        setDeriveError(err instanceof Error ? err.message : 'Failed to derive secrets');
+        setDeriveError(err instanceof Error ? err.message : t('packages.wizard.deriveFailed'));
       } finally {
         setDeriving(false);
         setDerivedOnce(true);
       }
     },
-    [selection, scanEntropy, scanRepoSlug, importedSecretNames],
+    [selection, scanEntropy, scanRepoSlug, importedSecretNames, t],
   );
 
   const toggleProposalGroup = (ids: string[]) =>
@@ -391,7 +400,7 @@ export default function PackageWizard({ open, onClose }: Props) {
       kind: manualKind,
     });
     if (!proposal) {
-      setManualError('Enter a non-empty value to redact (under 2000 characters).');
+      setManualError(t('packages.wizard.manualInvalid'));
       return;
     }
     setContentProposals((prev) =>
@@ -412,12 +421,12 @@ export default function PackageWizard({ open, onClose }: Props) {
       const candidates = await getPackageService().scanTargets(selection);
       setPickerCandidates(candidates);
     } catch (err) {
-      setPickerError(err instanceof Error ? err.message : 'Failed to load candidate values');
+      setPickerError(err instanceof Error ? err.message : t('packages.wizard.candidatesFailed'));
       setPickerCandidates([]);
     } finally {
       setPickerLoading(false);
     }
-  }, [selection]);
+  }, [selection, t]);
 
   /** Pick a candidate value: pre-fill the manual-secret form and close the picker (#285). */
   const pickValue = (candidate: SecretValueCandidate) => {
@@ -501,7 +510,7 @@ export default function PackageWizard({ open, onClose }: Props) {
   }, [importedDraft, derivedOnce, resolveResult, contentProposals]);
 
   const kindCounts = useMemo(() => {
-    const counts = new Map<string, number>();
+    const counts = new Map<SecretKind, number>();
     for (const g of groupedProposals) counts.set(g.kind, (counts.get(g.kind) ?? 0) + 1);
     return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
   }, [groupedProposals]);
@@ -540,10 +549,10 @@ export default function PackageWizard({ open, onClose }: Props) {
       );
       setBuildResult(result);
       if (!result.ok) {
-        setBuildError((result.errors && result.errors[0]) || 'Package build failed');
+        setBuildError((result.errors && result.errors[0]) || t('packages.wizard.buildFailed'));
       }
     } catch (err) {
-      setBuildError(err instanceof Error ? err.message : 'Failed to build package');
+      setBuildError(err instanceof Error ? err.message : t('packages.wizard.buildRequestFailed'));
     } finally {
       setBuilding(false);
     }
@@ -557,6 +566,7 @@ export default function PackageWizard({ open, onClose }: Props) {
     resolveResult,
     globalDescriptions,
     excludedEntitySecrets,
+    t,
   ]);
 
   /**
@@ -576,12 +586,12 @@ export default function PackageWizard({ open, onClose }: Props) {
       setPublishResult({
         ok: false,
         code: 'error',
-        error: err instanceof Error ? err.message : 'Failed to publish package',
+        error: err instanceof Error ? err.message : t('packages.wizard.publishFailed'),
       });
     } finally {
       setPublishing(false);
     }
-  }, [buildResult]);
+  }, [buildResult, t]);
 
   const downloadManifest = () => {
     if (!buildResult?.json) return;
@@ -608,7 +618,7 @@ export default function PackageWizard({ open, onClose }: Props) {
       await runBuild();
       return;
     }
-    setActiveStep((s) => Math.min(s + 1, STEPS.length - 1));
+    setActiveStep((s) => Math.min(s + 1, STEP_KEYS.length - 1));
   };
 
   const handleBack = () => setActiveStep((s) => Math.max(s - 1, 0));
@@ -616,6 +626,26 @@ export default function PackageWizard({ open, onClose }: Props) {
   const versionValid = SEMVER.test(version.trim());
   const metadataValid = name.trim().length > 0 && versionValid;
   const mcpBlocked = Boolean(resolveResult && !resolveResult.mcp.ok);
+
+  const entityTypeLabel = (type: string) => {
+    switch (type) {
+      case 'flow': return t('packages.wizard.entity.flow');
+      case 'model': return t('packages.wizard.entity.model');
+      case 'mcpServer': return t('packages.wizard.entity.mcpServer');
+      case 'plannedExecution': return t('packages.wizard.entity.plannedExecution');
+      default: return type;
+    }
+  };
+
+  const autoReasonLabel = (reason: string) => {
+    const planned = /^used by planned execution "(.+)"$/.exec(reason);
+    if (planned) return t('packages.wizard.reason.planned', { name: planned[1] });
+    const subflow = /^subflow of "(.+)"$/.exec(reason);
+    if (subflow) return t('packages.wizard.reason.subflow', { name: subflow[1] });
+    const flow = /^used by flow "(.+)"$/.exec(reason);
+    if (flow) return t('packages.wizard.reason.flow', { name: flow[1] });
+    return reason;
+  };
 
   const nextDisabled = (() => {
     if (activeStep === 0) return nothingSelected || resolving;
@@ -643,7 +673,7 @@ export default function PackageWizard({ open, onClose }: Props) {
         <TextField
           size="small"
           fullWidth
-          placeholder={`Search ${title.toLowerCase()}…`}
+          placeholder={t('packages.wizard.search', { category: title.toLocaleLowerCase() })}
           value={search}
           onChange={(e) => onSearch(e.target.value)}
           InputProps={{
@@ -657,11 +687,11 @@ export default function PackageWizard({ open, onClose }: Props) {
         />
         {options.length === 0 ? (
           <Typography variant="body2" color="text.secondary">
-            None available
+            {t('packages.wizard.noneAvailable')}
           </Typography>
         ) : filtered.length === 0 ? (
           <Typography variant="body2" color="text.secondary">
-            No matches for “{search}”.
+            {t('packages.wizard.noMatches', { search })}
           </Typography>
         ) : (
           <List dense sx={{ maxHeight: { xs: 240, md: '45vh' }, overflow: 'auto', border: 1, borderColor: 'divider', borderRadius: 1 }}>
@@ -691,12 +721,11 @@ export default function PackageWizard({ open, onClose }: Props) {
         ) : (
           <Stack spacing={2}>
             <Typography variant="body2" color="text.secondary">
-              Pick the entities to include. Dependencies (subflows, referenced models and
-              MCP servers, planned-execution flows) are pulled in automatically in the next step.
+              {t('packages.wizard.selectHelp')}
             </Typography>
             <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
               <Button component="label" variant="outlined" startIcon={<UploadFileIcon />}>
-                Import manifest (.json)
+                {t('packages.wizard.import')}
                 <input
                   type="file"
                   accept="application/json,.json"
@@ -710,13 +739,12 @@ export default function PackageWizard({ open, onClose }: Props) {
                 />
               </Button>
               <Typography variant="caption" color="text.secondary">
-                Restores the selection, metadata and accepted secrets from a package you
-                exported earlier.
+                {t('packages.wizard.importHelp')}
               </Typography>
             </Stack>
             {importErrors.length > 0 && (
               <Alert severity="error" onClose={() => setImportErrors([])}>
-                <AlertTitle>Could not import that file</AlertTitle>
+                <AlertTitle>{t('packages.wizard.importErrorTitle')}</AlertTitle>
                 {importErrors.map((e, i) => (
                   <div key={i}>{e}</div>
                 ))}
@@ -725,19 +753,24 @@ export default function PackageWizard({ open, onClose }: Props) {
             {importedDraft && (
               <Alert severity={importedDraft.missing.length > 0 ? 'warning' : 'success'}>
                 <AlertTitle>
-                  Imported “{importedDraft.metadata.name}” v{importedDraft.metadata.version}
+                  {t('packages.wizard.importedTitle', {
+                    name: importedDraft.metadata.name,
+                    version: importedDraft.metadata.version,
+                  })}
                 </AlertTitle>
-                Restored {importedDraft.selection.flowIds.length} flow(s),{' '}
-                {importedDraft.selection.modelIds.length} model(s),{' '}
-                {importedDraft.selection.mcpServerNames.length} MCP server(s),{' '}
-                {importedDraft.selection.plannedExecutionIds.length} planned execution(s) and{' '}
-                {importedDraft.secretNames.length} secret name(s).
+                {t('packages.wizard.importedSummary', {
+                  flows: tp('packages.installed.flows', importedDraft.selection.flowIds.length),
+                  models: tp('packages.installed.models', importedDraft.selection.modelIds.length),
+                  servers: tp('packages.installed.servers', importedDraft.selection.mcpServerNames.length),
+                  planned: tp('packages.installed.planned', importedDraft.selection.plannedExecutionIds.length),
+                  secrets: tp('packages.wizard.secretNames', importedDraft.secretNames.length),
+                })}
                 {importedDraft.missing.length > 0 && (
                   <Box sx={{ mt: 1 }}>
-                    No longer on this host (left unselected):
+                    {t('packages.wizard.missingHost')}
                     {importedDraft.missing.map((m, i) => (
                       <div key={i}>
-                        {m.type}: {m.label}
+                        {entityTypeLabel(m.type)}: {m.label}
                       </div>
                     ))}
                   </Box>
@@ -745,10 +778,10 @@ export default function PackageWizard({ open, onClose }: Props) {
               </Alert>
             )}
             <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
-              {renderList('Flows', entities.flows, selectedFlows, toggle(setSelectedFlows), flowSearch, setFlowSearch)}
-              {renderList('Models', entities.models, selectedModels, toggle(setSelectedModels), modelSearch, setModelSearch)}
-              {renderList('MCP servers', entities.mcpServers, selectedServers, toggle(setSelectedServers), serverSearch, setServerSearch)}
-              {renderList('Planned executions', entities.plannedExecutions, selectedPlanned, toggle(setSelectedPlanned), plannedSearch, setPlannedSearch)}
+              {renderList(t('packages.wizard.flows'), entities.flows, selectedFlows, toggle(setSelectedFlows), flowSearch, setFlowSearch)}
+              {renderList(t('packages.wizard.models'), entities.models, selectedModels, toggle(setSelectedModels), modelSearch, setModelSearch)}
+              {renderList(t('packages.wizard.servers'), entities.mcpServers, selectedServers, toggle(setSelectedServers), serverSearch, setServerSearch)}
+              {renderList(t('packages.wizard.planned'), entities.plannedExecutions, selectedPlanned, toggle(setSelectedPlanned), plannedSearch, setPlannedSearch)}
             </Stack>
           </Stack>
         );
@@ -768,7 +801,7 @@ export default function PackageWizard({ open, onClose }: Props) {
           <Stack spacing={2}>
             {mcpBlocked && (
               <Alert severity="error">
-                <AlertTitle>Local MCP server(s) cannot be packaged</AlertTitle>
+                <AlertTitle>{t('packages.wizard.localMcpTitle')}</AlertTitle>
                 {resolveResult.mcp.errors.map((e, i) => (
                   <div key={i}>{e}</div>
                 ))}
@@ -776,17 +809,17 @@ export default function PackageWizard({ open, onClose }: Props) {
             )}
             {resolveResult.resolved.autoAdded.length > 0 && (
               <Alert severity="info">
-                <AlertTitle>Automatically included dependencies</AlertTitle>
+                <AlertTitle>{t('packages.wizard.autoDependencies')}</AlertTitle>
                 {resolveResult.resolved.autoAdded.map((a, i) => (
                   <div key={i}>
-                    {a.type}: <code>{a.id}</code> — {a.reason}
+                    {entityTypeLabel(a.type)}: <code>{a.id}</code> — {autoReasonLabel(a.reason)}
                   </div>
                 ))}
               </Alert>
             )}
             {resolveResult.resolved.warnings.length > 0 && (
               <Alert severity="warning">
-                <AlertTitle>Warnings</AlertTitle>
+                <AlertTitle>{t('packages.wizard.warnings')}</AlertTitle>
                 {resolveResult.resolved.warnings.map((w, i) => (
                   <div key={i}>{w}</div>
                 ))}
@@ -794,10 +827,12 @@ export default function PackageWizard({ open, onClose }: Props) {
             )}
             <Divider />
             <Typography variant="body2">
-              Resolved: {resolveResult.resolved.flowIds.length} flow(s),{' '}
-              {resolveResult.resolved.modelIds.length} model(s),{' '}
-              {resolveResult.resolved.mcpServerNames.length} MCP server(s),{' '}
-              {resolveResult.resolved.plannedExecutionIds.length} planned execution(s).
+              {t('packages.wizard.resolved', {
+                flows: tp('packages.installed.flows', resolveResult.resolved.flowIds.length),
+                models: tp('packages.installed.models', resolveResult.resolved.modelIds.length),
+                servers: tp('packages.installed.servers', resolveResult.resolved.mcpServerNames.length),
+                planned: tp('packages.installed.planned', resolveResult.resolved.plannedExecutionIds.length),
+              })}
             </Typography>
             {resolveResult.mcp.servers.length > 0 && (
               <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
@@ -811,13 +846,12 @@ export default function PackageWizard({ open, onClose }: Props) {
       case 2:
         return (
           <Stack spacing={2}>
-            <Typography variant="subtitle2">Global variables</Typography>
+            <Typography variant="subtitle2">{t('packages.wizard.globals')}</Typography>
             <Typography variant="body2" color="text.secondary">
-              Global variables referenced by the package. Add a useful description for each one;
-              installers will supply values and FLUJO will create them in Global Variables.
+              {t('packages.wizard.globalsHelp')}
             </Typography>
             {!resolveResult || (resolveResult.globals ?? []).length === 0 ? (
-              <Alert severity="success">No global variables referenced by this package.</Alert>
+              <Alert severity="success">{t('packages.wizard.noGlobals')}</Alert>
             ) : (
               <Stack spacing={1.5}>
                 {resolveResult.globals.map((entry) => (
@@ -834,13 +868,13 @@ export default function PackageWizard({ open, onClose }: Props) {
                       }
                       helperText={
                         entry.isSecret
-                          ? 'Secret global; its value is never included in the package'
-                          : 'Description shown during package installation'
+                          ? t('packages.wizard.secretGlobalHelp')
+                          : t('packages.wizard.descriptionHelp')
                       }
                       fullWidth
                     />
                     {entry.isSecret && (
-                      <Chip label="secret global" size="small" color="warning" variant="outlined" />
+                      <Chip label={t('packages.wizard.secretGlobal')} size="small" color="warning" variant="outlined" />
                     )}
                   </Stack>
                 ))}
@@ -849,13 +883,12 @@ export default function PackageWizard({ open, onClose }: Props) {
 
             <Divider />
 
-            <Typography variant="subtitle2">Declared secrets (entity keys)</Typography>
+            <Typography variant="subtitle2">{t('packages.wizard.entitySecrets')}</Typography>
             <Typography variant="body2" color="text.secondary">
-              Secrets the package will declare from model API keys and MCP env/headers.
-              Values are never included — whoever installs must supply them.
+              {t('packages.wizard.entitySecretsHelp')}
             </Typography>
             {!resolveResult || resolveResult.secrets.length === 0 ? (
-              <Alert severity="success">No entity secrets to declare.</Alert>
+              <Alert severity="success">{t('packages.wizard.noEntitySecrets')}</Alert>
             ) : (
               <List dense>
                 {resolveResult.secrets.map((s) => (
@@ -871,18 +904,18 @@ export default function PackageWizard({ open, onClose }: Props) {
                           return next;
                         })
                       }
-                      inputProps={{ 'aria-label': `Include ${s.name} in package secrets` }}
+                      inputProps={{ 'aria-label': t('packages.wizard.includeSecretAria', { name: s.name }) }}
                     />
                     <ListItemText
                       primary={
                         <>
                           <code>{displaySecretName(s.name)}</code>{' '}
-                          {s.required && <Chip label="required" size="small" color="warning" />}
+                          {s.required && <Chip label={t('packages.wizard.required')} size="small" color="warning" />}
                         </>
                       }
                       secondary={
                         excludedEntitySecrets.has(s.name)
-                          ? 'Excluded — the package will not request this value'
+                          ? t('packages.wizard.excluded')
                           : s.description
                       }
                     />
@@ -893,12 +926,12 @@ export default function PackageWizard({ open, onClose }: Props) {
 
             <Divider />
 
-            <Typography variant="subtitle2">Detected secrets in content</Typography>
+            <Typography variant="subtitle2">{t('packages.wizard.detectedSecrets')}</Typography>
             <Typography variant="body2" color="text.secondary">
-              Values that look secret or instance-specific (paths, repos, tokens, URLs,
-              emails) found in flow prompts, node properties, model config and planned-
-              execution prompts. Accepted rows are replaced with a{' '}
-              <code>{'{{secret.NAME}}'}</code> placeholder everywhere they occur.
+              <Trans
+                message="packages.wizard.detectedHelp"
+                values={{ placeholder: <code>{'{{secret.NAME}}'}</code> }}
+              />
             </Typography>
 
             {deriving && (
@@ -909,32 +942,40 @@ export default function PackageWizard({ open, onClose }: Props) {
             {deriveError && <Alert severity="error">{deriveError}</Alert>}
 
             {!deriving && derivedOnce && contentProposals.length === 0 && (
-              <Alert severity="success">No likely secrets detected in the packaged content.</Alert>
+              <Alert severity="success">{t('packages.wizard.noDetected')}</Alert>
             )}
 
             {contentProposals.length > 0 && (
               <>
                 <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
                   {kindCounts.map(([kind, count]) => (
-                    <Chip key={kind} size="small" variant="outlined" label={`${kind}: ${count}`} />
+                    <Chip
+                      key={kind}
+                      size="small"
+                      variant="outlined"
+                      label={`${t(`packages.wizard.kind.${kind}`)}: ${formatNumber(count)}`}
+                    />
                   ))}
                 </Stack>
                 <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
                   <Button size="small" onClick={() => setAllProposals(true)}>
-                    Accept all
+                    {t('packages.wizard.acceptAll')}
                   </Button>
                   <Button size="small" onClick={() => setAllProposals(false)}>
-                    Reject all
+                    {t('packages.wizard.rejectAll')}
                   </Button>
                   <TextField
                     size="small"
-                    placeholder="Filter detected secrets…"
+                    placeholder={t('packages.wizard.filterSecrets')}
                     value={proposalFilter}
                     onChange={(e) => setProposalFilter(e.target.value)}
                     sx={{ minWidth: 200, flex: 1 }}
                   />
                   <Typography variant="caption" color="text.secondary" sx={{ alignSelf: 'center' }}>
-                    {groupedProposals.filter((g) => g.accepted).length} of {groupedProposals.length} accepted
+                    {t('packages.wizard.accepted', {
+                      accepted: formatNumber(groupedProposals.filter((g) => g.accepted).length),
+                      total: formatNumber(groupedProposals.length),
+                    })}
                   </Typography>
                 </Stack>
                 <List dense sx={{ border: 1, borderColor: 'divider', borderRadius: 1, maxHeight: 280, overflow: 'auto' }}>
@@ -943,7 +984,7 @@ export default function PackageWizard({ open, onClose }: Props) {
                       <ListItemText
                         primary={
                           <Typography variant="body2" color="text.secondary">
-                            No rows match “{proposalFilter}”.
+                            {t('packages.wizard.noRows', { search: proposalFilter })}
                           </Typography>
                         }
                       />
@@ -963,16 +1004,16 @@ export default function PackageWizard({ open, onClose }: Props) {
                       <ListItemText
                         primary={
                           <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-                            <Chip label={g.kind} size="small" />
+                            <Chip label={t(`packages.wizard.kind.${g.kind}`)} size="small" />
                             <Chip
-                              label={g.source}
+                              label={t(`packages.wizard.source.${g.source}`)}
                               size="small"
                               variant="outlined"
                               color={g.source === 'model' ? 'secondary' : g.source === 'manual' ? 'primary' : 'default'}
                             />
                             {g.confidence && (
                               <Chip
-                                label={g.confidence}
+                                label={t(`packages.wizard.confidence.${g.confidence}`)}
                                 size="small"
                                 variant="outlined"
                                 color={
@@ -996,13 +1037,15 @@ export default function PackageWizard({ open, onClose }: Props) {
                           <Stack spacing={0.5} sx={{ mt: 0.5 }}>
                             <Typography variant="caption" color="text.secondary">
                               {g.locations.length > 1
-                                ? `${g.locations.length} locations: ${g.locations.slice(0, 3).join(', ')}${g.locations.length > 3 ? ', …' : ''}`
+                                ? tp('packages.wizard.locations', g.locations.length, {
+                                    locations: `${g.locations.slice(0, 3).join(', ')}${g.locations.length > 3 ? ', …' : ''}`,
+                                  })
                                 : g.locations[0]}
                               {g.rationale ? ` — ${g.rationale}` : ''}
                             </Typography>
                             <TextField
                               size="small"
-                              label="Secret name"
+                              label={t('packages.wizard.secretName')}
                               value={displaySecretName(g.suggestedSecretName)}
                               onChange={(e) => renameProposalGroup(
                                 g.ids,
@@ -1024,16 +1067,16 @@ export default function PackageWizard({ open, onClose }: Props) {
 
             {unrecoveredSecretNames.length > 0 && (
               <Alert severity="warning">
-                <AlertTitle>Secrets from the imported manifest that need re-adding</AlertTitle>
-                A manifest never carries secret values, so these declarations could not be
-                matched to anything in the current content — re-add them below if they still
-                apply: {unrecoveredSecretNames.map(displaySecretName).join(', ')}.
+                <AlertTitle>{t('packages.wizard.unrecoveredTitle')}</AlertTitle>
+                {t('packages.wizard.unrecoveredHelp', {
+                  names: formatList(unrecoveredSecretNames.map(displaySecretName)),
+                })}
               </Alert>
             )}
 
             {deriveWarnings.length > 0 && (
               <Alert severity="warning">
-                <AlertTitle>Notes</AlertTitle>
+                <AlertTitle>{t('packages.wizard.notes')}</AlertTitle>
                 {deriveWarnings.map((w, i) => (
                   <div key={i}>{w}</div>
                 ))}
@@ -1041,24 +1084,25 @@ export default function PackageWizard({ open, onClose }: Props) {
             )}
 
             <Divider />
-            <Typography variant="subtitle2">Add a secret manually</Typography>
+            <Typography variant="subtitle2">{t('packages.wizard.manualTitle')}</Typography>
             <Typography variant="body2" color="text.secondary">
-              Enter any value that should be redacted from the package. It is treated purely
-              as text to replace with a <code>{'{{secret.NAME}}'}</code> placeholder — it is
-              never executed.
+              <Trans
+                message="packages.wizard.manualHelp"
+                values={{ placeholder: <code>{'{{secret.NAME}}'}</code> }}
+              />
             </Typography>
             {manualError && <Alert severity="error">{manualError}</Alert>}
             <Stack direction="row" spacing={1} alignItems="flex-start" flexWrap="wrap" useFlexGap>
               <TextField
                 size="small"
-                label="Value to redact"
+                label={t('packages.wizard.valueRedact')}
                 value={manualExcerpt}
                 onChange={(e) => setManualExcerpt(e.target.value)}
                 sx={{ minWidth: 240, flex: 1 }}
               />
               <TextField
                 size="small"
-                label="Secret name"
+                label={t('packages.wizard.secretName')}
                 value={manualName}
                 onChange={(e) => setManualName(e.target.value)}
                 sx={{ minWidth: 180 }}
@@ -1071,12 +1115,12 @@ export default function PackageWizard({ open, onClose }: Props) {
               >
                 {SECRET_KINDS.map((k) => (
                   <MenuItem key={k} value={k}>
-                    {k}
+                    {t(`packages.wizard.kind.${k}`)}
                   </MenuItem>
                 ))}
               </Select>
               <Button variant="outlined" onClick={addManualProposal} disabled={!manualExcerpt.trim()}>
-                Add
+                {t('packages.wizard.add')}
               </Button>
               <Button
                 variant="text"
@@ -1084,12 +1128,12 @@ export default function PackageWizard({ open, onClose }: Props) {
                 onClick={() => void openValuePicker()}
                 disabled={nothingSelected}
               >
-                Pick from app
+                {t('packages.wizard.pickApp')}
               </Button>
             </Stack>
 
             <Divider />
-            <Typography variant="subtitle2">Advanced scan options</Typography>
+            <Typography variant="subtitle2">{t('packages.wizard.advancedScan')}</Typography>
             <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
               <FormControlLabel
                 control={
@@ -1101,7 +1145,7 @@ export default function PackageWizard({ open, onClose }: Props) {
                     }}
                   />
                 }
-                label="Aggressive entropy scan"
+                label={t('packages.wizard.entropy')}
               />
               <FormControlLabel
                 control={
@@ -1113,18 +1157,17 @@ export default function PackageWizard({ open, onClose }: Props) {
                     }}
                   />
                 }
-                label="Detect bare owner/repo slugs"
+                label={t('packages.wizard.repoSlug')}
               />
               <Button size="small" variant="text" onClick={() => void runDerive()} disabled={deriving}>
-                Re-scan
+                {t('packages.wizard.rescan')}
               </Button>
             </Stack>
 
             <Divider />
-            <Typography variant="subtitle2">Optional: model-driven scan</Typography>
+            <Typography variant="subtitle2">{t('packages.wizard.modelScan')}</Typography>
             <Alert severity="info">
-              Running the model-driven pass sends the packaged content above to the selected
-              model provider. The offline heuristic scan never leaves your machine.
+              {t('packages.wizard.modelScanHelp')}
             </Alert>
             <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
               <Select
@@ -1135,7 +1178,7 @@ export default function PackageWizard({ open, onClose }: Props) {
                 sx={{ minWidth: 220 }}
               >
                 <MenuItem value="">
-                  <em>Select a model…</em>
+                  <em>{t('packages.wizard.selectModel')}</em>
                 </MenuItem>
                 {entities.models.map((m) => (
                   <MenuItem key={m.id} value={m.id}>
@@ -1148,7 +1191,7 @@ export default function PackageWizard({ open, onClose }: Props) {
                 disabled={!scanModelId || deriving}
                 onClick={() => void runDerive(scanModelId)}
               >
-                Scan with model
+                {t('packages.wizard.scanModel')}
               </Button>
             </Stack>
           </Stack>
@@ -1157,7 +1200,7 @@ export default function PackageWizard({ open, onClose }: Props) {
         return (
           <Stack spacing={2}>
             <TextField
-              label="Package name"
+              label={t('packages.wizard.packageName')}
               value={name}
               onChange={(e) => setName(e.target.value)}
               required
@@ -1165,16 +1208,16 @@ export default function PackageWizard({ open, onClose }: Props) {
               error={name.length > 0 && name.trim().length === 0}
             />
             <TextField
-              label="Version"
+              label={t('packages.wizard.version')}
               value={version}
               onChange={(e) => setVersion(e.target.value)}
               required
               fullWidth
               error={version.length > 0 && !versionValid}
-              helperText={version.length > 0 && !versionValid ? 'Must be a semantic version (e.g. 1.0.0)' : ' '}
+              helperText={version.length > 0 && !versionValid ? t('packages.wizard.semverHelp') : ' '}
             />
             <TextField
-              label="Description"
+              label={t('packages.wizard.description')}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               fullWidth
@@ -1182,7 +1225,7 @@ export default function PackageWizard({ open, onClose }: Props) {
               minRows={2}
             />
             <TextField
-              label="Tags (comma-separated)"
+              label={t('packages.wizard.tags')}
               value={tagsInput}
               onChange={(e) => setTagsInput(e.target.value)}
               fullWidth
@@ -1204,32 +1247,33 @@ export default function PackageWizard({ open, onClose }: Props) {
           return (
             <Stack spacing={2}>
               <Alert severity="success">
-                <AlertTitle>Package built</AlertTitle>
-                <code>{name.trim()}</code> v{version.trim()} is ready to export.
+                <AlertTitle>{t('packages.wizard.builtTitle')}</AlertTitle>
+                {t('packages.wizard.builtHelp', { name: name.trim(), version: version.trim() })}
               </Alert>
               {buildResult.warnings.length > 0 && (
                 <Alert severity="warning">
-                  <AlertTitle>Warnings</AlertTitle>
+                  <AlertTitle>{t('packages.wizard.warnings')}</AlertTitle>
                   {buildResult.warnings.map((w, i) => (
                     <div key={i}>{w}</div>
                   ))}
                 </Alert>
               )}
               <Button variant="contained" onClick={downloadManifest}>
-                Download package manifest (.json)
+                {t('packages.wizard.download')}
               </Button>
 
               <Divider />
-              <Typography variant="subtitle2">Publish to the FLUJO package registry</Typography>
+              <Typography variant="subtitle2">{t('packages.wizard.publishTitle')}</Typography>
               <Typography variant="body2" color="text.secondary">
-                Publishing requires a confirmed registry account (set one up on the
-                Packages page). Only the secret-safe manifest above
-                is uploaded — no secret values ever leave your machine.
+                {t('packages.wizard.publishHelp')}
               </Typography>
               {publishResult?.ok ? (
                 <Alert severity="success">
-                  <AlertTitle>Published</AlertTitle>
-                  {publishResult.name || name.trim()} v{publishResult.version || version.trim()} is live.
+                  <AlertTitle>{t('packages.wizard.published')}</AlertTitle>
+                  {t('packages.wizard.live', {
+                    name: publishResult.name || name.trim(),
+                    version: publishResult.version || version.trim(),
+                  })}
                   {publishResult.url && (
                     <div>
                       <a href={publishResult.url} target="_blank" rel="noreferrer">
@@ -1242,18 +1286,18 @@ export default function PackageWizard({ open, onClose }: Props) {
                 <>
                   {publishResult && !publishResult.ok && (
                     <Alert severity={publishResult.code === 'unconfirmed' || publishResult.code === 'not_authenticated' ? 'warning' : 'error'}>
-                      {publishResult.error || 'Failed to publish package.'}
+                      {publishResult.error || t('packages.wizard.publishFailed')}
                     </Alert>
                   )}
                   <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
                     <Button variant="outlined" onClick={() => void publishToRegistry()} disabled={publishing}>
-                      {publishing ? 'Publishing…' : 'Publish to registry'}
+                      {publishing ? t('packages.wizard.publishing') : t('packages.wizard.publish')}
                     </Button>
                     {publishResult &&
                       !publishResult.ok &&
                       (publishResult.code === 'not_authenticated' || publishResult.code === 'unconfirmed') && (
                         <Button variant="contained" onClick={() => setLoginOpen(true)} disabled={publishing}>
-                          Log in to registry
+                          {t('packages.wizard.loginRegistry')}
                         </Button>
                       )}
                   </Stack>
@@ -1278,38 +1322,38 @@ export default function PackageWizard({ open, onClose }: Props) {
         fullScreen={fullScreen}
         PaperProps={{ sx: { height: fullScreen ? '100%' : '90vh', maxHeight: fullScreen ? '100%' : '90vh' } }}
       >
-        <DialogTitle>Create package</DialogTitle>
+        <DialogTitle>{t('packages.wizard.title')}</DialogTitle>
         <DialogContent dividers sx={{ overflow: 'auto' }}>
           <Stepper activeStep={activeStep} sx={{ mb: 3 }}>
-            {STEPS.map((label) => (
-              <Step key={label}>
-                <StepLabel>{label}</StepLabel>
+            {STEP_KEYS.map((key) => (
+              <Step key={key}>
+                <StepLabel>{t(key)}</StepLabel>
               </Step>
             ))}
           </Stepper>
           {renderStepContent()}
         </DialogContent>
         <DialogActions>
-          <Button onClick={onClose}>{buildResult?.ok ? 'Close' : 'Cancel'}</Button>
+          <Button onClick={onClose}>{buildResult?.ok ? t('packages.wizard.close') : t('packages.wizard.cancel')}</Button>
           <Box sx={{ flex: 1 }} />
           <Button onClick={handleBack} disabled={activeStep === 0 || building || resolving}>
-            Back
+            {t('packages.wizard.back')}
           </Button>
           {activeStep < 4 && (
             <Button variant="contained" onClick={handleNext} disabled={nextDisabled}>
-              {activeStep === 3 ? 'Build' : 'Next'}
+              {activeStep === 3 ? t('packages.wizard.build') : t('packages.wizard.next')}
             </Button>
           )}
         </DialogActions>
       </Dialog>
 
       <Dialog open={loginOpen} onClose={() => setLoginOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Log in to the package registry</DialogTitle>
+        <DialogTitle>{t('packages.wizard.loginTitle')}</DialogTitle>
         <DialogContent dividers>
           <RegistryAccountSettings />
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setLoginOpen(false)}>Done</Button>
+          <Button onClick={() => setLoginOpen(false)}>{t('packages.wizard.done')}</Button>
           <Button
             variant="contained"
             onClick={() => {
@@ -1318,23 +1362,21 @@ export default function PackageWizard({ open, onClose }: Props) {
             }}
             disabled={publishing}
           >
-            Retry publish
+            {t('packages.wizard.retryPublish')}
           </Button>
         </DialogActions>
       </Dialog>
 
       <Dialog open={pickerOpen} onClose={() => setPickerOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>Pick a value to redact</DialogTitle>
+        <DialogTitle>{t('packages.wizard.pickerTitle')}</DialogTitle>
         <DialogContent dividers>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            These are plaintext values found in the packaged flows, models and planned
-            executions. Pick one to pre-fill the value to redact. API keys and MCP
-            env/header values are never listed — they are already declared as secrets.
+            {t('packages.wizard.pickerHelp')}
           </Typography>
           <TextField
             size="small"
             fullWidth
-            placeholder="Search values…"
+            placeholder={t('packages.wizard.searchValues')}
             value={pickerSearch}
             onChange={(e) => setPickerSearch(e.target.value)}
             InputProps={{
@@ -1353,10 +1395,10 @@ export default function PackageWizard({ open, onClose }: Props) {
           ) : pickerError ? (
             <Alert severity="error">{pickerError}</Alert>
           ) : pickerCandidates.length === 0 ? (
-            <Alert severity="info">No pickable plaintext values found in the packaged content.</Alert>
+            <Alert severity="info">{t('packages.wizard.noCandidates')}</Alert>
           ) : filteredCandidates.length === 0 ? (
             <Typography variant="body2" color="text.secondary">
-              No values match “{pickerSearch}”.
+              {t('packages.wizard.noValueMatches', { search: pickerSearch })}
             </Typography>
           ) : (
             <List dense sx={{ border: 1, borderColor: 'divider', borderRadius: 1, maxHeight: '50vh', overflow: 'auto' }}>
@@ -1371,7 +1413,7 @@ export default function PackageWizard({ open, onClose }: Props) {
                       }
                       secondary={
                         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mt: 0.5 }}>
-                          <Chip label={c.source} size="small" variant="outlined" />
+                          <Chip label={entityTypeLabel(c.source)} size="small" variant="outlined" />
                           <Typography variant="caption" color="text.secondary">
                             {c.location}
                           </Typography>
@@ -1387,7 +1429,7 @@ export default function PackageWizard({ open, onClose }: Props) {
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setPickerOpen(false)}>Close</Button>
+          <Button onClick={() => setPickerOpen(false)}>{t('packages.wizard.close')}</Button>
         </DialogActions>
       </Dialog>
     </>

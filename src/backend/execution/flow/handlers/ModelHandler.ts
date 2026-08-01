@@ -34,7 +34,12 @@ import { runWithConcurrency } from '@/backend/services/mcp/utils/boundedConcurre
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { extractUiResourceUri } from '@/shared/utils/mcpApps';
 import { resolveAdvertisedToolUiLink } from '@/backend/mcpApps/toolUi';
-import { getRunResourceSettings, writeRunResource, listRunResources } from '@/backend/services/runResources';
+import {
+  getRunResourceSettings,
+  writeRunResource,
+  listRunResources,
+  getRunResourceLocalPath,
+} from '@/backend/services/runResources';
 import { captureToolResult } from '@/backend/services/runResources/capture';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
 import { isRunResourceToolName, executeRunResourceTool, buildReadResourceTool, WRITE_RESOURCE_TOOL_NAME, READ_RESOURCE_TOOL_NAME } from './runResourceTools';
@@ -134,12 +139,14 @@ async function persistModelMedia(
         producedBy: { source: 'model-output', nodeId },
       });
       if ('skipped' in written) return { ...part, mimeType };
+      const localPath = await getRunResourceLocalPath(written.uri);
       return {
         type: mediaTypeFromMime(mimeType),
         mimeType,
         ...(part.name ? { name: part.name } : {}),
         ...(part.transcript ? { transcript: part.transcript } : {}),
         resourceUri: written.uri,
+        ...(localPath ? { localPath } : {}),
         url:
           `/v1/chat/conversations/${encodeURIComponent(conversationId)}` +
           `/resources/${encodeURIComponent(written.id)}/content`,

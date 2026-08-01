@@ -71,16 +71,20 @@ export function isRegexCompilable(pattern: string): boolean {
  * Returns '' for a missing/invalid condition so callers can treat it as
  * "render no badge".
  */
-export function formatConditionLabel(cond: EdgeCondition | undefined | null): string {
+export function formatConditionLabel(
+  cond: EdgeCondition | undefined | null,
+  labels?: Partial<Record<EdgeConditionKind, string>>,
+): string {
   if (!cond || !isValidConditionKind(cond.kind)) return '';
   const prefix = cond.negate ? '!' : '';
-  if (cond.kind === 'always') return `${prefix}always`;
+  const kindLabel = labels?.[cond.kind] ?? cond.kind;
+  if (cond.kind === 'always') return `${prefix}${kindLabel}`;
   const ci = cond.ignoreCase ? ' i' : '';
   const raw = typeof cond.value === 'string' ? cond.value : '';
   const MAX = 8;
   const shown = raw.length > MAX ? `${raw.slice(0, MAX)}…` : raw;
   const body = cond.kind === 'regex' ? `/${shown}/` : `"${shown}"`;
-  return `${prefix}${cond.kind}:${body}${ci}`;
+  return `${prefix}${kindLabel}:${body}${ci}`;
 }
 
 /**

@@ -10,6 +10,7 @@ import {
   Typography,
   useTheme
 } from '@mui/material';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface ConsoleOutputProps {
   output: string;
@@ -22,9 +23,10 @@ const ConsoleOutput: React.FC<ConsoleOutputProps> = ({
   output,
   isVisible,
   toggleVisibility,
-  title = 'Command Output'
+  title
 }) => {
   const theme = useTheme();
+  const { t } = useI18n();
   
   return (
     <Paper 
@@ -37,11 +39,11 @@ const ConsoleOutput: React.FC<ConsoleOutputProps> = ({
       }}
     >
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-        <Typography variant="h6">{title}</Typography>
+        <Typography variant="h6">{title ?? t('mcp.local.console.output')}</Typography>
         <IconButton
           onClick={toggleVisibility}
           size="small"
-          title={isVisible ? "Hide console" : "Show console"}
+          title={isVisible ? t('mcp.local.console.hide') : t('mcp.local.console.show')}
           color="inherit"
           sx={{ color: 'text.secondary' }}
         >
@@ -66,7 +68,7 @@ const ConsoleOutput: React.FC<ConsoleOutputProps> = ({
           </Box>
         ) : (
           <Typography variant="body2" sx={{ fontStyle: 'italic', color: 'text.secondary' }}>
-            No output to display
+            {t('mcp.local.console.empty')}
           </Typography>
         )}
       </Box>

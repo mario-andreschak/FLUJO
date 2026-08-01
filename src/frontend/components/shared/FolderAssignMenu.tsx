@@ -18,6 +18,7 @@ import CheckIcon from '@mui/icons-material/Check';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import CreateNewFolderOutlinedIcon from '@mui/icons-material/CreateNewFolderOutlined';
 import FolderOffOutlinedIcon from '@mui/icons-material/FolderOffOutlined';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 export interface FolderAssignMenuProps {
   anchorEl: HTMLElement | null;
@@ -44,6 +45,7 @@ const FolderAssignMenu = ({
   onClose,
   onAssign,
 }: FolderAssignMenuProps) => {
+  const { t } = useI18n();
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
 
@@ -91,14 +93,14 @@ const FolderAssignMenu = ({
           <ListItemIcon>
             <CreateNewFolderOutlinedIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText primary="New folder…" />
+          <ListItemText primary={t('folderAssign.newAction')} />
         </MenuItem>
         {currentFolder && (
           <MenuItem onClick={() => handleAssign(undefined)}>
             <ListItemIcon>
               <FolderOffOutlinedIcon fontSize="small" />
             </ListItemIcon>
-            <ListItemText primary="Remove from folder" />
+            <ListItemText primary={t('folderAssign.remove')} />
           </MenuItem>
         )}
       </Menu>
@@ -112,12 +114,12 @@ const FolderAssignMenu = ({
         // of the owning card in React's event tree.
         onClick={(event) => event.stopPropagation()}
       >
-        <DialogTitle>New folder</DialogTitle>
+        <DialogTitle>{t('folderAssign.newTitle')}</DialogTitle>
         <DialogContent>
           <TextField
             autoFocus
             margin="dense"
-            label="Folder name"
+            label={t('folderAssign.name')}
             fullWidth
             value={newFolderName}
             onChange={(e) => setNewFolderName(e.target.value)}
@@ -130,9 +132,9 @@ const FolderAssignMenu = ({
           />
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setNewFolderOpen(false)}>Cancel</Button>
+          <Button onClick={() => setNewFolderOpen(false)}>{t('common.cancel')}</Button>
           <Button variant="contained" disabled={!newFolderName.trim()} onClick={confirmNewFolder}>
-            Create
+            {t('common.create')}
           </Button>
         </DialogActions>
       </Dialog>

@@ -16,6 +16,7 @@ import {
   Typography
 } from '@mui/material';
 import SamplingManager from '../LocalServerTab/SamplingManager';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const RemoteTab: React.FC<TabProps> = ({
   onAdd,
@@ -23,6 +24,7 @@ const RemoteTab: React.FC<TabProps> = ({
   setActiveTab,
   onUpdate
 }) => {
+  const { t } = useI18n();
   const [url, setUrl] = useState<string>('');
   const [isValidating, setIsValidating] = useState<boolean>(false);
   const [message, setMessage] = useState<MessageState | null>(null);
@@ -96,7 +98,7 @@ const RemoteTab: React.FC<TabProps> = ({
     if (!isUrlValid) {
       setMessage({
         type: 'error',
-        text: 'Please enter a valid HTTP or HTTPS URL'
+        text: t('mcp.remote.invalidUrl')
       });
       return;
     }
@@ -110,7 +112,7 @@ const RemoteTab: React.FC<TabProps> = ({
     setIsValidating(true);
     setMessage({
       type: 'success',
-      text: 'Checking the server…'
+      text: t('mcp.remote.checkingServer')
     });
 
     try {
@@ -122,7 +124,7 @@ const RemoteTab: React.FC<TabProps> = ({
         setOauthDetected(true);
         setMessage({
           type: 'success',
-          text: 'This server uses OAuth. Continue to setup, then run Test Run and click "Save & Authenticate" to sign in.'
+          text: t('mcp.remote.oauthDetected')
         });
         setIsValidating(false);
         return;
@@ -131,14 +133,16 @@ const RemoteTab: React.FC<TabProps> = ({
       proceedToLocalTab();
       setMessage({
         type: 'success',
-        text: 'Switching to Local Server tab with pre-filled configuration...'
+        text: t('mcp.remote.switching')
       });
 
     } catch (error) {
       console.error('Error processing remote URL:', error);
       setMessage({
         type: 'error',
-        text: `Error processing URL: ${error instanceof Error ? error.message : 'Unknown error'}`
+        text: t('mcp.remote.processingError', {
+          error: error instanceof Error ? error.message : t('mcp.server.unknownError'),
+        })
       });
     } finally {
       setIsValidating(false);
@@ -159,17 +163,16 @@ const RemoteTab: React.FC<TabProps> = ({
     <Paper elevation={0} sx={{ p: 0 }}>
       <Stack spacing={3}>
         <Typography variant="h6" gutterBottom>
-          Connect to Remote MCP Server
+          {t('mcp.remote.title')}
         </Typography>
         
         <Typography variant="body2" color="text.secondary">
-          Enter the URL of a remote MCP server that supports HTTP streaming. 
-          The server configuration will be automatically set up for you.
+          {t('mcp.remote.help')}
         </Typography>
 
         <Box>
           <Typography variant="subtitle2" gutterBottom>
-            Server URL
+            {t('mcp.remote.url')}
           </Typography>
           <TextField
             fullWidth
@@ -182,8 +185,8 @@ const RemoteTab: React.FC<TabProps> = ({
             error={url.length > 0 && !isUrlValid}
             helperText={
               url.length > 0 && !isUrlValid 
-                ? "Please enter a valid HTTP or HTTPS URL" 
-                : "Enter the full URL to the MCP server endpoint"
+                ? t('mcp.remote.invalidUrl')
+                : t('mcp.remote.urlHelp')
             }
             disabled={isValidating}
           />
@@ -201,7 +204,7 @@ const RemoteTab: React.FC<TabProps> = ({
 
         <Box>
           <Typography variant="subtitle2" gutterBottom>
-            Sampling (optional)
+            {t('mcp.remote.sampling')}
           </Typography>
           <SamplingManager
             policy={samplingPolicy}
@@ -215,7 +218,7 @@ const RemoteTab: React.FC<TabProps> = ({
             onClick={onClose}
             disabled={isValidating}
           >
-            Cancel
+            {t('mcp.remote.cancel')}
           </Button>
           <Button
             variant="contained"
@@ -223,7 +226,11 @@ const RemoteTab: React.FC<TabProps> = ({
             onClick={handleConnect}
             disabled={!isUrlValid || isValidating}
           >
-            {isValidating ? 'Checking…' : oauthDetected ? 'Continue to setup' : 'Connect'}
+            {isValidating
+              ? t('mcp.remote.checking')
+              : oauthDetected
+                ? t('mcp.remote.continue')
+                : t('mcp.remote.connect')}
           </Button>
         </Box>
       </Stack>

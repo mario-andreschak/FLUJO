@@ -1,5 +1,11 @@
 import { createLogger } from '@/utils/logger';
-import { writeRunResource, readRunResource, readRunResourceBounded, parseRunResourceUri } from '@/backend/services/runResources';
+import {
+  writeRunResource,
+  readRunResource,
+  readRunResourceBounded,
+  parseRunResourceUri,
+  getRunResourceLocalPath,
+} from '@/backend/services/runResources';
 import { ToolDefinition, ResourceNodeReference, MCPNodeReference } from '../types';
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
 import { executeNativeReadResource } from './mcpResourceTools';
@@ -59,7 +65,8 @@ export function buildReadResourceTool(): ToolDefinition {
       'large to include inline; use this to retrieve its complete content. ' +
       '(2) A native MCP resource URI from a bound server (e.g. file://, asana://, or any other scheme) — ' +
       'fetched live from the server; large or binary content is auto-captured as a run resource and ' +
-      'returned as a flujo://run/... stub.',
+      'returned as a flujo://run/... stub. Binary run resources also return a validated localPath for ' +
+      'same-host filesystem tools.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -277,6 +284,9 @@ async function executeReadResource(
     const content = bounded?.content ?? (textParts.length > 0
       ? textParts.join('\n')
       : `[binary run resource ${entry.mimeType ?? entry.kind} (${entry.size} bytes) at ${entry.uri}]`);
+    const localPath = entry.kind !== 'text' && entry.kind !== 'link'
+      ? await getRunResourceLocalPath(entry.uri)
+      : null;
     log.info('read_resource served run resource', { uri: entry.uri, size: entry.size });
     return {
       success: true,
@@ -288,6 +298,7 @@ async function executeReadResource(
         truncated: bounded?.truncated ?? false,
         sha256: entry.sha256,
         verification: bounded?.verification,
+        ...(localPath ? { localPath } : {}),
       },
     };
   } catch (error) {

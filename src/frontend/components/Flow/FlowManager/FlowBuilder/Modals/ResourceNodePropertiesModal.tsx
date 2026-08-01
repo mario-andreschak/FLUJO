@@ -34,6 +34,7 @@ import { mcpService } from '@/frontend/services/mcp';
 import { isValidRunVarName } from '@/utils/shared/resolveRunVars';
 import { extractResourceRefNames } from '@/utils/shared/promptRefs';
 import { createLogger } from '@/utils/logger/index';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/ResourceNodePropertiesModal');
 
@@ -74,6 +75,7 @@ interface BrowsedResource {
  * persisted contract — only their human-facing labels changed in #183.
  */
 export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave, flowNodes }: ResourceNodePropertiesModalProps) => {
+  const { t } = useI18n();
   const [nodeData, setNodeData] = useState<{
     label: string;
     type: string;
@@ -153,8 +155,12 @@ export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave, flowN
             })),
             // Templates are offered too — picking one puts the raw uriTemplate
             // in the field for the user to fill in.
-            ...(result.resourceTemplates ?? []).map((t: any) => ({
-              uri: t.uriTemplate, name: t.name ? `${t.name} (template)` : '(template)', description: t.description,
+            ...(result.resourceTemplates ?? []).map((template: any) => ({
+              uri: template.uriTemplate,
+              name: template.name
+                ? `${template.name} (${t('flows.resource.template')})`
+                : `(${t('flows.resource.template')})`,
+              description: template.description,
             })),
           ];
           setBrowsed(list);
@@ -168,7 +174,7 @@ export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave, flowN
       })
       .finally(() => { if (!cancelled) setIsBrowsing(false); });
     return () => { cancelled = true; };
-  }, [open, scope, boundServer]);
+  }, [open, scope, boundServer, t]);
 
   const handleSave = () => {
     if (!node || !nodeData) return;
@@ -189,7 +195,7 @@ export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave, flowN
     // header so a name-less node still reads clearly on the canvas.
     const trimmedLabel = (nodeData.label ?? '').trim();
     const label = trimmedLabel
-      || (scope === 'run' ? (runName.trim() || 'Temporary Data') : 'MCP resource');
+      || (scope === 'run' ? (runName.trim() || t('flows.resource.temporary')) : t('flows.resource.mcp'));
     onSave(node.id, { ...nodeData, label, properties });
   };
 
@@ -199,7 +205,7 @@ export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave, flowN
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>Resource Node Properties</DialogTitle>
+      <DialogTitle>{t('flows.resource.title')}</DialogTitle>
       <DialogContent>
         <Box display="flex" flexDirection="column" gap={2} mt={1}>
           <FormControl>
@@ -208,29 +214,29 @@ export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave, flowN
               value={scope}
               onChange={(e) => setProperty('scope', e.target.value === 'mcp' ? 'mcp' : 'run')}
             >
-              <FormControlLabel value="run" control={<Radio />} label="Temporary Data" />
-              <FormControlLabel value="mcp" control={<Radio />} label="MCP resource" />
+              <FormControlLabel value="run" control={<Radio />} label={t('flows.resource.temporary')} />
+              <FormControlLabel value="mcp" control={<Radio />} label={t('flows.resource.mcp')} />
             </RadioGroup>
             <FormHelperText>
               {scope === 'mcp'
-                ? 'A static resource published by an MCP server. Steps connected FROM this node receive its contents.'
-                : 'A named piece of run data: a step writing INTO this node saves its output here; steps reading FROM it receive the latest value (also available as ${res:NAME}).'}
+                ? t('flows.resource.mcpHelp')
+                : t('flows.resource.temporaryHelp')}
             </FormHelperText>
           </FormControl>
 
           {scope === 'mcp' ? (
             <>
               <FormControl fullWidth>
-                <InputLabel id="resource-server-label">Server</InputLabel>
+                <InputLabel id="resource-server-label">{t('flows.resource.server')}</InputLabel>
                 <Select
                   labelId="resource-server-label"
-                  label="Server"
+                  label={t('flows.resource.server')}
                   value={boundServer}
                   onChange={(e) => {
                     setProperty('boundServer', e.target.value);
                   }}
                 >
-                  {isLoadingServers && <MenuItem value="" disabled>Loading servers…</MenuItem>}
+                  {isLoadingServers && <MenuItem value="" disabled>{t('flows.resource.loadingServers')}</MenuItem>}
                   {servers.map((s: any) => (
                     <MenuItem key={s.name} value={s.name}>{s.name}</MenuItem>
                   ))}
@@ -238,28 +244,28 @@ export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave, flowN
               </FormControl>
 
               <TextField
-                label="Resource URI"
+                label={t('flows.resource.uri')}
                 value={uri}
                 onChange={(e) => setProperty('uri', e.target.value)}
                 fullWidth
-                placeholder="e.g. file:///data/report.md"
-                helperText="Pick from the list below or paste a URI / filled-in template."
+                placeholder={t('flows.resource.uriPlaceholder')}
+                helperText={t('flows.resource.uriHelp')}
               />
 
               {isBrowsing && (
                 <Box display="flex" alignItems="center" gap={1}>
                   <CircularProgress size={18} />
-                  <Typography variant="body2" color="text.secondary">Loading resources…</Typography>
+                  <Typography variant="body2" color="text.secondary">{t('flows.resource.loading')}</Typography>
                 </Box>
               )}
               {browseError && (
                 <Typography variant="body2" color="warning.main">
-                  Could not list resources: {browseError}
+                  {t('flows.resource.loadFailed', { error: browseError })}
                 </Typography>
               )}
               {!isBrowsing && !browseError && boundServer && browsed.length === 0 && (
                 <Typography variant="body2" color="text.secondary">
-                  This server publishes no resources (you can still paste a URI above).
+                  {t('flows.resource.none')}
                 </Typography>
               )}
               {browsed.length > 0 && (
@@ -293,20 +299,20 @@ export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave, flowN
                 renderInput={(params) => (
                   <TextField
                     {...params}
-                    label="Temporary Data name"
+                    label={t('flows.resource.temporaryName')}
                     fullWidth
                     error={runNameInvalid}
                     helperText={runNameInvalid
-                      ? 'Letters, digits, _ and - only; must not start with a digit.'
+                      ? t('flows.resource.invalidName')
                       : nameSuggestions.length > 0
-                        ? 'Steps reference it as ${res:NAME}. Suggestions are names already used in this flow.'
-                        : 'Steps reference it as ${res:NAME}; a producing edge saves the step output under this name.'}
+                        ? t('flows.resource.nameSuggestions')
+                        : t('flows.resource.nameHelp')}
                   />
                 )}
               />
               {runName.trim() && !runNameInvalid && (
                 <Typography variant="caption" color="text.secondary">
-                  URI at run time: flujo://run/&lt;conversation&gt;/… (named &quot;{runName.trim()}&quot;)
+                  {t('flows.resource.runtimeUri', { name: runName.trim() })}
                 </Typography>
               )}
             </>
@@ -319,19 +325,19 @@ export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave, flowN
             onClick={() => setShowAdvanced((v) => !v)}
             sx={{ alignSelf: 'flex-start' }}
           >
-            {showAdvanced ? 'Hide advanced' : 'Advanced — name & description'}
+            {showAdvanced ? t('flows.resource.hideAdvanced') : t('flows.resource.showAdvanced')}
           </Link>
           <Collapse in={showAdvanced} unmountOnExit>
             <Box display="flex" flexDirection="column" gap={2}>
               <TextField
-                label="Label"
+                label={t('flows.resource.label')}
                 value={nodeData.label}
                 onChange={(e) => setNodeData({ ...nodeData, label: e.target.value })}
                 fullWidth
-                helperText="Optional. The node's name on the canvas; defaults to the Temporary Data name."
+                helperText={t('flows.resource.labelHelp')}
               />
               <TextField
-                label="Description"
+                label={t('flows.resource.description')}
                 value={nodeData.description ?? ''}
                 onChange={(e) => setNodeData({ ...nodeData, description: e.target.value })}
                 fullWidth
@@ -343,8 +349,8 @@ export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave, flowN
         </Box>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
-        <Button onClick={handleSave} variant="contained">Save</Button>
+        <Button onClick={onClose}>{t('flows.modal.cancel')}</Button>
+        <Button onClick={handleSave} variant="contained">{t('flows.modal.save')}</Button>
       </DialogActions>
     </Dialog>
   );

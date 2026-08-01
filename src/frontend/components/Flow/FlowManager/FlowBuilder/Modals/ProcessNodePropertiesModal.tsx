@@ -44,6 +44,7 @@ import { parseKvRef, buildKvRef, KvRefScope } from '@/utils/shared/resolveKvRefs
 import { getNodeProperties } from './ProcessNodePropertiesModal/utils'; // Adjusted path
 import { createLogger } from '@/utils/logger';
 import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal');
 
@@ -51,13 +52,7 @@ const log = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modal
 // in a single scroll container; the tab bar both scrolls a section into view
 // (on click) and reflects the section currently in view (via IntersectionObserver).
 type SectionKey = 'basic' | 'model' | 'io' | 'task' | 'advanced';
-const SECTIONS: { key: SectionKey; label: string }[] = [
-  { key: 'basic', label: 'Basic' },
-  { key: 'model', label: 'Model' },
-  { key: 'io', label: 'Input/Output' },
-  { key: 'task', label: 'Task' },
-  { key: 'advanced', label: 'Advanced' },
-];
+const SECTIONS: SectionKey[] = ['basic', 'model', 'io', 'task', 'advanced'];
 
 export function getInitialProcessSection(
   authoringMode: FlowAuthoringMode,
@@ -83,6 +78,14 @@ export const ProcessNodePropertiesModal = ({
   mode = 'edit',
 }: ProcessNodePropertiesModalProps) => {
   log.debug('ProcessNodePropertiesModal rendered with:', { node: node, flowId: flowId });
+  const { t } = useI18n();
+  const sectionLabels: Record<SectionKey, string> = {
+    basic: t('flows.process.basic'),
+    model: t('flows.process.model'),
+    io: t('flows.process.io'),
+    task: t('flows.process.task'),
+    advanced: t('flows.process.advanced'),
+  };
   const { nodeData, setNodeData, handlePropertyChange } = useNodeData(node);
   const [promptTemplate, setPromptTemplate] = useState('');
   const [isModelBound, setIsModelBound] = useState(false);
@@ -109,7 +112,7 @@ export const ProcessNodePropertiesModal = ({
   const [activeSection, setActiveSection] = useState<SectionKey>('basic');
   const visibleSections = authoringMode === 'advanced'
     ? SECTIONS
-    : SECTIONS.filter((section) => ['basic', 'model', 'task'].includes(section.key));
+    : SECTIONS.filter((section) => ['basic', 'model', 'task'].includes(section));
 
   // Refs for each section, used both for tab-click scroll-into-view and for the
   // IntersectionObserver that keeps the tab bar in sync while the user scrolls.
@@ -494,7 +497,7 @@ export const ProcessNodePropertiesModal = ({
 
   if (!node || !nodeData) return null;
 
-  const properties = getNodeProperties();
+  const properties = getNodeProperties(t);
   const selectedModelId = nodeData.properties?.boundModel || '';
 
   // Issue #300 (feedback): each section fills the scroll-port and snaps "as a
@@ -521,11 +524,11 @@ export const ProcessNodePropertiesModal = ({
           onChange={(_, newValue: string) => setActiveTab(newValue)}
           variant="scrollable"
           scrollButtons="auto"
-          aria-label="Task tools"
+          aria-label={t('flows.process.toolsAria')}
         >
-          <Tab id="process-task-tab-server" aria-controls="process-task-panel-server" label="MCP" value="server" />
-          <Tab id="process-task-tab-agent" aria-controls="process-task-panel-agent" label="Connected Nodes" value="agent" />
-          <Tab id="process-task-tab-resources" aria-controls="process-task-panel-resources" label="Resources" value="resources" />
+          <Tab id="process-task-tab-server" aria-controls="process-task-panel-server" label={t('flows.process.mcpTab')} value="server" />
+          <Tab id="process-task-tab-agent" aria-controls="process-task-panel-agent" label={t('flows.process.nodesTab')} value="agent" />
+          <Tab id="process-task-tab-resources" aria-controls="process-task-panel-resources" label={t('flows.process.resourcesTab')} value="resources" />
         </Tabs>
       </Box>}
 
@@ -606,9 +609,9 @@ export const ProcessNodePropertiesModal = ({
       <DialogTitle component="div">
         <Box display="flex" alignItems="center" justifyContent="space-between">
           <Typography variant="h6">
-            {nodeData.label || 'Process Node'} Properties
+            {t('flows.modal.properties', { name: nodeData.label || t('flows.process.title') })}
           </Typography>
-          <IconButton edge="end" color="inherit" onClick={onClose} aria-label="close">
+          <IconButton edge="end" color="inherit" onClick={onClose} aria-label={t('flows.modal.close')}>
             <CloseIcon />
           </IconButton>
         </Box>
@@ -625,8 +628,8 @@ export const ProcessNodePropertiesModal = ({
             variant="scrollable"
             scrollButtons="auto"
           >
-            {visibleSections.map((s) => (
-              <Tab key={s.key} label={s.label} value={s.key} />
+            {visibleSections.map((section) => (
+              <Tab key={section} label={sectionLabels[section]} value={section} />
             ))}
           </Tabs>
         </Box>
@@ -636,13 +639,13 @@ export const ProcessNodePropertiesModal = ({
         <Box ref={scrollContainerRef} sx={{ flexGrow: 1, overflow: 'auto', p: 3, scrollSnapType: 'y mandatory', scrollPaddingTop: '24px' }}>
           {/* Basic */}
           <Box ref={basicRef} data-section="basic" sx={sectionSx}>
-            <Typography variant="h6" sx={{ mb: 2 }}>Basic</Typography>
+            <Typography variant="h6" sx={{ mb: 2 }}>{t('flows.process.basic')}</Typography>
             <NodeConfiguration nodeData={nodeData} setNodeData={setNodeData} />
           </Box>
 
           {/* Model */}
           <Box ref={modelRef} data-section="model" sx={sectionSx}>
-            <Typography variant="h6" sx={{ mb: 2 }}>Model</Typography>
+            <Typography variant="h6" sx={{ mb: 2 }}>{t('flows.process.model')}</Typography>
             <ModelBinding
               isLoadingModels={isLoadingModels}
               loadError={loadError}
@@ -656,7 +659,7 @@ export const ProcessNodePropertiesModal = ({
 
           {/* Input/Output */}
           {authoringMode === 'advanced' && <Box ref={ioRef} data-section="io" sx={sectionSx}>
-            <Typography variant="h6" sx={{ mb: 2 }}>Input / Output</Typography>
+            <Typography variant="h6" sx={{ mb: 2 }}>{t('flows.process.io')}</Typography>
             <PromptIOControls
               excludeModelPrompt={excludeModelPrompt}
               setExcludeModelPrompt={setExcludeModelPrompt}
@@ -685,14 +688,14 @@ export const ProcessNodePropertiesModal = ({
                   onChange={(e) => setEnableTodoTool(e.target.checked)}
                 />
               }
-              label="Enable todo tool (run-scoped task list)"
+              label={t('flows.process.todo')}
             />
           </Box>}
 
           {/* Task — tool panels on the LEFT, editor on the RIGHT (as big as
               possible), single mounted editor (issue #300 feedback). */}
           <Box ref={taskRef} data-section="task" sx={sectionSx}>
-            <Typography variant="h6" sx={{ mb: 2 }}>Task</Typography>
+            <Typography variant="h6" sx={{ mb: 2 }}>{t('flows.process.task')}</Typography>
             <Box sx={{ display: 'flex', gap: 2, flexGrow: 1, minHeight: 480 }}>
               <Box sx={{ flex: '0 0 340px', minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
                 {toolPanels}
@@ -715,7 +718,7 @@ export const ProcessNodePropertiesModal = ({
 
           {/* Advanced */}
           {authoringMode === 'advanced' && <Box ref={advancedRef} data-section="advanced" sx={sectionSx}>
-            <Typography variant="h6" sx={{ mb: 2 }}>Advanced</Typography>
+            <Typography variant="h6" sx={{ mb: 2 }}>{t('flows.process.advanced')}</Typography>
             <Box sx={{ mb: 3 }}>
               <NodeProperties nodeData={nodeData} handlePropertyChange={handlePropertyChange} properties={properties} />
             </Box>
@@ -736,9 +739,9 @@ export const ProcessNodePropertiesModal = ({
       </DialogContent>
 
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose}>{t('flows.modal.cancel')}</Button>
         <Button onClick={handleSave} variant="contained" color="primary">
-          Save Changes
+          {t('flows.modal.saveChanges')}
         </Button>
       </DialogActions>
     </Dialog>

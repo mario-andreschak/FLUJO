@@ -9,6 +9,7 @@ import CancelIcon from '@mui/icons-material/Cancel';
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
 import { LiveLane, LiveLanes, laneList } from '@/utils/shared/liveLanes';
 import { getWorkingMessage, WORKING_MESSAGE_INTERVAL_MS } from './workingMessages';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 /** Live execution stats, driven by the SSE event stream while a run is active. */
 export interface LiveRunStats {
@@ -45,6 +46,7 @@ interface LiveRunIndicatorProps {
  *  touched by lane events), so dispatch, join and the post-join synthesis
  *  step all remain visible while the rows tell the per-worker story. */
 const LaneRow: React.FC<{ lane: LiveLane; onOpenLane?: (conversationId: string) => void }> = ({ lane, onOpenLane }) => {
+  const { t } = useI18n();
   const clickable = !!lane.laneConversationId && !!onOpenLane;
   const pending = lane.status === 'pending';
   return (
@@ -73,7 +75,7 @@ const LaneRow: React.FC<{ lane: LiveLane; onOpenLane?: (conversationId: string) 
         sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
       >
         {lane.label}
-        {pending && ' — queued'}
+        {pending && ` — ${t('chat.live.queued')}`}
         {lane.status === 'running' && lane.activity && (
           <Typography component="span" variant="caption" color="text.disabled">
             {' · '}{lane.activity}
@@ -86,23 +88,6 @@ const LaneRow: React.FC<{ lane: LiveLane; onOpenLane?: (conversationId: string) 
 
 /** Summary caption for the lane block; switches to the warning-colored
  *  partial-failure marker once every lane is terminal and some failed. */
-const laneSummary = (rows: LiveLane[]): { text: string; warning: boolean } => {
-  const running = rows.filter(l => l.status === 'running').length;
-  const queued = rows.filter(l => l.status === 'pending').length;
-  const done = rows.filter(l => l.status === 'completed').length;
-  const failed = rows.filter(l => l.status === 'error').length;
-  if (running === 0 && queued === 0 && failed > 0) {
-    return { text: `${failed}/${rows.length} lanes failed — partial results`, warning: true };
-  }
-  const parts = [
-    running > 0 ? `${running} running` : '',
-    queued > 0 ? `${queued} queued` : '',
-    done > 0 ? `${done} done` : '',
-    failed > 0 ? `${failed} failed` : '',
-  ].filter(Boolean);
-  return { text: `${rows.length} lanes — ${parts.join(', ')}`, warning: failed > 0 };
-};
-
 /**
  * The "Running… N tokens · Ns elapsed" indicator with its own 1-second tick.
  *
@@ -113,6 +98,7 @@ const laneSummary = (rows: LiveLane[]): { text: string; warning: boolean } => {
  * is simply this component's lifecycle.
  */
 const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, stopDisabled, awaitingApproval, lanes, onOpenLane, onAttachDebugger }) => {
+  const { locale, t, tp, formatNumber, formatList } = useI18n();
   const [nowTick, setNowTick] = useState<number>(() => Date.now());
   const [mountedAt] = useState<number>(() => Date.now());
   // Once armed, the pause fires at the next node and this component unmounts
@@ -132,10 +118,33 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
   const messageSequence = Math.floor(
     Math.max(0, nowTick - messageStartedAt) / WORKING_MESSAGE_INTERVAL_MS,
   );
-  const workingMessage = getWorkingMessage(messageSequence, messageStartedAt);
+  const workingMessage = locale === 'en'
+    ? getWorkingMessage(messageSequence, messageStartedAt)
+    : t(`chat.live.working.${messageSequence % 6}` as any);
 
   const laneRows = lanes ? laneList(lanes) : [];
-  const summary = laneRows.length > 0 ? laneSummary(laneRows) : null;
+  const summary = laneRows.length > 0 ? (() => {
+    const running = laneRows.filter(lane => lane.status === 'running').length;
+    const queued = laneRows.filter(lane => lane.status === 'pending').length;
+    const done = laneRows.filter(lane => lane.status === 'completed').length;
+    const failed = laneRows.filter(lane => lane.status === 'error').length;
+    if (running === 0 && queued === 0 && failed > 0) {
+      return {
+        text: t('chat.live.partialFailure', { failed: formatNumber(failed), total: formatNumber(laneRows.length) }),
+        warning: true,
+      };
+    }
+    const parts = [
+      running > 0 ? tp('chat.live.laneRunning', running) : '',
+      queued > 0 ? tp('chat.live.laneQueued', queued) : '',
+      done > 0 ? tp('chat.live.laneDone', done) : '',
+      failed > 0 ? tp('chat.live.laneFailed', failed) : '',
+    ].filter(Boolean);
+    return {
+      text: tp('chat.live.lanes', laneRows.length, { states: formatList(parts) }),
+      warning: failed > 0,
+    };
+  })() : null;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', my: 2, gap: 0.5 }}>
@@ -147,8 +156,8 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
         )}
         <Typography variant="body2" color="textSecondary">
           {awaitingApproval
-            ? 'Waiting for tool approval'
-            : liveStats?.activeNode ? `Running: ${liveStats.activeNode}` : 'Working…'}
+            ? t('chat.live.waitingApproval')
+            : liveStats?.activeNode ? t('chat.live.running', { node: liveStats.activeNode }) : t('chat.live.working')}
         </Typography>
         {onAttachDebugger && !awaitingApproval && (
           <Button
@@ -159,7 +168,7 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
             onClick={() => { setAttaching(true); onAttachDebugger(); }}
             disabled={attaching}
           >
-            {attaching ? 'Attaching…' : 'Attach debugger'}
+            {attaching ? t('chat.live.attaching') : t('chat.live.attach')}
           </Button>
         )}
         <Button
@@ -169,7 +178,7 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
           onClick={onStop}
           disabled={stopDisabled}
         >
-          Stop
+          {t('chat.live.stop')}
         </Button>
       </Box>
       {!awaitingApproval && (
@@ -198,8 +207,10 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
       )}
       {!awaitingApproval && (
         <Typography variant="caption" color={stuck ? 'warning.main' : 'textSecondary'}>
-          {(liveStats?.totalTokens ?? 0).toLocaleString()} tokens · {elapsed}s elapsed
-          {stuck ? ` · no activity for ${sinceLast}s — may be stuck` : ''}
+          {tp('chat.live.elapsed', elapsed, {
+            tokens: t('chat.stats.tokens', { count: formatNumber(liveStats?.totalTokens ?? 0) }),
+          })}
+          {stuck ? ` · ${tp('chat.live.inactive', sinceLast)}` : ''}
         </Typography>
       )}
     </Box>

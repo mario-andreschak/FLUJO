@@ -67,6 +67,7 @@ import {
   conversationOriginColor,
   conversationStatusColor,
 } from './conversationCardPalette';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface ChatHistoryProps {
   conversations: ConversationListItem[]; // Use ConversationListItem[]
@@ -107,30 +108,9 @@ const PREF = {
   searchDim: 'flujo-ui:chat-sidebar:search-dim',
 } as const;
 
-const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
-  { value: 'all', label: 'Any status' },
-  { value: 'running', label: 'Processing' },
-  { value: 'awaiting_tool_approval', label: 'Awaiting approval' },
-  { value: 'paused_debug', label: 'Paused (debug)' },
-  { value: 'completed', label: 'Completed' },
-  { value: 'error', label: 'Error' },
-];
-
-const DATE_OPTIONS: { value: DateFilter; label: string }[] = [
-  { value: 'all', label: 'Any time' },
-  { value: 'today', label: 'Last 24h' },
-  { value: '7d', label: 'Last 7 days' },
-  { value: '30d', label: 'Last 30 days' },
-];
-
-const GROUP_OPTIONS: { value: GroupMode; label: string }[] = [
-  { value: 'none', label: 'No grouping' },
-  { value: 'date', label: 'Group by date' },
-  { value: 'flow', label: 'Group by agent' },
-  { value: 'origin', label: 'Group by origin' },
-  { value: 'wave', label: 'Group by wave' },
-  { value: 'chain', label: 'Group by chain' },
-];
+const STATUS_OPTIONS: StatusFilter[] = ['all', 'running', 'awaiting_tool_approval', 'paused_debug', 'completed', 'error'];
+const DATE_OPTIONS: DateFilter[] = ['all', 'today', '7d', '30d'];
+const GROUP_OPTIONS: GroupMode[] = ['none', 'date', 'flow', 'origin', 'wave', 'chain'];
 
 const ORIGIN_ICONS: Record<ConversationOriginKey, React.ElementType> = {
   chat: ChatBubbleOutlineRoundedIcon,
@@ -155,6 +135,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   onCollapse,
   flowNames = {},
 }) => {
+  const { t, tp, formatDate: formatLocalizedDate } = useI18n();
   const muiTheme = useMuiTheme();
   const { visualStyle } = useAppTheme();
   const modern = visualStyle === 'modern';
@@ -233,25 +214,59 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   }, [search, searchDimension]);
 
   // Format date for display
-  const formatDate = (timestamp: number) => {
-    const date = new Date(timestamp);
-    return date.toLocaleDateString(undefined, {
+  const formatTimestamp = (timestamp: number) =>
+    formatLocalizedDate(timestamp, {
       month: 'short',
       day: 'numeric',
       hour: '2-digit',
       minute: '2-digit'
     });
-  };
+
+  const statusLabel = (status: StatusFilter) => ({
+    all: t('chat.status.any'),
+    running: t('chat.status.processing'),
+    awaiting_tool_approval: t('chat.status.awaiting'),
+    paused_debug: t('chat.status.paused'),
+    completed: t('chat.status.completed'),
+    capped: t('chat.status.capped'),
+    error: t('chat.status.error'),
+  })[status];
+
+  const dateLabel = (filter: DateFilter) => ({
+    all: t('chat.date.any'),
+    today: t('chat.date.day'),
+    '7d': t('chat.date.week'),
+    '30d': t('chat.date.month'),
+  })[filter];
+
+  const groupLabel = (mode: GroupMode) => ({
+    none: t('chat.group.none'),
+    date: t('chat.group.date'),
+    flow: t('chat.group.agent'),
+    origin: t('chat.group.origin'),
+    wave: t('chat.group.wave'),
+    chain: t('chat.group.chain'),
+  })[mode];
+
+  const originLabel = React.useCallback(
+    (key: ConversationOriginKey) => t(`chat.origin.${key}` as any),
+    [t],
+  );
+
+  const originDescription = React.useCallback(
+    (key: ConversationOriginKey) => t(`chat.origin.description.${key}` as any),
+    [t],
+  );
 
   // Get status description for tooltip
   const getStatusDescription = (status?: ConversationListItem['status']) => {
     switch (status) {
-      case 'running': return 'Processing';
-      case 'awaiting_tool_approval': return 'Waiting for tool approval';
-      case 'paused_debug': return 'Paused in debug mode';
-      case 'completed': return 'Completed';
-      case 'capped': return 'Landed at turn limit (summary produced)';
-      case 'error': return 'Error';
+      case 'running': return t('chat.status.processing');
+      case 'awaiting_tool_approval': return t('chat.status.waitingTooltip');
+      case 'paused_debug': return t('chat.status.pausedTooltip');
+      case 'completed': return t('chat.status.completed');
+      case 'capped': return t('chat.status.capped');
+      case 'error': return t('chat.status.error');
       default: return '';
     }
   };
@@ -262,11 +277,11 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   // flow" rather than dropped, so the conversation stays discoverable.
   const flowMeta = React.useCallback(
     (flowId: string | null): { key: string; label: string } => {
-      if (!flowId) return { key: 'flow:__none__', label: 'No agent' };
-      if (isQuickChatFlowId(flowId)) return { key: 'flow:__quickchat__', label: 'Quick Chat' };
-      return { key: `flow:${flowId}`, label: flowNames[flowId] ?? 'Unknown agent' };
+      if (!flowId) return { key: 'flow:__none__', label: t('chat.history.noAgent') };
+      if (isQuickChatFlowId(flowId)) return { key: 'flow:__quickchat__', label: t('chat.quick.title') };
+      return { key: `flow:${flowId}`, label: flowNames[flowId] ?? t('chat.history.unknownAgent') };
     },
-    [flowNames],
+    [flowNames, t],
   );
 
   // Distinct flow options for the flow filter, derived from the conversations
@@ -307,14 +322,14 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
             if (!contentMatchIds || !contentMatchIds.has(c.id)) return false;
           } else {
             const origin = getConversationOrigin(c);
-            const haystack = `${c.title} ${flowMeta(c.flowId).label} ${origin.label}`.toLowerCase();
+            const haystack = `${c.title} ${flowMeta(c.flowId).label} ${originLabel(origin.key)}`.toLowerCase();
             if (!haystack.includes(q)) return false;
           }
         }
         return true;
       })
       .sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt));
-  }, [conversations, search, searchDimension, contentMatchIds, statusFilter, flowFilter, dateFilter, flowMeta]);
+  }, [conversations, search, searchDimension, contentMatchIds, statusFilter, flowFilter, dateFilter, flowMeta, originLabel]);
 
   // Build the (optionally grouped) sections to render.
   const groups: CardGroup<ConversationListItem>[] = useMemo(() => {
@@ -325,17 +340,34 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
       // Bucket by wave; keep the Ad-hoc / Archived fallback buckets last.
       return orderWaveGroups(
         groupItems(filtered, (c) => waveBucket(c.plannedExecutionId, waveLookup)),
-      );
+      ).map((group) => ({
+        ...group,
+        label: group.key === 'wave:__adhoc__'
+          ? t('chat.group.adhoc')
+          : group.key === 'wave:__archived__'
+            ? t('chat.group.archived')
+            : group.label,
+      }));
     }
     return groupItems(filtered, (c) => {
-      if (groupMode === 'date') return recencyBucket(c.updatedAt);
+       if (groupMode === 'date') {
+         const bucket = recencyBucket(c.updatedAt);
+         const labels: Record<string, string> = {
+           'recency:unknown': t('flows.group.noDate'),
+           'recency:today': t('flows.group.today'),
+           'recency:week': t('flows.group.week'),
+           'recency:month': t('flows.group.month'),
+           'recency:older': t('flows.group.older'),
+         };
+         return { ...bucket, label: labels[bucket.key] ?? bucket.label };
+       }
       if (groupMode === 'origin') {
         const origin = getConversationOrigin(c);
-        return { key: `origin:${origin.key}`, label: origin.label };
+         return { key: `origin:${origin.key}`, label: originLabel(origin.key) };
       }
       return flowMeta(c.flowId);
     });
-  }, [filtered, groupMode, flowMeta, waveLookup]);
+  }, [filtered, groupMode, flowMeta, waveLookup, originLabel, t]);
 
   const toggleGroup = (key: string) => {
     setCollapsedGroups((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -386,6 +418,8 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     const isQuickChat = meta.key === 'flow:__quickchat__';
     const selected = conversation.id === currentConversationId;
     const origin = getConversationOrigin(conversation);
+    const localizedOriginLabel = originLabel(origin.key);
+    const localizedOriginDescription = originDescription(origin.key);
     const OriginIcon = ORIGIN_ICONS[origin.key];
     const originColor = conversationOriginColor(origin.key, muiTheme);
     const statusColor = conversationStatusColor(conversation.status, muiTheme);
@@ -414,11 +448,11 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
             } : { display: 'flex' }}
           >
             {stoppable && (
-              <Tooltip title="Stop this run">
+              <Tooltip title={t('chat.history.stop')}>
                 <IconButton
                   edge="end"
                   size="small"
-                  aria-label="stop run"
+                  aria-label={t('chat.history.stop')}
                   onClick={(e) => {
                     e.stopPropagation();
                     onStopConversation!(conversation.id);
@@ -428,11 +462,11 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                 </IconButton>
               </Tooltip>
             )}
-            <Tooltip title="Delete conversation">
+            <Tooltip title={t('chat.history.delete')}>
               <IconButton
                 edge="end"
                 size="small"
-                aria-label="delete"
+                aria-label={t('chat.history.delete')}
                 onClick={(e) => {
                   e.stopPropagation();
                   onDeleteConversation(conversation.id);
@@ -493,7 +527,11 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
         <ListItemButton
           selected={selected}
           onClick={() => onSelectConversation(conversation.id)}
-          aria-label={`Open ${conversation.title}, origin: ${origin.label}, status: ${getStatusDescription(conversation.status) || 'Unknown'}`}
+          aria-label={t('chat.history.openAria', {
+            title: conversation.title,
+            origin: localizedOriginLabel,
+            status: getStatusDescription(conversation.status) || t('chat.history.unknown'),
+          })}
           sx={{
             position: 'relative',
             zIndex: 1,
@@ -540,11 +578,11 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
               >
                 {groupMode !== 'origin' && (
                   <Tooltip
-                    title={`${origin.description}${origin.inferred ? ' (inferred from legacy metadata)' : ''}`}
+                    title={`${localizedOriginDescription}${origin.inferred ? ` (${t('chat.history.inferred')})` : ''}`}
                   >
                     <Chip
                       icon={<OriginIcon />}
-                      label={origin.label}
+                      label={localizedOriginLabel}
                       size="small"
                       variant="outlined"
                       sx={{
@@ -565,7 +603,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                 {/* Which flow this conversation used (issue #147) — hidden when
                     grouping by flow to avoid redundancy with the section header. */}
                 {groupMode !== 'flow' && (
-                  <Tooltip title={isQuickChat ? 'Quick Chat (no saved agent)' : `Agent: ${meta.label}`}>
+                  <Tooltip title={isQuickChat ? t('chat.history.quickNoAgent') : t('chat.history.agentNamed', { agent: meta.label })}>
                     <Chip
                       icon={isQuickChat ? <BoltIcon /> : undefined}
                       label={meta.label}
@@ -597,7 +635,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                     color="text.secondary"
                     sx={{ whiteSpace: 'nowrap' }}
                   >
-                    {formatDate(conversation.updatedAt)}
+                    {formatTimestamp(conversation.updatedAt)}
                   </Typography>
                 </Box>
               </Box>
@@ -627,29 +665,29 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
         }}
       >
         {onCollapse && (
-          <Tooltip title="Hide sidebar">
-            <IconButton size="small" onClick={onCollapse} aria-label="Hide conversation sidebar">
+          <Tooltip title={t('chat.history.hide')}>
+            <IconButton size="small" onClick={onCollapse} aria-label={t('chat.history.hide')}>
               <ChevronLeftIcon />
             </IconButton>
           </Tooltip>
         )}
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography variant="caption" sx={{ display: 'block', color: 'primary.light', fontWeight: 760, letterSpacing: '.1em' }}>
-            AGENT RUNS
+            {t('chat.history.agentRuns')}
           </Typography>
-          <Typography variant="h6" noWrap>Conversations</Typography>
+          <Typography variant="h6" noWrap>{t('chat.history.title')}</Typography>
         </Box>
         {conversations.length > 0 && (
-          <Tooltip title="Delete all conversations">
+          <Tooltip title={t('chat.history.deleteAll')}>
             <span>{/* span wrapper needed for Tooltip on (potentially) disabled buttons */}
               <IconButton
                 size="small"
                 color="error"
-                aria-label="Delete all conversations"
+                aria-label={t('chat.history.deleteAll')}
                 onClick={() => setBulkDeleteDialog({
                   open: true,
                   ids: conversations.map(c => c.id),
-                  label: `Delete all ${conversations.length} conversation(s)?`,
+                  label: tp('chat.history.deleteAllQuestion', conversations.length),
                 })}
               >
                 <DeleteForeverIcon fontSize="small" />
@@ -658,16 +696,16 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
           </Tooltip>
         )}
         {filtered.length > 0 && filtered.length < conversations.length && (
-          <Tooltip title="Delete visible conversations (matching current filter)">
+          <Tooltip title={t('chat.history.deleteVisible')}>
             <span>
               <IconButton
                 size="small"
                 color="error"
-                aria-label="Delete visible conversations"
+                aria-label={t('chat.history.deleteVisible')}
                 onClick={() => setBulkDeleteDialog({
                   open: true,
                   ids: filtered.map(c => c.id),
-                  label: `Delete ${filtered.length} visible conversation(s)?`,
+                  label: tp('chat.history.deleteVisibleQuestion', filtered.length),
                 })}
               >
                 <DeleteSweepIcon fontSize="small" />
@@ -676,7 +714,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
           </Tooltip>
         )}
         {onQuickChat && (
-          <Tooltip title="Quick Chat: a model + optional connected apps, no saved agent">
+          <Tooltip title={t('chat.history.quickHelp')}>
             <Button
               variant="outlined"
               color="primary"
@@ -684,7 +722,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
               onClick={onQuickChat}
               size="small"
             >
-              Quick
+              {t('chat.history.quick')}
             </Button>
           </Tooltip>
         )}
@@ -695,7 +733,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
           onClick={onNewConversation}
           size="small"
         >
-          New
+          {t('chat.history.new')}
         </Button>
       </Box>
 
@@ -717,7 +755,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
         <TextField
           size="small"
           sx={{ flex: 1 }}
-          placeholder={searchDimension === 'content' ? 'Search message content…' : 'Search title, origin or agent…'}
+          placeholder={searchDimension === 'content' ? t('chat.history.searchContent') : t('chat.history.searchTitle')}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           InputProps={{
@@ -728,7 +766,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
             ),
             endAdornment: search ? (
               <InputAdornment position="end">
-                <IconButton size="small" aria-label="Clear search" onClick={() => setSearch('')}>
+                <IconButton size="small" aria-label={t('chat.history.clearSearch')} onClick={() => setSearch('')}>
                   <ClearIcon fontSize="small" />
                 </IconButton>
               </InputAdornment>
@@ -739,10 +777,10 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
           <Select
             value={searchDimension}
             onChange={(e) => setSearchDimension(e.target.value as 'title' | 'content')}
-            aria-label="Search dimension"
+            aria-label={t('chat.history.searchDimension')}
           >
-            <MenuItem value="title">Title</MenuItem>
-            <MenuItem value="content">Content</MenuItem>
+            <MenuItem value="title">{t('chat.history.searchTitleOption')}</MenuItem>
+            <MenuItem value="content">{t('chat.history.searchContentOption')}</MenuItem>
           </Select>
         </FormControl>
         </Box>
@@ -751,10 +789,10 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
             <Select
               value={groupMode}
               onChange={(e) => setGroupMode(e.target.value as GroupMode)}
-              aria-label="Group conversations"
+              aria-label={t('chat.history.groupAria')}
             >
-              {GROUP_OPTIONS.map((o) => (
-                <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>
+              {GROUP_OPTIONS.map((option) => (
+                <MenuItem key={option} value={option}>{groupLabel(option)}</MenuItem>
               ))}
             </Select>
           </FormControl>
@@ -762,10 +800,10 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
             <Select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-              aria-label="Filter by status"
+              aria-label={t('chat.history.filterStatus')}
             >
-              {STATUS_OPTIONS.map((o) => (
-                <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>
+              {STATUS_OPTIONS.map((option) => (
+                <MenuItem key={option} value={option}>{statusLabel(option)}</MenuItem>
               ))}
             </Select>
           </FormControl>
@@ -773,9 +811,9 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
             <Select
               value={flowOptions.some((o) => o.key === flowFilter) ? flowFilter : 'all'}
               onChange={(e) => setFlowFilter(e.target.value)}
-              aria-label="Filter by agent"
+              aria-label={t('chat.history.filterAgent')}
             >
-              <MenuItem value="all">Any agent</MenuItem>
+              <MenuItem value="all">{t('chat.history.anyAgent')}</MenuItem>
               {flowOptions.map((o) => (
                 <MenuItem key={o.key} value={o.key}>{o.label}</MenuItem>
               ))}
@@ -785,10 +823,10 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
             <Select
               value={dateFilter}
               onChange={(e) => setDateFilter(e.target.value as DateFilter)}
-              aria-label="Filter by date"
+              aria-label={t('chat.history.filterDate')}
             >
-              {DATE_OPTIONS.map((o) => (
-                <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>
+              {DATE_OPTIONS.map((option) => (
+                <MenuItem key={option} value={option}>{dateLabel(option)}</MenuItem>
               ))}
             </Select>
           </FormControl>
@@ -796,7 +834,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
         {(search || activeFilterCount > 0) && (
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <Typography variant="caption" color="text.secondary">
-              {matchCount} of {totalCount}
+              {t('chat.history.matchCount', { shown: matchCount, total: totalCount })}
             </Typography>
             <Button
               size="small"
@@ -807,7 +845,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                 setDateFilter('all');
               }}
             >
-              Clear filters
+              {t('chat.history.clearFilters')}
             </Button>
           </Box>
         )}
@@ -816,7 +854,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
       <Divider />
 
       <List
-        aria-label="Conversations"
+        aria-label={t('chat.history.title')}
         sx={{
           overflow: 'auto',
           flex: 1,
@@ -828,8 +866,8 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
         {totalCount === 0 ? (
           <ListItem>
             <ListItemText
-              primary="No conversations yet"
-              secondary="Start a new conversation"
+              primary={t('chat.history.empty')}
+              secondary={t('chat.history.emptyHelp')}
               primaryTypographyProps={{ align: 'center' }}
               secondaryTypographyProps={{ align: 'center' }}
             />
@@ -837,8 +875,8 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
         ) : matchCount === 0 ? (
           <ListItem>
             <ListItemText
-              primary="No matching conversations"
-              secondary="Try a different search or filter"
+              primary={t('chat.history.noMatch')}
+              secondary={t('chat.history.noMatchHelp')}
               primaryTypographyProps={{ align: 'center' }}
               secondaryTypographyProps={{ align: 'center' }}
             />
@@ -899,15 +937,15 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
         onClose={() => setBulkDeleteDialog(prev => ({ ...prev, open: false }))}
         aria-labelledby="bulk-delete-dialog-title"
       >
-        <DialogTitle id="bulk-delete-dialog-title">Confirm deletion</DialogTitle>
+        <DialogTitle id="bulk-delete-dialog-title">{t('chat.history.confirmDelete')}</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            {bulkDeleteDialog.label} This cannot be undone.
+            {bulkDeleteDialog.label} {t('chat.history.cannotUndo')}
           </DialogContentText>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setBulkDeleteDialog(prev => ({ ...prev, open: false }))}>
-            Cancel
+            {t('common.cancel')}
           </Button>
           <Button
             color="error"
@@ -917,7 +955,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
             }}
             autoFocus
           >
-            Delete
+            {t('chat.history.deleteAction')}
           </Button>
         </DialogActions>
       </Dialog>

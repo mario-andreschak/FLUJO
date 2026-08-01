@@ -17,6 +17,7 @@ import {
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import { ModelTestAttempt, ModelTestResult } from '@/shared/types/model/response';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 export interface ModelTestDialogProps {
   open: boolean;
@@ -28,8 +29,9 @@ export interface ModelTestDialogProps {
   onRetry: () => void;
 }
 
-const AttemptBlock = ({ title, attempt }: { title: string; attempt: ModelTestAttempt }) => (
-  <Box sx={{ mb: 2 }}>
+const AttemptBlock = ({ title, attempt }: { title: string; attempt: ModelTestAttempt }) => {
+  const { t, formatNumber } = useI18n();
+  return <Box sx={{ mb: 2 }}>
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
       {attempt.ok ? (
         <CheckCircleIcon color="success" fontSize="small" />
@@ -40,12 +42,12 @@ const AttemptBlock = ({ title, attempt }: { title: string; attempt: ModelTestAtt
       {typeof attempt.status === 'number' && (
         <Chip size="small" label={`HTTP ${attempt.status}`} />
       )}
-      <Chip size="small" variant="outlined" label={`${attempt.durationMs} ms`} />
+      <Chip size="small" variant="outlined" label={`${formatNumber(attempt.durationMs)} ms`} />
     </Box>
 
     {attempt.ok ? (
       <Typography variant="body2" color="text.secondary" sx={{ pl: 3 }}>
-        Response: {attempt.content ? `"${attempt.content}"` : '(empty)'}
+        {t('models.test.response', { response: attempt.content ? `"${attempt.content}"` : t('models.test.empty') })}
       </Typography>
     ) : (
       <Box sx={{ pl: 3 }}>
@@ -82,8 +84,8 @@ const AttemptBlock = ({ title, attempt }: { title: string; attempt: ModelTestAtt
         )}
       </Box>
     )}
-  </Box>
-);
+  </Box>;
+};
 
 export const ModelTestDialog = ({
   open,
@@ -94,19 +96,20 @@ export const ModelTestDialog = ({
   onClose,
   onRetry,
 }: ModelTestDialogProps) => {
+  const { t } = useI18n();
   const sdkTitle = result?.provider === 'codex'
-    ? 'Codex SDK (used by flows)'
-    : 'OpenAI SDK (used by flows)';
+    ? t('models.test.codexSdk')
+    : t('models.test.openaiSdk');
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>Test model: {modelLabel}</DialogTitle>
+      <DialogTitle>{t('models.test.title', { model: modelLabel })}</DialogTitle>
       <DialogContent dividers>
         {loading ? (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, py: 3 }}>
             <CircularProgress size={24} />
             <Typography variant="body2">
-              Sending a direct test request (SDK + axios)…
+              {t('models.test.sending')}
             </Typography>
           </Box>
         ) : error ? (
@@ -117,22 +120,22 @@ export const ModelTestDialog = ({
               {result.diagnosis}
             </Alert>
             <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 2 }}>
-              model: {result.model}
+              {t('models.test.modelLabel', { model: result.model })}
               {result.baseUrl ? ` · ${result.baseUrl}` : ''}
               {result.provider ? ` · ${result.provider}` : ''}
             </Typography>
             <Divider sx={{ mb: 2 }} />
             <AttemptBlock title={sdkTitle} attempt={result.sdk} />
-            <AttemptBlock title="axios (independent cross-check)" attempt={result.axios} />
+            <AttemptBlock title={t('models.test.axios')} attempt={result.axios} />
           </>
         ) : null}
       </DialogContent>
       <DialogActions>
         <Button onClick={onRetry} disabled={loading}>
-          Run again
+          {t('models.test.runAgain')}
         </Button>
         <Button onClick={onClose} variant="contained">
-          Close
+          {t('common.close')}
         </Button>
       </DialogActions>
     </Dialog>

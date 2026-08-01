@@ -31,6 +31,7 @@ import { CardPickerItem } from '@/frontend/components/shared/CardPickerGrid';
 import ServerCard from '@/frontend/components/mcp/MCPServerManager/ServerCard';
 import { useCardPicker } from '@/frontend/hooks/useCardPicker';
 import { CardGroup } from '@/utils/shared/cardGrouping';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/PlannedExecutions/WatchToolPanel');
 
@@ -62,6 +63,7 @@ interface ServerConfigLike {
  * knowledge lives in the MCP server — FLUJO only supplies the polling.
  */
 const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
+  const { t } = useI18n();
   const [servers, setServers] = useState<ServerConfigLike[]>([]);
   const [serverPickerOpen, setServerPickerOpen] = useState(false);
   const [tools, setTools] = useState<ToolEntry[]>([]);
@@ -139,13 +141,13 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
     try {
       const parsed = JSON.parse(text);
       if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        setArgsError('Arguments must be a JSON object, e.g. { "query": "…" }');
+        setArgsError(t('automations.tool.argsObject'));
         return;
       }
       setArgsError(null);
       onChange({ ...config, args: parsed });
     } catch {
-      setArgsError('Not valid JSON yet');
+      setArgsError(t('automations.tool.invalidJson'));
     }
   };
 
@@ -156,14 +158,14 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
     try {
       const response = await mcpService.callTool(config.serverName, config.toolName, config.args || {});
       if (response?.error) {
-        setTestError(typeof response.error === 'string' ? response.error : 'Tool call failed');
+        setTestError(typeof response.error === 'string' ? response.error : t('automations.tool.callFailed'));
       } else {
         const data = response?.data ?? response;
         const serialized = JSON.stringify(data, null, 2) ?? '';
-        setTestResult(serialized.length > 6000 ? `${serialized.slice(0, 6000)}\n… (truncated)` : serialized);
+        setTestResult(serialized.length > 6000 ? `${serialized.slice(0, 6000)}\n… (${t('automations.tool.truncated')})` : serialized);
       }
     } catch (error) {
-      setTestError(error instanceof Error ? error.message : 'Tool call failed');
+      setTestError(error instanceof Error ? error.message : t('automations.tool.callFailed'));
     } finally {
       setTesting(false);
     }
@@ -202,7 +204,7 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
       <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
         <Box sx={{ minWidth: 220, flex: 1, mt: 2, mb: 1 }}>
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
-            Server
+            {t('automations.tool.server')}
           </Typography>
           <Button
             variant="outlined"
@@ -210,16 +212,16 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
             onClick={() => setServerPickerOpen(true)}
             sx={{ justifyContent: 'flex-start', textTransform: 'none' }}
           >
-            {config.serverName ? `${config.serverName} — change` : 'Choose an MCP server…'}
+            {config.serverName ? t('automations.tool.changeServer', { server: config.serverName }) : t('automations.tool.chooseServer')}
           </Button>
           <CardPickerDialog
             open={serverPickerOpen}
             onClose={() => setServerPickerOpen(false)}
-            title="Choose an MCP server"
-            description="Pick the server whose tool you want to watch."
-            emptyMessage="No MCP servers configured."
+            title={t('automations.tool.chooseServerTitle')}
+            description={t('automations.tool.chooseServerDescription')}
+            emptyMessage={t('automations.tool.noServers')}
             searchable
-            searchPlaceholder="Search servers…"
+            searchPlaceholder={t('automations.tool.searchServers')}
             searchTerm={serverPicker.searchTerm}
             onSearchChange={serverPicker.setSearchTerm}
             columns={{ xs: 12, sm: 6 }}
@@ -231,17 +233,17 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
         </Box>
 
         <FormControl sx={{ minWidth: 220, flex: 1 }} margin="normal" disabled={!config.serverName}>
-          <InputLabel id="watch-tool-label">Tool</InputLabel>
+          <InputLabel id="watch-tool-label">{t('automations.tool.tool')}</InputLabel>
           <Select
             labelId="watch-tool-label"
-            label="Tool"
+            label={t('automations.tool.tool')}
             value={tools.some(t => t.name === config.toolName) ? config.toolName : ''}
             // Args belong to a specific tool — reset them on tool change.
             onChange={(e) => onChange({ ...config, toolName: e.target.value, args: {} })}
           >
             {tools.length === 0 && (
               <MenuItem value="" disabled>
-                {loadingTools ? 'Loading tools…' : 'Pick a server first'}
+                {loadingTools ? t('automations.tool.loadingTools') : t('automations.tool.pickServerFirst')}
               </MenuItem>
             )}
             {tools.map(tool => (
@@ -253,10 +255,10 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
       </Box>
 
       <Typography variant="subtitle2" sx={{ mt: 1 }}>
-        How often to check
+        {t('automations.howOften')}
       </Typography>
       <SchedulePanel
-        verb="Check"
+        verb={t('automations.checkVerb')}
         cron={config.cron ?? intervalMsToCron(config.intervalMs)}
         timezone={config.timezone}
         onChange={({ cron, timezone }) => onChange({ ...config, cron, timezone })}
@@ -265,7 +267,7 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
       {selectedTool ? (
         <Box sx={{ my: 1.5 }}>
           <Typography variant="subtitle2" sx={{ mb: 1.5 }}>
-            Tool parameters — sent on every check
+            {t('automations.tool.params')}
           </Typography>
           <SchemaParamsForm
             schema={selectedTool.inputSchema}
@@ -276,7 +278,7 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
       ) : (
         <TextField
           fullWidth
-          label="Tool arguments (JSON, optional)"
+          label={t('automations.tool.args')}
           value={argsText}
           onChange={(e) => handleArgsChange(e.target.value)}
           margin="normal"
@@ -284,7 +286,7 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
           minRows={2}
           placeholder='{ "query": "is:unread" }'
           error={!!argsError}
-          helperText={argsError ?? 'Sent to the tool on every check.'}
+          helperText={argsError ?? t('automations.tool.argsHelp')}
           slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: 14 } } }}
         />
       )}
@@ -297,10 +299,10 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
           disabled={!config.serverName || !config.toolName || testing || !!argsError}
           startIcon={testing ? <CircularProgress size={16} /> : undefined}
         >
-          Test: call the tool now
+          {t('automations.tool.test')}
         </Button>
         <Typography variant="caption" color="text.secondary">
-          See what the result looks like — useful for the settings below.
+          {t('automations.tool.testHelp')}
         </Typography>
       </Box>
       {testError && <Alert severity="error" sx={{ mb: 1 }}>{testError}</Alert>}
@@ -323,15 +325,15 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
       )}
 
       <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>
-        Run the flow when…
+        {t('automations.tool.runWhen')}
       </Typography>
-      <Box role="radiogroup" aria-label="Poll condition" sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+      <Box role="radiogroup" aria-label={t('automations.tool.pollConditionAria')} sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
         <OptionCard
           selected={evaluate.mode === 'on-change'}
           onClick={() => onChange({ ...config, evaluate: { mode: 'on-change' } })}
           icon={<DifferenceIcon />}
-          title="The result changes"
-          description="Any difference from the last check runs the flow. Simplest — no setup."
+          title={t('automations.tool.resultChanges')}
+          description={t('automations.tool.resultChangesDescription')}
         />
         <OptionCard
           selected={evaluate.mode === 'llm-gate' || evaluate.mode === 'flow-gate'}
@@ -341,8 +343,8 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
             }
           }}
           icon={<PsychologyIcon />}
-          title="AI decides"
-          description="Describe the condition in plain language; a model — or one of your flows — checks the result whenever it changes."
+          title={t('automations.tool.aiDecides')}
+          description={t('automations.tool.aiDecidesDescription')}
         />
       </Box>
 
@@ -350,20 +352,20 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
         <Box sx={{ mt: 1 }}>
           <TextField
             fullWidth
-            label="Run the flow if…"
+            label={t('automations.tool.condition')}
             value={evaluate.condition}
             onChange={(e) => onChange({ ...config, evaluate: { ...evaluate, condition: e.target.value } })}
             multiline
             minRows={2}
             margin="normal"
-            placeholder="e.g. any email mentions an invoice or a payment reminder"
+            placeholder={t('automations.tool.conditionPlaceholder')}
           />
           <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'flex-start' }}>
             <FormControl sx={{ minWidth: 170 }}>
-              <InputLabel id="gate-checker-label">Checked by</InputLabel>
+              <InputLabel id="gate-checker-label">{t('automations.tool.checkedBy')}</InputLabel>
               <Select
                 labelId="gate-checker-label"
-                label="Checked by"
+                label={t('automations.tool.checkedBy')}
                 value={evaluate.mode}
                 onChange={(e) => {
                   const mode = e.target.value as 'llm-gate' | 'flow-gate';
@@ -381,22 +383,22 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
                   });
                 }}
               >
-                <MenuItem value="llm-gate">A model</MenuItem>
-                <MenuItem value="flow-gate">One of my flows</MenuItem>
+                <MenuItem value="llm-gate">{t('automations.tool.aModel')}</MenuItem>
+                <MenuItem value="flow-gate">{t('automations.tool.oneFlow')}</MenuItem>
               </Select>
             </FormControl>
 
             {evaluate.mode === 'llm-gate' && (
               <FormControl sx={{ minWidth: 240, flex: 1 }}>
-                <InputLabel id="gate-model-label">Model that checks</InputLabel>
+                <InputLabel id="gate-model-label">{t('automations.tool.modelChecker')}</InputLabel>
                 <Select
                   labelId="gate-model-label"
-                  label="Model that checks"
+                  label={t('automations.tool.modelChecker')}
                   value={models.some(m => m.id === evaluate.modelId) ? evaluate.modelId : ''}
                   onChange={(e) => onChange({ ...config, evaluate: { ...evaluate, modelId: e.target.value } })}
                 >
                   {models.length === 0 && (
-                    <MenuItem value="" disabled>No models configured</MenuItem>
+                    <MenuItem value="" disabled>{t('automations.tool.noModels')}</MenuItem>
                   )}
                   {models.map(m => (
                     <MenuItem key={m.id} value={m.id}>{m.displayName || m.name}</MenuItem>
@@ -407,15 +409,15 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
 
             {evaluate.mode === 'flow-gate' && (
               <FormControl sx={{ minWidth: 240, flex: 1 }}>
-                <InputLabel id="gate-flow-label">Flow that checks</InputLabel>
+                <InputLabel id="gate-flow-label">{t('automations.tool.flowChecker')}</InputLabel>
                 <Select
                   labelId="gate-flow-label"
-                  label="Flow that checks"
+                  label={t('automations.tool.flowChecker')}
                   value={flows.some(f => f.id === evaluate.flowId) ? evaluate.flowId : ''}
                   onChange={(e) => onChange({ ...config, evaluate: { ...evaluate, flowId: e.target.value } })}
                 >
                   {flows.length === 0 && (
-                    <MenuItem value="" disabled>No flows available</MenuItem>
+                    <MenuItem value="" disabled>{t('automations.tool.noFlows')}</MenuItem>
                   )}
                   {flows.map(f => (
                     <MenuItem key={f.id} value={f.id}>{f.name}</MenuItem>
@@ -425,7 +427,7 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
             )}
 
             <TextField
-              label="Max checks per day"
+              label={t('automations.tool.maxChecks')}
               type="number"
               value={evaluate.maxCallsPerDay ?? 500}
               onChange={(e) =>
@@ -435,22 +437,20 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
                 })
               }
               inputProps={{ min: 1 }}
-              helperText="Cost guard per check."
+              helperText={t('automations.tool.costGuard')}
               sx={{ width: 180 }}
             />
           </Box>
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
             {evaluate.mode === 'flow-gate'
-              ? 'The checker flow runs invisibly (never in the chat), gets the condition + tool result, and must answer with {"fire": true/false, "reason": "…"} — it can use its own tools to verify before deciding.'
-              : 'The model is only asked when the result actually changed since the last check — an idle feed costs nothing. Pick a small, cheap model.'}
+              ? t('automations.tool.flowGateHelp')
+              : t('automations.tool.modelGateHelp')}
           </Typography>
         </Box>
       )}
 
       <Alert severity="info" sx={{ mt: 2 }}>
-        The first check only takes a snapshot — the flow runs from the second
-        check onwards, when something actually changed. FLUJO must be running
-        for checks to happen.
+        {t('automations.tool.firstSnapshot')}
       </Alert>
     </Box>
   );

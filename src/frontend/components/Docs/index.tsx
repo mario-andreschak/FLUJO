@@ -16,6 +16,22 @@ import SearchIcon from '@mui/icons-material/Search';
 import MenuBookRoundedIcon from '@mui/icons-material/MenuBookRounded';
 import { API_GROUPS, ApiEndpoint, HttpMethod } from './apiReference';
 import PageHeader from '@/frontend/components/shared/PageHeader';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+
+const GROUP_MESSAGE_KEYS = {
+  openai: { name: 'docs.group.openai.name', description: 'docs.group.openai.description' },
+  conversations: { name: 'docs.group.conversations.name', description: 'docs.group.conversations.description' },
+  model: { name: 'docs.group.model.name', description: 'docs.group.model.description' },
+  flow: { name: 'docs.group.flow.name', description: 'docs.group.flow.description' },
+  'planned-executions': { name: 'docs.group.planned.name', description: 'docs.group.planned.description' },
+  mcp: { name: 'docs.group.mcp.name', description: 'docs.group.mcp.description' },
+  'mcp-proxy': { name: 'docs.group.proxy.name', description: 'docs.group.proxy.description' },
+  'mcp-flows': { name: 'docs.group.mcpFlows.name', description: 'docs.group.mcpFlows.description' },
+  oauth: { name: 'docs.group.oauth.name', description: 'docs.group.oauth.description' },
+  env: { name: 'docs.group.env.name', description: 'docs.group.env.description' },
+  storage: { name: 'docs.group.storage.name', description: 'docs.group.storage.description' },
+  system: { name: 'docs.group.system.name', description: 'docs.group.system.description' },
+} as const;
 
 const METHOD_COLORS: Record<HttpMethod, string> = {
   GET: '#2e7d32',
@@ -44,6 +60,14 @@ function MethodChip({ method }: { method: HttpMethod }) {
 }
 
 function EndpointCard({ endpoint }: { endpoint: ApiEndpoint }) {
+  const { t } = useI18n();
+  const paramsLabel = endpoint.paramsLabel === 'Body'
+    ? t('docs.label.body')
+    : endpoint.paramsLabel === 'Query'
+      ? t('docs.label.query')
+      : endpoint.paramsLabel === 'Form data'
+        ? t('docs.label.form')
+        : t('docs.parameters');
   return (
     <Paper variant="outlined" sx={{ p: 2, mb: 1.5 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 1 }}>
@@ -64,7 +88,7 @@ function EndpointCard({ endpoint }: { endpoint: ApiEndpoint }) {
       {endpoint.params && endpoint.params.length > 0 && (
         <Box sx={{ mb: 1 }}>
           <Typography variant="caption" sx={{ fontWeight: 700, textTransform: 'uppercase', color: 'text.secondary' }}>
-            {endpoint.paramsLabel ?? 'Parameters'}
+            {paramsLabel}
           </Typography>
           <Box component="ul" sx={{ m: 0, mt: 0.5, pl: 2.5 }}>
             {endpoint.params.map((p) => (
@@ -79,7 +103,7 @@ function EndpointCard({ endpoint }: { endpoint: ApiEndpoint }) {
                   <Box component="span" sx={{ color: 'text.secondary' }}>
                     {' '}
                     {p.type}
-                    {p.required ? ' · required' : ''} — {p.description}
+                    {p.required ? ` · ${t('docs.required')}` : ''} — {p.description}
                   </Box>
                 </Typography>
               </Box>
@@ -91,7 +115,7 @@ function EndpointCard({ endpoint }: { endpoint: ApiEndpoint }) {
       {endpoint.response && (
         <Typography variant="body2" sx={{ mt: 0.5 }}>
           <Box component="span" sx={{ fontWeight: 600 }}>
-            Response:{' '}
+            {t('docs.response')}{' '}
           </Box>
           <Box component="span" sx={{ color: 'text.secondary' }}>
             {endpoint.response}
@@ -129,6 +153,7 @@ function EndpointCard({ endpoint }: { endpoint: ApiEndpoint }) {
 }
 
 export default function Docs() {
+  const { t } = useI18n();
   const [query, setQuery] = useState('');
   const [origin, setOrigin] = useState('');
 
@@ -153,9 +178,9 @@ export default function Docs() {
   return (
     <>
       <PageHeader
-        eyebrow="Reference"
-        title="API documentation"
-        description="Use FLUJO as an OpenAI-compatible runtime or automate every core resource directly."
+        eyebrow={t('docs.eyebrow')}
+        title={t('docs.title')}
+        description={t('docs.description')}
         icon={MenuBookRoundedIcon}
         maxWidth={960}
       />
@@ -163,7 +188,7 @@ export default function Docs() {
 
       <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
         <Typography variant="subtitle2" gutterBottom>
-          Base URL
+          {t('docs.baseUrl')}
         </Typography>
         <Box
           component="code"
@@ -172,22 +197,14 @@ export default function Docs() {
           {origin || 'http://localhost:4200'}
         </Box>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          Point any OpenAI SDK at{' '}
-          <Box component="code" sx={{ fontFamily: 'var(--font-geist-mono), monospace' }}>
-            {(origin || 'http://localhost:4200') + '/v1'}
-          </Box>{' '}
-          and set the model to{' '}
-          <Box component="code" sx={{ fontFamily: 'var(--font-geist-mono), monospace' }}>
-            flow-&lt;NAME&gt;
-          </Box>
-          . Any API key value is accepted locally.
+          {t('docs.baseHelp', { url: (origin || 'http://localhost:4200') + '/v1' })}
         </Typography>
       </Paper>
 
       <TextField
         fullWidth
         size="small"
-        placeholder="Search endpoints (path, method, description)…"
+        placeholder={t('docs.search')}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         sx={{ mb: 3 }}
@@ -201,16 +218,20 @@ export default function Docs() {
       />
 
       {filteredGroups.length === 0 && (
-        <Typography color="text.secondary">No endpoints match “{query}”.</Typography>
+        <Typography color="text.secondary">{t('docs.noMatches', { query })}</Typography>
       )}
 
       {filteredGroups.map((group) => (
         <Box key={group.id} sx={{ mb: 4 }} id={group.id}>
           <Typography variant="h6" gutterBottom>
-            {group.name}
+            {GROUP_MESSAGE_KEYS[group.id as keyof typeof GROUP_MESSAGE_KEYS]
+              ? t(GROUP_MESSAGE_KEYS[group.id as keyof typeof GROUP_MESSAGE_KEYS].name)
+              : group.name}
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            {group.description}
+            {GROUP_MESSAGE_KEYS[group.id as keyof typeof GROUP_MESSAGE_KEYS]
+              ? t(GROUP_MESSAGE_KEYS[group.id as keyof typeof GROUP_MESSAGE_KEYS].description)
+              : group.description}
           </Typography>
           {group.endpoints.map((e) => (
             <EndpointCard key={`${e.method} ${e.path}`} endpoint={e} />
@@ -220,12 +241,9 @@ export default function Docs() {
 
       <Divider sx={{ my: 3 }} />
       <Typography variant="caption" color="text.secondary">
-        Secrets (API keys, encryption passwords, OAuth tokens) are encrypted at rest and never
-        returned to the browser in clear text. See the project{' '}
         <MuiLink href="https://github.com/mario-andreschak/FLUJO" target="_blank" rel="noopener">
-          repository
-        </MuiLink>{' '}
-        for source-level details.
+          {t('docs.security')}
+        </MuiLink>
       </Typography>
       </Container>
     </>

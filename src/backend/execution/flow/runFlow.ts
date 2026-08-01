@@ -23,6 +23,7 @@ import {
   ErrorDetails,
 } from '@/backend/execution/flow/types';
 import { FlujoChatMessage } from '@/shared/types/chat';
+import type { ModelMediaPart } from '@/shared/types/model/media';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { isInternalToolName } from '@/backend/execution/flow/handlers/toolNamespace';
 import { flowService } from '@/backend/services/flow/index';
@@ -328,6 +329,8 @@ export interface FlowRunResult {
   runId: string;
   /** Final assistant content (the default "output"), post external-tool XML wrap. */
   outputText: string;
+  /** Provider-neutral media attached to the final assistant output. */
+  outputMedia?: ModelMediaPart[];
   /** Tool calls to surface in a tool-calls response (undefined when XML-wrapped). */
   toolCalls?: OpenAI.ChatCompletionMessageToolCall[];
   /** Full transcript of THIS run. */
@@ -2130,6 +2133,9 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   const toolCalls = externalToolsXml
     ? undefined
     : (lastMessage?.role === 'assistant' ? lastMessage.tool_calls : undefined);
+  const outputMedia = lastMessage?.role === 'assistant' && lastMessage.media?.length
+    ? lastMessage.media
+    : undefined;
 
   log.info(`Returning success result for conv ${effectiveConvId}`, { action: currentAction, status: sharedState.status, flujo, requireApproval, flujodebug });
 
@@ -2138,6 +2144,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     ...baseResult,
     status: (sharedState.status as FlowRunStatus) || (currentAction === FINAL_RESPONSE_ACTION ? 'completed' : 'running'),
     outputText: responseContent,
+    ...(outputMedia ? { outputMedia } : {}),
     toolCalls,
     pendingToolCalls: sharedState.pendingToolCalls,
   });

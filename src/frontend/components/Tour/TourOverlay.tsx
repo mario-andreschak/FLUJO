@@ -7,6 +7,7 @@ import IconButton from '@mui/material/IconButton';
 import { usePathname, useRouter } from 'next/navigation';
 import { useTour } from '@/frontend/contexts/TourContext';
 import { TOUR_STEPS, TourStep } from '@/frontend/components/Tour/tourSteps';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const SPOTLIGHT_PADDING = 8;
 const CARD_WIDTH = 360;
@@ -80,6 +81,7 @@ function clamp({
 
 export default function TourOverlay() {
   const { isActive, stepIndex, next, back, endTour } = useTour();
+  const { t } = useI18n();
   const pathname = usePathname();
   const router = useRouter();
   const [rect, setRect] = useState<Rect | null>(null);
@@ -196,7 +198,7 @@ export default function TourOverlay() {
         }}
       >
         <IconButton
-          aria-label="Close tour"
+          aria-label={t('tour.close')}
           size="small"
           onClick={endTour}
           sx={{ position: 'absolute', top: 6, right: 6 }}
@@ -205,10 +207,10 @@ export default function TourOverlay() {
         </IconButton>
 
         <Typography variant="h6" gutterBottom sx={{ pr: 3 }}>
-          {step.title}
+          {t(step.title)}
         </Typography>
 
-        {step.body.split('\n\n').map((para, i) => (
+        {t(step.body).split('\n\n').map((para, i) => (
           <Typography key={i} variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
             {para}
           </Typography>
@@ -222,12 +224,12 @@ export default function TourOverlay() {
           sx={{ background: 'transparent', px: 0, mt: 1 }}
           nextButton={
             <Button size="small" variant="contained" onClick={next}>
-              {isLast ? 'Finish' : 'Next'}
+              {isLast ? t('common.finish') : t('common.next')}
             </Button>
           }
           backButton={
             <Button size="small" onClick={back} disabled={isFirst}>
-              Back
+              {t('common.back')}
             </Button>
           }
         />
@@ -235,7 +237,7 @@ export default function TourOverlay() {
         <Box sx={{ display: 'flex', justifyContent: 'center', mt: 0.5 }}>
           {!isLast && (
             <Button size="small" color="inherit" onClick={endTour} sx={{ opacity: 0.7 }}>
-              Skip tour
+              {t('tour.skip')}
             </Button>
           )}
         </Box>

@@ -36,6 +36,8 @@ import {
 } from '@/shared/types/model/provider';
 import { MASKED_API_KEY } from '@/shared/types/constants';
 import { modelService } from '@/frontend/services/model';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { TranslationKey } from '@/frontend/i18n/messages';
 
 const log = createLogger('frontend/components/models/modal');
 
@@ -59,6 +61,7 @@ export interface ModelModalProps {
 }
 
 export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) => {
+  const { t } = useI18n();
   const router = useRouter();
   const { globalEnvVars, settings } = useStorage();
   const [formState, setFormState] = useState<Partial<Model>>({});
@@ -290,10 +293,10 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
 
     // Validation
     if (!formState.name?.trim()) {
-      newErrors.name = 'Name is required';
+      newErrors.name = t('models.modal.nameRequired');
     }
     if (!formState.displayName?.trim()) {
-      newErrors.displayName = 'Display Name is required';
+      newErrors.displayName = t('models.modal.displayNameRequired');
     }
     if (configurationCapabilities.creativity && formState.temperature?.trim()) {
       const creativity = Number(formState.temperature);
@@ -302,13 +305,15 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         creativity < configurationCapabilities.creativity.min ||
         creativity > configurationCapabilities.creativity.max
       ) {
-        newErrors.temperature =
-          `Creativity must be between ${configurationCapabilities.creativity.min} and ${configurationCapabilities.creativity.max}`;
+        newErrors.temperature = t('models.modal.creativityRange', {
+          min: configurationCapabilities.creativity.min,
+          max: configurationCapabilities.creativity.max,
+        });
       }
     }
     // Codex may run keyless via the machine's `codex login` (ChatGPT plan).
     if (!isApiKeyBound && !formState.ApiKey?.trim() && currentProfile.adapter !== 'codex-cli') {
-      newErrors.ApiKey = 'API key is required';
+      newErrors.ApiKey = t('models.modal.apiKeyRequired');
     }
 
     if (Object.keys(newErrors).length > 0) {
@@ -362,16 +367,28 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         router.refresh();
       } else {
         setErrors({
-          submit: result.error || 'Failed to save model'
+          submit: result.error || t('models.saveFailed')
         });
       }
     } catch (error: any) {
       log.error('Failed to save model', { error });
       setErrors({
-        submit: error?.message || 'Failed to save model',
+        submit: error?.message || t('models.saveFailed'),
       });
     }
-};
+  };
+
+  const levelLabelKeys: Record<string, TranslationKey> = {
+    minimal: 'models.modal.level.minimal',
+    low: 'models.modal.level.low',
+    medium: 'models.modal.level.medium',
+    high: 'models.modal.level.high',
+    xhigh: 'models.modal.level.xhigh',
+    max: 'models.modal.level.max',
+  };
+  const levelLabel = (level: string) => levelLabelKeys[level]
+    ? t(levelLabelKeys[level])
+    : level;
 
   return (
     <Dialog 
@@ -390,7 +407,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     >
       <form onSubmit={handleSubmit}>
         <DialogTitle>
-          {model.name ? 'Edit AI connection' : 'Connect your AI'}
+          {model.name ? t('models.modal.editTitle') : t('models.modal.createTitle')}
         </DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', height: 'calc(90vh - 130px)' }}>
           {errors.submit && (
@@ -409,26 +426,26 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
             <Grid item xs={6} sx={{ height: '100%' }}>
               <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', pr: 2, overflowY: 'auto' }}>
                 <Typography variant="h6" gutterBottom>
-                  Connection details
+                  {t('models.modal.connectionDetails')}
                 </Typography>
                 
                 <TextField
                   autoFocus
                   margin="dense"
-                  label="Display Name"
+                  label={t('models.modal.displayName')}
                   fullWidth
                   required
                   value={formState.displayName || ''}
                   onChange={(e) => handleChange('displayName', e.target.value)}
                   error={!!errors.displayName}
-                  helperText={errors.displayName || "The name shown in the UI"}
+                  helperText={errors.displayName || t('models.modal.displayNameHelp')}
                 />
 
                 <FormControl fullWidth margin="dense">
-                  <InputLabel id="provider-profile-label">Provider</InputLabel>
+                  <InputLabel id="provider-profile-label">{t('models.modal.provider')}</InputLabel>
                   <Select
                     labelId="provider-profile-label"
-                    label="Provider"
+                    label={t('models.modal.provider')}
                     value={currentProfile.id}
                     onChange={(e) => handleSelectProfile(e.target.value)}
                   >
@@ -441,29 +458,29 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                 </FormControl>
 
                 <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, mb: 1, display: 'block' }}>
-                  Uses the <strong>{currentProfile.sdkLabel}</strong>
+                  {t('models.modal.usesSdk', { sdk: currentProfile.sdkLabel })}
                   {currentProfile.adapter === 'claude-cli'
-                    ? '. Paste an OAuth token from `claude setup-token` into the API Key field.'
+                    ? ` ${t('models.modal.claudeAuthHelp')}`
                     : currentProfile.adapter === 'codex-cli'
-                      ? '. Paste an OpenAI API key — or leave it empty to use your ChatGPT plan via `codex login`.'
+                      ? ` ${t('models.modal.codexAuthHelp')}`
                       : ''}
                 </Typography>
 
                 {currentProfile.showBaseUrl && (
                   <TextField
                     margin="dense"
-                    label="Base URL"
+                    label={t('models.card.baseUrl')}
                     fullWidth
                     value={formState.baseUrl || ''}
                     onChange={(e) => handleChange('baseUrl', e.target.value)}
-                    helperText="Endpoint for the OpenAI-compatible API."
+                    helperText={t('models.modal.baseUrlHelp')}
                   />
                 )}
 
                 <Box sx={{ position: 'relative', mt: 1, mb: 1 }}>
                   <TextField
                     margin="dense"
-                    label="API Key"
+                    label={t('models.modal.apiKey')}
                     fullWidth
                     required={!isApiKeyBound && currentProfile.adapter !== 'codex-cli'}
                     type={isApiKeyBound ? "text" : "password"}
@@ -471,8 +488,8 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                     onChange={(e) => handleChange('ApiKey', e.target.value)}
                     error={!!errors.ApiKey}
                     helperText={errors.ApiKey || (currentProfile.adapter === 'codex-cli'
-                      ? "Optional — leave empty to use your ChatGPT plan (codex login)"
-                      : "API key is required for this provider")}
+                      ? t('models.modal.apiKeyOptionalCodex')
+                      : t('models.modal.apiKeyRequiredProvider'))}
                     InputProps={{
                       readOnly: isApiKeyBound,
                       endAdornment: (
@@ -481,7 +498,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                             <IconButton
                               onClick={handleUnbindApiKey}
                               size="small"
-                              title="Unbind from global variable"
+                              title={t('models.modal.unbindGlobal')}
                             >
                               <CancelIcon />
                             </IconButton>
@@ -489,7 +506,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                             <IconButton
                               onClick={handleBindApiKey}
                               size="small"
-                              title="Bind to global variable"
+                              title={t('models.modal.bindGlobal')}
                             >
                               <LinkIcon />
                             </IconButton>
@@ -563,10 +580,10 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                     <TextField
                       {...params}
                       margin="dense"
-                      label="Technical Name"
+                      label={t('models.modal.technicalName')}
                       required
                       error={!!errors.name}
-                      helperText={errors.name || "Used for API calls to the LLM. Type to search available models."}
+                      helperText={errors.name || t('models.modal.technicalNameHelp')}
                       InputProps={{
                         ...params.InputProps,
                         endAdornment: (
@@ -595,13 +612,13 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                       </li>
                     );
                   }}
-                  noOptionsText="No matching models found"
-                  loadingText="Loading models..."
+                  noOptionsText={t('models.modal.noMatches')}
+                  loadingText={t('models.modal.loadingModels')}
                 />
 
                 <TextField
                   margin="dense"
-                  label="Description"
+                  label={t('models.modal.description')}
                   fullWidth
                   multiline
                   rows={3}
@@ -612,23 +629,26 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                 {configurationCapabilities.creativity && (
                   <TextField
                     margin="dense"
-                    label="Creativity"
+                    label={t('models.modal.creativity')}
                     fullWidth
                     type="number"
                     value={formState.temperature ?? ''}
                     onChange={(e) => handleChange('temperature', e.target.value)}
                     error={!!errors.temperature}
                     inputProps={configurationCapabilities.creativity}
-                    helperText={errors.temperature || `Sampling temperature (${configurationCapabilities.creativity.min}–${configurationCapabilities.creativity.max}). Blank uses FLUJO's deterministic default (0).`}
+                    helperText={errors.temperature || t('models.modal.creativityHelp', {
+                      min: configurationCapabilities.creativity.min,
+                      max: configurationCapabilities.creativity.max,
+                    })}
                   />
                 )}
 
                 {configurationCapabilities.effortLevels && (
                   <FormControl fullWidth margin="dense">
-                    <InputLabel id="reasoning-effort-label">Effort</InputLabel>
+                    <InputLabel id="reasoning-effort-label">{t('models.modal.effort')}</InputLabel>
                     <Select
                       labelId="reasoning-effort-label"
-                      label="Effort"
+                      label={t('models.modal.effort')}
                       value={formState.reasoningEffort || ''}
                       onChange={(e) => setFormState(prev => ({
                         ...prev,
@@ -637,25 +657,25 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                           : undefined,
                       }))}
                     >
-                      <MenuItem value=""><em>Provider default</em></MenuItem>
+                      <MenuItem value=""><em>{t('models.modal.providerDefault')}</em></MenuItem>
                       {configurationCapabilities.effortLevels.map(level => (
                         <MenuItem key={level} value={level}>
-                          {level === 'xhigh' ? 'Extra high' : level.charAt(0).toUpperCase() + level.slice(1)}
+                          {levelLabel(level)}
                         </MenuItem>
                       ))}
                     </Select>
                     <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, ml: 1.75 }}>
-                      Controls how much reasoning the model performs.
+                      {t('models.modal.effortHelp')}
                     </Typography>
                   </FormControl>
                 )}
 
                 {configurationCapabilities.thinkingLevels && (
                   <FormControl fullWidth margin="dense">
-                    <InputLabel id="thinking-level-label">Thinking Level</InputLabel>
+                    <InputLabel id="thinking-level-label">{t('models.modal.thinkingLevel')}</InputLabel>
                     <Select
                       labelId="thinking-level-label"
-                      label="Thinking Level"
+                      label={t('models.modal.thinkingLevel')}
                       value={formState.thinkingLevel || ''}
                       onChange={(e) => setFormState(prev => ({
                         ...prev,
@@ -664,10 +684,10 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                           : undefined,
                       }))}
                     >
-                      <MenuItem value=""><em>Provider default</em></MenuItem>
+                      <MenuItem value=""><em>{t('models.modal.providerDefault')}</em></MenuItem>
                       {configurationCapabilities.thinkingLevels.map(level => (
                         <MenuItem key={level} value={level}>
-                          {level.charAt(0).toUpperCase() + level.slice(1)}
+                          {levelLabel(level)}
                         </MenuItem>
                       ))}
                     </Select>
@@ -677,7 +697,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                 {configurationCapabilities.thinkingBudget && (
                   <TextField
                     margin="dense"
-                    label="Thinking Budget"
+                    label={t('models.modal.thinkingBudget')}
                     fullWidth
                     type="number"
                     value={formState.thinkingBudget ?? ''}
@@ -692,34 +712,34 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                       }));
                     }}
                     inputProps={{ min: -1, step: 1 }}
-                    helperText="Gemini 2.5 thinking tokens. -1 = adaptive, 0 = disabled where supported, blank = provider default."
+                    helperText={t('models.modal.thinkingBudgetHelp')}
                   />
                 )}
 
                 {configurationCapabilities.priority && (
                   <FormControl fullWidth margin="dense">
-                    <InputLabel id="service-tier-label">Priority</InputLabel>
+                    <InputLabel id="service-tier-label">{t('models.modal.priority')}</InputLabel>
                     <Select
                       labelId="service-tier-label"
-                      label="Priority"
+                      label={t('models.modal.priority')}
                       value={formState.serviceTier || 'default'}
                       onChange={(e) => setFormState(prev => ({
                         ...prev,
                         serviceTier: e.target.value as Model['serviceTier'],
                       }))}
                     >
-                      <MenuItem value="default">Standard</MenuItem>
-                      <MenuItem value="priority">Priority (faster)</MenuItem>
+                      <MenuItem value="default">{t('models.modal.standard')}</MenuItem>
+                      <MenuItem value="priority">{t('models.modal.priorityFaster')}</MenuItem>
                     </Select>
                     <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, ml: 1.75 }}>
-                      Priority uses Codex Fast mode and may consume more plan usage.
+                      {t('models.modal.priorityHelp')}
                     </Typography>
                   </FormControl>
                 )}
 
                 <TextField
                   margin="dense"
-                  label="Context Window (tokens)"
+                  label={t('models.modal.contextWindow')}
                   fullWidth
                   type="number"
                   value={formState.contextWindow ?? ''}
@@ -731,12 +751,12 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                       contextWindow: parsed !== undefined && Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined,
                     }));
                   }}
-                  helperText="Discovered automatically when the provider advertises it; you can override it manually."
+                  helperText={t('models.modal.contextWindowHelp')}
                 />
 
                 <TextField
                   margin="dense"
-                  label="Max Turns"
+                  label={t('models.modal.maxTurns')}
                   fullWidth
                   type="number"
                   value={formState.maxTurns ?? ''}
@@ -749,13 +769,13 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                     }));
                   }}
                   inputProps={{ min: 1 }}
-                  helperText="Max agentic turns before a run stops (default 50). Process nodes can override this per-node."
+                  helperText={t('models.modal.maxTurnsHelp')}
                 />
 
                 {configurationCapabilities.maxOutputTokens && (
                   <TextField
                     margin="dense"
-                    label="Max Output Tokens (optional)"
+                    label={t('models.modal.maxOutputTokens')}
                     fullWidth
                     type="number"
                     value={formState.maxTokens ?? ''}
@@ -768,7 +788,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                       }));
                     }}
                     inputProps={{ min: 1 }}
-                    helperText="Optional. Default cap on generated tokens. A request's max_tokens overrides this. Anthropic uses 8192 when unset."
+                    helperText={t('models.modal.maxOutputTokensHelp')}
                   />
                 )}
               </Box>
@@ -778,7 +798,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
             <Grid item xs={6} sx={{ height: '100%' }}>
               <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', pl: 2 }}>
                 <Typography variant="h6" gutterBottom>
-                  Prompt Template
+                  {t('models.modal.promptTemplate')}
                 </Typography>
                 <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', height: 'calc(100% - 32px)' }}>
                   <PromptBuilder 
@@ -810,12 +830,12 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
               }}
             >
               <Typography variant="h6" component="h2" sx={{ mb: 2 }}>
-                Bind to Global Variable
+                {t('models.modal.bindTitle')}
               </Typography>
               
               {Object.keys(globalEnvVars).length === 0 ? (
                 <Typography sx={{ mb: 2 }}>
-                  No global variables available. Add some in Settings first.
+                  {t('models.modal.noGlobals')}
                 </Typography>
               ) : (
                 <Box sx={{ maxHeight: 300, overflow: 'auto', mb: 2 }}>
@@ -852,16 +872,16 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
               
               <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
                 <Button onClick={() => setShowBindModal(false)}>
-                  Cancel
+                  {t('common.cancel')}
                 </Button>
               </Box>
             </Box>
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{t('common.cancel')}</Button>
           <Button type="submit" variant="contained" color="primary">
-            Save
+            {t('models.modal.save')}
           </Button>
         </DialogActions>
       </form>

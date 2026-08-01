@@ -10,6 +10,7 @@ import {
 } from '@mui/material';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import { createLogger } from '@/utils/logger';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/TelemetryNotice');
 
@@ -22,6 +23,7 @@ interface CheckResult {
 
 export default function TelemetryNotice() {
   const { settings, settingsHydrated, updateSettings } = useStorage();
+  const { t } = useI18n();
   const checked = useRef(false);
   const [result, setResult] = useState<CheckResult | null>(null);
 
@@ -68,11 +70,7 @@ export default function TelemetryNotice() {
     >
       <Alert severity="info" variant="filled" sx={{ width: '100%' }}>
         <Typography variant="body2">
-          Anonymous daily activity sharing is on. FLUJO {result?.sent
-            ? 'sent today’s rotating anonymous usage pulse.'
-            : 'performed today’s usage check; no pulse was delivered.'}
-          {' '}It includes only the app version, platform, install method, UTC
-          date, and a random ID that changes every day.
+          {t(result?.sent ? 'telemetry.notice.sent' : 'telemetry.notice.notSent')}
         </Typography>
         <Box sx={{ display: 'flex', gap: 1, mt: 1, flexWrap: 'wrap' }}>
           <Button
@@ -81,14 +79,14 @@ export default function TelemetryNotice() {
             variant="outlined"
             onClick={() => updateTelemetry({ enabled: false })}
           >
-            Turn off sharing
+            {t('telemetry.notice.turnOff')}
           </Button>
           <Button
             color="inherit"
             size="small"
             onClick={() => updateTelemetry({ notifyDaily: false })}
           >
-            Don&apos;t notify again
+            {t('telemetry.notice.dismissForever')}
           </Button>
         </Box>
       </Alert>

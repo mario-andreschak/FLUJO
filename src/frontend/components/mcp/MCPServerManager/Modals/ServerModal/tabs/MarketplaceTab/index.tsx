@@ -55,15 +55,10 @@ import ClearIcon from '@mui/icons-material/Clear';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import StarIcon from '@mui/icons-material/Star';
 import DownloadIcon from '@mui/icons-material/Download';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import Trans from '@/frontend/components/shared/Trans';
 
 const PAGE_SIZE = 30;
-
-/** Compact human count: 1200 → "1.2k", 1_500_000 → "1.5M". */
-const formatCount = (n: number): string => {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1).replace(/\.0$/, '')}k`;
-  return String(n);
-};
 
 const MarketplaceTab: React.FC<TabProps> = ({
   onClose,
@@ -72,6 +67,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
   onOpenInGitHubTab
 }) => {
   const theme = useTheme();
+  const { t, formatNumber, formatList } = useI18n();
   const [searchInput, setSearchInput] = useState<string>('');
   // The term actually sent to the registry — only updated when the user commits
   // a search (Enter or the clear button), never while typing
@@ -120,7 +116,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
       if (fetchId !== fetchIdRef.current) return; // superseded by a newer request
 
       if (!response.ok || data.success === false) {
-        throw new Error(data.error || `Request failed with status ${response.status}`);
+        throw new Error(data.error || String(response.status));
       }
 
       const servers = data.servers ?? [];
@@ -133,7 +129,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
       console.error('Error fetching from MCP Registry:', error);
       setMessage({
         type: 'error',
-        text: `Could not load servers from the MCP Registry: ${error instanceof Error ? error.message : 'Unknown error'}`
+        text: t('mcp.marketplace.loadError', { error: error instanceof Error ? error.message : t('mcp.server.unknownError') })
       });
     } finally {
       if (fetchId === fetchIdRef.current) {
@@ -141,7 +137,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
         setIsLoadingMore(false);
       }
     }
-  }, []);
+  }, [t]);
 
   // Committed searches only (Enter) — nothing is fetched on mount or while typing,
   // so opening the tab issues no request to the registry
@@ -180,8 +176,8 @@ const MarketplaceTab: React.FC<TabProps> = ({
       type: missing.length > 0 ? 'warning' : 'success',
       text:
         missing.length > 0
-          ? `Configuration prepared. Fill in the required value(s) before saving: ${missing.join(', ')}`
-          : 'Configuration prepared. Review and save it in the Local Server tab.'
+          ? t('mcp.marketplace.preparedMissing', { values: formatList(missing) })
+          : t('mcp.marketplace.prepared')
     });
   };
 
@@ -223,7 +219,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
       chips.push(<Chip key={`pkg-${label}`} size="small" icon={<TerminalIcon />} label={label} />);
     }
     if ((server.remotes ?? []).length > 0) {
-      chips.push(<Chip key="remote" size="small" icon={<CloudIcon />} label="Remote" />);
+      chips.push(<Chip key="remote" size="small" icon={<CloudIcon />} label={t('mcp.marketplace.remote')} />);
     }
     return chips;
   };
@@ -234,16 +230,20 @@ const MarketplaceTab: React.FC<TabProps> = ({
     <Box sx={{ width: '100%' }}>
       <Stack spacing={3}>
         <Typography variant="h6" gutterBottom>
-          MCP Marketplace
+          {t('mcp.marketplace.title')}
         </Typography>
 
         <Typography variant="body2" color="text.secondary">
-          Search the official{' '}
-          <Link href="https://registry.modelcontextprotocol.io" target="_blank" rel="noopener noreferrer">
-            MCP Registry
-          </Link>{' '}
-          and install servers with one click. Local packages run via npx, uvx or Docker;
-          remote servers connect directly.
+          <Trans
+            message="mcp.marketplace.help"
+            values={{
+              registryLink: (
+                <Link href="https://registry.modelcontextprotocol.io" target="_blank" rel="noopener noreferrer">
+                  {t('mcp.marketplace.registry')}
+                </Link>
+              ),
+            }}
+          />
         </Typography>
 
         <TextField
@@ -266,7 +266,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
               }
             }
           }}
-          placeholder="Search servers by name and press Enter (e.g. github, filesystem, postgres)…"
+          placeholder={t('mcp.marketplace.search')}
           variant="outlined"
           InputProps={{
             startAdornment: (
@@ -276,7 +276,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
             ),
             endAdornment: searchInput ? (
               <InputAdornment position="end">
-                <IconButton size="small" onClick={handleClearSearch} aria-label="clear search">
+                <IconButton size="small" onClick={handleClearSearch} aria-label={t('mcp.marketplace.clearSearch')}>
                   <ClearIcon fontSize="small" />
                 </IconButton>
               </InputAdornment>
@@ -299,12 +299,9 @@ const MarketplaceTab: React.FC<TabProps> = ({
             {results.length === 0 && !message && (
               <Typography variant="body1" color="text.secondary" sx={{ textAlign: 'center', my: 4 }}>
                 {activeSearch ? (
-                  <>
-                    No servers found for &quot;{activeSearch}&quot;. The registry matches on
-                    server names — try a shorter term.
-                  </>
+                  <>{t('mcp.marketplace.noResults', { search: activeSearch })}</>
                 ) : (
-                  <>Search the MCP Registry to get started — type a term and press Enter.</>
+                  <>{t('mcp.marketplace.startSearch')}</>
                 )}
               </Typography>
             )}
@@ -374,7 +371,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
                               overflow: 'hidden'
                             }}
                           >
-                            {server.description || 'No description provided.'}
+                            {server.description || t('mcp.spotlight.noDescription')}
                           </Typography>
                           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center' }}>
                             {typeof result.quality?.stars === 'number' && (
@@ -382,8 +379,8 @@ const MarketplaceTab: React.FC<TabProps> = ({
                                 size="small"
                                 variant="outlined"
                                 icon={<StarIcon />}
-                                label={formatCount(result.quality.stars)}
-                                title={`${result.quality.stars.toLocaleString()} GitHub stars`}
+                                label={formatNumber(result.quality.stars, { notation: 'compact', maximumFractionDigits: 1 })}
+                                title={t('mcp.marketplace.stars', { count: formatNumber(result.quality.stars) })}
                               />
                             )}
                             {typeof result.quality?.weeklyDownloads === 'number' && (
@@ -391,8 +388,8 @@ const MarketplaceTab: React.FC<TabProps> = ({
                                 size="small"
                                 variant="outlined"
                                 icon={<DownloadIcon />}
-                                label={`${formatCount(result.quality.weeklyDownloads)}/wk`}
-                                title={`${result.quality.weeklyDownloads.toLocaleString()} npm downloads last week`}
+                                label={t('mcp.marketplace.weeklyCompact', { count: formatNumber(result.quality.weeklyDownloads, { notation: 'compact', maximumFractionDigits: 1 }) })}
+                                title={t('mcp.marketplace.weeklyDownloads', { count: formatNumber(result.quality.weeklyDownloads) })}
                               />
                             )}
                             {renderOptionChips(server)}
@@ -400,7 +397,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
                               <Chip size="small" variant="outlined" label={`v${server.version}`} />
                             )}
                             {!installable && (
-                              <Chip size="small" color="warning" variant="outlined" label="Manual setup" />
+                              <Chip size="small" color="warning" variant="outlined" label={t('mcp.marketplace.manualSetup')} />
                             )}
                             {installable && !verified && (
                               <Chip
@@ -408,8 +405,8 @@ const MarketplaceTab: React.FC<TabProps> = ({
                                 color="warning"
                                 variant="outlined"
                                 icon={<WarningAmberIcon />}
-                                label="Unverified"
-                                title="Self-asserted registry entry — review the command before installing."
+                                label={t('mcp.marketplace.unverified')}
+                                title={t('mcp.marketplace.unverifiedHelp')}
                               />
                             )}
                           </Box>
@@ -429,7 +426,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
                   disabled={isLoadingMore}
                   startIcon={isLoadingMore ? <CircularProgress size={20} color="inherit" /> : undefined}
                 >
-                  {isLoadingMore ? 'Loading…' : 'Load more'}
+                  {isLoadingMore ? t('mcp.marketplace.loading') : t('mcp.marketplace.loadMore')}
                 </Button>
               </Box>
             )}
@@ -438,7 +435,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
 
         <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1 }}>
           <Button variant="outlined" onClick={onClose}>
-            Cancel
+            {t('mcp.local.cancel')}
           </Button>
         </Box>
       </Stack>
@@ -480,7 +477,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
                       target="_blank"
                       rel="noopener noreferrer"
                     >
-                      Repository
+                      {t('mcp.marketplace.repository')}
                     </Button>
                   )}
                   {selectedServer.websiteUrl && (
@@ -492,20 +489,19 @@ const MarketplaceTab: React.FC<TabProps> = ({
                       target="_blank"
                       rel="noopener noreferrer"
                     >
-                      Website
+                      {t('mcp.marketplace.website')}
                     </Button>
                   )}
                 </Box>
               )}
 
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                {selectedServer.description || 'No description provided.'}
+                {selectedServer.description || t('mcp.spotlight.noDescription')}
               </Typography>
 
               {/* Persistent security warning + explicit trust confirmation */}
               <Alert severity="warning" icon={<WarningAmberIcon />} sx={{ mb: 1 }}>
-                MCP servers run code or connect to external services on your machine.
-                Only install servers you trust — review the repository and the command it runs first.
+                {t('mcp.marketplace.securityWarning')}
               </Alert>
               <FormControlLabel
                 sx={{ mb: 1 }}
@@ -515,13 +511,13 @@ const MarketplaceTab: React.FC<TabProps> = ({
                     onChange={e => setTrustConfirmed(e.target.checked)}
                   />
                 }
-                label="I understand the risk and trust this server"
+                label={t('mcp.marketplace.trust')}
               />
 
               {selectedOptions.length > 0 ? (
                 <>
                   <Typography variant="subtitle2" gutterBottom>
-                    Choose how to install this server:
+                    {t('mcp.marketplace.chooseInstall')}
                   </Typography>
                   <List>
                     {selectedOptions.map((option, index) => {
@@ -539,10 +535,10 @@ const MarketplaceTab: React.FC<TabProps> = ({
                             primary={option.label}
                             secondary={
                               missing.length > 0
-                                ? `Requires: ${missing.join(', ')}`
+                                ? t('mcp.marketplace.requires', { values: formatList(missing) })
                                 : option.kind === 'package'
-                                  ? 'Runs locally'
-                                  : 'Hosted remotely'
+                                  ? t('mcp.marketplace.runsLocal')
+                                  : t('mcp.marketplace.hostedRemote')
                             }
                             primaryTypographyProps={{ sx: { wordBreak: 'break-all' } }}
                           />
@@ -554,11 +550,9 @@ const MarketplaceTab: React.FC<TabProps> = ({
               ) : (
                 <>
                   <Alert severity="info">
-                    This server does not offer an installation method FLUJO can set up automatically.
-                    Check its documentation for manual setup instructions.
+                    {t('mcp.marketplace.noAutomatic')}
                     {githubRepoUrl(selectedServer) && onOpenInGitHubTab && (
-                      <> You can still try to clone it directly from GitHub, but additional steps
-                      might still be required.</>
+                      <> {t('mcp.marketplace.githubFallback')}</>
                     )}
                   </Alert>
                   {githubRepoUrl(selectedServer) && onOpenInGitHubTab && (
@@ -569,14 +563,14 @@ const MarketplaceTab: React.FC<TabProps> = ({
                       onClick={() => handleManualInstall(selectedServer)}
                       sx={{ mt: 2 }}
                     >
-                      Try manual installation
+                      {t('mcp.marketplace.tryManual')}
                     </Button>
                   )}
                 </>
               )}
             </DialogContent>
             <DialogActions>
-              <Button onClick={closeServerDetails}>Close</Button>
+              <Button onClick={closeServerDetails}>{t('mcp.marketplace.close')}</Button>
             </DialogActions>
           </>
         )}

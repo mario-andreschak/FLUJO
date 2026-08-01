@@ -1,6 +1,9 @@
 import { parseServerConfig, parseServerConfigFromClipboard } from '@/utils/mcp';
 import { MessageState } from '../types';
 import { MCPServerConfig, MCPStdioConfig, MCPWebSocketConfig } from '@/shared/types/mcp';
+import { translate, type Translator } from '@/frontend/i18n';
+
+const englishTranslator: Translator = (key, values) => translate('en', key, values);
 
 // Type guard to check if a config is a StdioConfig
 function isStdioConfig(config: Partial<MCPServerConfig>): config is Partial<MCPStdioConfig> {
@@ -14,7 +17,8 @@ function isWebSocketConfig(config: Partial<MCPServerConfig>): config is Partial<
 export const parseConfigFromReadme = async (
   readmeContent: string,
   defaultConfig: MCPServerConfig,
-  serverName?: string
+  serverName?: string,
+  t: Translator = englishTranslator
 ): Promise<{
   config: MCPServerConfig;
   message: MessageState | null;
@@ -59,7 +63,7 @@ export const parseConfigFromReadme = async (
         foundExplicitConfig: parseResult.foundExplicitConfig,
         message: {
           type: 'success',
-          text: `Server configuration extracted from README.`
+          text: t('mcp.local.messages.readmeExtracted')
         }
       };
     } else {
@@ -68,7 +72,7 @@ export const parseConfigFromReadme = async (
         foundExplicitConfig: false,
         message: {
           type: 'warning',
-          text: 'No server configuration found in README.'
+          text: t('mcp.local.messages.readmeMissingConfig')
         }
       };
     }
@@ -78,7 +82,7 @@ export const parseConfigFromReadme = async (
       config: defaultConfig,
       message: {
         type: 'error',
-        text: `Error parsing README: ${(error as Error).message || 'Unknown error'}`
+        text: t('mcp.local.messages.readmeError', { error: (error as Error).message || t('mcp.server.unknownError') })
       }
     };
   }
@@ -86,7 +90,8 @@ export const parseConfigFromReadme = async (
 
 export const parseConfigFromClipboard = async (
   defaultConfig: Partial<MCPServerConfig>,
-  serverName?: string
+  serverName?: string,
+  t: Translator = englishTranslator
 ): Promise<{
   config: Partial<MCPServerConfig>;
   message: MessageState | null;
@@ -127,17 +132,17 @@ export const parseConfigFromClipboard = async (
       
       return {
         config: mergedConfig,
-        message: result.message || {
+        message: {
           type: 'success',
-          text: 'Configuration parsed from clipboard.'
+          text: t('mcp.local.messages.clipboardParsed')
         }
       };
     } else {
       return {
         config: defaultConfig,
-        message: result.message || {
+        message: {
           type: 'warning',
-          text: 'No valid configuration found in clipboard.'
+          text: t('mcp.local.messages.clipboardNoConfig')
         }
       };
     }
@@ -147,7 +152,7 @@ export const parseConfigFromClipboard = async (
       config: defaultConfig,
       message: {
         type: 'error',
-        text: `Error parsing clipboard: ${(error as Error).message || 'Unknown error'}`
+        text: t('mcp.local.messages.clipboardError', { error: (error as Error).message || t('mcp.server.unknownError') })
       }
     };
   }
@@ -184,7 +189,8 @@ export const formatEnvVariables = (
  * Parse environment variables from a .env file content
  */
 export const parseEnvFromFile = async (
-  filePath: string
+  filePath: string,
+  t: Translator = englishTranslator
 ): Promise<{
   env: Record<string, string>;
   message: MessageState | null;
@@ -222,7 +228,7 @@ export const parseEnvFromFile = async (
         env: {},
         message: {
           type: 'warning',
-          text: 'No environment variables found in the file.'
+          text: t('mcp.local.messages.noEnvFile')
         }
       };
     }
@@ -231,7 +237,7 @@ export const parseEnvFromFile = async (
       env,
       message: {
         type: 'success',
-        text: `${Object.keys(env).length} environment variables extracted from file.`
+        text: t('mcp.local.messages.envFileExtracted', { count: Object.keys(env).length })
       }
     };
   } catch (error) {
@@ -240,7 +246,7 @@ export const parseEnvFromFile = async (
       env: {},
       message: {
         type: 'error',
-        text: `Error parsing env file: ${(error as Error).message || 'Unknown error'}`
+        text: t('mcp.local.messages.envFileError', { error: (error as Error).message || t('mcp.server.unknownError') })
       }
     };
   }
@@ -249,7 +255,7 @@ export const parseEnvFromFile = async (
 /**
  * Parse environment variables from clipboard content
  */
-export const parseEnvFromClipboard = async (): Promise<{
+export const parseEnvFromClipboard = async (t: Translator = englishTranslator): Promise<{
   env: Record<string, string>;
   message: MessageState | null;
 }> => {
@@ -264,7 +270,7 @@ export const parseEnvFromClipboard = async (): Promise<{
         env: {},
         message: {
           type: 'warning',
-          text: 'No environment variables found in clipboard content.'
+          text: t('mcp.local.messages.noEnvClipboard')
         }
       };
     }
@@ -273,7 +279,7 @@ export const parseEnvFromClipboard = async (): Promise<{
       env,
       message: {
         type: 'success',
-        text: `${Object.keys(env).length} environment variables extracted from clipboard.`
+        text: t('mcp.local.messages.envClipboardExtracted', { count: Object.keys(env).length })
       }
     };
   } catch (error) {
@@ -282,7 +288,7 @@ export const parseEnvFromClipboard = async (): Promise<{
       env: {},
       message: {
         type: 'error',
-        text: `Error parsing clipboard: ${(error as Error).message || 'Unknown error'}`
+        text: t('mcp.local.messages.clipboardError', { error: (error as Error).message || t('mcp.server.unknownError') })
       }
     };
   }

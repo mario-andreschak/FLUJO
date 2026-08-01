@@ -1,5 +1,6 @@
 import React from 'react';
 import { TextField, Typography, Box } from '@mui/material';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface NodeConfigurationProps {
   nodeData: {
@@ -10,17 +11,18 @@ interface NodeConfigurationProps {
 }
 
 const NodeConfiguration: React.FC<NodeConfigurationProps> = ({ nodeData, setNodeData }) => {
+  const { t } = useI18n();
   if (!nodeData) return null;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', pr: 2 }}>
       <Typography variant="h6" gutterBottom>
-        Node Configuration
+        {t('flows.process.configTitle')}
       </Typography>
 
       <TextField
         fullWidth
-        label="Node Label"
+        label={t('flows.mcpNode.label')}
         value={nodeData.label || ''}
         onChange={(e) =>
           // Editing the label by hand marks it custom so model (re)binding
@@ -36,13 +38,13 @@ const NodeConfiguration: React.FC<NodeConfigurationProps> = ({ nodeData, setNode
 
       <TextField
         fullWidth
-        label="Description"
+        label={t('flows.process.description')}
         value={nodeData.description || ''}
         onChange={(e) => setNodeData({ ...nodeData, description: e.target.value })}
         margin="normal"
         multiline
         rows={2}
-        helperText="This description will be displayed on the node"
+        helperText={t('flows.process.descriptionHelp')}
       />
     </Box>
   );

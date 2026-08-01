@@ -26,6 +26,7 @@ import {
   autoWindowForWave,
   type WaveWindowKey,
 } from './waveTimeline';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 /** Y of the bottom time axis — sits just above the root lane (#209). */
 const AXIS_Y = BASE_Y - 48;
@@ -71,6 +72,7 @@ interface WaveCanvasProps {
  * following to arbitrary depth.
  */
 function WaveCanvasInner({ wave, height = 460 }: WaveCanvasProps) {
+  const { t } = useI18n();
   const [now, setNow] = useState(() => Date.now());
   const [windowKey, setWindowKey] = useState<WaveWindowKey>(() => autoWindowForWave(wave, Date.now()));
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
@@ -135,23 +137,23 @@ function WaveCanvasInner({ wave, height = 460 }: WaveCanvasProps) {
     }));
     // Bottom time axis (#209): only for time-based waves, aligned to card x.
     const ticks: Node[] = hasTimeline
-      ? timelineTicks(now, windowMs).map((t, i) => ({
+      ? timelineTicks(now, windowMs, undefined, t).map((tick, i) => ({
           id: `__tick_${i}__`,
           type: 'tick',
-          position: { x: TIMELINE_X0 + t.fraction * TIMELINE_W, y: AXIS_Y },
-          data: { label: t.label },
+          position: { x: TIMELINE_X0 + tick.fraction * TIMELINE_W, y: AXIS_Y },
+          data: { label: tick.label },
           draggable: false,
           selectable: false,
           connectable: false,
         }))
       : [];
     return [clock, ...ticks, ...cards];
-  }, [graph, now, pinnedKey, hasTimeline, windowMs]);
+  }, [graph, now, pinnedKey, hasTimeline, windowMs, t]);
 
   const edges: Edge[] = useMemo(() => {
     return graph.edges.map((ge) => {
       const stroke = ge.recursive ? '#ed6c02' : ge.chainEdge.via === 'signal' ? '#7b1fa2' : '#616161';
-      const label = `${ge.recursive ? '↻ ' : ''}${edgeLabel(ge.chainEdge, nameById.get(ge.chainEdge.fromExecutionId))}`;
+      const label = `${ge.recursive ? '↻ ' : ''}${edgeLabel(ge.chainEdge, nameById.get(ge.chainEdge.fromExecutionId), t)}`;
       return {
         id: ge.id,
         source: ge.source,
@@ -166,7 +168,7 @@ function WaveCanvasInner({ wave, height = 460 }: WaveCanvasProps) {
         labelBgStyle: { fill: '#fff', fillOpacity: 0.85 },
       };
     });
-  }, [graph, nameById]);
+  }, [graph, nameById, t]);
 
   return (
     <Box sx={{ height, width: '100%', border: '1px solid rgba(0,0,0,0.1)', borderRadius: 1 }}>
@@ -228,7 +230,7 @@ function WaveCanvasInner({ wave, height = 460 }: WaveCanvasProps) {
         )}
         <Panel position="bottom-right">
           <Typography variant="caption" sx={{ opacity: 0.55, bgcolor: 'background.paper', px: 0.5, borderRadius: 0.5 }}>
-            {pinnedKey ? 'chain pinned — click the background to release' : 'hover a card to follow its chain · click to pin'}
+            {pinnedKey ? t('waves.canvasPinnedHelp') : t('waves.canvasHoverHelp')}
           </Typography>
         </Panel>
       </ReactFlow>

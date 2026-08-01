@@ -24,6 +24,7 @@ import {
   buildProcessToSubflowDraft,
   type ProcessToSubflowDraft,
 } from '../utils/convertProcessToSubflow';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface ConvertProcessToSubflowDialogProps {
   open: boolean;
@@ -42,6 +43,7 @@ export default function ConvertProcessToSubflowDialog({
   onClose,
   onAccept,
 }: ConvertProcessToSubflowDialogProps) {
+  const { t, tp, formatList } = useI18n();
   const [name, setName] = useState('');
   const [draft, setDraft] = useState<ProcessToSubflowDraft | null>(null);
   const [saving, setSaving] = useState(false);
@@ -50,12 +52,12 @@ export default function ConvertProcessToSubflowDialog({
   useEffect(() => {
     if (!open) return;
     const process = parentFlow.nodes.find(node => node.id === processNodeId);
-    const suggested = `${String(process?.data?.label || 'Process').replace(/[^\w-]+/g, '_')}_subflow`;
+    const suggested = `${String(process?.data?.label || t('flows.convert.processDefault')).replace(/[^\w-]+/g, '_')}_subflow`;
     setName(suggested);
     setDraft(null);
     setSaving(false);
     setSaveError(null);
-  }, [open, processNodeId, parentFlow.nodes]);
+  }, [open, processNodeId, parentFlow.nodes, t]);
 
   const buildPreview = () => {
     if (!processNodeId) return;
@@ -65,6 +67,8 @@ export default function ConvertProcessToSubflowDialog({
       processNodeId,
       subflowName: name,
       existingFlowNames,
+      t,
+      tp,
     }));
   };
 
@@ -76,7 +80,7 @@ export default function ConvertProcessToSubflowDialog({
       await onAccept(draft);
       onClose();
     } catch (error) {
-      setSaveError(error instanceof Error ? error.message : 'The conversion could not be saved.');
+      setSaveError(error instanceof Error ? error.message : t('flows.convert.saveFailed'));
     } finally {
       setSaving(false);
     }
@@ -84,17 +88,17 @@ export default function ConvertProcessToSubflowDialog({
 
   return (
     <Dialog open={open} onClose={saving ? undefined : onClose} fullWidth maxWidth="md">
-      <DialogTitle>{draft ? 'Preview Process conversion' : 'Convert Process to subflow'}</DialogTitle>
+      <DialogTitle>{draft ? t('flows.convert.previewTitle') : t('flows.convert.title')}</DialogTitle>
       <DialogContent>
         {!draft ? (
           <>
             <DialogContentText sx={{ mb: 2 }}>
-              Name the child flow. The next step builds a non-persisted preview; closing or rejecting it changes nothing.
+              {t('flows.convert.help')}
             </DialogContentText>
             <TextField
               autoFocus
               fullWidth
-              label="Subflow name"
+              label={t('flows.convert.name')}
               value={name}
               onChange={event => setName(event.target.value)}
               onKeyDown={event => {
@@ -106,7 +110,7 @@ export default function ConvertProcessToSubflowDialog({
           <Stack spacing={2}>
             {draft.errors.length > 0 && (
               <Alert severity="error">
-                <Typography fontWeight={600}>This graph cannot be converted yet.</Typography>
+                <Typography fontWeight={600}>{t('flows.convert.invalid')}</Typography>
                 <List dense disablePadding>
                   {draft.errors.map((error, index) => (
                     <ListItem key={`${error.code}-${index}`} disableGutters>
@@ -122,21 +126,25 @@ export default function ConvertProcessToSubflowDialog({
             ))}
 
             <Box>
-              <Typography variant="subtitle1" fontWeight={600}>Included in “{name.trim()}”</Typography>
+              <Typography variant="subtitle1" fontWeight={600}>{t('flows.convert.included', { name: name.trim() })}</Typography>
               <Stack direction="row" gap={1} flexWrap="wrap" sx={{ mt: 1 }}>
                 {draft.preview.includedNodes.map(node => (
                   <Chip key={node.id} label={`${node.label} · ${node.type}`} size="small" />
                 ))}
               </Stack>
               <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                {draft.preview.attachmentCount} attachment(s), {draft.preview.signalCount} signal(s), and {draft.preview.internalEdgeCount} internal edge(s).
+                {t('flows.convert.summary', {
+                  attachments: tp('flows.convert.attachment', draft.preview.attachmentCount),
+                  signals: tp('flows.convert.signal', draft.preview.signalCount),
+                  edges: tp('flows.convert.edge', draft.preview.internalEdgeCount),
+                })}
               </Typography>
             </Box>
 
             <Divider />
 
             <Box>
-              <Typography variant="subtitle1" fontWeight={600}>Boundary and rewiring</Typography>
+              <Typography variant="subtitle1" fontWeight={600}>{t('flows.convert.boundary')}</Typography>
               <List dense>
                 {draft.preview.rewires.map(rewire => (
                   <ListItem key={rewire} disableGutters><ListItemText primary={rewire} /></ListItem>
@@ -144,28 +152,30 @@ export default function ConvertProcessToSubflowDialog({
               </List>
               {draft.preview.excludedBoundaryNodes.length > 0 && (
                 <Typography variant="body2" color="text.secondary">
-                  Kept in parent: {draft.preview.excludedBoundaryNodes.map(node => `${node.label} (${node.type})`).join(', ')}
+                  {t('flows.convert.keptParent', {
+                    nodes: formatList(draft.preview.excludedBoundaryNodes.map(node => `${node.label} (${node.type})`)),
+                  })}
                 </Typography>
               )}
             </Box>
 
             <Alert severity="info">
-              Accepting saves the child and parent together. If either save fails, the server compensates so the parent is restored and no child is left behind.
+              {t('flows.convert.atomic')}
             </Alert>
           </Stack>
         )}
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose} disabled={saving}>{draft ? 'Reject' : 'Cancel'}</Button>
+        <Button onClick={onClose} disabled={saving}>{draft ? t('flows.convert.reject') : t('flows.modal.cancel')}</Button>
         {draft ? (
           <>
-            <Button onClick={() => { setDraft(null); setSaveError(null); }} disabled={saving}>Back</Button>
+            <Button onClick={() => { setDraft(null); setSaveError(null); }} disabled={saving}>{t('flows.convert.back')}</Button>
             <Button variant="contained" onClick={accept} disabled={!draft.valid || saving}>
-              {saving ? 'Converting…' : 'Accept conversion'}
+              {saving ? t('flows.convert.converting') : t('flows.convert.accept')}
             </Button>
           </>
         ) : (
-          <Button variant="contained" onClick={buildPreview}>Preview</Button>
+          <Button variant="contained" onClick={buildPreview}>{t('flows.convert.preview')}</Button>
         )}
       </DialogActions>
     </Dialog>

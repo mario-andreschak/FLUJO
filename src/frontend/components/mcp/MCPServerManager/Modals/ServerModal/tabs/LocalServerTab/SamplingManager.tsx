@@ -17,6 +17,7 @@ import { MCPSamplingPolicy } from '@/shared/types/mcp';
 import { Model } from '@/shared/types/model';
 import { modelService } from '@/frontend/services/model';
 import { createLogger } from '@/utils/logger';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/mcp/.../SamplingManager');
 
@@ -33,6 +34,7 @@ interface SamplingManagerProps {
  */
 const SamplingManager: React.FC<SamplingManagerProps> = ({ policy, onChange }) => {
   const [models, setModels] = useState<Model[]>([]);
+  const { t } = useI18n();
   const enabled = !!policy?.enabled;
 
   useEffect(() => {
@@ -55,13 +57,11 @@ const SamplingManager: React.FC<SamplingManagerProps> = ({ policy, onChange }) =
   return (
     <Box>
       <Alert severity="warning" sx={{ mb: 2 }}>
-        MCP sampling is deprecated in the 2026-07-28 spec. FLUJO&apos;s implementation (routing
-        through your configured model) already matches the recommended replacement pattern —
-        no action is required until server support is removed (estimated mid-2027).
+        {t('mcp.local.sampling.deprecated')}
       </Alert>
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
         <SmartToyIcon fontSize="small" sx={{ mr: 1, color: 'text.secondary' }} />
-        <Typography variant="subtitle1">Let this tool use your AI</Typography>
+        <Typography variant="subtitle1">{t('mcp.local.sampling.title')}</Typography>
         <Switch
           checked={enabled}
           onChange={(e) => patch({ enabled: e.target.checked })}
@@ -70,24 +70,22 @@ const SamplingManager: React.FC<SamplingManagerProps> = ({ policy, onChange }) =
         />
       </Box>
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
-        Allows this server to ask FLUJO to run AI calls on its behalf (MCP sampling). Off by
-        default. When on, the server can spend the selected model&apos;s API budget — only
-        enable it for servers you trust.
+        {t('mcp.local.sampling.help')}
       </Typography>
 
       {enabled && (
         <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'flex-start' }}>
           <FormControl size="small" sx={{ minWidth: 260 }} error={!policy?.modelId}>
-            <InputLabel id="sampling-model-label">Model</InputLabel>
+            <InputLabel id="sampling-model-label">{t('mcp.local.sampling.model')}</InputLabel>
             <Select
               labelId="sampling-model-label"
-              label="Model"
+              label={t('mcp.local.sampling.model')}
               value={models.some((m) => m.id === policy?.modelId) ? policy?.modelId : ''}
               onChange={(e) => patch({ modelId: e.target.value || undefined })}
             >
               {models.length === 0 && (
                 <MenuItem value="" disabled>
-                  No models configured
+                  {t('mcp.local.sampling.noModels')}
                 </MenuItem>
               )}
               {models.map((m) => (
@@ -101,7 +99,7 @@ const SamplingManager: React.FC<SamplingManagerProps> = ({ policy, onChange }) =
           <TextField
             size="small"
             type="number"
-            label="Max calls / minute"
+            label={t('mcp.local.sampling.maxCalls')}
             sx={{ width: 160 }}
             value={policy?.maxCallsPerMinute ?? ''}
             placeholder="10"
@@ -109,12 +107,12 @@ const SamplingManager: React.FC<SamplingManagerProps> = ({ policy, onChange }) =
               const n = parseInt(e.target.value, 10);
               patch({ maxCallsPerMinute: Number.isFinite(n) && n > 0 ? n : undefined });
             }}
-            helperText="Default 10"
+            helperText={t('mcp.local.sampling.defaultCalls')}
           />
 
           {!policy?.modelId && (
             <Alert severity="warning" sx={{ width: '100%' }}>
-              Pick a model — sampling requests will be rejected until one is selected.
+              {t('mcp.local.sampling.selectModel')}
             </Alert>
           )}
         </Box>

@@ -86,6 +86,7 @@ import { LiveLanes, EMPTY_LIVE_LANES, applyLaneEvent } from '@/utils/shared/live
 import { deriveExecutedNodeIds } from '@/utils/shared/executedNodes';
 import { Flow, FlowNode } from '@/shared/types/flow'; // Import Flow and FlowNode types
 import { LLM_REQUEST_TIMEOUT_MS } from '@/shared/config/timeouts';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/Chat/index');
 
@@ -302,6 +303,7 @@ const isCancellationError = (err: unknown): boolean => {
 const Chat: React.FC = () => {
   const router = useRouter();
   const theme = useTheme();
+  const { t, tp } = useI18n();
   const isCompactLayout = useMediaQuery(theme.breakpoints.down('lg'), { noSsr: true });
   // --- State Management ---
   // List of conversation summaries for the sidebar, fetched from backend
@@ -776,7 +778,7 @@ const Chat: React.FC = () => {
         fetchFailed = true;
         log.error('Error fetching conversation list:', err);
         if (!silent) {
-          setHistoryError('Failed to load conversation history.');
+          setHistoryError(t('chat.page.historyLoadFailed'));
           setConversationList([]); // Clear list on error
         }
       } finally {
@@ -840,7 +842,7 @@ const Chat: React.FC = () => {
     });
     silentListRefreshInFlightRef.current = trackedRequest;
     return trackedRequest;
-  }, [setCurrentConversationId]); // Include dependencies that affect auto-selection logic if needed
+  }, [setCurrentConversationId, t]); // Include dependencies that affect auto-selection logic if needed
 
   useEffect(() => {
     // Fetch initial list on mount
@@ -999,12 +1001,12 @@ const Chat: React.FC = () => {
        // Ignore errors for a selection that is no longer current.
        if (currentConversationIdRef.current !== id) return;
        if (err instanceof ChatApiError && err.status === 404) {
-          setDetailsError(`Conversation ${id} not found.`);
+          setDetailsError(t('chat.page.conversationNotFound', { id }));
           // Clear the invalid selection and refresh the list
           setCurrentConversationId(null);
           fetchConversations(); // Refresh list and auto-select valid one
        } else {
-          setDetailsError(`Failed to load details for conversation ${id}.`);
+          setDetailsError(t('chat.page.detailsLoadFailed', { id }));
        }
       setDetailedConversation(null);
     } finally {
@@ -1014,7 +1016,7 @@ const Chat: React.FC = () => {
         setIsLoadingDetails(false);
       }
     }
-  }, [fetchConversations, setCurrentConversationId]); // currentConversationId read via ref
+  }, [fetchConversations, setCurrentConversationId, t]); // currentConversationId read via ref
 
   useEffect(() => {
     // Switching conversations: drop any approval prompt belonging to the previous
@@ -1158,13 +1160,13 @@ const Chat: React.FC = () => {
     const selectedFlowId = (explicitFlow ?? rememberedFlow ?? flows.find(f => f.favorite) ?? flows[0])?.id || null;
     if (!selectedFlowId) {
       log.error('Cannot create conversation: No flows available or first flow has no ID.');
-      setError('Cannot create a new conversation: No agents available.');
+      setError(t('chat.page.noAgents'));
       return;
     }
 
     const newId = uuidv4();
     const now = Date.now();
-    const initialTitle = 'New Conversation';
+    const initialTitle = t('chat.page.newTitle');
 
     // Prepare payload for the backend POST request
     const payload = {
@@ -1201,11 +1203,11 @@ const Chat: React.FC = () => {
 
     } catch (err) {
       log.error('Error creating conversation on backend:', err);
-      let errorMsg = 'Failed to create conversation on the server.';
+      let errorMsg = t('chat.page.createFailed');
       if (err instanceof ChatApiError) {
-        errorMsg += ` Error: ${err.body?.error || err.message}`;
+        errorMsg += ` (${err.body?.error || err.message})`;
       } else if (err instanceof Error) {
-        errorMsg += ` Error: ${err.message}`;
+        errorMsg += ` (${err.message})`;
       }
       setError(errorMsg);
       // Do not update UI state if backend creation failed
@@ -1249,7 +1251,7 @@ const Chat: React.FC = () => {
     const now = Date.now();
     const created = await chatService.createConversation({
       id: conversationId,
-      title: 'Quick Chat',
+      title: t('chat.page.quickChat'),
       flowId: flow.id,
       flowSnapshot: flow,
       createdAt: now,
@@ -1694,13 +1696,13 @@ const Chat: React.FC = () => {
         }
         break;
       case 'error':
-        setError(event.message || 'Execution error');
+        setError(event.message || t('chat.page.executionError'));
         break;
       default:
         touch({});
         break;
     }
-  }, [closeEventStream, fetchDetailedConversation, fetchConversations, markConvRunning, patchConversationStatus, markConversationStopped]);
+  }, [closeEventStream, fetchDetailedConversation, fetchConversations, markConvRunning, patchConversationStatus, markConversationStopped, t]);
 
   // Open the SSE stream for a conversation and resolve once it is connected
   // (or after a short timeout). Callers await this BEFORE issuing the run's POST
@@ -1825,7 +1827,7 @@ const Chat: React.FC = () => {
 
     } catch (err) {
       log.error('Error deleting conversation:', { conversationId, err });
-      setError(`Failed to delete conversation ${conversationId}. Please try again.`);
+      setError(t('chat.page.deleteFailed', { id: conversationId }));
       // Revert optimistic UI update — including the shields, so the restored
       // conversation is fetchable/pollable again.
       pendingDeleteIdsRef.current.delete(conversationId);
@@ -1876,7 +1878,7 @@ const Chat: React.FC = () => {
       log.info('Bulk delete succeeded', { requested: ids.length, ...result });
     } catch (err) {
       log.error('Bulk delete failed', { err });
-      setError('Failed to delete conversations. Please try again.');
+      setError(t('chat.page.bulkDeleteFailed'));
       // Revert the optimistic update and shields, then re-sync from the server.
       ids.forEach((id) => pendingDeleteIdsRef.current.delete(id));
       setConversationList(previousList);
@@ -1891,7 +1893,7 @@ const Chat: React.FC = () => {
   const handleFlowSelect = (flowId: string) => {
     if (!currentConversationId) {
       log.warn('Cannot update flow: No conversation selected.');
-      setError('Please select a conversation first.');
+      setError(t('chat.page.selectFirst'));
       return;
     }
     // Remember the user's manual pick so the NEXT new conversation defaults to
@@ -1916,7 +1918,7 @@ const Chat: React.FC = () => {
 
     if (!currentConversationId) {
       log.warn('Cannot update flow: No conversation selected.');
-      setError('Please select a conversation first.');
+      setError(t('chat.page.selectFirst'));
       return;
     }
 
@@ -1978,11 +1980,11 @@ const Chat: React.FC = () => {
 
     } catch (err) {
       log.error('Error updating flowId on backend:', { conversationId: currentConversationId, flowId, err });
-      let errorMsg = 'Failed to update the selected agent.';
+      let errorMsg = t('chat.page.updateAgentFailed');
       if (err instanceof ChatApiError) {
-        errorMsg += ` Error: ${err.body?.error || err.message}`;
+        errorMsg += ` (${err.body?.error || err.message})`;
       } else if (err instanceof Error) {
-        errorMsg += ` Error: ${err.message}`;
+        errorMsg += ` (${err.message})`;
       }
       setError(errorMsg);
 
@@ -2023,7 +2025,7 @@ const Chat: React.FC = () => {
       log.warn('Failed to rename conversation', { conversationId: id, err });
       setDetailedConversation(prev => (prev && prev.id === id ? { ...prev, title: previousTitle } : prev));
       setConversationList(prevList => prevList.map(c => (c.id === id ? { ...c, title: previousTitle } : c)));
-      setError('Failed to rename the conversation.');
+      setError(t('chat.page.renameFailed'));
     }
   };
 
@@ -2037,7 +2039,7 @@ const Chat: React.FC = () => {
     if (!content.trim() && attachments.length === 0) return;
     if (!detailedConversation) {
        log.error("Cannot send message, detailed conversation not loaded.");
-       setError("Cannot send message: conversation details not loaded.");
+       setError(t('chat.page.detailsMissing'));
        return;
     }
 
@@ -2199,7 +2201,7 @@ const Chat: React.FC = () => {
       //   await fetchConversations(currentConversationId); // Refetch list, keeping current selection
       // }
     } else {
-      setError('Please select an agent for this conversation before sending messages');
+      setError(t('chat.page.chooseAgent'));
       // Revert optimistic update?
        setDetailedConversation(detailedConversation); // Revert to previous detailed state
     }
@@ -2343,7 +2345,7 @@ const Chat: React.FC = () => {
       }
       if (data.status === 'error') {
          // Handle OpenAI compatible error structure
-         const errorMessage = data.error?.message || data.lastResponse?.error || 'Unknown error during execution';
+         const errorMessage = data.error?.message || data.lastResponse?.error || t('chat.page.unknownExecutionError');
          // A user Stop ends the run as a cancellation error: present it neutrally
          // (the "stopped" banner) rather than flashing a red failure.
          if (CANCELLED_MESSAGE_RE.test(errorMessage) || stoppedConversationIdsRef.current.has(conversationId)) {
@@ -2389,7 +2391,7 @@ const Chat: React.FC = () => {
 
 
     return false; // Indicate standard response was handled
-  }, [setDetailedConversation, setPendingToolCalls, setIsLoading, setError, setIsDebugPaused, setDebugState, setConversationList, fetchDetailedConversation, closeEventStream, markConvRunning, patchConversationStatus, markConversationStopped]);
+  }, [setDetailedConversation, setPendingToolCalls, setIsLoading, setError, setIsDebugPaused, setDebugState, setConversationList, fetchDetailedConversation, closeEventStream, markConvRunning, patchConversationStatus, markConversationStopped, t]);
 
 
   // Function to stop polling (legacy interval; live updates now use SSE)
@@ -2419,7 +2421,7 @@ const Chat: React.FC = () => {
     // Ensure we use the detailed conversation's ID and flowId
     if (!conversation?.id || !conversation.flowId || !openaiRef.current) {
        log.error("Cannot send to completions: Missing conversation ID or flow ID.", { id: conversation?.id, flowId: conversation?.flowId });
-       setError("Cannot send message: This conversation is missing its agent.");
+       setError(t('chat.page.agentMissing'));
        return false;
     }
 
@@ -3003,7 +3005,7 @@ const Chat: React.FC = () => {
           markConversationStopped(updatedDetailedConv.id, true);
         } else {
           log.error('Error sending edited message:', err);
-          setError(err instanceof Error ? err.message : 'Failed to send edited message');
+          setError(err instanceof Error ? err.message : t('chat.page.sendEditedFailed'));
         }
         markConvRunning(updatedDetailedConv.id, false);
         // Scoped teardown: leave another conversation's live view alone.
@@ -3060,7 +3062,7 @@ const Chat: React.FC = () => {
     const newId = uuidv4();
     const newSplitConversation: Conversation = {
       id: newId,
-      title: `Split from ${detailedConversation.title}`,
+      title: t('chat.page.splitTitle', { title: detailedConversation.title }),
       messages: messagesBeforeSplit,
       flowId: detailedConversation.flowId,
       createdAt: Date.now(), // New creation time
@@ -3118,11 +3120,11 @@ const Chat: React.FC = () => {
         return;
       }
       log.error(`Error sending tool response (${action})`, { conversationId: currentConversationId, toolCallId, err });
-      let errorMessage = `Failed to ${action} tool call.`;
+      let errorMessage = action === 'approve' ? t('chat.page.approveFailed') : t('chat.page.rejectFailed');
       if (err instanceof ChatApiError) {
-        errorMessage += ` Error: ${err.body?.error || err.message}`;
+        errorMessage += ` (${err.body?.error || err.message})`;
       } else if (err instanceof Error) {
-        errorMessage += ` Error: ${err.message}`;
+        errorMessage += ` (${err.message})`;
       }
       setError(errorMessage);
       // Stop loading on error since polling won't restart — unless the live
@@ -3217,7 +3219,7 @@ const Chat: React.FC = () => {
       handleApiResponse(data, currentConversationId); // Process the response (updates state, status)
     } catch (err) {
       log.error('Error during debug step API call', { conversationId: currentConversationId, err });
-      setError(err instanceof Error ? err.message : 'Failed to execute debug step.');
+      setError(err instanceof Error ? err.message : t('chat.page.debugStepFailed'));
       setIsLoading(false); // Stop loading on error
       markConvRunning(currentConversationId, false);
       setIsDebugPaused(false); // Exit debug mode on error? Or just show error?
@@ -3245,7 +3247,7 @@ const Chat: React.FC = () => {
       // Polling might restart via useEffect if status is 'running'
     } catch (err) {
       log.error('Error during debug continue API call', { conversationId: currentConversationId, err });
-      setError(err instanceof Error ? err.message : 'Failed to continue execution.');
+      setError(err instanceof Error ? err.message : t('chat.page.debugContinueFailed'));
       setIsLoading(false); // Stop loading on error
       markConvRunning(currentConversationId, false);
     } finally {
@@ -3288,9 +3290,9 @@ const Chat: React.FC = () => {
       await chatService.setBreakpoints(currentConversationId, ['*']);
     } catch (err) {
       log.error('Failed to attach debugger', { conversationId: currentConversationId, err });
-      setError(err instanceof Error ? err.message : 'Failed to attach debugger.');
+      setError(err instanceof Error ? err.message : t('chat.page.attachDebuggerFailed'));
     }
-  }, [currentConversationId]);
+  }, [currentConversationId, t]);
 
   // Step Over: advance one node at a time until the active node changes (i.e.
   // skip a process node's internal tool-call iterations), or execution pauses
@@ -3320,7 +3322,7 @@ const Chat: React.FC = () => {
       markConvRunning(currentConversationId, false);
     } catch (err) {
       log.error('Error during step over', { conversationId: currentConversationId, err });
-      setError(err instanceof Error ? err.message : 'Failed to step over.');
+      setError(err instanceof Error ? err.message : t('chat.page.stepOverFailed'));
       setIsLoading(false);
       markConvRunning(currentConversationId, false);
     }
@@ -3348,7 +3350,7 @@ const Chat: React.FC = () => {
       await fetchDetailedConversation(currentConversationId);
     } catch (err) {
       log.error('Error sending cancel request', { conversationId: currentConversationId, err });
-      setError('Failed to send cancel request to the server.');
+      setError(t('chat.page.cancelFailed'));
     }
   };
 
@@ -3372,7 +3374,7 @@ const Chat: React.FC = () => {
       await fetchConversations(undefined, { silent: true });
     } catch (err) {
       log.error('Error stopping background conversation', { conversationId, err });
-      setError('Failed to send cancel request to the server.');
+      setError(t('chat.page.cancelFailed'));
     }
   };
 
@@ -3501,6 +3503,16 @@ const Chat: React.FC = () => {
   const sidebarCreateNewConversation = useStableCallback(createNewConversation);
   const sidebarOpenQuickChat = useCallback(() => setQuickChatOpen(true), []);
 
+  const translateQueueHoldReason = (reason: string | null): string | null => {
+    switch (reason) {
+      case 'Held — you stopped this run. Send again to continue.': return t('chat.page.queueStopped');
+      case 'Held — the last run failed. Retry or send again to continue.': return t('chat.page.queueFailed');
+      case 'Held — waiting for tool approval.': return t('chat.page.queueApproval');
+      case 'Held — paused in the debugger.': return t('chat.page.queueDebugger');
+      default: return reason;
+    }
+  };
+
   const sidebarPanelContent = isLoadingHistory ? (
     <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', p: 2 }}>
       <Spinner size="medium" color="primary" />
@@ -3533,7 +3545,7 @@ const Chat: React.FC = () => {
         bgcolor: 'transparent',
       }}
     >
-      <Typography component="h1" className="sr-only">Chat</Typography>
+      <Typography component="h1" className="sr-only">{t('chat.title')}</Typography>
 
       {/* Collapsed state: a slim always-visible affordance to bring the sidebar
           back (so the conversation list is never permanently lost). */}
@@ -3552,8 +3564,8 @@ const Chat: React.FC = () => {
             backdropFilter: 'blur(18px)',
           }}
         >
-          <Tooltip title="Show conversation sidebar">
-            <IconButton size="small" onClick={toggleSidebarCollapsed} aria-label="Show conversation sidebar">
+          <Tooltip title={t('chat.page.showSidebar')}>
+            <IconButton size="small" onClick={toggleSidebarCollapsed} aria-label={t('chat.page.showSidebar')}>
               <ViewSidebarIcon fontSize="small" />
             </IconButton>
           </Tooltip>
@@ -3643,7 +3655,7 @@ const Chat: React.FC = () => {
             '&:focus-visible::after': { width: 3, bgcolor: 'primary.main' },
             touchAction: 'none',
           }}
-          aria-label="Resize conversation sidebar"
+          aria-label={t('chat.page.resizeSidebar')}
         />
       )}
 
@@ -3682,7 +3694,7 @@ const Chat: React.FC = () => {
                   size="small"
                   autoFocus
                   fullWidth
-                  inputProps={{ maxLength: 200, 'aria-label': 'Conversation title' }}
+                  inputProps={{ maxLength: 200, 'aria-label': t('chat.page.conversationTitle') }}
                 />
               ) : (
                 <>
@@ -3693,20 +3705,20 @@ const Chat: React.FC = () => {
                     title={detailedConversation?.title || currentConversationSummary?.title || ''}
                     sx={{ flex: 1, minWidth: 0, cursor: 'text' }}
                   >
-                    {detailedConversation?.title || currentConversationSummary?.title || 'Untitled Conversation'}
+                    {detailedConversation?.title || currentConversationSummary?.title || t('chat.page.untitled')}
                   </Typography>
-                  <Tooltip title="Rename conversation">
-                    <IconButton size="small" onClick={beginEditTitle} aria-label="Rename conversation">
+                  <Tooltip title={t('chat.page.rename')}>
+                    <IconButton size="small" onClick={beginEditTitle} aria-label={t('chat.page.rename')}>
                       <EditIcon fontSize="small" />
                     </IconButton>
                   </Tooltip>
                   {/* Toggle the Executed-Steps path panel (issue #213). */}
-                  <Tooltip title={workflowPanelVisible ? 'Hide executed steps' : 'Show executed steps'}>
+                  <Tooltip title={workflowPanelVisible ? t('chat.page.hideExecuted') : t('chat.page.showExecuted')}>
                     <IconButton
                       size="small"
                       color={workflowPanelVisible ? 'primary' : 'default'}
                       onClick={() => setWorkflowPanelVisible(v => !v)}
-                      aria-label="Toggle executed steps panel"
+                      aria-label={t('chat.page.toggleExecuted')}
                     >
                       <AccountTreeOutlinedIcon fontSize="small" />
                     </IconButton>
@@ -3738,7 +3750,7 @@ const Chat: React.FC = () => {
                   // Quick chats have no stored flow to select — the flow lives on
                   // the conversation as a snapshot. Show a badge instead of the
                   // flow dropdown (which would render blank).
-                  <Chip color="primary" variant="outlined" icon={<BoltIcon />} label="Quick Chat" />
+                  <Chip color="primary" variant="outlined" icon={<BoltIcon />} label={t('chat.page.quickChat')} />
                 ) : (
                   <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5 }}>
                     <FlowSelector
@@ -3754,7 +3766,7 @@ const Chat: React.FC = () => {
                         currentConversationSummary?.flowId || detailedConversation?.flowId || null;
                       if (!builderFlowId) return null;
                       return (
-                        <Tooltip title="Open this agent in the editor">
+                        <Tooltip title={t('chat.page.openAgent')}>
                           <IconButton
                             color="primary"
                             onClick={() => router.push(`/flows?flow=${encodeURIComponent(builderFlowId)}`)}
@@ -3826,13 +3838,13 @@ const Chat: React.FC = () => {
                 onRegisterAppTeardown={handleRegisterInlineTeardown}
                 onOpenInCanvas={handleOpenInCanvas}
                 queuedMessages={getMsgQueue(queuedMessages, detailedConversation.id)}
-                queueHoldReason={drainHoldReason({
+                queueHoldReason={translateQueueHoldReason(drainHoldReason({
                   running: runningConvs.has(detailedConversation.id),
                   pendingApproval: !!pendingToolCalls,
                   debugPaused: isDebugPaused,
                   hasError: currentConversationSummary?.status === 'error',
                   stopped: viewedConversationStopped,
-                })}
+                }))}
               />
 
               {/* Completion banner: shown once the run has reached a Finish node
@@ -3848,7 +3860,7 @@ const Chat: React.FC = () => {
                     variant="filled"
                     sx={{ borderRadius: 2, py: 0.5 }}
                   >
-                    Conversation completed
+                    {t('chat.page.completed')}
                   </Alert>
                 </Box>
               )}
@@ -3872,11 +3884,11 @@ const Chat: React.FC = () => {
                         startIcon={<RefreshIcon />}
                         onClick={() => sendToChatCompletions(detailedConversation)}
                       >
-                        Resume
+                        {t('chat.page.resume')}
                       </Button>
                     }
                   >
-                    Conversation stopped
+                    {t('chat.page.stopped')}
                   </Alert>
                 </Box>
               )}
@@ -3899,15 +3911,14 @@ const Chat: React.FC = () => {
                         startIcon={<RefreshIcon />}
                         onClick={() => sendToChatCompletions(detailedConversation)}
                       >
-                        Restart turn
+                        {t('chat.page.restartTurn')}
                       </Button>
                     }
                   >
                     <Typography variant="body2" fontWeight={600}>
-                      Recovery required
                       {detailedConversation.recovery.currentCheckpoint?.nodeId
-                        ? ` at node ${detailedConversation.recovery.currentCheckpoint.nodeId}`
-                        : ''}
+                        ? t('chat.page.recoveryAtNode', { node: detailedConversation.recovery.currentCheckpoint.nodeId })
+                        : t('chat.page.recovery')}
                     </Typography>
                     {detailedConversation.recovery.sideEffectWarning && (
                       <Typography variant="caption" component="div">
@@ -3943,11 +3954,11 @@ const Chat: React.FC = () => {
                           sendToChatCompletions(detailedConversation);
                         }}
                       >
-                        Retry
+                        {t('chat.page.retry')}
                       </Button>
                     }
                   >
-                    Conversation ended with an error
+                    {t('chat.page.endedError')}
                   </Alert>
                 </Box>
               )}
@@ -4014,7 +4025,7 @@ const Chat: React.FC = () => {
                         }
                       }}
                     >
-                      Retry
+                      {t('chat.page.retry')}
                     </Button>
                   }
                 >
@@ -4026,8 +4037,8 @@ const Chat: React.FC = () => {
             // Message when no conversation is selected or loaded
             <Typography variant="body1" color="textSecondary" align="center" sx={{ mt: 4 }}>
               {conversationList.length > 0
-                ? "Select a conversation or create a new one."
-                : "Create a new conversation to start chatting."}
+                ? t('chat.page.selectOrCreate')
+                : t('chat.page.createToStart')}
             </Typography>
           )}
         </Box>
@@ -4037,7 +4048,7 @@ const Chat: React.FC = () => {
           <Fab
             size="small"
             color="primary"
-            aria-label="Scroll to latest messages"
+            aria-label={t('chat.page.scrollLatest')}
             onClick={jumpToLatest}
             sx={{ position: 'absolute', bottom: 16, right: 24, zIndex: 2 }}
           >
@@ -4081,14 +4092,14 @@ const Chat: React.FC = () => {
               sx={{ mb: 1, display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center' }}
             >
               <Typography variant="caption" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                <ScheduleIcon fontSize="inherit" /> Queued:
+                <ScheduleIcon fontSize="inherit" /> {t('chat.page.queued')}
               </Typography>
               {getMsgQueue(queuedMessages, currentConversationId).map((q) => (
                 <Chip
                   key={q.id}
                   size="small"
                   variant="outlined"
-                  label={q.content.trim().slice(0, 40) || (q.attachments.length ? `${q.attachments.length} attachment(s)` : 'message')}
+                  label={q.content.trim().slice(0, 40) || (q.attachments.length ? tp('chat.messages.attachment', q.attachments.length) : t('chat.page.queuedMessage'))}
                   onDelete={() => setQueuedMessages(prev => removeQueuedMsg(prev, currentConversationId, q.id))}
                 />
               ))}
@@ -4161,7 +4172,7 @@ const Chat: React.FC = () => {
                 '&:focus-visible': { bgcolor: 'primary.main' },
                 touchAction: 'none',
               }}
-              aria-label="Resize executed steps panel"
+              aria-label={t('chat.page.resizeExecuted')}
             />
             <Box
               sx={{
@@ -4228,7 +4239,7 @@ const Chat: React.FC = () => {
                 '&:focus-visible': { bgcolor: 'primary.main' },
                 touchAction: 'none',
               }}
-              aria-label="Resize debugger panel"
+              aria-label={t('chat.page.resizeDebugger')}
             />
             <Box
               sx={{
@@ -4271,7 +4282,7 @@ const Chat: React.FC = () => {
           fullScreen
           open
           onClose={() => setWorkflowPanelVisible(false)}
-          aria-label="Executed steps"
+          aria-label={t('chat.page.executedDialog')}
         >
           <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: 'background.default' }}>
             <ExecutedFlowPanel
@@ -4297,7 +4308,7 @@ const Chat: React.FC = () => {
             if (isCompactLayout) handleDebugClose();
             else setDebuggerExpanded(false);
           }}
-          aria-label="Flow debugger"
+          aria-label={t('chat.page.debuggerDialog')}
         >
           <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
             <DebuggerCanvas
@@ -4328,17 +4339,16 @@ const Chat: React.FC = () => {
           keeps the current flow (the selector is controlled, so no revert is
           needed — we simply never apply the change). */}
       <Dialog open={!!pendingFlowSwitch} onClose={() => setPendingFlowSwitch(null)}>
-        <DialogTitle>Switch agent?</DialogTitle>
+        <DialogTitle>{t('chat.page.switchTitle')}</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            This conversation has already been processed with its current agent.
-            {' '}If you switch to
-            {' '}<strong>{flows.find(f => f.id === pendingFlowSwitch)?.name || 'the selected agent'}</strong>,
-            {' '}the conversation will continue from that agent&apos;s starting point.
+            {t('chat.page.switchHelp', {
+              agent: flows.find(f => f.id === pendingFlowSwitch)?.name || t('chat.page.selectedAgent'),
+            })}
           </DialogContentText>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setPendingFlowSwitch(null)}>Cancel</Button>
+          <Button onClick={() => setPendingFlowSwitch(null)}>{t('chat.page.cancel')}</Button>
           <Button
             variant="contained"
             onClick={() => {
@@ -4347,7 +4357,7 @@ const Chat: React.FC = () => {
               if (flowId) applyFlowSelect(flowId);
             }}
           >
-            Switch Agent
+            {t('chat.page.switch')}
           </Button>
         </DialogActions>
       </Dialog>

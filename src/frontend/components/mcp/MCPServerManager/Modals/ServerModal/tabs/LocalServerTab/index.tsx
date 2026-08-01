@@ -38,6 +38,7 @@ import {
   Typography
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const LocalServerTab: React.FC<TabProps> = ({
   initialConfig,
@@ -47,6 +48,7 @@ const LocalServerTab: React.FC<TabProps> = ({
   autoTestRun,
   onSaveAndAuthenticate
 }) => {
+  const { t } = useI18n();
   // Use custom hooks for state management first
   const {
     localConfig,
@@ -105,7 +107,7 @@ const LocalServerTab: React.FC<TabProps> = ({
     ) {
       setMessage({
         type: 'warning',
-        text: 'Configuration detection was not successful. Please configure the server manually.'
+        text: t('mcp.local.detectionFailed')
       });
       
       // Expand all sections to make it easier for the user to configure
@@ -115,7 +117,7 @@ const LocalServerTab: React.FC<TabProps> = ({
         run: true
       });
     }
-  }, [initialConfig]);
+  }, [initialConfig, setExpandedSections, setMessage, t]);
 
   // Event handlers that use the form handlers utility functions
   const onSubmit = (e: React.FormEvent) => {
@@ -130,7 +132,8 @@ const LocalServerTab: React.FC<TabProps> = ({
       onAdd,
       onUpdate,
       initialConfig,
-      onClose
+      onClose,
+      t
     );
   };
 
@@ -156,7 +159,8 @@ const LocalServerTab: React.FC<TabProps> = ({
       setBuildCommand,
       setInstallCommand,
       setWebsocketUrl,
-      websocketUrl
+      websocketUrl,
+      t
     );
   };
 
@@ -165,7 +169,8 @@ const LocalServerTab: React.FC<TabProps> = ({
       localConfig,
       setLocalConfig,
       setMessage,
-      setIsParsingEnv
+      setIsParsingEnv,
+      t
     );
   };
 
@@ -174,7 +179,8 @@ const LocalServerTab: React.FC<TabProps> = ({
       localConfig,
       setLocalConfig,
       setMessage,
-      setIsParsingEnv
+      setIsParsingEnv,
+      t
     );
   };
 
@@ -187,7 +193,8 @@ const LocalServerTab: React.FC<TabProps> = ({
       setBuildCommand,
       setInstallCommand,
       setWebsocketUrl,
-      websocketUrl
+      websocketUrl,
+      t
     );
   };
 
@@ -200,7 +207,8 @@ const LocalServerTab: React.FC<TabProps> = ({
       setConsoleTitle,
       setIsConsoleVisible,
       setConsoleOutput,
-      setInstallCompleted
+      setInstallCompleted,
+      t
     );
   };
 
@@ -213,7 +221,8 @@ const LocalServerTab: React.FC<TabProps> = ({
       setConsoleTitle,
       setIsConsoleVisible,
       setConsoleOutput,
-      setBuildCompleted
+      setBuildCompleted,
+      t
     );
   };
 
@@ -236,7 +245,8 @@ const LocalServerTab: React.FC<TabProps> = ({
       // Pass the pre-edit server name so masked secret headers hydrate from the saved
       // config on Test Connection, even after a rename (#137).
       initialConfig?.name,
-      setOauthCapable
+      setOauthCapable,
+      t
     );
   };
 
@@ -246,25 +256,25 @@ const LocalServerTab: React.FC<TabProps> = ({
   const onSaveAndAuthenticateClick = async () => {
     if (!onSaveAndAuthenticate) return;
     if (!localConfig.name || !serverUrl) {
-      setMessage({ type: 'error', text: 'Please provide a server name and URL before authenticating.' });
+      setMessage({ type: 'error', text: t('mcp.local.auth.missingDetails') });
       return;
     }
     const finalConfig = buildFinalConfig(localConfig, websocketUrl, serverUrl, buildCommand, installCommand);
     setIsAuthenticating(true);
-    setMessage({ type: 'success', text: `Saving ${finalConfig.name} and starting OAuth…` });
+    setMessage({ type: 'success', text: t('mcp.local.auth.starting', { server: finalConfig.name }) });
     try {
       const result = await onSaveAndAuthenticate(finalConfig);
       if (result.status === 'needs_client_credentials') {
         setMessage({
           type: 'warning',
-          text: result.error || 'This server needs an OAuth Client ID and Secret. Enter them above, then authenticate again.'
+          text: result.error || t('mcp.local.auth.credentialsRequired')
         });
       } else if (result.status === 'error') {
-        setMessage({ type: 'error', text: result.error || 'OAuth authentication failed.' });
+        setMessage({ type: 'error', text: result.error || t('mcp.local.auth.failed') });
       }
       // 'authorized' → the manager closes the modal; nothing more to do here.
     } catch (error) {
-      setMessage({ type: 'error', text: `OAuth authentication failed: ${error instanceof Error ? error.message : 'Unknown error'}` });
+      setMessage({ type: 'error', text: t('mcp.local.auth.failedWithError', { error: error instanceof Error ? error.message : t('mcp.server.unknownError') }) });
     } finally {
       setIsAuthenticating(false);
     }
@@ -413,7 +423,7 @@ const LocalServerTab: React.FC<TabProps> = ({
                     fontWeight: 500
                   }}
                 >
-                  First, define your server
+                  {t('mcp.local.section.define')}
                 </Typography>
               </AccordionSummary>
               <AccordionDetails sx={{ px: 3, py: 2 }}>
@@ -477,7 +487,7 @@ const LocalServerTab: React.FC<TabProps> = ({
                     fontWeight: 500
                   }}
                 >
-                  Second, install and build
+                  {t('mcp.local.section.build')}
                 </Typography>
               </AccordionSummary>
               <AccordionDetails sx={{ px: 3, py: 2 }}>
@@ -543,7 +553,7 @@ const LocalServerTab: React.FC<TabProps> = ({
                     fontWeight: 500
                   }}
                 >
-                  Third, define how to run your server
+                  {t('mcp.local.section.run')}
                 </Typography>
               </AccordionSummary>
               <AccordionDetails sx={{ px: 3, py: 2 }}>
@@ -656,27 +666,27 @@ const LocalServerTab: React.FC<TabProps> = ({
           variant="outlined"
           onClick={onClose}
         >
-          Cancel
+          {t('mcp.local.cancel')}
         </Button>
         <Button
           type="submit"
           variant="contained"
           color="primary"
         >
-          {initialConfig ? 'Update Server' : 'Add Server'}
+          {initialConfig ? t('mcp.local.updateServer') : t('mcp.local.addServer')}
         </Button>
       </Box>
 
       <FolderPickerDialog
         open={rootPickerOpen}
-        title="Choose the server folder"
+        title={t('mcp.local.chooseServerFolder')}
         initialPath={localConfig.rootPath || undefined}
         onClose={() => setRootPickerOpen(false)}
         onSelect={(path) => setLocalConfig({ ...localConfig, rootPath: path })}
       />
       <FolderPickerDialog
         open={argPickerIndex !== null}
-        title="Choose a folder or file"
+        title={t('mcp.local.chooseFolderOrFile')}
         selectFiles
         onClose={() => setArgPickerIndex(null)}
         onSelect={(path) => {

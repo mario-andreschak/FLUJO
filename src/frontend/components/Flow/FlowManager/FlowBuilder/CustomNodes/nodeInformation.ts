@@ -1,4 +1,6 @@
 import type { NodeType } from '@/frontend/types/flow/flow';
+import type { TranslationValues, Translator } from '@/frontend/i18n/core';
+import type { PluralTranslationKey, TranslationKey } from '@/frontend/i18n/messages';
 
 const DESCRIPTION_LIMIT = 180;
 const PROMPT_LINE_LIMIT = 90;
@@ -40,6 +42,26 @@ export interface NodeInformationViewModel {
   technicalDetails: NodeTechnicalDetail[];
   technicalText: string;
 }
+
+export interface NodeInformationI18n {
+  t: Translator;
+  tp: (key: PluralTranslationKey, count: number, values?: TranslationValues) => string;
+  formatList: (values: Iterable<string>, options?: Intl.ListFormatOptions) => string;
+}
+
+const tr = (
+  i18n: NodeInformationI18n | undefined,
+  key: TranslationKey,
+  fallback: string,
+  values?: TranslationValues,
+): string => i18n ? i18n.t(key, values) : fallback;
+
+const pl = (
+  i18n: NodeInformationI18n | undefined,
+  key: PluralTranslationKey,
+  count: number,
+  fallback: string,
+): string => i18n ? i18n.tp(key, count) : fallback;
 
 interface PropertySpec {
   key: string;
@@ -239,15 +261,18 @@ const technicalDetail = (
   };
 };
 
-const formatTechnicalText = (details: NodeTechnicalDetail[]): string => {
+const formatTechnicalText = (
+  details: NodeTechnicalDetail[],
+  i18n?: NodeInformationI18n,
+): string => {
   const metadata = details.filter((detail) => detail.key.startsWith('metadata.'));
   const properties = details.filter((detail) => !detail.key.startsWith('metadata.'));
   const render = (detail: NodeTechnicalDetail) => `${detail.label}: ${detail.value}`;
   return [
-    'Node metadata',
+    tr(i18n, 'flows.nodeInfo.nodeMetadata', 'Node metadata'),
     ...metadata.map(render),
     '',
-    'Supported properties',
+    tr(i18n, 'flows.nodeInfo.supportedProperties', 'Supported properties'),
     ...properties.map(render),
   ].join('\n');
 };
@@ -255,56 +280,72 @@ const formatTechnicalText = (details: NodeTechnicalDetail[]): string => {
 const addProcessSummary = (
   summary: NodeSummaryEntry[],
   properties: Record<string, unknown>,
+  i18n?: NodeInformationI18n,
 ): void => {
   summary.push({
     key: 'modes',
-    label: 'Modes',
+    label: tr(i18n, 'flows.nodeInfo.modes', 'Modes'),
     value: `${displayMode(properties, 'inputMode', 'full-history')} → ${displayMode(properties, 'outputMode', 'full-conversation')}`,
   });
   const preview = promptPreview(properties.promptTemplate);
   if (preview !== undefined) {
-    summary.push({ key: 'prompt', label: 'Prompt', value: preview, multiline: true });
+    summary.push({ key: 'prompt', label: tr(i18n, 'flows.nodeInfo.prompt', 'Prompt'), value: preview, multiline: true });
   }
 };
 
 const addSubflowSummary = (
   summary: NodeSummaryEntry[],
   properties: Record<string, unknown>,
+  i18n?: NodeInformationI18n,
+  flowNames?: ReadonlyMap<string, string>,
 ): void => {
   const subflowId = nonEmptyString(properties.subflowId);
   const parallelIds = stringArray(properties.parallelSubflowIds);
   const parallelVariable = nonEmptyString(properties.parallelSubflowIdsVar);
   const spawnBriefs = stringArray(properties.spawnBriefs);
 
-  let target = 'Not bound';
-  if (subflowId) target = subflowId;
-  else if (parallelIds.length) target = `${parallelIds.length} parallel flow${parallelIds.length === 1 ? '' : 's'}`;
-  else if (parallelVariable) target = `Flows from ${parallelVariable}`;
-  summary.push({ key: 'target', label: 'Target', value: target });
+  let target = tr(i18n, 'flows.nodeInfo.notBound', 'Not bound');
+  if (subflowId) target = flowNames?.get(subflowId) || subflowId;
+  else if (parallelIds.length) {
+    target = pl(i18n, 'flows.nodeInfo.parallelFlow', parallelIds.length, `${parallelIds.length} parallel flow${parallelIds.length === 1 ? '' : 's'}`);
+  } else if (parallelVariable) {
+    target = tr(i18n, 'flows.nodeInfo.flowsFrom', `Flows from ${parallelVariable}`, { variable: parallelVariable });
+  }
+  summary.push({ key: 'target', label: tr(i18n, 'flows.nodeInfo.target', 'Target'), value: target });
   summary.push({
     key: 'modes',
-    label: 'Modes',
+    label: tr(i18n, 'flows.nodeInfo.modes', 'Modes'),
     value: `${displayMode(properties, 'inputMode', 'full-history')} → ${displayMode(properties, 'outputMode', 'steps')}`,
   });
 
   const settings: string[] = [];
   const hasActiveFanout = !subflowId && (parallelIds.length > 0 || Boolean(parallelVariable));
-  if (hasActiveFanout) settings.push(properties.sequential === true ? 'sequential fan-out' : 'parallel fan-out');
-  if (properties.mapOverList === true) {
-    settings.push(`map list (${displayMode(properties, 'itemSplit', 'json-array')})`);
+  if (hasActiveFanout) {
+    settings.push(properties.sequential === true
+      ? tr(i18n, 'flows.nodeInfo.sequentialFanout', 'sequential fan-out')
+      : tr(i18n, 'flows.nodeInfo.parallelFanout', 'parallel fan-out'));
   }
-  if (spawnBriefs.length) settings.push(`${spawnBriefs.length} spawn brief${spawnBriefs.length === 1 ? '' : 's'}`);
-  if (settings.length) summary.push({ key: 'execution', label: 'Execution', value: settings.join(' · ') });
+  if (properties.mapOverList === true) {
+    const mode = displayMode(properties, 'itemSplit', 'json-array');
+    settings.push(tr(i18n, 'flows.nodeInfo.mapList', `map list (${mode})`, { mode }));
+  }
+  if (spawnBriefs.length) {
+    settings.push(pl(i18n, 'flows.nodeInfo.spawnBrief', spawnBriefs.length, `${spawnBriefs.length} spawn brief${spawnBriefs.length === 1 ? '' : 's'}`));
+  }
+  if (settings.length) {
+    summary.push({ key: 'execution', label: tr(i18n, 'flows.nodeInfo.execution', 'Execution'), value: settings.join(' · ') });
+  }
 };
 
 const addMcpSummary = (
   summary: NodeSummaryEntry[],
   properties: Record<string, unknown>,
+  i18n?: NodeInformationI18n,
 ): void => {
   summary.push({
     key: 'server',
-    label: 'Server',
-    value: nonEmptyString(properties.boundServer) || 'Not bound',
+    label: tr(i18n, 'flows.nodeInfo.server', 'Server'),
+    value: nonEmptyString(properties.boundServer) || tr(i18n, 'flows.nodeInfo.notBound', 'Not bound'),
   });
   const tools = stringArray(properties.enabledTools);
   if (tools.length) {
@@ -312,11 +353,15 @@ const addMcpSummary = (
     const remaining = tools.length - visible.length;
     summary.push({
       key: 'tools',
-      label: 'Tools',
-      value: `${visible.join(', ')}${remaining > 0 ? ` +${remaining} more` : ''} (${tools.length})`,
+      label: tr(i18n, 'flows.nodeInfo.tools', 'Tools'),
+      value: `${i18n ? i18n.formatList(visible) : visible.join(', ')}${remaining > 0 ? ` ${tr(i18n, 'flows.nodeInfo.more', `+${remaining} more`, { count: remaining })}` : ''} (${tools.length})`,
     });
   } else {
-    summary.push({ key: 'tools', label: 'Tools', value: 'None enabled' });
+    summary.push({
+      key: 'tools',
+      label: tr(i18n, 'flows.nodeInfo.tools', 'Tools'),
+      value: tr(i18n, 'flows.nodeInfo.noneEnabled', 'None enabled'),
+    });
   }
 };
 
@@ -324,29 +369,38 @@ const addOtherSummary = (
   summary: NodeSummaryEntry[],
   nodeType: NodeType,
   properties: Record<string, unknown>,
+  i18n?: NodeInformationI18n,
 ): void => {
   if (nodeType === 'start') {
     const preview = promptPreview(properties.promptTemplate);
-    if (preview !== undefined) summary.push({ key: 'prompt', label: 'Prompt', value: preview, multiline: true });
+    if (preview !== undefined) {
+      summary.push({ key: 'prompt', label: tr(i18n, 'flows.nodeInfo.prompt', 'Prompt'), value: preview, multiline: true });
+    }
   } else if (nodeType === 'resource') {
     const scope = displayMode(properties, 'scope', 'run');
-    summary.push({ key: 'scope', label: 'Scope', value: scope });
+    summary.push({ key: 'scope', label: tr(i18n, 'flows.nodeInfo.scope', 'Scope'), value: scope });
     const resource = nonEmptyString(properties.uri) || nonEmptyString(properties.runName);
-    if (resource) summary.push({ key: 'resource', label: 'Resource', value: clamp(resource, 100) });
+    if (resource) {
+      summary.push({ key: 'resource', label: tr(i18n, 'flows.nodeInfo.resource', 'Resource'), value: clamp(resource, 100) });
+    }
   } else if (nodeType === 'signal') {
     const preview = promptPreview(properties.payloadTemplate);
-    if (preview !== undefined) summary.push({ key: 'payload', label: 'Payload', value: preview, multiline: true });
+    if (preview !== undefined) {
+      summary.push({ key: 'payload', label: tr(i18n, 'flows.nodeInfo.payload', 'Payload'), value: preview, multiline: true });
+    }
   } else if (nodeType === 'trigger') {
     const trigger = isRecord(properties.trigger) ? properties.trigger : {};
     summary.push({
       key: 'trigger',
-      label: 'Trigger',
-      value: nonEmptyString(trigger.type) || 'Not configured',
+      label: tr(i18n, 'flows.nodeInfo.trigger', 'Trigger'),
+      value: nonEmptyString(trigger.type) || tr(i18n, 'flows.nodeInfo.notConfigured', 'Not configured'),
     });
     summary.push({
       key: 'enabled',
-      label: 'Status',
-      value: properties.enabled === false ? 'Disabled' : 'Enabled',
+      label: tr(i18n, 'flows.nodeInfo.status', 'Status'),
+      value: properties.enabled === false
+        ? tr(i18n, 'flows.nodeInfo.disabled', 'Disabled')
+        : tr(i18n, 'flows.nodeInfo.enabled', 'Enabled'),
     });
   }
 };
@@ -354,10 +408,14 @@ const addOtherSummary = (
 export const buildNodeInformation = (
   data: NodeDataLike | null | undefined,
   nodeType: NodeType,
+  i18n?: NodeInformationI18n,
+  flowNames?: ReadonlyMap<string, string>,
 ): NodeInformationViewModel => {
   const source = data || {};
   const properties = isRecord(source.properties) ? source.properties : {};
-  const fallbackLabel = nodeType === 'signal' ? 'Signal' : 'No Label';
+  const fallbackLabel = nodeType === 'signal'
+    ? tr(i18n, 'flows.nodeInfo.signal', 'Signal')
+    : tr(i18n, 'flows.nodeInfo.noLabel', 'No Label');
   const ordinaryLabel = nonEmptyString(source.label) || fallbackLabel;
   const label = nodeType === 'signal'
     ? nonEmptyString(properties.topic) || ordinaryLabel
@@ -368,15 +426,15 @@ export const buildNodeInformation = (
   if (description) {
     summary.push({
       key: 'description',
-      label: 'Description',
+      label: tr(i18n, 'flows.nodeInfo.description', 'Description'),
       value: clamp(description, DESCRIPTION_LIMIT),
     });
   }
 
-  if (nodeType === 'process') addProcessSummary(summary, properties);
-  else if (nodeType === 'subflow') addSubflowSummary(summary, properties);
-  else if (nodeType === 'mcp') addMcpSummary(summary, properties);
-  else addOtherSummary(summary, nodeType, properties);
+  if (nodeType === 'process') addProcessSummary(summary, properties, i18n);
+  else if (nodeType === 'subflow') addSubflowSummary(summary, properties, i18n, flowNames);
+  else if (nodeType === 'mcp') addMcpSummary(summary, properties, i18n);
+  else addOtherSummary(summary, nodeType, properties, i18n);
 
   const metadataSource: Record<string, unknown> = {
     type: typeof source.type === 'string' && source.type ? source.type : nodeType,
@@ -387,19 +445,19 @@ export const buildNodeInformation = (
   }
 
   const technicalDetails: NodeTechnicalDetail[] = [
-    technicalDetail('type', 'Type', metadataSource),
-    technicalDetail('label', 'Label', metadataSource),
-    technicalDetail('description', 'Description', metadataSource),
+    technicalDetail('type', i18n ? 'type' : 'Type', metadataSource),
+    technicalDetail('label', i18n ? 'label' : 'Label', metadataSource),
+    technicalDetail('description', i18n ? 'description' : 'Description', metadataSource),
   ].map((detail) => ({ ...detail, key: `metadata.${detail.key}` }));
 
   for (const spec of PROPERTY_SPECS[nodeType]) {
-    technicalDetails.push(technicalDetail(spec.key, spec.label, properties, spec.defaultValue));
+    technicalDetails.push(technicalDetail(spec.key, i18n ? spec.key : spec.label, properties, spec.defaultValue));
   }
 
   return {
     label,
     summary,
     technicalDetails,
-    technicalText: formatTechnicalText(technicalDetails),
+    technicalText: formatTechnicalText(technicalDetails, i18n),
   };
 };

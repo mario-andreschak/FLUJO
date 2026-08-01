@@ -5,10 +5,14 @@ import dynamic from 'next/dynamic';
 import LivingWorldGate from './AmbientWorld/LivingWorldGate';
 import RouteStage from './shared/RouteStage';
 import { createLogger } from '@/utils/logger';
+import { I18nProvider, useI18n } from '@/frontend/contexts/I18nContext';
+import type { TranslationKey } from '@/frontend/i18n';
 
 const log = createLogger('frontend/components/AppWrapper');
 
-function AppLoading({ label = 'Preparing your workspace', compact = false }: { label?: string; compact?: boolean }) {
+function AppLoading({ message = 'shell.loading.preparing', compact = false }: { message?: TranslationKey; compact?: boolean }) {
+  const { t } = useI18n();
+  const label = t(message);
   if (compact) {
     return (
       <div
@@ -36,17 +40,17 @@ function AppLoading({ label = 'Preparing your workspace', compact = false }: { l
 // Dynamically import components with loading fallbacks
 const ThemeProvider = dynamic(() => import('../contexts/ThemeContext').then(mod => mod.ThemeProvider), {
   ssr: false,
-  loading: () => <AppLoading label="Lighting up FLUJO" />
+  loading: () => <AppLoading message="shell.loading.theme" />
 });
 
 const StorageProvider = dynamic(() => import('../contexts/StorageContext').then(mod => mod.StorageProvider), {
   ssr: false,
-  loading: () => <AppLoading label="Opening your workspace" />
+  loading: () => <AppLoading message="shell.loading.workspace" />
 });
 
 const Navigation = dynamic(() => import("./Navigation"), {
   ssr: false,
-  loading: () => <AppLoading label="Loading navigation" compact />
+  loading: () => <AppLoading message="shell.loading.navigation" compact />
 });
 
 const EncryptionAuthDialog = dynamic(() => import("./EncryptionAuthDialog"), {
@@ -89,49 +93,54 @@ class ErrorBoundary extends React.Component<
 
   render() {
     if (this.state.hasError) {
-      return (
-        <div className="app-loading">
-          <div
-            className="premium-surface"
-            style={{
-              width: 'min(92vw, 520px)',
-              padding: '42px',
-              borderRadius: '28px',
-              textAlign: 'center',
-            }}
-          >
-            <div className="app-loading__mark" style={{ margin: '0 auto 24px' }} aria-hidden="true">
-              <span>!</span>
-            </div>
-            <h2 style={{ margin: '0 0 10px', letterSpacing: '-0.035em' }}>
-              The workspace hit a snag
-            </h2>
-            <p style={{ margin: '0 auto 24px', maxWidth: 380, color: 'var(--text-secondary)' }}>
-              Your data is safe. Reload FLUJO to reconnect the interface to the local runtime.
-            </p>
-            <button
-              onClick={() => window.location.reload()}
-              style={{
-                minHeight: 46,
-                padding: '0 22px',
-                border: 0,
-                borderRadius: 14,
-                cursor: 'pointer',
-                color: '#fff',
-                background: 'linear-gradient(135deg, #9b8cff, #6253e8 55%, #18b8d7)',
-                boxShadow: '0 14px 34px rgba(102, 87, 245, 0.32)',
-                fontWeight: 700,
-              }}
-            >
-              Reload workspace
-            </button>
-          </div>
-        </div>
-      );
+      return <AppErrorFallback />;
     }
 
     return this.props.children;
   }
+}
+
+function AppErrorFallback() {
+  const { t } = useI18n();
+  return (
+    <div className="app-loading">
+      <div
+        className="premium-surface"
+        style={{
+          width: 'min(92vw, 520px)',
+          padding: '42px',
+          borderRadius: '28px',
+          textAlign: 'center',
+        }}
+      >
+        <div className="app-loading__mark" style={{ margin: '0 auto 24px' }} aria-hidden="true">
+          <span>!</span>
+        </div>
+        <h2 style={{ margin: '0 0 10px', letterSpacing: '-0.035em' }}>
+          {t('shell.error.title')}
+        </h2>
+        <p style={{ margin: '0 auto 24px', maxWidth: 380, color: 'var(--text-secondary)' }}>
+          {t('shell.error.body')}
+        </p>
+        <button
+          onClick={() => window.location.reload()}
+          style={{
+            minHeight: 46,
+            padding: '0 22px',
+            border: 0,
+            borderRadius: 14,
+            cursor: 'pointer',
+            color: '#fff',
+            background: 'linear-gradient(135deg, #9b8cff, #6253e8 55%, #18b8d7)',
+            boxShadow: '0 14px 34px rgba(102, 87, 245, 0.32)',
+            fontWeight: 700,
+          }}
+        >
+          {t('shell.error.reload')}
+        </button>
+      </div>
+    </div>
+  );
 }
 
 interface AppWrapperProps {
@@ -141,28 +150,39 @@ interface AppWrapperProps {
 export default function AppWrapper({ children }: AppWrapperProps) {
   log.debug('Rendering AppWrapper');
   return (
-    <ErrorBoundary>
-      <Suspense fallback={<AppLoading />}>
-        <ThemeProvider>
-          <StorageProvider>
-            <TourProvider>
-              <div className="app-shell">
-                <a className="skip-link" href="#main-content">Skip to content</a>
-                <LivingWorldGate />
-                <Suspense fallback={<AppLoading label="Loading navigation" compact />}>
-                  <Navigation />
-                  <EncryptionAuthDialog />
-                  <TelemetryNotice />
-                </Suspense>
-                <main id="main-content" className="app-main" tabIndex={-1}>
-                  <RouteStage>{children}</RouteStage>
-                </main>
-                <TourOverlay />
-              </div>
-            </TourProvider>
-          </StorageProvider>
-        </ThemeProvider>
+    <I18nProvider>
+      <ErrorBoundary>
+        <Suspense fallback={<AppLoading />}>
+          <ThemeProvider>
+            <StorageProvider>
+              <TourProvider>
+                <LocalizedAppShell>
+                  {children}
+                </LocalizedAppShell>
+              </TourProvider>
+            </StorageProvider>
+          </ThemeProvider>
+        </Suspense>
+      </ErrorBoundary>
+    </I18nProvider>
+  );
+}
+
+function LocalizedAppShell({ children }: { children: React.ReactNode }) {
+  const { t } = useI18n();
+  return (
+    <div className="app-shell">
+      <a className="skip-link" href="#main-content">{t('shell.skipToContent')}</a>
+      <LivingWorldGate />
+      <Suspense fallback={<AppLoading message="shell.loading.navigation" compact />}>
+        <Navigation />
+        <EncryptionAuthDialog />
+        <TelemetryNotice />
       </Suspense>
-    </ErrorBoundary>
+      <main id="main-content" className="app-main" tabIndex={-1}>
+        <RouteStage>{children}</RouteStage>
+      </main>
+      <TourOverlay />
+    </div>
   );
 }

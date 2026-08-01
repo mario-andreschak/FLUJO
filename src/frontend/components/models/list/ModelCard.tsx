@@ -28,6 +28,7 @@ import { getModelService } from '@/frontend/services/model';
 import { createLogger } from '@/utils/logger';
 import ModelTestDialog from './ModelTestDialog';
 import FolderAssignMenu from '@/frontend/components/shared/FolderAssignMenu';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/models/list/ModelCard');
 
@@ -70,6 +71,7 @@ export const ModelCard = ({
   onSelect,
   onToggleFavorite,
 }: ModelCardProps) => {
+  const { t, formatNumber } = useI18n();
   const theme = useTheme();
   const [testOpen, setTestOpen] = useState(false);
   const [testLoading, setTestLoading] = useState(false);
@@ -88,7 +90,7 @@ export const ModelCard = ({
       setTestResult(result);
     } catch (error) {
       log.error('Model test failed', { modelId: model.id, error });
-      setTestError(error instanceof Error ? error.message : 'Failed to run test');
+      setTestError(error instanceof Error ? error.message : t('models.test.failed'));
     } finally {
       setTestLoading(false);
     }
@@ -110,10 +112,10 @@ export const ModelCard = ({
   // (top-left, warning color when active). Shown whenever a toggle handler is
   // provided — on the management card and in picker mode alike.
   const favoriteButton = onToggleFavorite ? (
-    <Tooltip title={model.favorite ? 'Remove from favorites' : 'Add to favorites'} arrow placement="top">
+    <Tooltip title={model.favorite ? t('models.favorite.remove') : t('models.favorite.add')} arrow placement="top">
       <IconButton
         size="small"
-        aria-label={model.favorite ? 'remove from favorites' : 'add to favorites'}
+        aria-label={model.favorite ? t('models.favorite.remove') : t('models.favorite.add')}
         onClick={handleFavoriteClick}
         sx={{
           position: 'absolute',
@@ -174,21 +176,21 @@ export const ModelCard = ({
         >
           {model.displayName && (
             <Typography variant="body2" color="text.secondary" noWrap>
-              <Box component="span" sx={{ color: 'text.primary', fontWeight: 650 }}>Model</Box>
+              <Box component="span" sx={{ color: 'text.primary', fontWeight: 650 }}>{t('models.card.model')}</Box>
               {' · '}{model.name}
             </Typography>
           )}
           {typeof model.contextWindow === 'number' && (
             <Typography variant="body2" color="text.secondary">
-              <Box component="span" sx={{ color: 'text.primary', fontWeight: 650 }}>Context</Box>
-              {' · '}{model.contextWindow.toLocaleString()} tokens
+              <Box component="span" sx={{ color: 'text.primary', fontWeight: 650 }}>{t('models.card.context')}</Box>
+              {' · '}{formatNumber(model.contextWindow)} {t('models.card.tokens')}
             </Typography>
           )}
         </Box>
         {model.baseUrl && (
           <Tooltip title={model.baseUrl} arrow placement="top">
             <Typography variant="body2" color="text.secondary" noWrap>
-              Base URL: {model.baseUrl}
+              {t('models.card.baseUrl')}: {model.baseUrl}
             </Typography>
           </Tooltip>
         )}
@@ -258,21 +260,21 @@ export const ModelCard = ({
       {favoriteButton}
       {body}
       <CardActions disableSpacing sx={{ px: 1.5, pb: 1.4, borderTop: 1, borderColor: 'divider' }}>
-        <Tooltip title="Test model (direct SDK call, no flow)" arrow>
-          <IconButton aria-label="test" onClick={handleOpenTest}>
+        <Tooltip title={t('models.card.testTooltip')} arrow>
+          <IconButton aria-label={t('models.card.testAria')} onClick={handleOpenTest}>
             <ScienceIcon />
           </IconButton>
         </Tooltip>
-        <IconButton aria-label="edit" onClick={onEdit}>
+        <IconButton aria-label={t('models.card.editAria')} onClick={onEdit}>
           <EditIcon />
         </IconButton>
-        <IconButton aria-label="delete" onClick={onDelete}>
+        <IconButton aria-label={t('models.card.deleteAria')} onClick={onDelete}>
           <DeleteIcon />
         </IconButton>
         {onSetFolder && (
-          <Tooltip title="Move to folder…" arrow>
+          <Tooltip title={t('models.card.moveTooltip')} arrow>
             <IconButton
-              aria-label="move to folder"
+              aria-label={t('models.card.moveAria')}
               onClick={(e) => setFolderAnchorEl(e.currentTarget)}
               sx={{ ml: 'auto' }}
             >

@@ -1,5 +1,8 @@
 import { MessageState } from '../types';
+import { translate, type Translator } from '@/frontend/i18n';
 import { readNdjsonStream } from '@/frontend/utils/ndjsonReader';
+
+const englishTranslator: Translator = (key, values) => translate('en', key, values);
 
 /**
  * Drive one of the git route's streaming actions (`installStream` / `buildStream`, #65),
@@ -46,7 +49,8 @@ async function streamGitCommand(
 export const installDependencies = async (
   serverPath: string,
   installCommand: string,
-  onOutput?: (chunk: string) => void
+  onOutput?: (chunk: string) => void,
+  t: Translator = englishTranslator
 ): Promise<{
   success: boolean;
   message: MessageState;
@@ -63,9 +67,9 @@ export const installDependencies = async (
       return {
         success: streamed.success,
         message: streamed.success
-          ? { type: 'success', text: `Dependencies installed successfully. You can now build the server.` }
-          : { type: 'error', text: `Error installing dependencies. You can still try to build the server.` },
-        output: streamed.output || 'No output was returned from the installation process.',
+          ? { type: 'success', text: t('mcp.build.installReady') }
+          : { type: 'error', text: t('mcp.build.installContinue') },
+        output: streamed.output || t('mcp.build.noInstallOutput'),
       };
     }
   }
@@ -87,16 +91,16 @@ export const installDependencies = async (
     const result = await response.json();
 
     if (!response.ok) {
-      throw new Error(result.error || 'Failed to install dependencies');
+      throw new Error(result.error || t('mcp.local.messages.installFailed'));
     }
 
     return {
       success: true,
       message: {
         type: 'success',
-        text: `Dependencies installed successfully. You can now build the server.`
+        text: t('mcp.build.installReady')
       },
-      output: result.commandOutput || 'No output was returned from the installation process.'
+      output: result.commandOutput || t('mcp.build.noInstallOutput')
     };
   } catch (error) {
     console.error('Error installing dependencies:', error);
@@ -105,9 +109,9 @@ export const installDependencies = async (
       success: false,
       message: {
         type: 'error',
-        text: `Error installing dependencies: ${(error as Error).message || 'Unknown error'}. You can still try to build the server.`
+        text: t('mcp.build.installError', { error: (error as Error).message || t('mcp.server.unknownError') })
       },
-      output: error instanceof Response ? await error.text() : (error as any)?.message || 'Unknown error'
+      output: error instanceof Response ? await error.text() : (error as any)?.message || t('mcp.server.unknownError')
     };
   }
 };
@@ -115,7 +119,8 @@ export const installDependencies = async (
 export const buildServer = async (
   serverPath: string,
   buildCommand: string,
-  onOutput?: (chunk: string) => void
+  onOutput?: (chunk: string) => void,
+  t: Translator = englishTranslator
 ): Promise<{
   success: boolean;
   message: MessageState;
@@ -132,9 +137,9 @@ export const buildServer = async (
       return {
         success: streamed.success,
         message: streamed.success
-          ? { type: 'success', text: `Server built successfully.` }
-          : { type: 'error', text: `Error building server.` },
-        output: streamed.output || 'No output was returned from the build process.',
+          ? { type: 'success', text: t('mcp.build.serverBuilt') }
+          : { type: 'error', text: t('mcp.build.serverFailed') },
+        output: streamed.output || t('mcp.build.noBuildOutput'),
       };
     }
   }
@@ -156,16 +161,16 @@ export const buildServer = async (
     const result = await response.json();
 
     if (!response.ok) {
-      throw new Error(result.error || 'Failed to build repository');
+      throw new Error(result.error || t('mcp.build.serverFailed'));
     }
 
     return {
       success: true,
       message: {
         type: 'success',
-        text: `Server built successfully.`
+        text: t('mcp.build.serverBuilt')
       },
-      output: result.commandOutput || 'No output was returned from the build process.'
+      output: result.commandOutput || t('mcp.build.noBuildOutput')
     };
   } catch (error) {
     console.error('Error building server:', error);
@@ -174,9 +179,9 @@ export const buildServer = async (
       success: false,
       message: {
         type: 'error',
-        text: `Error building server: ${(error as Error).message || 'Unknown error'}.`
+        text: t('mcp.build.serverError', { error: (error as Error).message || t('mcp.server.unknownError') })
       },
-      output: error instanceof Response ? await error.text() : (error as any)?.message || 'Unknown error'
+      output: error instanceof Response ? await error.text() : (error as any)?.message || t('mcp.server.unknownError')
     };
   }
 };

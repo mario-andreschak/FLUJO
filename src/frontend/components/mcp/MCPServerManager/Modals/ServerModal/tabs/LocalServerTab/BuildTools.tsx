@@ -12,6 +12,7 @@ import {
   CircularProgress
 } from '@mui/material';
 import { MessageState } from '../../types';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface BuildToolsProps {
   installCommand: string;
@@ -40,28 +41,29 @@ const BuildTools: React.FC<BuildToolsProps> = ({
   buildCompleted,
   buildMessage
 }) => {
+  const { t } = useI18n();
   // Array of messages to show during installation and building
   const progressMessages = [
-    "Still working on it...",
-    "Don't close this window!",
-    "This can take some time...",
-    "Backend is processing your request...",
-    "Almost there, please wait...",
-    "Processing in progress..."
+    t('mcp.local.progress.stillWorking'),
+    t('mcp.local.progress.keepOpen'),
+    t('mcp.local.progress.mayTakeTime'),
+    t('mcp.local.progress.backend'),
+    t('mcp.local.progress.almostThere'),
+    t('mcp.local.progress.processing')
   ];
   
   const installMessages = [
     ...progressMessages,
-    "Installing dependencies...",
-    "NPM install in progress...",
-    "Fetching packages from registry..."
+    t('mcp.local.progress.installingDependencies'),
+    t('mcp.local.progress.npmInstall'),
+    t('mcp.local.progress.fetchingPackages')
   ];
   
   const buildMessages = [
     ...progressMessages,
-    "Building server...",
-    "Compiling source code...",
-    "Bundling files..."
+    t('mcp.local.progress.buildingServer'),
+    t('mcp.local.progress.compiling'),
+    t('mcp.local.progress.bundling')
   ];
   
   // State to track the current message indices
@@ -111,7 +113,7 @@ const BuildTools: React.FC<BuildToolsProps> = ({
       )}
       <Box>
         <Typography variant="subtitle2" gutterBottom>
-          Install Script
+          {t('mcp.local.installScript')}
         </Typography>
         <TextField
           fullWidth
@@ -146,14 +148,14 @@ const BuildTools: React.FC<BuildToolsProps> = ({
             onClick={onInstall}
             disabled={isInstalling}
           >
-            {isInstalling ? 'Installing...' : '1) Install Dependencies'}
+            {isInstalling ? t('mcp.local.installing') : t('mcp.local.installDependencies')}
           </Button>
         </Box>
       </Box>
       
       <Box>
         <Typography variant="subtitle2" gutterBottom>
-          Build Command
+          {t('mcp.local.buildCommand')}
         </Typography>
         <TextField
           fullWidth
@@ -188,7 +190,7 @@ const BuildTools: React.FC<BuildToolsProps> = ({
             onClick={onBuild}
             disabled={isBuilding}
           >
-            {isBuilding ? 'Building...' : '2) Build Server'}
+            {isBuilding ? t('mcp.local.building') : t('mcp.local.buildServer')}
           </Button>
         </Box>
       </Box>

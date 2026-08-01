@@ -14,6 +14,7 @@ import {
 } from '@mui/material';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import GlobalReferenceEditor from './GlobalReferenceEditor';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 /**
  * Render input fields for an MCP tool's parameters from its JSON schema
@@ -35,6 +36,7 @@ export interface SchemaParamsFormProps {
 
 const SchemaParamsForm = ({ schema, values, onChange, size = 'small' }: SchemaParamsFormProps) => {
   const { globalEnvVars } = useStorage();
+  const { t } = useI18n();
   const globalNames = useMemo(
     () => Object.keys(globalEnvVars).sort((a, b) => a.localeCompare(b)),
     [globalEnvVars],
@@ -50,7 +52,7 @@ const SchemaParamsForm = ({ schema, values, onChange, size = 'small' }: SchemaPa
   if (keys.length === 0) {
     return (
       <Typography variant="body2" color="text.secondary">
-        This tool takes no parameters.
+        {t('schema.noParameters')}
       </Typography>
     );
   }
@@ -155,7 +157,7 @@ const SchemaParamsForm = ({ schema, values, onChange, size = 'small' }: SchemaPa
             try {
               JSON.parse(draft);
             } catch {
-              parseError = 'Not valid JSON yet';
+              parseError = t('schema.invalidJson');
             }
           }
           return (

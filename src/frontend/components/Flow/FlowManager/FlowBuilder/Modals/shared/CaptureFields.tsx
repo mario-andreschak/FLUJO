@@ -11,6 +11,7 @@ import {
 } from '@mui/material';
 import { KV_SCOPE_KINDS, KvRefScope, isValidKvName } from '@/utils/shared/resolveKvRefs';
 import { isValidRunVarName } from '@/utils/shared/resolveRunVars';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 /**
  * The editor state for the three data-flow "capture" fields. `captureKv` is
@@ -49,6 +50,7 @@ interface CaptureFieldsProps {
  * semantics when persisting to `node.data.properties`.
  */
 const CaptureFields: React.FC<CaptureFieldsProps> = ({ value, onChange, onInsertRef }) => {
+  const { t } = useI18n();
   const varName = value.captureVariable.trim();
   const kvKey = value.captureKvKey.trim();
   const resName = value.captureResource.trim();
@@ -59,11 +61,10 @@ const CaptureFields: React.FC<CaptureFieldsProps> = ({ value, onChange, onInsert
   return (
     <Box>
       <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
-        Data-flow capture
+        {t('flows.capture.title')}
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Optionally save this step&apos;s output so a later step can reuse it.
-        Leave a field empty to not capture it.
+        {t('flows.capture.help')}
       </Typography>
 
       {/* ${var:NAME} — run-scoped scratchpad (Tier 2c) */}
@@ -71,14 +72,14 @@ const CaptureFields: React.FC<CaptureFieldsProps> = ({ value, onChange, onInsert
         <TextField
           fullWidth
           size="small"
-          label="Capture as run variable"
+          label={t('flows.capture.variable')}
           value={value.captureVariable}
           onChange={(e) => onChange({ captureVariable: e.target.value })}
           error={!varValid}
           helperText={
             !varValid
-              ? 'Use letters, digits, _ or - and start with a letter or _.'
-              : 'Saves this step’s output into a run-scoped variable, injected later with ${var:NAME}.'
+              ? t('flows.capture.invalidName')
+              : t('flows.capture.variableHelp')
           }
         />
         {onInsertRef && (
@@ -89,7 +90,7 @@ const CaptureFields: React.FC<CaptureFieldsProps> = ({ value, onChange, onInsert
             disabled={!varName || !varValid}
             onClick={() => onInsertRef(`\${var:${varName}}`)}
           >
-            Insert ${'{var:NAME}'}
+            {t('flows.capture.insert', { token: '${var:NAME}' })}
           </Button>
         )}
       </Stack>
@@ -99,10 +100,10 @@ const CaptureFields: React.FC<CaptureFieldsProps> = ({ value, onChange, onInsert
         <TextField
           fullWidth
           size="small"
-          label="Capture as run resource"
+          label={t('flows.capture.resource')}
           value={value.captureResource}
           onChange={(e) => onChange({ captureResource: e.target.value })}
-          helperText="Saves this step’s output as a named run resource, referenced later with ${res:NAME}."
+          helperText={t('flows.capture.resourceHelp')}
         />
         {onInsertRef && (
           <Button
@@ -112,7 +113,7 @@ const CaptureFields: React.FC<CaptureFieldsProps> = ({ value, onChange, onInsert
             disabled={!resName}
             onClick={() => onInsertRef(`\${res:${resName}}`)}
           >
-            Insert ${'{res:NAME}'}
+            {t('flows.capture.insert', { token: '${res:NAME}' })}
           </Button>
         )}
       </Stack>
@@ -122,28 +123,32 @@ const CaptureFields: React.FC<CaptureFieldsProps> = ({ value, onChange, onInsert
         <TextField
           select
           size="small"
-          label="Scope"
+          label={t('flows.capture.scope')}
           sx={{ width: 130, flexShrink: 0 }}
           value={value.captureKvScope}
           onChange={(e) => onChange({ captureKvScope: e.target.value as KvRefScope })}
         >
           {KV_SCOPE_KINDS.map((s) => (
             <MenuItem key={s} value={s}>
-              {s}
+              {s === 'folder'
+                ? t('flows.capture.scope.folder')
+                : s === 'flow'
+                  ? t('flows.capture.scope.flow')
+                  : t('flows.capture.scope.global')}
             </MenuItem>
           ))}
         </TextField>
         <TextField
           fullWidth
           size="small"
-          label="Capture as persistent key (kv)"
+          label={t('flows.capture.kv')}
           value={value.captureKvKey}
           onChange={(e) => onChange({ captureKvKey: e.target.value })}
           error={!kvValid}
           helperText={
             !kvValid
-              ? 'Use letters, digits, _ or - and start with a letter or _.'
-              : 'Persists across runs. Reference later with ${kv:NAME} (scope lives on this capture, not the reference).'
+              ? t('flows.capture.invalidName')
+              : t('flows.capture.kvHelp')
           }
         />
         {onInsertRef && (
@@ -154,7 +159,7 @@ const CaptureFields: React.FC<CaptureFieldsProps> = ({ value, onChange, onInsert
             disabled={!kvKey || !kvValid}
             onClick={() => onInsertRef(`\${kv:${kvKey}}`)}
           >
-            Insert ${'{kv:NAME}'}
+            {t('flows.capture.insert', { token: '${kv:NAME}' })}
           </Button>
         )}
       </Stack>

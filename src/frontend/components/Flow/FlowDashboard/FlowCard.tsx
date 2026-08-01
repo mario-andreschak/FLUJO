@@ -32,6 +32,8 @@ import { FlowValidationResult } from '@/utils/shared/flowValidation';
 import { getFlowCardMetrics } from '@/utils/shared/flowCardMetrics';
 import FolderAssignMenu from '@/frontend/components/shared/FolderAssignMenu';
 import { createLogger } from '@/utils/logger';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import { localizeFlowIssue } from '@/frontend/i18n/flowValidation';
 
 const log = createLogger('components/Flow/FlowDashboard/FlowCard');
 
@@ -141,6 +143,7 @@ const FlowCard = ({
 }: FlowCardProps) => {
   log.debug('Rendering FlowCard', { flowId: flow.id, flowName: flow.name });
   const theme = useTheme();
+  const { t, tp, formatNumber } = useI18n();
   const [folderAnchorEl, setFolderAnchorEl] = useState<null | HTMLElement>(null);
 
   // Surface flow problems at a glance: red when it won't run (errors), amber for
@@ -154,17 +157,17 @@ const FlowCard = ({
     <Box>
       <Typography variant="caption" sx={{ fontWeight: 600, display: 'block', mb: 0.5 }}>
         {errorCount > 0
-          ? `${errorCount} problem${errorCount === 1 ? '' : 's'} — won't run`
-          : `${warningCount} warning${warningCount === 1 ? '' : 's'}`}
+          ? tp('flows.card.problem', errorCount)
+          : tp('flows.card.warning', warningCount)}
       </Typography>
       {validation.issues.slice(0, 5).map((issue, i) => (
         <Typography key={i} variant="caption" sx={{ display: 'block' }}>
-          • {issue.message}
+          • {localizeFlowIssue(issue, t)}
         </Typography>
       ))}
       {validation.issues.length > 5 && (
         <Typography variant="caption" sx={{ display: 'block', fontStyle: 'italic' }}>
-          …and {validation.issues.length - 5} more
+          {t('flows.card.more', { count: formatNumber(validation.issues.length - 5) })}
         </Typography>
       )}
     </Box>
@@ -211,7 +214,7 @@ const FlowCard = ({
       return (
         <Box sx={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Typography color="textSecondary" align="center">
-            Nothing added yet
+            {t('flows.card.nothing')}
           </Typography>
         </Box>
       );
@@ -307,7 +310,7 @@ const FlowCard = ({
   return (
     <StyledCard selected={selected}>
       {onToggleFavorite && (
-        <Tooltip title={flow.favorite ? 'Remove from favorites' : 'Add to favorites'} arrow placement="top">
+        <Tooltip title={flow.favorite ? t('flows.card.favoriteRemove') : t('flows.card.favoriteAdd')} arrow placement="top">
           <IconButton
             size="small"
             onClick={handleFavoriteClick}
@@ -377,7 +380,7 @@ const FlowCard = ({
 
       <CardActionArea
         onClick={() => onSelect(flow.id)}
-        aria-label={`Open ${flow.name}`}
+        aria-label={t('flows.card.open', { name: flow.name })}
         sx={{
           gridArea: 'preview',
           minWidth: 0,
@@ -419,14 +422,14 @@ const FlowCard = ({
             </Tooltip>
           ) : (
             <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
-              No description yet
+              {t('flows.card.noDescription')}
             </Typography>
           )}
           
           <Box sx={{ display: 'flex', gap: 0.5, mt: 1.25, flexWrap: 'wrap' }}>
             <Chip 
               size="small" 
-              label={`${stepCount} step${stepCount === 1 ? '' : 's'}`}
+              label={tp('flows.card.step', stepCount)}
               color="primary" 
               variant="outlined"
               sx={{ fontSize: '0.7rem', height: 20 }}
@@ -434,7 +437,7 @@ const FlowCard = ({
             {subagentCount > 0 && (
               <Chip
                 size="small"
-                label={`${subagentCount} subagent${subagentCount === 1 ? '' : 's'}`}
+                label={tp('flows.card.subagent', subagentCount)}
                 color="secondary"
                 variant="outlined"
                 sx={{ fontSize: '0.7rem', height: 20 }}
@@ -442,7 +445,7 @@ const FlowCard = ({
             )}
             <Chip
               size="small"
-              label={`${signalCount} signal${signalCount === 1 ? '' : 's'}`}
+              label={tp('flows.card.signal', signalCount)}
               variant="outlined"
               sx={{ fontSize: '0.7rem', height: 20 }}
             />
@@ -461,7 +464,7 @@ const FlowCard = ({
                 onClick={handleOpenInChatClick}
                 sx={{ flex: 1, minWidth: 0 }}
               >
-                Use
+                {t('flows.card.use')}
               </Button>
             )}
 
@@ -472,7 +475,7 @@ const FlowCard = ({
               onClick={handleEditClick}
               sx={{ flex: 1, minWidth: 0 }}
             >
-              Edit
+              {t('flows.card.edit')}
             </Button>
           </CardActions>
 
@@ -489,20 +492,20 @@ const FlowCard = ({
             }}
           >
             {onCopy && (
-              <Tooltip title="Make a copy">
-                <IconButton size="small" onClick={handleCopyClick} aria-label="Make a copy">
+              <Tooltip title={t('flows.card.copy')}>
+                <IconButton size="small" onClick={handleCopyClick} aria-label={t('flows.card.copy')}>
                   <ContentCopyIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
             )}
 
             {onSetFolder && (
-              <Tooltip title={flow.folder ? `Folder: ${flow.folder}` : 'Organize in a folder'}>
+              <Tooltip title={flow.folder ? t('flows.card.folder', { folder: flow.folder }) : t('flows.card.organize')}>
                 <IconButton
                   size="small"
                   onClick={handleFolderClick}
                   color={flow.folder ? 'primary' : 'default'}
-                  aria-label="Move to folder"
+                  aria-label={t('flows.card.move')}
                 >
                   <DriveFileMoveOutlinedIcon fontSize="small" />
                 </IconButton>
@@ -510,8 +513,8 @@ const FlowCard = ({
             )}
 
             {onDelete && (
-              <Tooltip title="Delete agent">
-                <IconButton size="small" onClick={handleDeleteClick} color="error" aria-label="Delete agent">
+              <Tooltip title={t('flows.card.delete')}>
+                <IconButton size="small" onClick={handleDeleteClick} color="error" aria-label={t('flows.card.delete')}>
                   <DeleteIcon fontSize="small" />
                 </IconButton>
               </Tooltip>

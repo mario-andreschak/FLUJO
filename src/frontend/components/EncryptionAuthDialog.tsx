@@ -25,13 +25,16 @@ import {
   ENCRYPTION_LOCKED_EVENT,
   ENCRYPTION_UNLOCKED_EVENT,
 } from '@/frontend/utils/encryptionLock';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { TranslationKey } from '@/frontend/i18n';
 
 export default function EncryptionAuthDialog() {
   const { verifyKey, isEncryptionInitialized, isUserEncryptionEnabled } = useStorage();
+  const { t } = useI18n();
   
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<TranslationKey | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -112,7 +115,7 @@ export default function EncryptionAuthDialog() {
   const handleVerify = async () => {
     if (!password.trim()) {
       log.warn('Empty password submitted');
-      setError('Password is required');
+      setError('encryption.unlock.required');
       return;
     }
     
@@ -138,11 +141,11 @@ export default function EncryptionAuthDialog() {
         }
       } else {
         log.warn('Invalid password provided');
-        setError('Invalid password');
+        setError('encryption.unlock.invalid');
       }
     } catch (error) {
       log.error('Failed to verify password:', error);
-      setError('An error occurred while verifying the password');
+      setError('encryption.unlock.error');
     } finally {
       setIsLoading(false);
     }
@@ -170,24 +173,24 @@ export default function EncryptionAuthDialog() {
       <DialogTitle component="div">
         <Box display="flex" alignItems="center">
           <LockOutlined sx={{ mr: 1 }} />
-          <Typography variant="h6">Encryption Password Required</Typography>
+          <Typography variant="h6">{t('encryption.unlock.title')}</Typography>
         </Box>
       </DialogTitle>
       <DialogContent>
         {error && (
           <Alert severity="error" sx={{ mb: 2 }}>
-            {error}
+            {t(error)}
           </Alert>
         )}
         
         <Typography variant="body1" paragraph>
-          This application is configured with custom encryption. Please enter your encryption password to access your encrypted data.
+          {t('encryption.unlock.description')}
         </Typography>
         
         <TextField
           autoFocus
           fullWidth
-          label="Encryption Password"
+          label={t('encryption.unlock.password')}
           variant="outlined"
           type={showPassword ? 'text' : 'password'}
           value={password}
@@ -197,7 +200,7 @@ export default function EncryptionAuthDialog() {
             endAdornment: (
               <InputAdornment position="end">
                 <IconButton
-                  aria-label="toggle password visibility"
+                  aria-label={showPassword ? t('encryption.unlock.hidePassword') : t('encryption.unlock.showPassword')}
                   onClick={() => setShowPassword(!showPassword)}
                   edge="end"
                 >
@@ -217,7 +220,7 @@ export default function EncryptionAuthDialog() {
           disabled={isLoading}
           startIcon={isLoading ? <CircularProgress size={20} /> : null}
         >
-          {isLoading ? 'Verifying...' : 'Unlock'}
+          {isLoading ? t('encryption.unlock.verifying') : t('encryption.unlock.action')}
         </Button>
       </DialogActions>
     </Dialog>

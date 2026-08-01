@@ -23,6 +23,7 @@ import {
   Typography
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const ServerModal: React.FC<ServerModalProps> = ({
   isOpen,
@@ -33,6 +34,7 @@ const ServerModal: React.FC<ServerModalProps> = ({
   onRestartAfterUpdate,
   onSaveAndAuthenticate
 }) => {
+  const { t } = useI18n();
   const [activeTab, setActiveTab] = useState<'spotlight' | 'marketplace' | 'github' | 'local' | 'reference' | 'remote'>('spotlight');
   
   // Store parsed configuration from GitHub tab
@@ -117,13 +119,15 @@ const ServerModal: React.FC<ServerModalProps> = ({
         }}
       >
         <Typography variant="h6">
-          {initialConfig ? `Edit MCP Server: ${initialConfig.name}` : 'Add MCP Server'}
+          {initialConfig
+            ? t('mcp.modal.editTitle', { name: initialConfig.name })
+            : t('mcp.modal.addTitle')}
         </Typography>
         <IconButton
           edge="end"
           color="inherit"
           onClick={handleClose}
-          aria-label="close"
+          aria-label={t('mcp.modal.close')}
         >
           <CloseIcon />
         </IconButton>
@@ -136,15 +140,15 @@ const ServerModal: React.FC<ServerModalProps> = ({
             <Tabs 
               value={activeTab} 
               onChange={handleTabChange}
-              aria-label="server configuration tabs"
+              aria-label={t('mcp.modal.tabsAria')}
               sx={{ px: 2 }}
             >
-              <Tab label="Spotlight" value="spotlight" />
-              <Tab label="Marketplace" value="marketplace" />
-              <Tab label="GitHub" value="github" />
-              <Tab label="Local Server" value="local" />
-              <Tab label="Remote" value="remote" />
-              <Tab label="Reference Servers" value="reference" />
+              <Tab label={t('mcp.modal.spotlight')} value="spotlight" />
+              <Tab label={t('mcp.modal.marketplace')} value="marketplace" />
+              <Tab label={t('mcp.modal.github')} value="github" />
+              <Tab label={t('mcp.modal.local')} value="local" />
+              <Tab label={t('mcp.modal.remote')} value="remote" />
+              <Tab label={t('mcp.modal.reference')} value="reference" />
             </Tabs>
           </Box>
         ) : null}

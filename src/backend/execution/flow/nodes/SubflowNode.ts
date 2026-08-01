@@ -12,11 +12,12 @@ import {
 } from '../types';
 import { FEATURES } from '@/config/features';
 import { FlujoChatMessage } from '@/shared/types/chat';
+import type { ModelMediaPart } from '@/shared/types/model/media';
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
 import { resolveRunVars } from '@/utils/shared/resolveRunVars';
 import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { resolveKvNodeRefs, captureKvValue } from '../resolveKvNodeRefs';
-import { writeRunResource } from '@/backend/services/runResources';
+import { copyRunResourceToConversation, writeRunResource } from '@/backend/services/runResources';
 import { isCancelledByAncestry } from '../cancellation';
 import { buildConversationTitle } from '@/utils/shared/conversationTitle';
 
@@ -106,6 +107,78 @@ function messageText(content: unknown): string {
       .join('');
   }
   return '';
+}
+
+function buildMediaArtifactSummary(media: ModelMediaPart[]): string {
+  if (media.length === 0) return '';
+  const lines = media.map((part, index) => {
+    const label = part.name?.trim() || `${part.type} ${index + 1}`;
+    const mime = part.mimeType ? ` (${part.mimeType})` : '';
+    const reference = part.resourceUri ?? part.url;
+    return reference ? `- ${label}${mime}: ${reference}` : `- ${label}${mime}: attached media`;
+  });
+  const hasRunResource = media.some(part => part.resourceUri?.startsWith('flujo://run/'));
+  return [
+    'Completed artifacts:',
+    ...lines,
+    ...(hasRunResource
+      ? ['Use `read_resource` with a `flujo://` URI to obtain its validated `localPath` before passing it to filesystem tools.']
+      : []),
+  ].join('\n');
+}
+
+/** Copy child-owned media into the parent run so resource access remains scoped. */
+async function promoteSubflowMedia(
+  media: ModelMediaPart[],
+  sharedState: SharedState,
+  node_params?: SubflowNodeParams,
+): Promise<ModelMediaPart[]> {
+  if (media.length === 0 || !sharedState.conversationId || sharedState.ephemeral) return media;
+  const nodeRef: NodeRef = {
+    nodeId: node_params?.id ?? 'unknown',
+    nodeName: node_params?.properties?.name,
+    nodeType: 'subflow',
+  };
+
+  return Promise.all(media.map(async (part) => {
+    if (!part.resourceUri?.startsWith('flujo://run/')) return part;
+    try {
+      const copied = await copyRunResourceToConversation({
+        uri: part.resourceUri,
+        conversationId: sharedState.conversationId!,
+        producedBy: {
+          source: 'capture',
+          nodeId: node_params?.id,
+          nodeName: node_params?.properties?.name,
+        },
+      });
+      if (!copied || 'skipped' in copied) {
+        log.warn('Subflow media promotion skipped; retaining child resource URI', {
+          uri: part.resourceUri,
+          reason: copied && 'skipped' in copied ? copied.skipped : 'missing-source',
+        });
+        return part;
+      }
+      sharedState.emit?.({
+        type: 'resource:write',
+        node: nodeRef,
+        server: 'flujo',
+        uri: copied.uri,
+        name: copied.name,
+        mimeType: copied.mimeType,
+        size: copied.size,
+        source: 'capture',
+      });
+      return {
+        ...part,
+        resourceUri: copied.uri,
+        url: `/v1/chat/conversations/${copied.conversationId}/resources/${copied.id}/content`,
+      };
+    } catch (error) {
+      log.error('Subflow media promotion failed; retaining child resource URI', error);
+      return part;
+    }
+  }));
 }
 
 /**
@@ -710,7 +783,12 @@ export class SubflowNode extends BaseNode {
         subStatus: result.status,
       };
     }
-    return { success: true, outputText: result.outputText, subStatus: result.status };
+    return {
+      success: true,
+      outputText: result.outputText,
+      outputMedia: result.outputMedia,
+      subStatus: result.status,
+    };
   }
 
   /**
@@ -804,7 +882,12 @@ export class SubflowNode extends BaseNode {
         results[i] =
           r.status === 'error'
             ? { subflowId: lane.subflowId, success: false, error: r.error?.message || 'Subflow execution failed' }
-            : { subflowId: lane.subflowId, success: true, outputText: r.outputText };
+            : {
+                subflowId: lane.subflowId,
+                success: true,
+                outputText: r.outputText,
+                outputMedia: r.outputMedia,
+              };
       } catch (err) {
         results[i] = {
           subflowId: lane.subflowId,
@@ -868,12 +951,20 @@ export class SubflowNode extends BaseNode {
     }
 
     let outputText = succeeded.map((r) => r.outputText ?? '').join(joinSeparator);
+    const outputMedia = succeeded.flatMap((r) => r.outputMedia ?? []);
     if (anyFailed) {
       const summary = failedLanes.map((r) => `- ${r.subflowId}: ${r.error ?? 'unknown error'}`).join('\n');
       outputText += `${joinSeparator}[${failedLanes.length} parallel subflow(s) failed:\n${summary}]`;
     }
 
-    return { success: true, outputText, subStatus: 'completed', lanes: ordered, partial: anyFailed };
+    return {
+      success: true,
+      outputText,
+      outputMedia: outputMedia.length > 0 ? outputMedia : undefined,
+      subStatus: 'completed',
+      lanes: ordered,
+      partial: anyFailed,
+    };
   }
 
   async post(
@@ -901,9 +992,13 @@ export class SubflowNode extends BaseNode {
       return ERROR_ACTION;
     }
 
-    // Fold the subflow's output into the parent transcript as an assistant
-    // message attributed to this node, and expose it as the latest response.
+    // Fold the subflow's text + generated media into the parent transcript as an
+    // assistant message attributed to this node, and expose a textual artifact
+    // manifest as the latest response for model/capture consumers.
     const outputText = execResult.outputText ?? '';
+    const outputMedia = await promoteSubflowMedia(execResult.outputMedia ?? [], sharedState, node_params);
+    const artifactSummary = buildMediaArtifactSummary(outputMedia);
+    const resultText = [outputText, artifactSummary].filter(part => part.trim().length > 0).join('\n\n');
 
     // Issue #218: FRAME the folded output as an explicit returned result. On the
     // model wire, stripHandoffPlumbing removes the caller's `handoff_to_*` call
@@ -914,14 +1009,14 @@ export class SubflowNode extends BaseNode {
     // "awaiting the sub-agent's report", and ends its turn on plain text (which
     // terminates the run). A short attribution header makes the boundary explicit
     // and tells the model the sub-task is FINISHED, not in-flight. The RAW
-    // `outputText` is kept for lastResponse and every capture path below so the
+    // `resultText` is kept for lastResponse and every capture path below so the
     // frame never leaks into programmatic outputs (captureVariable/Resource/kv)
     // or the run's returned outputText.
     const subAgentName =
       node_params?.properties?.name || prepResult.subflowName || 'the sub-agent';
     const framedContent =
-      outputText.trim().length > 0
-        ? `[↩ Returned result from sub-agent "${subAgentName}" — this is a FINISHED sub-task result handed back to you, not your own message. Use it to continue your task; do not wait for further output from it.]\n\n${outputText}`
+      resultText.trim().length > 0
+        ? `[↩ Returned result from sub-agent "${subAgentName}" — this is a FINISHED sub-task result handed back to you, not your own message. Use it to continue your task; do not wait for further output from it.]\n\n${resultText}`
         : `[↩ Sub-agent "${subAgentName}" finished and returned control to you with no output. Continue your task; do not wait for further output from it.]`;
     const assistantMessage: FlujoChatMessage = {
       role: 'assistant',
@@ -929,9 +1024,10 @@ export class SubflowNode extends BaseNode {
       id: crypto.randomUUID(),
       timestamp: Date.now(),
       processNodeId: node_params?.id,
+      ...(outputMedia.length > 0 ? { media: outputMedia } : {}),
     };
     sharedState.messages.push(assistantMessage);
-    sharedState.lastResponse = outputText;
+    sharedState.lastResponse = resultText;
 
     // Tier 2c (named variables): capture the child's folded output into the
     // PARENT run's scratchpad so a later step can inject it via `${var:NAME}`.
@@ -940,7 +1036,7 @@ export class SubflowNode extends BaseNode {
     const captureVariable = node_params?.properties?.captureVariable?.trim();
     if (captureVariable) {
       sharedState.variables = sharedState.variables ?? {};
-      sharedState.variables[captureVariable] = outputText;
+      sharedState.variables[captureVariable] = resultText;
       log.info('Captured subflow output into run variable', { captureVariable, nodeId: node_params?.id });
     }
 
@@ -955,7 +1051,7 @@ export class SubflowNode extends BaseNode {
           name: captureResource,
           mimeType: 'text/markdown',
           kind: 'text',
-          data: { text: outputText },
+          data: { text: resultText },
           producedBy: {
             source: 'capture',
             nodeId: node_params?.id,
@@ -993,7 +1089,7 @@ export class SubflowNode extends BaseNode {
           const { flowService } = await import('@/backend/services/flow/index');
           folder = (await flowService.getFlow(sharedState.flowId))?.folder;
         } catch { /* best effort */ }
-        const res = await captureKvValue(captureKv, outputText, { flowId: sharedState.flowId, folder });
+        const res = await captureKvValue(captureKv, resultText, { flowId: sharedState.flowId, folder });
         if ('skipped' in res) {
           log.warn('captureKv skipped', { captureKv, reason: res.skipped });
         } else {

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Box, Button, TextField, Typography, Paper, CircularProgress, FormControlLabel, Switch } from '@mui/material';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface PromptRendererDemoProps {
   flowId?: string;
@@ -7,6 +8,7 @@ interface PromptRendererDemoProps {
 }
 
 const PromptRendererDemo: React.FC<PromptRendererDemoProps> = ({ flowId: initialFlowId, nodeId: initialNodeId }) => {
+  const { t } = useI18n();
   const [flowId, setFlowId] = useState(initialFlowId || '');
   const [nodeId, setNodeId] = useState(initialNodeId || '');
   const [renderMode, setRenderMode] = useState<'raw' | 'rendered'>('rendered');
@@ -17,7 +19,7 @@ const PromptRendererDemo: React.FC<PromptRendererDemoProps> = ({ flowId: initial
 
   const handleRender = async () => {
     if (!flowId || !nodeId) {
-      setError('Flow ID and Node ID are required');
+      setError(t('promptRenderer.required'));
       return;
     }
 
@@ -43,12 +45,12 @@ const PromptRendererDemo: React.FC<PromptRendererDemoProps> = ({ flowId: initial
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to render prompt');
+        throw new Error(data.error || t('promptRenderer.failed'));
       }
 
       setPrompt(data.prompt);
     } catch (error) {
-      setError(error instanceof Error ? error.message : 'An unknown error occurred');
+      setError(error instanceof Error ? error.message : t('common.unknownError'));
     } finally {
       setLoading(false);
     }
@@ -57,13 +59,13 @@ const PromptRendererDemo: React.FC<PromptRendererDemoProps> = ({ flowId: initial
   return (
     <Box sx={{ p: 3 }}>
       <Typography variant="h5" gutterBottom>
-        Prompt Renderer Demo
+        {t('promptRenderer.title')}
       </Typography>
 
       <Box sx={{ mb: 3 }}>
         <TextField
           fullWidth
-          label="Flow ID"
+          label={t('promptRenderer.flowId')}
           value={flowId}
           onChange={(e) => setFlowId(e.target.value)}
           margin="normal"
@@ -72,7 +74,7 @@ const PromptRendererDemo: React.FC<PromptRendererDemoProps> = ({ flowId: initial
         />
         <TextField
           fullWidth
-          label="Node ID"
+          label={t('promptRenderer.nodeId')}
           value={nodeId}
           onChange={(e) => setNodeId(e.target.value)}
           margin="normal"
@@ -88,7 +90,7 @@ const PromptRendererDemo: React.FC<PromptRendererDemoProps> = ({ flowId: initial
                 onChange={(e) => setRenderMode(e.target.checked ? 'rendered' : 'raw')}
               />
             }
-            label="Resolve Tool Pills"
+            label={t('promptRenderer.resolveTools')}
           />
           <FormControlLabel
             control={
@@ -97,7 +99,7 @@ const PromptRendererDemo: React.FC<PromptRendererDemoProps> = ({ flowId: initial
                 onChange={(e) => setIncludeConversationHistory(e.target.checked)}
               />
             }
-            label="Include Conversation History"
+            label={t('promptRenderer.includeHistory')}
           />
         </Box>
 
@@ -108,7 +110,7 @@ const PromptRendererDemo: React.FC<PromptRendererDemoProps> = ({ flowId: initial
           disabled={loading || !flowId || !nodeId}
           sx={{ mt: 2 }}
         >
-          {loading ? <CircularProgress size={24} /> : 'Render Prompt'}
+          {loading ? <CircularProgress size={24} /> : t('promptRenderer.action')}
         </Button>
       </Box>
 
@@ -121,7 +123,7 @@ const PromptRendererDemo: React.FC<PromptRendererDemoProps> = ({ flowId: initial
       {prompt && (
         <Paper sx={{ p: 2, maxHeight: '400px', overflow: 'auto' }}>
           <Typography variant="subtitle1" gutterBottom>
-            Rendered Prompt:
+            {t('promptRenderer.result')}
           </Typography>
           <Box
             component="pre"

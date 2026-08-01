@@ -21,6 +21,7 @@ import {
 import LoginIcon from '@mui/icons-material/Login';
 import { isPackageRunnerCommand } from '@/utils/mcp/resolveServerCwd';
 import { RUNNER_TEST_CONNECTION_TIMEOUT_MS } from '@/utils/mcp/testConnectionTimeout';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface RunToolsProps {
   command: string;
@@ -81,15 +82,16 @@ const RunTools: React.FC<RunToolsProps> = ({
   onSaveAndAuthenticate,
   isAuthenticating = false
 }) => {
+  const { t, formatNumber } = useI18n();
   // Check for MODULE_NOT_FOUND in console output
   useEffect(() => {
     if (consoleOutput.includes("MODULE_NOT_FOUND")) {
       setMessage({
         type: 'error',
-        text: 'Module not found error detected. Please check the paths defined in the Arguments!'
+        text: t('mcp.local.run.moduleNotFound')
       });
     }
-  }, [consoleOutput, setMessage]);
+  }, [consoleOutput, setMessage, t]);
   
   // URL validation
   const isValidWebsocketUrl = (url: string): boolean => {
@@ -157,7 +159,7 @@ const RunTools: React.FC<RunToolsProps> = ({
       {/* Transport selection tabs */}
       <Box>
         <Typography variant="subtitle2" gutterBottom>
-          Transport Type
+          {t('mcp.local.run.transport')}
         </Typography>
         <Tabs 
           value={transport} 
@@ -166,10 +168,10 @@ const RunTools: React.FC<RunToolsProps> = ({
           variant="scrollable"
           scrollButtons="auto"
         >
-          <Tab label="Standard IO" value="stdio" />
-          <Tab label="WebSocket" value="websocket" />
-          <Tab label="SSE" value="sse" />
-          <Tab label="Streamable HTTP" value="streamable" />
+          <Tab label={t('mcp.server.transport.stdio')} value="stdio" />
+          <Tab label={t('mcp.server.transport.websocket')} value="websocket" />
+          <Tab label={t('mcp.server.transport.sse')} value="sse" />
+          <Tab label={t('mcp.server.transport.streamable')} value="streamable" />
         </Tabs>
       </Box>
 
@@ -177,7 +179,7 @@ const RunTools: React.FC<RunToolsProps> = ({
       {transport === 'websocket' && (
         <Box>
           <Typography variant="subtitle2" gutterBottom>
-            WebSocket URL
+            {t('mcp.local.run.websocketUrl')}
           </Typography>
           <TextField
             fullWidth
@@ -188,11 +190,11 @@ const RunTools: React.FC<RunToolsProps> = ({
             variant="outlined"
             required
             error={!isWebsocketUrlValid}
-            helperText={!isWebsocketUrlValid && "Please enter a valid WebSocket URL (starting with ws:// or wss://)"}
+            helperText={!isWebsocketUrlValid && t('mcp.local.run.invalidWebsocket')}
           />
           {showInsecureWebsocketWarning && (
             <Alert severity="warning" sx={{ mt: 1 }}>
-              This URL uses unencrypted ws:// to a non-localhost host. Consider using wss:// for remote servers so credentials and data are encrypted in transit.
+              {t('mcp.local.run.insecureWebsocket')}
             </Alert>
           )}
         </Box>
@@ -202,7 +204,7 @@ const RunTools: React.FC<RunToolsProps> = ({
       {(transport === 'sse' || transport === 'streamable') && (
         <Box>
           <Typography variant="subtitle2" gutterBottom>
-            Server URL
+            {t('mcp.local.run.serverUrl')}
           </Typography>
           <TextField
             fullWidth
@@ -213,7 +215,7 @@ const RunTools: React.FC<RunToolsProps> = ({
             variant="outlined"
             required
             error={!isServerUrlValid}
-            helperText={!isServerUrlValid && "Please enter a valid HTTP URL (starting with http:// or https://)"}
+            helperText={!isServerUrlValid && t('mcp.local.run.invalidHttp')}
           />
         </Box>
       )}
@@ -241,7 +243,7 @@ const RunTools: React.FC<RunToolsProps> = ({
       {transport === 'stdio' && (
         <Box>
           <Typography variant="subtitle2" gutterBottom>
-            Run Command
+            {t('mcp.local.run.command')}
           </Typography>
           <TextField
             fullWidth
@@ -254,7 +256,7 @@ const RunTools: React.FC<RunToolsProps> = ({
           />
           {isRunnerCommand && (
             <FormHelperText>
-              npx/uvx may download the package on the first run — the Test Run waits up to {runnerTimeoutSeconds}s before timing out.
+              {t('mcp.local.run.runnerTimeout', { seconds: formatNumber(runnerTimeoutSeconds) })}
             </FormHelperText>
           )}
         </Box>
@@ -270,12 +272,12 @@ const RunTools: React.FC<RunToolsProps> = ({
                   (transport === 'stdio' && !command.trim()) || 
                   (transport === 'websocket' && !isWebsocketUrlValid) || 
                   ((transport === 'sse' || transport === 'streamable') && !isServerUrlValid)}
-          title={(transport === 'stdio' && !command.trim()) ? 'Please enter a run command first' : 
-                (transport === 'websocket' && !isWebsocketUrlValid) ? 'Please enter a valid WebSocket URL' : 
-                ((transport === 'sse' || transport === 'streamable') && !isServerUrlValid) ? 'Please enter a valid Server URL' : 
-                'Test the run command'}
+          title={(transport === 'stdio' && !command.trim()) ? t('mcp.local.run.enterCommand') :
+                (transport === 'websocket' && !isWebsocketUrlValid) ? t('mcp.local.run.validWebsocket') :
+                ((transport === 'sse' || transport === 'streamable') && !isServerUrlValid) ? t('mcp.local.run.validServer') :
+                t('mcp.local.run.testHelp')}
         >
-          {isRunning ? 'Running...' : '3) Test Run'}
+          {isRunning ? t('mcp.local.run.running') : t('mcp.local.run.test')}
         </Button>
       </Box>
 
@@ -295,11 +297,11 @@ const RunTools: React.FC<RunToolsProps> = ({
               onClick={() => { void onSaveAndAuthenticate(); }}
               disabled={isAuthenticating || !isServerUrlValid}
             >
-              {isAuthenticating ? 'Authenticating…' : 'Save & Authenticate'}
+              {isAuthenticating ? t('mcp.local.run.authenticating') : t('mcp.local.run.saveAuthenticate')}
             </Button>
           }
         >
-          This server uses OAuth. Saving it and signing in will complete the connection.
+          {t('mcp.local.run.oauthHelp')}
         </Alert>
       )}
 

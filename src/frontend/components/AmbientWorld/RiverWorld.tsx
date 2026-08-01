@@ -14,6 +14,7 @@ import {
   type RiverPointer,
 } from './riverRenderer';
 import { RIVER_SCENES, resolveRiverScene, type RiverScene } from './sceneMap';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface CameraFlight {
   from: RiverCamera;
@@ -40,10 +41,33 @@ function prefersReducedMotion() {
   return typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 export default function RiverWorld() {
+  const { t } = useI18n();
   const pathname = usePathname();
   const { settings, settingsHydrated } = useStorage();
   const { isDarkMode, visualStyle } = useTheme();
   const scene = useMemo(() => resolveRiverScene(pathname), [pathname]);
+  const sceneLabel = t(`ambient.scene.${scene.id}` as any);
+  const sceneEyebrow = scene.id === 'home'
+    ? t('ambient.eyebrow.home')
+    : scene.id === 'models'
+      ? t('nav.aiSetup')
+      : scene.id === 'mcp'
+        ? t('nav.connectedApps')
+        : scene.id === 'flows'
+          ? t('ambient.eyebrow.flows')
+          : scene.id === 'chat'
+            ? t('nav.talk')
+            : scene.id === 'automations'
+              ? t('nav.automations')
+              : scene.id === 'waves'
+                ? t('ambient.eyebrow.waves')
+                : scene.id === 'packages'
+                  ? t('nav.extensions')
+                  : scene.id === 'statistics'
+                    ? t('nav.activity')
+                    : scene.id === 'docs'
+                      ? t('ambient.eyebrow.docs')
+                      : t('ambient.eyebrow.settings');
   const enabled = (
     settingsHydrated
     && settings?.experimental?.enabled === true
@@ -280,10 +304,10 @@ export default function RiverWorld() {
           <span />
         </span>
         <span className="living-watershed__location-copy" key={scene.id}>
-          <span>{scene.eyebrow}</span>
-          <strong>{travelling ? 'Following the current…' : scene.label}</strong>
+          <span>{sceneEyebrow}</span>
+          <strong>{travelling ? t('ambient.following') : sceneLabel}</strong>
         </span>
-        <span className="living-watershed__experimental">Living Watershed · Experimental</span>
+        <span className="living-watershed__experimental">{t('ambient.experimental')}</span>
       </aside>
     </>
   );

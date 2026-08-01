@@ -23,6 +23,7 @@ import BackupRoundedIcon from '@mui/icons-material/BackupRounded';
 import ChevronRightRoundedIcon from '@mui/icons-material/ChevronRightRounded';
 import DataObjectRoundedIcon from '@mui/icons-material/DataObjectRounded';
 import LockRoundedIcon from '@mui/icons-material/LockRounded';
+import LanguageRoundedIcon from '@mui/icons-material/LanguageRounded';
 import MicRoundedIcon from '@mui/icons-material/MicRounded';
 import PaletteRoundedIcon from '@mui/icons-material/PaletteRounded';
 import PrivacyTipRoundedIcon from '@mui/icons-material/PrivacyTipRounded';
@@ -40,12 +41,16 @@ import UpdateSettings from './UpdateSettings';
 import OnboardingSettings from './OnboardingSettings';
 import ExperimentalFeaturesSettings from './ExperimentalFeaturesSettings';
 import PrivacySettings from './PrivacySettings';
+import LanguageSettings from './LanguageSettings';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { TranslationKey } from '@/frontend/i18n';
 
 type SettingsSectionId =
   | 'globalEnv'
   | 'encryption'
   | 'backup'
   | 'theme'
+  | 'language'
   | 'speech'
   | 'onboarding'
   | 'updates'
@@ -54,80 +59,87 @@ type SettingsSectionId =
 
 interface SettingsSection {
   id: SettingsSectionId;
-  title: string;
-  description: string;
+  titleKey: TranslationKey;
+  descriptionKey: TranslationKey;
   icon: React.ElementType;
   component: React.ComponentType;
 }
 
 interface SettingsCategory {
   id: string;
-  title: string;
-  description: string;
+  titleKey: TranslationKey;
+  descriptionKey: TranslationKey;
   sectionIds: SettingsSectionId[];
 }
 
 const SETTINGS_SECTIONS: SettingsSection[] = [
   {
     id: 'globalEnv',
-    title: 'Global variables',
-    description: 'Manage shared values and secrets used by your connected services.',
+    titleKey: 'settings.section.globalEnv',
+    descriptionKey: 'settings.section.globalEnvDescription',
     icon: DataObjectRoundedIcon,
     component: GlobalEnvSettings,
   },
   {
     id: 'encryption',
-    title: 'Encryption',
-    description: 'Control how credentials and other sensitive local data are protected.',
+    titleKey: 'settings.section.encryption',
+    descriptionKey: 'settings.section.encryptionDescription',
     icon: LockRoundedIcon,
     component: EncryptionSettings,
   },
   {
     id: 'backup',
-    title: 'Backup & restore',
-    description: 'Export your setup for safekeeping or restore it on this installation.',
+    titleKey: 'settings.section.backup',
+    descriptionKey: 'settings.section.backupDescription',
     icon: BackupRoundedIcon,
     component: BackupSettings,
   },
   {
     id: 'theme',
-    title: 'Appearance',
-    description: 'Choose the visual mode that makes FLUJO most comfortable to use.',
+    titleKey: 'settings.section.theme',
+    descriptionKey: 'settings.section.themeDescription',
     icon: PaletteRoundedIcon,
     component: ThemeSettings,
   },
   {
+    id: 'language',
+    titleKey: 'language.title',
+    descriptionKey: 'language.description',
+    icon: LanguageRoundedIcon,
+    component: LanguageSettings,
+  },
+  {
     id: 'speech',
-    title: 'Speech recognition',
-    description: 'Configure voice input and browser speech-recognition preferences.',
+    titleKey: 'settings.section.speech',
+    descriptionKey: 'settings.section.speechDescription',
     icon: MicRoundedIcon,
     component: SpeechRecognitionSettings,
   },
   {
     id: 'onboarding',
-    title: 'Onboarding',
-    description: 'Review the guided setup experience or launch the product tour again.',
+    titleKey: 'settings.section.onboarding',
+    descriptionKey: 'settings.section.onboardingDescription',
     icon: RocketLaunchRoundedIcon,
     component: OnboardingSettings,
   },
   {
     id: 'updates',
-    title: 'Updates',
-    description: 'Check your installed version and manage automatic update checks.',
+    titleKey: 'settings.section.updates',
+    descriptionKey: 'settings.section.updatesDescription',
     icon: SystemUpdateAltRoundedIcon,
     component: UpdateSettings,
   },
   {
     id: 'privacy',
-    title: 'Privacy & usage',
-    description: 'Decide which anonymous usage signals this installation may share.',
+    titleKey: 'settings.section.privacy',
+    descriptionKey: 'settings.section.privacyDescription',
     icon: PrivacyTipRoundedIcon,
     component: PrivacySettings,
   },
   {
     id: 'experimental',
-    title: 'Experimental features',
-    description: 'Preview advanced capabilities that are still under active development.',
+    titleKey: 'settings.section.experimental',
+    descriptionKey: 'settings.section.experimentalDescription',
     icon: ScienceRoundedIcon,
     component: ExperimentalFeaturesSettings,
   },
@@ -136,26 +148,27 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
 const SETTINGS_CATEGORIES: SettingsCategory[] = [
   {
     id: 'security',
-    title: 'Data & security',
-    description: 'Credentials, protection and portability',
+    titleKey: 'settings.category.security',
+    descriptionKey: 'settings.category.securityDescription',
     sectionIds: ['globalEnv', 'encryption', 'backup'],
   },
   {
     id: 'experience',
-    title: 'Experience',
-    description: 'Appearance, voice and guidance',
-    sectionIds: ['theme', 'speech', 'onboarding'],
+    titleKey: 'settings.category.experience',
+    descriptionKey: 'settings.category.experienceDescription',
+    sectionIds: ['theme', 'language', 'speech', 'onboarding'],
   },
   {
     id: 'system',
-    title: 'System',
-    description: 'Maintenance, privacy and labs',
+    titleKey: 'settings.category.system',
+    descriptionKey: 'settings.category.systemDescription',
     sectionIds: ['updates', 'privacy', 'experimental'],
   },
 ];
 
 export default function Settings() {
   const theme = useTheme();
+  const { t } = useI18n();
   const [activeSectionId, setActiveSectionId] = useState<SettingsSectionId>('globalEnv');
 
   const sectionsById = useMemo(
@@ -168,7 +181,7 @@ export default function Settings() {
   const activeSection = sectionsById.get(activeSectionId) ?? SETTINGS_SECTIONS[0];
   const ActiveSectionIcon = activeSection.icon;
   const mobileMenuItems = SETTINGS_CATEGORIES.flatMap((category) => [
-    <ListSubheader key={`${category.id}-heading`}>{category.title}</ListSubheader>,
+    <ListSubheader key={`${category.id}-heading`}>{t(category.titleKey)}</ListSubheader>,
     ...category.sectionIds.map((sectionId) => {
       const section = sectionsById.get(sectionId);
       if (!section) return null;
@@ -178,7 +191,7 @@ export default function Settings() {
           <ListItemIcon>
             <SectionIcon fontSize="small" />
           </ListItemIcon>
-          {section.title}
+          {t(section.titleKey)}
         </MenuItem>
       );
     }),
@@ -246,7 +259,7 @@ export default function Settings() {
             <Box>
               <Chip
                 icon={<TuneRoundedIcon />}
-                label="Workspace controls"
+                label={t('settings.controls')}
                 size="small"
                 variant="outlined"
                 sx={{
@@ -266,11 +279,10 @@ export default function Settings() {
                   lineHeight: 1.04,
                 }}
               >
-                Settings
+                {t('settings.title')}
               </Typography>
               <Typography color="text.secondary" sx={{ maxWidth: 660, fontSize: { sm: '1.05rem' } }}>
-                Shape FLUJO around the way you work. Your data, experience, and system controls
-                now live in one focused workspace.
+                {t('settings.intro')}
               </Typography>
             </Box>
 
@@ -306,17 +318,17 @@ export default function Settings() {
           }}
         >
           <FormControl fullWidth size="small">
-            <InputLabel id="mobile-settings-section-label">Settings section</InputLabel>
+            <InputLabel id="mobile-settings-section-label">{t('settings.sectionLabel')}</InputLabel>
             <Select<SettingsSectionId>
               labelId="mobile-settings-section-label"
               value={activeSectionId}
-              label="Settings section"
+              label={t('settings.sectionLabel')}
               onChange={handleMobileSectionChange}
               renderValue={() => (
                 <Stack direction="row" alignItems="center" spacing={1.25}>
                   <ActiveSectionIcon color="primary" fontSize="small" />
                   <Typography variant="body2" fontWeight={650}>
-                    {activeSection.title}
+                    {t(activeSection.titleKey)}
                   </Typography>
                 </Stack>
               )}
@@ -336,7 +348,7 @@ export default function Settings() {
         >
           <Stack
             component="nav"
-            aria-label="Settings sections"
+            aria-label={t('settings.sectionsAria')}
             spacing={1.5}
             sx={{ display: { xs: 'none', md: 'flex' } }}
           >
@@ -353,10 +365,10 @@ export default function Settings() {
               >
                 <Box sx={{ px: 1.25, pt: 1, pb: 1.25 }}>
                   <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 750, letterSpacing: '0.1em' }}>
-                    {category.title}
+                    {t(category.titleKey)}
                   </Typography>
                   <Typography variant="caption" color="text.secondary" display="block">
-                    {category.description}
+                    {t(category.descriptionKey)}
                   </Typography>
                 </Box>
 
@@ -407,7 +419,7 @@ export default function Settings() {
                           </Box>
                         </ListItemIcon>
                         <ListItemText
-                          primary={section.title}
+                          primary={t(section.titleKey)}
                           primaryTypographyProps={{
                             fontSize: '0.9rem',
                             fontWeight: selected ? 700 : 550,
@@ -478,10 +490,10 @@ export default function Settings() {
                   variant="h4"
                   sx={{ fontSize: { xs: '1.35rem', sm: '1.65rem' }, letterSpacing: '-0.02em' }}
                 >
-                  {activeSection.title}
+                  {t(activeSection.titleKey)}
                 </Typography>
                 <Typography color="text.secondary" variant="body2" sx={{ mt: 0.35 }}>
-                  {activeSection.description}
+                  {t(activeSection.descriptionKey)}
                 </Typography>
               </Box>
 

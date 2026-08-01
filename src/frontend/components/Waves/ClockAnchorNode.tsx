@@ -3,6 +3,7 @@
 import React from 'react';
 import { Box, Typography } from '@mui/material';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 /**
  * The fixed "now" anchor pinned to the LEFT of a wave lane (#144). Time flows
@@ -10,6 +11,7 @@ import AccessTimeIcon from '@mui/icons-material/AccessTime';
  * left as their run approaches.
  */
 export default function ClockAnchorNode() {
+  const { t } = useI18n();
   return (
     <Box
       sx={{
@@ -36,10 +38,10 @@ export default function ClockAnchorNode() {
         <AccessTimeIcon />
       </Box>
       <Typography variant="caption" sx={{ fontWeight: 600 }}>
-        now
+        {t('waves.now')}
       </Typography>
       <Typography variant="caption" sx={{ opacity: 0.6, fontSize: 10, textAlign: 'center' }}>
-        time →
+        {t('waves.timeDirection')}
       </Typography>
     </Box>
   );

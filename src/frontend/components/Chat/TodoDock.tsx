@@ -7,6 +7,7 @@ import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
 import AutorenewIcon from '@mui/icons-material/Autorenew';
 import CancelIcon from '@mui/icons-material/Cancel';
 import type { TodoEventItem } from '@/shared/types/execution/events';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 /**
  * TodoDock (issue #259): a compact live checklist rendered from the run-scoped
@@ -32,6 +33,7 @@ function statusIcon(status: TodoEventItem['status']) {
 }
 
 const TodoDock: React.FC<TodoDockProps> = ({ todos }) => {
+  const { t, formatNumber } = useI18n();
   if (!todos || todos.length === 0) return null;
   const done = todos.filter((t) => t.status === 'done').length;
   const pct = todos.length > 0 ? Math.round((done / todos.length) * 100) : 0;
@@ -40,10 +42,10 @@ const TodoDock: React.FC<TodoDockProps> = ({ todos }) => {
     <Paper variant="outlined" sx={{ mt: 2, p: 1.5, borderRadius: 2 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
         <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-          Tasks
+          {t('chat.todo.title')}
         </Typography>
         <Typography variant="caption" color="text.secondary">
-          {done} of {todos.length} done
+          {t('chat.todo.progress', { done: formatNumber(done), total: formatNumber(todos.length) })}
         </Typography>
       </Box>
       <LinearProgress variant="determinate" value={pct} sx={{ mb: 1, borderRadius: 1 }} />

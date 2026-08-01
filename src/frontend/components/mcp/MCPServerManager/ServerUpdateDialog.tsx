@@ -35,6 +35,7 @@ import {
   installDependencies,
   buildServer,
 } from './Modals/ServerModal/utils/buildUtils';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/mcp/MCPServerManager/ServerUpdateDialog');
 
@@ -69,6 +70,7 @@ const ServerUpdateDialog: React.FC<ServerUpdateDialogProps> = ({
   onToggle,
   onUpdated,
 }) => {
+  const { t, tp } = useI18n();
   const [preview, setPreview] = useState<UpdateCommitsPreview | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [running, setRunning] = useState(false);
@@ -81,11 +83,11 @@ const ServerUpdateDialog: React.FC<ServerUpdateDialogProps> = ({
   const hasBuild = Boolean(buildCommand && buildCommand.trim());
 
   const steps: Array<{ key: StepKey; label: string; active: boolean }> = [
-    { key: 'stop', label: 'Stop server', active: enabled },
-    { key: 'pull', label: 'Pull latest changes', active: true },
-    { key: 'install', label: `Install dependencies (${installCommand})`, active: hasInstall },
-    { key: 'build', label: `Build (${buildCommand})`, active: hasBuild },
-    { key: 'restart', label: 'Restart server', active: enabled },
+    { key: 'stop', label: t('mcp.update.stop'), active: enabled },
+    { key: 'pull', label: t('mcp.update.pullLatest'), active: true },
+    { key: 'install', label: t('mcp.update.installDeps', { command: installCommand ?? '' }), active: hasInstall },
+    { key: 'build', label: t('mcp.update.build', { command: buildCommand ?? '' }), active: hasBuild },
+    { key: 'restart', label: t('mcp.update.restart'), active: enabled },
   ];
 
   // Reset transient state whenever the dialog is (re)opened for a server.
@@ -144,16 +146,19 @@ const ServerUpdateDialog: React.FC<ServerUpdateDialogProps> = ({
       setStep('pull', 'running');
       const pull = await pullServerUpdate(rootPath);
       if (!pull.success) {
-        fail('pull', pull.error || 'Failed to pull updates');
+        fail('pull', pull.error || t('mcp.update.pullFailed'));
         return;
       }
-      appendOutput('Pull', `Updated ${shortSha(pull.oldSha)} -> ${shortSha(pull.newSha)}`);
+      appendOutput(t('mcp.update.pull'), t('mcp.update.updatedShas', {
+        old: shortSha(pull.oldSha),
+        new: shortSha(pull.newSha),
+      }));
       setStep('pull', 'done');
 
       if (hasInstall) {
         setStep('install', 'running');
-        const install = await installDependencies(rootPath, installCommand!.trim());
-        appendOutput('Install', install.output);
+        const install = await installDependencies(rootPath, installCommand!.trim(), undefined, t);
+        appendOutput(t('mcp.update.install'), install.output);
         if (!install.success) {
           fail('install', install.message.text);
           return;
@@ -163,8 +168,8 @@ const ServerUpdateDialog: React.FC<ServerUpdateDialogProps> = ({
 
       if (hasBuild) {
         setStep('build', 'running');
-        const build = await buildServer(rootPath, buildCommand!.trim());
-        appendOutput('Build', build.output);
+        const build = await buildServer(rootPath, buildCommand!.trim(), undefined, t);
+        appendOutput(t('mcp.update.buildOutput'), build.output);
         if (!build.success) {
           fail('build', build.message.text);
           return;
@@ -184,7 +189,7 @@ const ServerUpdateDialog: React.FC<ServerUpdateDialogProps> = ({
       onUpdated?.();
     } catch (error) {
       log.error(`Update failed for server ${serverName}`, error);
-      setErrorMessage((error as Error).message || 'Update failed');
+      setErrorMessage((error as Error).message || t('mcp.update.failed'));
       setRunning(false);
     }
   };
@@ -209,7 +214,7 @@ const ServerUpdateDialog: React.FC<ServerUpdateDialogProps> = ({
     <Dialog open={open} onClose={running ? undefined : onClose} maxWidth="sm" fullWidth onClick={(e) => e.stopPropagation()}>
       <DialogTitle component="div" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <SystemUpdateAltIcon color="primary" />
-        Update {serverName}
+        {t('mcp.update.title', { server: serverName })}
       </DialogTitle>
       <DialogContent>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
@@ -218,12 +223,12 @@ const ServerUpdateDialog: React.FC<ServerUpdateDialogProps> = ({
           <Chip size="small" color="primary" label={shortSha(updateInfo.remoteSha)} sx={{ fontFamily: 'monospace' }} />
           {updateInfo.branch && updateInfo.branch !== 'HEAD' && (
             <Typography variant="body2" color="text.secondary">
-              on <code>{updateInfo.branch}</code>
+              {t('mcp.update.onBranch', { branch: updateInfo.branch })}
             </Typography>
           )}
           {preview?.behindBy != null && (
             <Typography variant="body2" color="text.secondary">
-              ({preview.behindBy} commit{preview.behindBy === 1 ? '' : 's'} behind)
+              {tp('mcp.update.behind', preview.behindBy)}
             </Typography>
           )}
         </Box>
@@ -232,9 +237,7 @@ const ServerUpdateDialog: React.FC<ServerUpdateDialogProps> = ({
           updateInfo.repoRoot.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() !==
             rootPath.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() && (
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-              This server lives inside a larger repository — the update pulls{' '}
-              <code>{updateInfo.repoRoot}</code> as a whole (other servers from the same repository
-              are updated along with it).
+              {t('mcp.update.largerRepo', { root: updateInfo.repoRoot })}
             </Typography>
           )}
 
@@ -261,9 +264,7 @@ const ServerUpdateDialog: React.FC<ServerUpdateDialogProps> = ({
         {updateInfo.hasLocalChanges && !started && (
           <Alert severity="warning" sx={{ mb: 2 }}>
             <Typography variant="body2" sx={{ mb: 1 }}>
-              This repository has local changes to tracked files. Updating will <strong>discard</strong> them.
-              Untracked files (e.g. a <code>.env</code> you created) and all FLUJO settings for this server
-              are kept.
+              {t('mcp.update.localChanges')}
             </Typography>
             <Box component="ul" sx={{ m: 0, pl: 3, maxHeight: 100, overflow: 'auto' }}>
               {updateInfo.dirtyFiles.map((f) => (
@@ -283,7 +284,7 @@ const ServerUpdateDialog: React.FC<ServerUpdateDialogProps> = ({
                   onChange={(e) => setConfirmDiscard(e.target.checked)}
                 />
               }
-              label={<Typography variant="body2">Discard my local changes and update</Typography>}
+              label={<Typography variant="body2">{t('mcp.update.confirmDiscard')}</Typography>}
             />
           </Alert>
         )}
@@ -305,7 +306,7 @@ const ServerUpdateDialog: React.FC<ServerUpdateDialogProps> = ({
             {errorMessage}
             {enabled && (
               <Typography variant="body2" sx={{ mt: 1 }}>
-                The server was left stopped. Adjust the install/build commands via Edit, then re-enable it.
+                {t('mcp.update.leftStopped')}
               </Typography>
             )}
           </Alert>
@@ -313,7 +314,7 @@ const ServerUpdateDialog: React.FC<ServerUpdateDialogProps> = ({
 
         {finished && (
           <Alert severity="success" sx={{ mt: 2 }}>
-            Server updated successfully{enabled ? ' and restarted' : ''}.
+            {enabled ? t('mcp.update.successRestarted') : t('mcp.update.success')}
           </Alert>
         )}
 
@@ -339,7 +340,7 @@ const ServerUpdateDialog: React.FC<ServerUpdateDialogProps> = ({
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose} disabled={running}>
-          {finished ? 'Close' : 'Cancel'}
+          {finished ? t('mcp.update.close') : t('mcp.update.cancel')}
         </Button>
         {!finished && (
           <Button
@@ -349,7 +350,7 @@ const ServerUpdateDialog: React.FC<ServerUpdateDialogProps> = ({
             onClick={runUpdate}
             disabled={running || updateBlocked}
           >
-            {running ? 'Updating…' : errorMessage ? 'Retry Update' : 'Update'}
+            {running ? t('mcp.update.updating') : errorMessage ? t('mcp.update.retry') : t('mcp.update.action')}
           </Button>
         )}
       </DialogActions>

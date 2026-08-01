@@ -16,6 +16,7 @@ import {
   Typography,
 } from '@mui/material';
 import { chatService, type RevertPreview } from '@/frontend/services/chat';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface Props {
   open: boolean;
@@ -26,6 +27,7 @@ interface Props {
 }
 
 export default function RevertPreviewDialog({ open, conversationId, messageId, onClose, onReverted }: Props) {
+  const { t } = useI18n();
   const [preview, setPreview] = useState<RevertPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -41,10 +43,10 @@ export default function RevertPreviewDialog({ open, conversationId, messageId, o
     setLoading(true);
     chatService.previewRevert(conversationId, messageId)
       .then(value => { if (!cancelled) setPreview(value); })
-      .catch(err => { if (!cancelled) setError(err instanceof Error ? err.message : 'Unable to load preview'); })
+      .catch(err => { if (!cancelled) setError(err instanceof Error ? err.message : t('chat.revert.previewFailed')); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [conversationId, messageId, open]);
+  }, [conversationId, messageId, open, t]);
 
   const confirm = async () => {
     if (!messageId || !preview) return;
@@ -55,7 +57,7 @@ export default function RevertPreviewDialog({ open, conversationId, messageId, o
       setOperationId(result.operationId);
       onReverted?.(messageId);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to revert changes');
+      setError(err instanceof Error ? err.message : t('chat.revert.failed'));
     } finally {
       setConfirming(false);
     }
@@ -70,7 +72,7 @@ export default function RevertPreviewDialog({ open, conversationId, messageId, o
       setOperationId(null);
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to undo revert');
+      setError(err instanceof Error ? err.message : t('chat.revert.undoFailed'));
     } finally {
       setConfirming(false);
     }
@@ -78,15 +80,15 @@ export default function RevertPreviewDialog({ open, conversationId, messageId, o
 
   return (
     <Dialog open={open} onClose={confirming ? undefined : onClose} fullWidth maxWidth="md">
-      <DialogTitle>Revert to here</DialogTitle>
+      <DialogTitle>{t('chat.revert.title')}</DialogTitle>
       <DialogContent>
         {(loading || confirming) && <LinearProgress sx={{ mb: 2 }} />}
         {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
         {operationId ? (
-          <Alert severity="success">Changes were reverted. You can undo this operation now.</Alert>
+          <Alert severity="success">{t('chat.revert.success')}</Alert>
         ) : preview && (
           <>
-            <Typography variant="body2">Review the affected files before changing the worktree.</Typography>
+            <Typography variant="body2">{t('chat.revert.review')}</Typography>
             <List dense>
               {preview.files.map(file => (
                 <ListItem key={`${file.status}:${file.path}`} disableGutters>
@@ -95,19 +97,19 @@ export default function RevertPreviewDialog({ open, conversationId, messageId, o
               ))}
             </List>
             <Box component="pre" sx={{ maxHeight: 360, overflow: 'auto', p: 1.5, bgcolor: 'action.hover', borderRadius: 1, fontFamily: 'monospace', fontSize: 12, whiteSpace: 'pre-wrap' }}>
-              {preview.diff || 'No textual diff available.'}
+              {preview.diff || t('chat.revert.noDiff')}
             </Box>
-            {preview.truncated && <Typography variant="caption">Preview truncated for safety.</Typography>}
+            {preview.truncated && <Typography variant="caption">{t('chat.revert.truncated')}</Typography>}
           </>
         )}
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose} disabled={confirming}>Cancel</Button>
+        <Button onClick={onClose} disabled={confirming}>{t('common.cancel')}</Button>
         {operationId ? (
-          <Button onClick={undo} disabled={confirming}>Undo revert</Button>
+          <Button onClick={undo} disabled={confirming}>{t('chat.revert.undo')}</Button>
         ) : (
           <Button color="error" variant="contained" onClick={confirm} disabled={!preview || loading || confirming}>
-            Confirm Revert
+            {t('chat.revert.confirm')}
           </Button>
         )}
       </DialogActions>

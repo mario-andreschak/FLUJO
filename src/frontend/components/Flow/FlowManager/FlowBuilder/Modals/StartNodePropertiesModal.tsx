@@ -16,6 +16,7 @@ import {
 import CloseIcon from '@mui/icons-material/Close';
 import { FlowNode } from '@/frontend/types/flow/flow';
 import PromptBuilder from '@/frontend/components/shared/PromptBuilder';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface StartNodePropertiesModalProps {
   open: boolean;
@@ -25,6 +26,7 @@ interface StartNodePropertiesModalProps {
 }
 
 export const StartNodePropertiesModal = ({ open, node, onClose, onSave }: StartNodePropertiesModalProps) => {
+  const { t } = useI18n();
   // Clone node data to avoid direct mutation
   const [nodeData, setNodeData] = useState<{
     label: string;
@@ -100,9 +102,9 @@ export const StartNodePropertiesModal = ({ open, node, onClose, onSave }: StartN
       <DialogTitle component="div">
         <Box display="flex" alignItems="center" justifyContent="space-between">
           <Typography variant="h6">
-            {nodeData.label || 'Start Node'} Properties
+            {t('flows.modal.properties', { name: nodeData.label || t('flows.modal.startNode') })}
           </Typography>
-          <IconButton edge="end" color="inherit" onClick={onClose} aria-label="close">
+          <IconButton edge="end" color="inherit" onClick={onClose} aria-label={t('flows.modal.close')}>
             <CloseIcon />
           </IconButton>
         </Box>
@@ -113,7 +115,7 @@ export const StartNodePropertiesModal = ({ open, node, onClose, onSave }: StartN
       <DialogContent sx={{ display: 'flex', flexDirection: 'column', p: 3, overflow: 'auto', height: 'calc(90vh - 130px)' }}>
         <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
           <Typography variant="h6" gutterBottom>
-            Prompt Template
+            {t('flows.modal.promptTemplate')}
           </Typography>
           <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', height: 'calc(100% - 40px)' }}>
             <PromptBuilder 
@@ -127,9 +129,9 @@ export const StartNodePropertiesModal = ({ open, node, onClose, onSave }: StartN
       </DialogContent>
       
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose}>{t('flows.modal.cancel')}</Button>
         <Button onClick={handleSave} variant="contained" color="primary">
-          Save Changes
+          {t('flows.modal.saveChanges')}
         </Button>
       </DialogActions>
     </Dialog>

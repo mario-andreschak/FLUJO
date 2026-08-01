@@ -10,9 +10,11 @@ import {
   Typography,
 } from '@mui/material';
 import { useStorage } from '@/frontend/contexts/StorageContext';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 export default function PrivacySettings() {
   const { settings, updateSettings } = useStorage();
+  const { t, tp } = useI18n();
   const [dailyActivity, setDailyActivity] = useState<{
     date: string;
     count: number;
@@ -50,12 +52,10 @@ export default function PrivacySettings() {
     <Box sx={{ p: 2 }}>
       <Alert severity="info" sx={{ mb: 2 }}>
         {dailyActivity
-          ? `${dailyActivity.count.toLocaleString()} anonymous active ${
-              dailyActivity.count === 1 ? 'installation' : 'installations'
-            } today (UTC).`
+          ? tp('settings.privacy.count', dailyActivity.count)
           : countUnavailable
-            ? 'Today’s anonymous activity count is currently unavailable.'
-            : 'Loading today’s anonymous activity count…'}
+            ? t('settings.privacy.countUnavailable')
+            : t('settings.privacy.countLoading')}
       </Alert>
 
       <FormControl fullWidth sx={{ mb: 2 }}>
@@ -69,13 +69,10 @@ export default function PrivacySettings() {
               name="anonymousDailyActivity"
             />
           }
-          label="Share anonymous daily activity"
+          label={t('settings.privacy.shareLabel')}
         />
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          Helps count daily active FLUJO installations. At most one pulse is
-          attempted per UTC day. It contains the app version, platform, install
-          method, UTC date, and a random ID that changes daily. It never includes
-          flows, prompts, models, keys, filenames, or a permanent installation ID.
+          {t('settings.privacy.shareDescription')}
         </Typography>
       </FormControl>
 
@@ -91,17 +88,15 @@ export default function PrivacySettings() {
               name="dailyTelemetryNotice"
             />
           }
-          label="Show the daily activity-sharing notification"
+          label={t('settings.privacy.notifyLabel')}
         />
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          Turning this off hides the daily notification but does not disable
-          anonymous activity sharing.
+          {t('settings.privacy.notifyDescription')}
         </Typography>
       </FormControl>
 
       <Alert severity="info">
-        Anonymous activity sharing is enabled by default and can be disabled
-        here at any time. Collector failures never block FLUJO.
+        {t('settings.privacy.defaultInfo')}
       </Alert>
     </Box>
   );

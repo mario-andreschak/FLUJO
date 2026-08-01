@@ -16,6 +16,8 @@ import MemoryRoundedIcon from '@mui/icons-material/MemoryRounded';
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
 import { RESOURCE_COLOR, SIGNAL_COLOR, TRIGGER_COLOR, TRIGGER_COLOR_LIGHT } from './CustomNodes';
 import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { Translator } from '@/frontend/i18n/core';
 
 // Create a logger instance for this file
 const log = createLogger('components/flow/FlowBuilder/NodePalette.tsx');
@@ -176,54 +178,54 @@ const NodeContent = styled(Box)(({ theme }) => ({
   },
 }));
 
-const nodeTypes: Array<{
+const getNodeTypes = (t: Translator): Array<{
   type: NodeType;
   label: string;
   shortLabel: string;
   description: string;
-}> = [
+}> => [
   // Start node is automatically added to new flows and not available in the palette
   {
     type: 'process',
-    label: 'Ask AI',
-    shortLabel: 'AI step',
-    description: 'Write, summarize, analyze, or make a decision',
+    label: t('flows.palette.process'),
+    shortLabel: t('flows.palette.processShort'),
+    description: t('flows.palette.processHelp'),
   },
   {
     type: 'finish',
-    label: 'Send the answer',
-    shortLabel: 'Finish',
-    description: 'Return the finished result to the person',
+    label: t('flows.palette.finish'),
+    shortLabel: t('flows.palette.finishShort'),
+    description: t('flows.palette.finishHelp'),
   },
   {
     type: 'mcp',
-    label: 'Use a connected app',
-    shortLabel: 'Tool',
-    description: 'Let the agent use an app or service',
+    label: t('flows.palette.mcp'),
+    shortLabel: t('flows.palette.mcpShort'),
+    description: t('flows.palette.mcpHelp'),
   },
   {
     type: 'subflow',
-    label: 'Ask another agent',
-    shortLabel: 'Agent',
-    description: 'Hand part of the job to another agent',
+    label: t('flows.palette.subflow'),
+    shortLabel: t('flows.palette.subflowShort'),
+    description: t('flows.palette.subflowHelp'),
   },
   {
     type: 'resource',
-    label: 'Use saved information',
-    shortLabel: 'Information',
-    description: 'Read or create a reusable result',
+    label: t('flows.palette.resource'),
+    shortLabel: t('flows.palette.resourceShort'),
+    description: t('flows.palette.resourceHelp'),
   },
   {
     type: 'signal',
-    label: 'Notify an automation',
-    shortLabel: 'Notify',
-    description: 'Let another automation know this step finished',
+    label: t('flows.palette.signal'),
+    shortLabel: t('flows.palette.signalShort'),
+    description: t('flows.palette.signalHelp'),
   },
   {
     type: 'trigger',
-    label: 'Start automatically',
-    shortLabel: 'Start',
-    description: 'Run on a schedule or when something happens',
+    label: t('flows.palette.trigger'),
+    shortLabel: t('flows.palette.triggerShort'),
+    description: t('flows.palette.triggerHelp'),
   },
 ];
 
@@ -257,6 +259,8 @@ export const NodePalette: React.FC<{
   onAddNode,
 }) => {
   log.debug(`${COMPONENT_NAME}: Entering component`);
+  const { t } = useI18n();
+  const nodeTypes = useMemo(() => getNodeTypes(t), [t]);
   const [query, setQuery] = useState('');
   const searchRef = useRef<HTMLInputElement | null>(null);
 
@@ -283,7 +287,7 @@ export const NodePalette: React.FC<{
       .filter((node) => !normalizedQuery || `${node.label} ${node.description} ${node.shortLabel}`
         .toLowerCase()
         .includes(normalizedQuery));
-  }, [authoringMode, query]);
+  }, [authoringMode, nodeTypes, query]);
   
   const onDragStart = (event: React.DragEvent, nodeType: NodeType) => {
     log.debug(`${COMPONENT_NAME}.onDragStart: Entering method with nodeType=${nodeType}`);
@@ -295,7 +299,7 @@ export const NodePalette: React.FC<{
     // Add a drag image to make the drag operation more visible
     const dragPreview = document.createElement('div');
     const friendlyNode = nodeTypes.find(node => node.type === nodeType);
-    dragPreview.textContent = friendlyNode?.label ?? 'Agent step';
+    dragPreview.textContent = friendlyNode?.label ?? t('flows.palette.step');
     Object.assign(dragPreview.style, {
       padding: '10px',
       background: 'white',
@@ -333,7 +337,7 @@ export const NodePalette: React.FC<{
     <PaletteContainer elevation={2}>
       <Box sx={{ display: { xs: 'none', md: 'flex' }, alignItems: 'baseline', justifyContent: 'space-between' }}>
         <Typography className="node-palette-title" variant="subtitle1" fontWeight={800}>
-          Add an action
+          {t('flows.palette.title')}
         </Typography>
         <Typography variant="caption" color="text.secondary">A</Typography>
       </Box>
@@ -342,8 +346,8 @@ export const NodePalette: React.FC<{
         value={query}
         onChange={(event) => setQuery(event.target.value)}
         size="small"
-        placeholder="Search actions"
-        inputProps={{ 'aria-label': 'Search actions to add' }}
+        placeholder={t('flows.palette.search')}
+        inputProps={{ 'aria-label': t('flows.palette.searchAria') }}
         sx={{ display: { xs: 'none', md: 'flex' } }}
         InputProps={{
           startAdornment: (
@@ -401,7 +405,7 @@ export const NodePalette: React.FC<{
         ))}
         {visibleNodeTypes.length === 0 && (
           <Typography variant="caption" color="text.secondary" sx={{ px: 0.5, py: 1 }}>
-            No matching nodes
+            {t('flows.palette.noMatches')}
           </Typography>
         )}
       </Box>

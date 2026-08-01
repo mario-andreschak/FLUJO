@@ -7,6 +7,8 @@ import CancelIcon from '@mui/icons-material/Cancel';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import { MASKED_API_KEY } from '@/shared/types/constants';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import Trans from '@/frontend/components/shared/Trans';
 
 interface OAuthCredentialsEditorProps {
   clientId: string;
@@ -39,6 +41,7 @@ const OAuthCredentialsEditor: React.FC<OAuthCredentialsEditorProps> = ({
   onClientSecretChange,
 }) => {
   const { globalEnvVars } = useStorage();
+  const { t } = useI18n();
   const [showBindModal, setShowBindModal] = useState(false);
 
   const bindingMatch = clientSecret.match(GLOBAL_BINDING_RE);
@@ -57,22 +60,26 @@ const OAuthCredentialsEditor: React.FC<OAuthCredentialsEditorProps> = ({
   return (
     <Box sx={{ position: 'relative' }}>
       <Typography variant="subtitle2" gutterBottom>
-        OAuth Client Credentials{' '}
-        <Typography component="span" variant="caption" color="text.secondary">(optional)</Typography>
+        {t('mcp.local.oauth.title')}{' '}
+        <Typography component="span" variant="caption" color="text.secondary">{t('mcp.local.optional')}</Typography>
       </Typography>
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
-        Leave blank for servers that support automatic registration — just click Authenticate.
-        Only fill these in if the server requires a pre-registered app (it will report that
-        dynamic client registration is not supported). See the{' '}
-        <Link href="https://modelcontextprotocol.io/specification/draft/basic/authorization" target="_blank" rel="noopener">
-          MCP authorization spec
-        </Link>.
+        <Trans
+          message="mcp.local.oauth.help"
+          values={{
+            specLink: (
+              <Link href="https://modelcontextprotocol.io/specification/draft/basic/authorization" target="_blank" rel="noopener">
+                {t('mcp.local.oauth.spec')}
+              </Link>
+            ),
+          }}
+        />
       </Typography>
 
       <TextField
         fullWidth
         size="small"
-        label="Client ID"
+        label={t('mcp.local.oauth.clientId')}
         value={clientId}
         onChange={e => onClientIdChange(e.target.value)}
         placeholder="e.g. 1234567890abcdef"
@@ -83,23 +90,23 @@ const OAuthCredentialsEditor: React.FC<OAuthCredentialsEditorProps> = ({
       <TextField
         fullWidth
         size="small"
-        label="Client Secret"
+        label={t('mcp.local.oauth.clientSecret')}
         type={isBound ? 'text' : 'password'}
         value={clientSecret}
         onChange={e => onClientSecretChange(e.target.value)}
-        placeholder="Only if the server requires it"
+        placeholder={t('mcp.local.oauth.secretPlaceholder')}
         variant="outlined"
         autoComplete="off"
         InputProps={{
           readOnly: isBound,
           endAdornment: isBound ? (
-            <Tooltip title="Unbind from global variable">
+            <Tooltip title={t('mcp.local.oauth.unbind')}>
               <IconButton size="small" onClick={() => onClientSecretChange('')}>
                 <CancelIcon fontSize="small" />
               </IconButton>
             </Tooltip>
           ) : (
-            <Tooltip title="Bind to a global variable">
+            <Tooltip title={t('mcp.local.headers.bind')}>
               <IconButton size="small" onClick={() => setShowBindModal(true)}>
                 <LinkIcon fontSize="small" />
               </IconButton>
@@ -108,9 +115,9 @@ const OAuthCredentialsEditor: React.FC<OAuthCredentialsEditorProps> = ({
         }}
         helperText={
           isBound
-            ? `Bound to global variable "${boundVar}"`
+            ? t('mcp.local.oauth.bound', { variable: boundVar ?? '' })
             : clientSecret === MASKED_API_KEY
-              ? 'A secret is stored. Type a new one to replace it, or bind it to a global variable.'
+              ? t('mcp.local.oauth.storedSecret')
               : undefined
         }
       />
@@ -118,10 +125,10 @@ const OAuthCredentialsEditor: React.FC<OAuthCredentialsEditorProps> = ({
       {/* The callback URL the user must register in the provider's OAuth app. */}
       <Box sx={{ mt: 1.5, display: 'flex', alignItems: 'center', gap: 0.5 }}>
         <Typography variant="caption" color="text.secondary">
-          Redirect URI to register in the provider's app:
+          {t('mcp.local.oauth.redirect')}
         </Typography>
         <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>{callbackUrl}</Typography>
-        <Tooltip title="Copy redirect URI">
+        <Tooltip title={t('mcp.local.oauth.copyRedirect')}>
           <IconButton size="small" onClick={() => navigator.clipboard.writeText(callbackUrl)}>
             <ContentCopyIcon sx={{ fontSize: 14 }} />
           </IconButton>
@@ -144,11 +151,11 @@ const OAuthCredentialsEditor: React.FC<OAuthCredentialsEditorProps> = ({
           }}
         >
           <Typography variant="h6" component="h2" sx={{ mb: 2 }}>
-            Bind Client Secret to Global Variable
+            {t('mcp.local.oauth.bindTitle')}
           </Typography>
           {Object.keys(globalEnvVars).length === 0 ? (
             <Typography sx={{ mb: 2 }}>
-              No global variables available. Add some in Settings first.
+              {t('mcp.local.headers.noGlobals')}
             </Typography>
           ) : (
             <Box sx={{ maxHeight: 300, overflow: 'auto', mb: 2 }}>
@@ -166,7 +173,7 @@ const OAuthCredentialsEditor: React.FC<OAuthCredentialsEditorProps> = ({
             </Box>
           )}
           <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <Button onClick={() => setShowBindModal(false)}>Cancel</Button>
+            <Button onClick={() => setShowBindModal(false)}>{t('mcp.local.cancel')}</Button>
           </Box>
         </Box>
       )}

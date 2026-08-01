@@ -14,12 +14,14 @@ import {
 import SentimentDissatisfiedOutlinedIcon from '@mui/icons-material/SentimentDissatisfiedOutlined';
 import SentimentSatisfiedAltOutlinedIcon from '@mui/icons-material/SentimentSatisfiedAltOutlined';
 import { openGitHubNewIssue } from '@/frontend/utils/openGitHubIssue';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 type Sentiment = 'happy' | 'unhappy';
 
 const ratingFor = (sentiment: Sentiment): 1 | 5 => sentiment === 'happy' ? 5 : 1;
 
 export default function FeedbackBanner() {
+  const { t } = useI18n();
   const [sentiment, setSentiment] = useState<Sentiment | null>(null);
   const [notice, setNotice] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -47,13 +49,13 @@ export default function FeedbackBanner() {
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) {
-        setError(typeof body.error === 'string' ? body.error : 'Could not submit feedback.');
+        setError(typeof body.error === 'string' ? body.error : t('feedback.submitFailed'));
         setFallbackAvailable(response.status >= 500);
         return;
       }
       setSubmitted(true);
     } catch {
-      setError('The feedback service is temporarily unavailable.');
+      setError(t('feedback.unavailable'));
       setFallbackAvailable(true);
     } finally {
       setSubmitting(false);
@@ -71,7 +73,7 @@ export default function FeedbackBanner() {
   if (submitted) {
     return (
       <Alert severity="success" sx={{ mb: 4 }}>
-        Thanks for helping improve FLUJO.
+        {t('feedback.thanks')}
       </Alert>
     );
   }
@@ -93,10 +95,10 @@ export default function FeedbackBanner() {
       >
         <Box sx={{ flex: '0 0 auto' }}>
           <Typography id="feedback-banner-title" variant="subtitle1" fontWeight={600}>
-            Are you happy with FLUJO?
+            {t('feedback.title')}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Tell us what is working—or what could be better.
+            {t('feedback.description')}
           </Typography>
         </Box>
 
@@ -106,27 +108,27 @@ export default function FeedbackBanner() {
           onChange={(_, value: Sentiment | null) => {
             if (value) setSentiment(value);
           }}
-          aria-label="Are you happy with FLUJO?"
+          aria-label={t('feedback.title')}
           size="small"
         >
-          <ToggleButton value="happy" aria-label="Yes, I am happy">
+          <ToggleButton value="happy" aria-label={t('feedback.yesAria')}>
             <SentimentSatisfiedAltOutlinedIcon sx={{ mr: 0.75 }} />
-            Yes
+            {t('feedback.yes')}
           </ToggleButton>
-          <ToggleButton value="unhappy" aria-label="No, I am not happy">
+          <ToggleButton value="unhappy" aria-label={t('feedback.noAria')}>
             <SentimentDissatisfiedOutlinedIcon sx={{ mr: 0.75 }} />
-            Not really
+            {t('feedback.no')}
           </ToggleButton>
         </ToggleButtonGroup>
 
         <TextField
           value={notice}
           onChange={(event) => setNotice(event.target.value)}
-          placeholder="Share your feedback"
+          placeholder={t('feedback.placeholder')}
           size="small"
           multiline
           maxRows={3}
-          inputProps={{ maxLength: 255, 'aria-label': 'Feedback' }}
+          inputProps={{ maxLength: 255, 'aria-label': t('feedback.inputAria') }}
           helperText={`${characterCount}/255`}
           sx={{ flex: '1 1 280px' }}
         />
@@ -137,7 +139,7 @@ export default function FeedbackBanner() {
           disabled={!canSubmit || submitting}
           sx={{ alignSelf: { xs: 'stretch', md: 'flex-start' }, minWidth: 96 }}
         >
-          {submitting ? 'Sending…' : 'Send'}
+          {submitting ? t('feedback.sending') : t('feedback.send')}
         </Button>
       </Box>
       {error && (
@@ -150,12 +152,12 @@ export default function FeedbackBanner() {
           }}
           action={fallbackAvailable ? (
             <Button color="inherit" size="small" onClick={handleGitHubFallback}>
-              Open on GitHub
+              {t('feedback.openGitHub')}
             </Button>
           ) : undefined}
         >
           {error}
-          {fallbackAvailable && ' You can send it through a pre-filled GitHub issue instead.'}
+          {fallbackAvailable && ` ${t('feedback.githubFallback')}`}
         </Alert>
       )}
     </Paper>

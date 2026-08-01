@@ -4,6 +4,7 @@ import { FlowNode } from '@/frontend/types/flow/flow';
 import { SelectedElementsState, ContextMenuState } from '../types';
 import { canDeleteNode } from '../utils/nodeUtils';
 import { createLogger } from '@/utils/logger';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 // Create a logger instance for this file
 const log = createLogger('components/flow/FlowBuilder/Canvas/hooks/useCanvasEvents.ts');
@@ -19,6 +20,7 @@ const log = createLogger('components/flow/FlowBuilder/Canvas/hooks/useCanvasEven
  */
 export function useCanvasEvents(nodes: FlowNode[]) {
   const { deleteElements } = useReactFlow();
+  const { t } = useI18n();
 
   // Context menu state
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
@@ -98,7 +100,7 @@ export function useCanvasEvents(nodes: FlowNode[]) {
       // Check if the node is a Start node - Start nodes cannot be deleted
       if (!canDeleteNode(contextMenu.nodeId, nodes)) {
         log.warn(`Cannot delete Start node: ${contextMenu.nodeId}`);
-        alert("Start nodes cannot be deleted");
+        alert(t('flows.canvas.startProtected'));
         return;
       }
 
@@ -109,7 +111,7 @@ export function useCanvasEvents(nodes: FlowNode[]) {
       log.debug(`handleDelete: Deleting edge ${contextMenu.edgeId}`);
       deleteElements({ edges: [{ id: contextMenu.edgeId }] });
     }
-  }, [contextMenu, deleteElements, nodes, selectedElements]);
+  }, [contextMenu, deleteElements, nodes, selectedElements, t]);
 
   // Node context menu handler
   const onNodeContextMenu = useCallback(

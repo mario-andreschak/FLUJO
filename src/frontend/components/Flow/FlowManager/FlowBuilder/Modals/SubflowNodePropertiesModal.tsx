@@ -25,6 +25,7 @@ import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import HistoryIcon from '@mui/icons-material/History';
 import ShortTextIcon from '@mui/icons-material/ShortText';
 import EditNoteIcon from '@mui/icons-material/EditNote';
+import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import { FlowNode, Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
 import OptionCard from '@/frontend/components/shared/OptionCard';
@@ -37,6 +38,7 @@ import CaptureFields from './shared/CaptureFields';
 import { parseKvRef, buildKvRef, KvRefScope } from '@/utils/shared/resolveKvRefs';
 import { createLogger } from '@/utils/logger';
 import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/SubflowNodePropertiesModal');
 
@@ -45,6 +47,7 @@ interface SubflowNodePropertiesModalProps {
   node: FlowNode | null;
   onClose: () => void;
   onSave: (nodeId: string, data: any) => void;
+  onNavigateToFlow?: (flowId: string) => void;
   /** The id of the flow being edited, so it can be excluded from the picker. */
   flowId?: string;
   authoringMode?: FlowAuthoringMode;
@@ -55,9 +58,11 @@ export const SubflowNodePropertiesModal = ({
   node,
   onClose,
   onSave,
+  onNavigateToFlow,
   flowId,
   authoringMode = 'advanced',
 }: SubflowNodePropertiesModalProps) => {
+  const { t, tp, formatList } = useI18n();
   const [nodeData, setNodeData] = useState<{
     label: string;
     type: string;
@@ -254,9 +259,9 @@ export const SubflowNodePropertiesModal = ({
       <DialogTitle component="div">
         <Box display="flex" alignItems="center" justifyContent="space-between">
           <Typography variant="h6">
-            {nodeData.label || 'Subflow Node'} Properties
+            {t('flows.modal.properties', { name: nodeData.label || t('flows.subflow.title') })}
           </Typography>
-          <IconButton edge="end" color="inherit" onClick={onClose} aria-label="close">
+          <IconButton edge="end" color="inherit" onClick={onClose} aria-label={t('flows.modal.close')}>
             <CloseIcon />
           </IconButton>
         </Box>
@@ -266,14 +271,12 @@ export const SubflowNodePropertiesModal = ({
 
       <DialogContent sx={{ p: 3 }}>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          This step runs another flow inside this one — like calling a helper.
-          When it finishes, its answer becomes part of this conversation and the
-          flow continues to the next node.
+          {t('flows.subflow.intro')}
         </Typography>
 
         <TextField
           fullWidth
-          label="Node Label"
+          label={t('flows.subflow.nodeLabel')}
           value={nodeData.label || ''}
           onChange={(e) => setNodeData({ ...nodeData, label: e.target.value })}
           margin="normal"
@@ -283,7 +286,7 @@ export const SubflowNodePropertiesModal = ({
             a subflow looks exactly like the Flows page. */}
         <Box sx={{ mt: 2 }}>
           <Typography variant="subtitle2" sx={{ mb: 1 }}>
-            Flow to run
+            {t('flows.subflow.flowToRun')}
           </Typography>
           <Button
             variant="outlined"
@@ -294,17 +297,17 @@ export const SubflowNodePropertiesModal = ({
             <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {selectedSubflowName ||
                 (parallelIds.length > 0
-                  ? `Parallel fan-out: ${parallelIds.length} flows`
+                  ? tp('flows.subflow.parallel', parallelIds.length)
                   : parallelVar
-                    ? `Fan-out targets from \${var:${parallelVar}}`
-                    : 'Choose a flow…')}
+                    ? t('flows.subflow.targetsVariable', { name: parallelVar })
+                    : t('flows.subflow.choose'))}
             </Box>
           </Button>
         </Box>
 
         {selectedMissing && (
           <Alert severity="warning" sx={{ mt: 1 }}>
-            The previously selected flow no longer exists. Please choose another.
+            {t('flows.subflow.missing')}
           </Alert>
         )}
 
@@ -314,20 +317,23 @@ export const SubflowNodePropertiesModal = ({
             modes (parallelFlowsVariable / mapOverList) are now editable below. */}
         {parallelIds.length > 0 && (
           <Alert severity="info" sx={{ mt: 1 }}>
-            {`This node runs ${parallelIds.length} flows in parallel and merges their results: ${parallelNames.join(', ')}. (Configured via the flow API.)`}
+            {t('flows.subflow.parallelInfo', {
+              count: parallelIds.length,
+              names: formatList(parallelNames),
+            })}
           </Alert>
         )}
 
         <CardPickerDialog
           open={pickerOpen}
           onClose={() => setPickerOpen(false)}
-          title="Choose a flow to run"
-          description="This subflow node will run the selected flow as a helper."
+          title={t('flows.subflow.pickerTitle')}
+          description={t('flows.subflow.pickerHelp')}
           isLoading={loadingFlows}
           skeleton={<FlowCardSkeleton />}
-          emptyMessage="No other flows available. Create another flow first."
+          emptyMessage={t('flows.subflow.pickerEmpty')}
           searchable
-          searchPlaceholder="Search flows…"
+          searchPlaceholder={t('flows.subflow.search')}
           searchTerm={flowPicker.searchTerm}
           onSearchChange={flowPicker.setSearchTerm}
           items={flowPicker.items.map((f) => ({
@@ -370,41 +376,41 @@ export const SubflowNodePropertiesModal = ({
         {authoringMode === 'guided' && (
           <TextField
             fullWidth
-            label="What should this helper do?"
+            label={t('flows.subflow.helperTask')}
             value={nodeData.description || ''}
             onChange={(e) => setNodeData({ ...nodeData, description: e.target.value })}
             margin="normal"
             multiline
             minRows={2}
-            helperText="This instruction is used when another step hands work to the helper flow."
+            helperText={t('flows.subflow.helperTaskHelp')}
           />
         )}
 
         {authoringMode === 'advanced' && <>
         <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
-          What does the subflow receive?
+          {t('flows.subflow.inputTitle')}
         </Typography>
-        <Box role="radiogroup" aria-label="Subflow input" sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+        <Box role="radiogroup" aria-label={t('flows.subflow.inputAria')} sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
           <OptionCard
             selected={inputMode === 'full-history'}
             onClick={() => handlePropertyChange('inputMode', 'full-history')}
             icon={<HistoryIcon />}
-            title="Full conversation"
-            description="The subflow sees the whole conversation so far, minus tool plumbing (system messages, tool calls and tool results are always stripped). Best for a helper that should continue with all the context."
+            title={t('flows.subflow.fullHistory')}
+            description={t('flows.subflow.fullHistoryHelp')}
           />
           <OptionCard
             selected={inputMode === 'latest-message'}
             onClick={() => handlePropertyChange('inputMode', 'latest-message')}
             icon={<ShortTextIcon />}
-            title="Latest message only"
-            description="The subflow sees the conversation from the most recent user message onward (not just one message), with tool plumbing stripped. Best for an orchestrator that hands off one task at a time, so old tasks don't leak in."
+            title={t('flows.subflow.latest')}
+            description={t('flows.subflow.latestHelp')}
           />
           <OptionCard
             selected={inputMode === 'isolated'}
             onClick={() => handlePropertyChange('inputMode', 'isolated')}
             icon={<EditNoteIcon />}
-            title="Isolated"
-            description="The conversation is ignored. The subflow receives only the prompt you write below, as its first message."
+            title={t('flows.subflow.isolated')}
+            description={t('flows.subflow.isolatedHelp')}
           />
         </Box>
 
@@ -418,16 +424,14 @@ export const SubflowNodePropertiesModal = ({
                   onChange={(e) => handlePropertyChange('allowCallerPrompt', e.target.checked)}
                 />
               }
-              label="Let the caller pass a prompt"
+              label={t('flows.subflow.allowCallerPrompt')}
             />
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1, ml: 4, mt: -0.5 }}>
-              When on, a step that routes to this subflow can attach an instruction through
-              its handoff tool, overriding the prompt below. The prompt below is then used
-              only as a default when the caller sends none.
+              {t('flows.subflow.allowCallerPromptHelp')}
             </Typography>
             <TextField
               fullWidth
-              label={nodeData.properties?.allowCallerPrompt !== false ? 'Default prompt (used if the caller sends none)' : 'Isolated prompt'}
+              label={nodeData.properties?.allowCallerPrompt !== false ? t('flows.subflow.defaultPrompt') : t('flows.subflow.isolatedPrompt')}
               value={promptTemplate}
               onChange={(e) => handlePropertyChange('promptTemplate', e.target.value)}
               margin="normal"
@@ -435,8 +439,8 @@ export const SubflowNodePropertiesModal = ({
               rows={3}
               helperText={
                 nodeData.properties?.allowCallerPrompt !== false
-                  ? 'The default first message for the subflow. A routing model may override it via the handoff tool. The parent conversation is not passed.'
-                  : 'Sent to the subflow as its single user message. The parent conversation is not passed.'
+                  ? t('flows.subflow.defaultPromptHelp')
+                  : t('flows.subflow.isolatedPromptHelp')
               }
             />
           </>
@@ -450,11 +454,11 @@ export const SubflowNodePropertiesModal = ({
             keys when explicitly set. Mode gating mirrors the compiler's mutual
             exclusions so an invalid combination can't be authored here. */}
         <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
-          Dynamic fan-out
+          {t('flows.subflow.dynamicTitle')}
         </Typography>
         <TextField
           fullWidth
-          label="Parallel flows from run variable"
+          label={t('flows.subflow.parallelVariable')}
           value={parallelVar}
           disabled={!varAllowed}
           onChange={(e) => {
@@ -466,9 +470,9 @@ export const SubflowNodePropertiesModal = ({
           helperText={
             !varAllowed
               ? (mapOverList
-                  ? 'Disabled while “map over list” is on — a node can’t do both.'
-                  : 'Disabled while a static parallel list is configured via the flow API.')
-              : 'Enter a run-variable NAME only (no ${…}); it resolves at runtime to the list of flow ids to run in parallel.'
+                  ? t('flows.subflow.parallelDisabledMap')
+                  : t('flows.subflow.parallelDisabledStatic'))
+              : t('flows.subflow.parallelVariableHelp')
           }
         />
         <FormControlLabel
@@ -492,17 +496,17 @@ export const SubflowNodePropertiesModal = ({
               }}
             />
           }
-          label="Run the selected flow once per input item (map over list)"
+          label={t('flows.subflow.map')}
         />
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1, ml: 4, mt: -0.5 }}>
           {mapAllowed || mapOverList
-            ? 'When on, the node parses its input into a list and runs the single selected flow once per item, merging the results.'
-            : 'Disabled: map-over-list needs a single selected flow and can’t combine with parallel or spawning modes.'}
+            ? t('flows.subflow.mapHelp')
+            : t('flows.subflow.mapDisabled')}
         </Typography>
         {mapOverList && (
           <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center', ml: 4, mt: 1 }}>
             <TextField
-              label="Split input as"
+              label={t('flows.subflow.split')}
               select
               size="small"
               sx={{ width: 240 }}
@@ -513,10 +517,10 @@ export const SubflowNodePropertiesModal = ({
                 if (e.target.value === 'lines') handlePropertyChange('itemSplit', 'lines');
                 else removeProperty('itemSplit');
               }}
-              helperText="How the input is parsed into items"
+              helperText={t('flows.subflow.splitHelp')}
             >
-              <MenuItem value="json-array">JSON array (default)</MenuItem>
-              <MenuItem value="lines">Lines</MenuItem>
+              <MenuItem value="json-array">{t('flows.subflow.jsonArray')}</MenuItem>
+              <MenuItem value="lines">{t('flows.subflow.lines')}</MenuItem>
             </TextField>
             <FormControlLabel
               control={
@@ -528,7 +532,7 @@ export const SubflowNodePropertiesModal = ({
                   }}
                 />
               }
-              label="Run items one at a time (ignores max copies)"
+              label={t('flows.subflow.sequential')}
             />
           </Box>
         )}
@@ -538,7 +542,7 @@ export const SubflowNodePropertiesModal = ({
             each call carrying its own task brief; and/or the author pins a
             fixed brief list. Both run through the same parallel lane engine. */}
         <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
-          Parallel workers (spawning)
+          {t('flows.subflow.workersTitle')}
         </Typography>
         <FormControlLabel
           sx={{ display: 'block' }}
@@ -548,28 +552,25 @@ export const SubflowNodePropertiesModal = ({
               onChange={(e) => handlePropertyChange('allowCallerFanout', e.target.checked)}
             />
           }
-          label="Let the caller spawn parallel copies of this sub-agent"
+          label={t('flows.subflow.allowSpawn')}
         />
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1, ml: 4, mt: -0.5 }}>
-          When on, the step that hands off here may call this node&apos;s handoff tool
-          several times in one reply — each call runs one parallel copy of the selected
-          flow with its own task brief. The copies run concurrently; their results are
-          merged in order and the flow continues once all of them finish.
+          {t('flows.subflow.spawnHelp')}
         </Typography>
         <TextField
           fullWidth
-          label="Always spawn these briefs (one per line, optional)"
+          label={t('flows.subflow.briefs')}
           value={briefsText}
           onChange={(e) => setBriefsText(e.target.value)}
           margin="normal"
           multiline
           minRows={2}
-          helperText="When set, every visit runs one parallel copy of the selected flow per line — no caller needed. Caller-passed tasks (above) override this list for that visit. Supports ${var:NAME}, ${res:NAME} and ${kv:NAME}."
+          helperText={t('flows.subflow.briefsHelp')}
         />
         {showTuning && (
           <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mt: 1 }}>
             <TextField
-              label="Max copies at once"
+              label={t('flows.subflow.maxCopies')}
               type="number"
               size="small"
               sx={{ width: 160 }}
@@ -588,22 +589,22 @@ export const SubflowNodePropertiesModal = ({
                   if (!Number.isNaN(n)) handlePropertyChange('concurrencyLimit', n);
                 }
               }}
-              helperText="Default 4"
+              helperText={t('flows.subflow.defaultFour')}
             />
             <TextField
-              label="Error handling"
+              label={t('flows.subflow.errorHandling')}
               select
               size="small"
               sx={{ width: 220 }}
               value={nodeData.properties?.errorStrategy === 'fail-fast' ? 'fail-fast' : 'collect-all'}
               onChange={(e) => handlePropertyChange('errorStrategy', e.target.value)}
-              helperText="What happens if a copy fails"
+              helperText={t('flows.subflow.errorHelp')}
             >
-              <MenuItem value="collect-all">Collect all (note failures, continue)</MenuItem>
-              <MenuItem value="fail-fast">Fail fast (first failure stops the node)</MenuItem>
+              <MenuItem value="collect-all">{t('flows.subflow.collect')}</MenuItem>
+              <MenuItem value="fail-fast">{t('flows.subflow.failFast')}</MenuItem>
             </TextField>
             <TextField
-              label="Separator between merged results"
+              label={t('flows.subflow.separator')}
               size="small"
               sx={{ width: 260 }}
               multiline
@@ -621,28 +622,28 @@ export const SubflowNodePropertiesModal = ({
                   handlePropertyChange('joinSeparator', raw);
                 }
               }}
-              helperText="Empty = blank line"
+              helperText={t('flows.subflow.blankLine')}
             />
           </Box>
         )}
 
         <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
-          What do you see in the chat while the subflow runs?
+          {t('flows.subflow.outputTitle')}
         </Typography>
-        <Box role="radiogroup" aria-label="Subflow output" sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+        <Box role="radiogroup" aria-label={t('flows.subflow.outputAria')} sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
           <OptionCard
             selected={(nodeData.properties?.outputMode || 'steps') !== 'final-only'}
             onClick={() => handlePropertyChange('outputMode', 'steps')}
             icon={<ForumOutlinedIcon />}
-            title="Full"
-            description="You see all of the subflow's messages in the chat, indented under this step — like watching it work."
+            title={t('flows.subflow.fullOutput')}
+            description={t('flows.subflow.fullOutputHelp')}
           />
           <OptionCard
             selected={nodeData.properties?.outputMode === 'final-only'}
             onClick={() => handlePropertyChange('outputMode', 'final-only')}
             icon={<ChatBubbleOutlineIcon />}
-            title="Condensed"
-            description="You only see the subflow's final answer as a single message. Its inner steps stay hidden."
+            title={t('flows.subflow.condensed')}
+            description={t('flows.subflow.condensedHelp')}
           />
         </Box>
 
@@ -650,7 +651,7 @@ export const SubflowNodePropertiesModal = ({
             chat sidebar, mirroring a planned execution's "Save full conversations".
             Routed through runFlow mode:'conversation' on the single-child path. */}
         <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
-          Debugging
+          {t('flows.subflow.debugging')}
         </Typography>
         <FormControlLabel
           sx={{ display: 'block' }}
@@ -660,13 +661,10 @@ export const SubflowNodePropertiesModal = ({
               onChange={(e) => handlePropertyChange('saveConversation', e.target.checked)}
             />
           }
-          label="Save this subflow's conversation to the sidebar (useful for debugging)"
+          label={t('flows.subflow.saveConversation')}
         />
         <Typography variant="body2" color="text.secondary" sx={{ ml: 4, mt: -0.5 }}>
-          When on, each run of this subflow is persisted as its own conversation in
-          the chat sidebar, linked to the parent run — like a planned execution&apos;s
-          &quot;Save full conversations&quot;. Parallel copies each get their own
-          conversation, titled by their brief.
+          {t('flows.subflow.saveConversationHelp')}
         </Typography>
 
         <Divider sx={{ my: 3 }} />
@@ -683,9 +681,18 @@ export const SubflowNodePropertiesModal = ({
       </DialogContent>
 
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        {selectedSubflowId && !selectedMissing && onNavigateToFlow && (
+          <Button
+            onClick={() => onNavigateToFlow(selectedSubflowId)}
+            startIcon={<ArrowForwardIcon />}
+          >
+            {t('flows.subflow.openTarget')}
+          </Button>
+        )}
+        <Box sx={{ flex: 1 }} />
+        <Button onClick={onClose}>{t('flows.modal.cancel')}</Button>
         <Button onClick={handleSave} variant="contained" color="primary">
-          Save
+          {t('flows.modal.save')}
         </Button>
       </DialogActions>
     </Dialog>

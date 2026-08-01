@@ -23,6 +23,7 @@ import {
 } from '@/utils/shared/promptRefs';
 import GlobalReferenceEditor, { GlobalReferenceEditorRef } from '../GlobalReferenceEditor';
 import './promptBuilder.css';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/shared/PromptBuilder');
 
@@ -42,6 +43,7 @@ interface PromptBuilderProps {
 }
 
 const ToolPreview = ({ server, name }: { server: string; name: string }) => {
+  const { t } = useI18n();
   const isHandoff = server === 'handoff';
   const [toolInfo, setToolInfo] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -76,19 +78,24 @@ const ToolPreview = ({ server, name }: { server: string; name: string }) => {
   if (!toolInfo) {
     return (
       <span className={`tool-reference-preview not-found ${isHandoff ? 'handoff' : ''}`}>
-        {`tool:${server}__${name} (Tool not found)`}
+        {t('promptBuilder.notFound', { reference: `tool:${server}__${name}` })}
       </span>
     );
   }
 
   return (
     <span className={`tool-reference-preview ${isHandoff ? 'handoff' : ''}`}>
-      [The user is referencing a {isHandoff ? 'handoff' : 'tool'} `tool:{server}__{name}` ({toolInfo.description || 'No description'})]
+      {t('promptBuilder.toolPreview', {
+        kind: t(isHandoff ? 'promptBuilder.kind.handoff' : 'promptBuilder.kind.tool'),
+        reference: `tool:${server}__${name}`,
+        description: toolInfo.description || t('promptBuilder.noDescription'),
+      })}
     </span>
   );
 };
 
 const ResourcePreview = ({ server, name }: { server: string; name: string }) => {
+  const { t } = useI18n();
   const [description, setDescription] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -118,22 +125,32 @@ const ResourcePreview = ({ server, name }: { server: string; name: string }) => 
   }
   return (
     <span className="tool-reference-preview resource">
-      [The contents of resource `{name}` from `{server}`{description ? ` (${description})` : ''} will be inserted here]
+      {t('promptBuilder.resourcePreview', {
+        name,
+        server,
+        description: description ? ` (${description})` : '',
+      })}
     </span>
   );
 };
 
-const RunResourcePreview = ({ name }: { name: string }) => (
-  <span className="tool-reference-preview runres">
-    [The contents of the Temporary Data `{name}` will be inserted here at run time]
-  </span>
-);
+const RunResourcePreview = ({ name }: { name: string }) => {
+  const { t } = useI18n();
+  return (
+    <span className="tool-reference-preview runres">
+      {t('promptBuilder.tempPreview', { name })}
+    </span>
+  );
+};
 
-const GlobalPreview = ({ name }: { name: string }) => (
-  <span className="tool-reference-preview global">
-    [Global variable <code>{`\${global:${name}}`}</code> will be inserted at run time]
-  </span>
-);
+const GlobalPreview = ({ name }: { name: string }) => {
+  const { t } = useI18n();
+  return (
+    <span className="tool-reference-preview global">
+      {t('promptBuilder.globalPreview', { reference: `\${global:${name}}` })}
+    </span>
+  );
+};
 
 const BindingPreview = ({ binding }: { binding: PromptRef }) => {
   if (binding.kind === 'global') return <GlobalPreview name={binding.name} />;
@@ -185,12 +202,14 @@ const PreviewRenderer = ({ value }: { value: string }) => {
 const PromptBuilder = forwardRef<PromptBuilderRef, PromptBuilderProps>(({
   value,
   onChange,
-  label = 'Prompt Builder',
+  label,
   height = 300,
   onModeChange,
   customPreviewRenderer,
   suggestions = [],
 }, ref) => {
+  const { t } = useI18n();
+  const resolvedLabel = label ?? t('promptBuilder.title');
   const { globalEnvVars } = useStorage();
   const globalNames = useMemo(
     () => Object.entries(globalEnvVars)
@@ -222,9 +241,9 @@ const PromptBuilder = forwardRef<PromptBuilderRef, PromptBuilderProps>(({
 
   return (
     <Box sx={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
-      {label && (
+      {resolvedLabel && (
         <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 'medium', mb: 1 }}>
-          {label}
+          {resolvedLabel}
         </Typography>
       )}
 
@@ -232,11 +251,11 @@ const PromptBuilder = forwardRef<PromptBuilderRef, PromptBuilderProps>(({
         <ToggleButtonGroup value={mode} exclusive onChange={handleModeChange} size="small">
           <ToggleButton value="raw">
             <CodeIcon fontSize="small" sx={{ mr: 0.5 }} />
-            Raw
+            {t('promptBuilder.raw')}
           </ToggleButton>
           <ToggleButton value="preview">
             <VisibilityIcon fontSize="small" sx={{ mr: 0.5 }} />
-            Preview
+            {t('promptBuilder.preview')}
           </ToggleButton>
         </ToggleButtonGroup>
       </Box>
@@ -262,11 +281,11 @@ const PromptBuilder = forwardRef<PromptBuilderRef, PromptBuilderProps>(({
               value={value}
               onChange={onChange}
               suggestions={pickerSuggestions}
-              placeholder="Write your prompt here..."
+              placeholder={t('promptBuilder.placeholder')}
               bare
               minRows={4}
               containerSx={{ height: '100%' }}
-              ariaLabel={label || 'Prompt editor'}
+              ariaLabel={resolvedLabel || t('promptBuilder.editorAria')}
             />
           </Box>
         ) : customPreviewRenderer ? (

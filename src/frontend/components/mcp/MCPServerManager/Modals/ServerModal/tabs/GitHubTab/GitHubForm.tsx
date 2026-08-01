@@ -13,6 +13,7 @@ import {
   InputAdornment
 } from '@mui/material';
 import { useThemeUtils } from '@/frontend/utils/theme';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface GitHubFormProps {
   githubUrl: string;
@@ -37,6 +38,7 @@ const GitHubForm: React.FC<GitHubFormProps> = ({
 }) => {
   const [mcpServersDir, setMcpServersDir] = useState<string>('');
   const { getThemeColor } = useThemeUtils();
+  const { t } = useI18n();
 
   // Fetch the mcp-servers directory path from the API when the component mounts
   useEffect(() => {
@@ -62,14 +64,14 @@ const GitHubForm: React.FC<GitHubFormProps> = ({
     <Stack spacing={3}>
       <Box>
         <Typography variant="subtitle2" gutterBottom>
-          GitHub Repository URL
+          {t('mcp.github.repositoryUrl')}
         </Typography>
         <TextField
           fullWidth
           value={githubUrl}
           onChange={e => setGithubUrl(e.target.value)}
-          placeholder="GitHub repository URL"
-          helperText="Paste a GitHub repository URL"
+          placeholder={t('mcp.github.repositoryUrl')}
+          helperText={t('mcp.github.pasteUrl')}
           variant="outlined"
           size="small"
         />
@@ -80,7 +82,7 @@ const GitHubForm: React.FC<GitHubFormProps> = ({
             onClick={onValidate}
             disabled={isValidating}
           >
-            {isValidating ? 'Validating...' : '1) Parse'}
+            {isValidating ? t('mcp.github.validating') : t('mcp.github.parse')}
           </Button>
         </Box>
       </Box>
@@ -88,7 +90,7 @@ const GitHubForm: React.FC<GitHubFormProps> = ({
       {repoInfo?.valid && (
         <Box>
           <Typography variant="subtitle2" gutterBottom>
-            Where to save the repository?
+            {t('mcp.github.saveWhere')}
           </Typography>
           <TextField
             fullWidth
@@ -119,6 +121,7 @@ const GitHubForm: React.FC<GitHubFormProps> = ({
                       }
                     }}
                     edge="end"
+                    aria-label={t('mcp.github.selectFolder')}
                   >
                     <FolderIcon />
                   </IconButton>

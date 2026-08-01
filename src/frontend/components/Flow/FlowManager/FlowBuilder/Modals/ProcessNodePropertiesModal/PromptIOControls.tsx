@@ -6,6 +6,7 @@ import EditNoteIcon from '@mui/icons-material/EditNote';
 import ForumOutlinedIcon from '@mui/icons-material/ForumOutlined';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import OptionCard from '@/frontend/components/shared/OptionCard';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 type InputMode = 'full-history' | 'latest-message' | 'isolated';
 type OutputMode = 'full-conversation' | 'latest-message';
@@ -58,6 +59,7 @@ const PromptIOControls: React.FC<PromptIOControlsProps> = ({
   models,
   nodeData,
 }) => {
+  const { t } = useI18n();
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column' }}>
       {/* Exclude toggles */}
@@ -71,7 +73,7 @@ const PromptIOControls: React.FC<PromptIOControlsProps> = ({
               size="small"
             />
           }
-          label="Exclude Model Prompt"
+          label={t('flows.process.excludeModel')}
         />
         <FormControlLabel
           control={
@@ -82,7 +84,7 @@ const PromptIOControls: React.FC<PromptIOControlsProps> = ({
               size="small"
             />
           }
-          label="Exclude Start Node Prompt"
+          label={t('flows.process.excludeStart')}
         />
         <FormControlLabel
           control={
@@ -93,51 +95,50 @@ const PromptIOControls: React.FC<PromptIOControlsProps> = ({
               size="small"
             />
           }
-          label="Exclude System Prompt"
+          label={t('flows.process.excludeSystem')}
         />
       </Box>
 
       {/* Prompt inclusion preview */}
       <Box sx={{ mb: 2, p: 2, bgcolor: 'rgba(0, 0, 0, 0.03)', borderRadius: 1, fontSize: '0.85rem' }}>
         <Typography variant="caption" sx={{ display: 'block', mb: 1, fontWeight: 'bold' }}>
-          Prompt Rendering Order:
+          {t('flows.process.renderOrder')}
         </Typography>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
           {!excludeStartNodePrompt && (
             <Box sx={{ display: 'flex', alignItems: 'center' }}>
               <Typography variant="caption" sx={{ color: 'primary.main', fontWeight: 'medium' }}>
-                1. Start Node Prompt
+                1. {t('flows.process.startPrompt')}
               </Typography>
               <Typography variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
-                (from the Start node in this flow)
+                {t('flows.process.fromStart')}
               </Typography>
             </Box>
           )}
           {!excludeModelPrompt && isModelBound && (
             <Box sx={{ display: 'flex', alignItems: 'center' }}>
               <Typography variant="caption" sx={{ color: 'secondary.main', fontWeight: 'medium' }}>
-                {!excludeStartNodePrompt ? '2.' : '1.'} Model Prompt
+                {!excludeStartNodePrompt ? '2.' : '1.'} {t('flows.process.modelPrompt')}
               </Typography>
               <Typography variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
-                (from the selected model: {
-                  // Find the model by ID to get its display name
-                  (() => {
+                {t('flows.process.fromModel', {
+                  model: (() => {
                     const modelId = nodeData.properties?.boundModel;
-                    if (!modelId) return 'None';
+                    if (!modelId) return t('flows.process.none');
                     const model = models.find(m => m.id === modelId);
-                    return model ? (model.displayName || model.name) : nodeData.properties?.modelName || 'None';
-                  })()
-                })
+                    return model ? (model.displayName || model.name) : nodeData.properties?.modelName || t('flows.process.none');
+                  })(),
+                })}
               </Typography>
             </Box>
           )}
           <Box sx={{ display: 'flex', alignItems: 'center' }}>
             <Typography variant="caption" sx={{ fontWeight: 'medium' }}>
               {(!excludeStartNodePrompt && !excludeModelPrompt && isModelBound) ? '3.' :
-                (!excludeStartNodePrompt || (!excludeModelPrompt && isModelBound)) ? '2.' : '1.'} This Node&apos;s Prompt
+                (!excludeStartNodePrompt || (!excludeModelPrompt && isModelBound)) ? '2.' : '1.'} {t('flows.process.nodePrompt')}
             </Typography>
             <Typography variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
-              (defined in the Task tab)
+              {t('flows.process.fromTask')}
             </Typography>
           </Box>
           <Box sx={{ display: 'flex', alignItems: 'center' }}>
@@ -145,17 +146,17 @@ const PromptIOControls: React.FC<PromptIOControlsProps> = ({
               {(!excludeStartNodePrompt && !excludeModelPrompt && isModelBound) ? '4.' :
                 (!excludeStartNodePrompt || (!excludeModelPrompt && isModelBound)) ? '3.' : '2.'}{' '}
               {inputMode === 'isolated'
-                ? 'Isolated prompt'
+                ? t('flows.subflow.isolatedPrompt')
                 : inputMode === 'latest-message'
-                  ? 'Latest message only'
-                  : 'Conversation History'}
+                  ? t('flows.subflow.latest')
+                  : t('flows.process.history')}
             </Typography>
             <Typography variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
               {inputMode === 'isolated'
-                ? '(the prompt below, as the user message)'
+                ? t('flows.process.isolatedDetail')
                 : inputMode === 'latest-message'
-                  ? '(the last user message + the last agent response)'
-                  : '(coming from ChatCompletion endpoint)'}
+                  ? t('flows.process.latestDetail')
+                  : t('flows.process.historyDetail')}
             </Typography>
           </Box>
         </Box>
@@ -164,29 +165,29 @@ const PromptIOControls: React.FC<PromptIOControlsProps> = ({
       {/* Which conversation the model sees — mirrors the subflow node's input modes. */}
       <Box sx={{ mb: 2 }}>
         <Typography variant="subtitle2" sx={{ mb: 1 }}>
-          What does the model receive?
+          {t('flows.process.receiveTitle')}
         </Typography>
-        <Box role="radiogroup" aria-label="Model input" sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+        <Box role="radiogroup" aria-label={t('flows.process.inputAria')} sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
           <OptionCard
             selected={inputMode === 'full-history'}
             onClick={() => setInputMode('full-history')}
             icon={<HistoryIcon fontSize="small" />}
-            title="Full conversation"
-            description="The model sees this node's prompt plus the whole conversation so far. The default."
+            title={t('flows.subflow.fullHistory')}
+            description={t('flows.process.fullInputHelp')}
           />
           <OptionCard
             selected={inputMode === 'latest-message'}
             onClick={() => setInputMode('latest-message')}
             icon={<ShortTextIcon fontSize="small" />}
-            title="Latest message only"
-            description="The model sees this node's prompt plus the most recent exchange — the last user message and the last agent response — plus this turn's own in-flight tool calls and results."
+            title={t('flows.subflow.latest')}
+            description={t('flows.process.latestInputHelp')}
           />
           <OptionCard
             selected={inputMode === 'isolated'}
             onClick={() => setInputMode('isolated')}
             icon={<EditNoteIcon fontSize="small" />}
-            title="Isolated"
-            description="The conversation is ignored. The model sees this node's prompt plus the prompt below, sent as the user message."
+            title={t('flows.subflow.isolated')}
+            description={t('flows.process.isolatedInputHelp')}
           />
         </Box>
 
@@ -200,16 +201,14 @@ const PromptIOControls: React.FC<PromptIOControlsProps> = ({
                   onChange={(e) => setAllowCallerPrompt(e.target.checked)}
                 />
               }
-              label="Let the caller pass a prompt"
+              label={t('flows.subflow.allowCallerPrompt')}
             />
             <Typography variant="body2" color="text.secondary" sx={{ ml: 4, mt: -0.5 }}>
-              When on, a step that hands off to this node can attach an instruction through
-              its handoff tool, overriding the prompt below. The prompt below is then used
-              only as a default when the caller sends none.
+              {t('flows.process.callerPromptHelp')}
             </Typography>
             <TextField
               fullWidth
-              label={allowCallerPrompt ? 'Default prompt (used if the caller sends none)' : 'Isolated prompt'}
+              label={allowCallerPrompt ? t('flows.subflow.defaultPrompt') : t('flows.subflow.isolatedPrompt')}
               value={isolatedPrompt}
               onChange={(e) => setIsolatedPrompt(e.target.value)}
               margin="normal"
@@ -217,8 +216,8 @@ const PromptIOControls: React.FC<PromptIOControlsProps> = ({
               rows={2}
               helperText={
                 allowCallerPrompt
-                  ? 'The default user message. A routing model may override it via the handoff tool. The prior conversation is not shown to the model (it is still kept in the transcript for later nodes).'
-                  : 'Sent to the model as the user message. The prior conversation is not shown to the model (it is still kept in the transcript for later nodes).'
+                  ? t('flows.process.defaultUserHelp')
+                  : t('flows.process.isolatedUserHelp')
               }
             />
           </>
@@ -228,22 +227,22 @@ const PromptIOControls: React.FC<PromptIOControlsProps> = ({
       {/* What LATER steps see of this node's work — the output-side counterpart. */}
       <Box sx={{ mb: 1 }}>
         <Typography variant="subtitle2" sx={{ mb: 1 }}>
-          What do later steps see of this step&apos;s work?
+          {t('flows.process.outputTitle')}
         </Typography>
-        <Box role="radiogroup" aria-label="Model output" sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+        <Box role="radiogroup" aria-label={t('flows.process.outputAria')} sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
           <OptionCard
             selected={outputMode === 'full-conversation'}
             onClick={() => setOutputMode('full-conversation')}
             icon={<ForumOutlinedIcon fontSize="small" />}
-            title="Full conversation"
-            description="Later steps see everything this step did — tool calls, tool results, and intermediate turns. The default."
+            title={t('flows.subflow.fullHistory')}
+            description={t('flows.process.fullOutputHelp')}
           />
           <OptionCard
             selected={outputMode === 'latest-message'}
             onClick={() => setOutputMode('latest-message')}
             icon={<ChatBubbleOutlineIcon fontSize="small" />}
-            title="Latest message only"
-            description="Later steps see only this step's final response. Its tool calls and results are hidden from later models to save context tokens (they stay visible in the chat and log)."
+            title={t('flows.subflow.latest')}
+            description={t('flows.process.latestOutputHelp')}
           />
         </Box>
       </Box>

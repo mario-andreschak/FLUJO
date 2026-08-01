@@ -54,6 +54,7 @@ import WatchToolPanel from '@/frontend/components/PlannedExecutions/WatchToolPan
 import UrlWatchPanel from '@/frontend/components/PlannedExecutions/UrlWatchPanel';
 import FlowEventPanel from '@/frontend/components/PlannedExecutions/FlowEventPanel';
 import { createLogger } from '@/utils/logger';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/FlowBuilder/Modals/TriggerNodePropertiesModal');
 
@@ -117,7 +118,8 @@ const TriggerNodePropertiesModal = ({
   onClose,
   onSave,
 }: TriggerNodePropertiesModalProps) => {
-  const [name, setName] = useState('Flow Trigger');
+  const { t } = useI18n();
+  const [name, setName] = useState(t('flows.trigger.defaultName'));
   const [enabled, setEnabled] = useState(true);
   const [trigger, setTrigger] = useState<TriggerConfig>(DEFAULT_SCHEDULE);
   const [overlapStrategy, setOverlapStrategy] = useState<OverlapStrategy>('skip');
@@ -136,7 +138,7 @@ const TriggerNodePropertiesModal = ({
     if (!open || !node) return;
     setSaveError(null);
     const props = node.data.properties || {};
-    setName(typeof props.name === 'string' ? props.name : 'Flow Trigger');
+    setName(typeof props.name === 'string' ? props.name : t('flows.trigger.defaultName'));
     setEnabled(props.enabled !== false);
     setTrigger((props.trigger as TriggerConfig) || DEFAULT_SCHEDULE);
     setOverlapStrategy((props.overlapStrategy as OverlapStrategy) || 'skip');
@@ -148,7 +150,7 @@ const TriggerNodePropertiesModal = ({
       setExecutionId(crypto.randomUUID());
       setIsSaved(false);
     }
-  }, [open, node]);
+  }, [open, node, t]);
 
   // Load flows for the FlowEvent panel
   useEffect(() => {
@@ -179,7 +181,7 @@ const TriggerNodePropertiesModal = ({
     // Synchronize first so a failed request never leaves the canvas pointing
     // at a planned execution that was not created or updated.
     const input: PlannedExecutionInput = {
-      name: name.trim() || 'Flow Trigger',
+      name: name.trim() || t('flows.trigger.defaultName'),
       flowId,
       prompt,
       overlapStrategy,
@@ -195,14 +197,14 @@ const TriggerNodePropertiesModal = ({
         result = await plannedExecutionsService.create({ ...input, id: executionId });
       }
       if (!result.success) {
-        setSaveError(result.error || 'Failed to save trigger configuration');
+        setSaveError(result.error || t('flows.trigger.saveFailed'));
         setSaving(false);
         return;
       }
       setIsSaved(true);
 
       // Persist the node link only after the PlannedExecution API accepted it.
-      const label = name.trim() || 'Trigger';
+      const label = name.trim() || t('flows.trigger.defaultNode');
       onSave(node.id, {
         ...node.data,
         label,
@@ -210,14 +212,14 @@ const TriggerNodePropertiesModal = ({
         properties,
       });
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : 'Failed to save trigger configuration');
+      setSaveError(err instanceof Error ? err.message : t('flows.trigger.saveFailed'));
       setSaving(false);
       return;
     }
 
     setSaving(false);
     log.info(`TriggerNodePropertiesModal: Saved trigger node for executionId=${executionId}`);
-  }, [node, executionId, name, enabled, trigger, overlapStrategy, prompt, flowId, isSaved, onSave]);
+  }, [node, executionId, name, enabled, trigger, overlapStrategy, prompt, flowId, isSaved, onSave, t]);
 
   if (!node) return null;
 
@@ -239,8 +241,8 @@ const TriggerNodePropertiesModal = ({
       >
         <DialogTitle component="div">
           <Box display="flex" alignItems="center" justifyContent="space-between">
-            <Typography variant="h6">Trigger Node</Typography>
-            <IconButton edge="end" color="inherit" onClick={onClose} aria-label="close">
+            <Typography variant="h6">{t('flows.trigger.title')}</Typography>
+            <IconButton edge="end" color="inherit" onClick={onClose} aria-label={t('flows.modal.close')}>
               <CloseIcon />
             </IconButton>
           </Box>
@@ -250,20 +252,19 @@ const TriggerNodePropertiesModal = ({
 
         <DialogContent sx={{ p: 3 }}>
           <Alert severity="info" sx={{ mb: 2 }}>
-            This node links a planned execution trigger to this flow. When the trigger fires,
-            the flow will run headlessly. Configure the trigger below.
+            {t('flows.trigger.info')}
             {!isSaved && (
-              <> The trigger will be created when you first save.</>
+              <> {t('flows.trigger.createdOnSave')}</>
             )}
           </Alert>
 
           <TextField
             fullWidth
-            label="Trigger name"
+            label={t('flows.trigger.name')}
             value={name}
             onChange={(e) => setName(e.target.value)}
             margin="normal"
-            placeholder="e.g. Daily digest trigger"
+            placeholder={t('flows.trigger.namePlaceholder')}
           />
 
           <FormControlLabel
@@ -274,23 +275,23 @@ const TriggerNodePropertiesModal = ({
                 color="primary"
               />
             }
-            label="Enabled"
+            label={t('flows.trigger.enabled')}
             sx={{ mt: 1, mb: 1 }}
           />
 
           <Typography variant="subtitle1" sx={{ mt: 2, mb: 1, fontWeight: 600 }}>
-            When should it run?
+            {t('flows.trigger.when')}
           </Typography>
 
-          <Box role="radiogroup" aria-label="Trigger type" sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+          <Box role="radiogroup" aria-label={t('flows.trigger.typeAria')} sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
             <OptionCard
               selected={trigger.type === 'schedule'}
               onClick={() => {
                 if (trigger.type !== 'schedule') setTrigger(DEFAULT_SCHEDULE);
               }}
               icon={<ScheduleIcon />}
-              title="On a schedule"
-              description="Run at fixed times — every few minutes, daily, on weekdays, or a custom rhythm."
+              title={t('flows.trigger.schedule')}
+              description={t('flows.trigger.scheduleHelp')}
             />
             <OptionCard
               selected={trigger.type === 'webhook'}
@@ -298,8 +299,8 @@ const TriggerNodePropertiesModal = ({
                 if (trigger.type !== 'webhook') setTrigger(newWebhookTrigger());
               }}
               icon={<WebhookIcon />}
-              title="When called (webhook)"
-              description="Other apps run this flow by calling a URL."
+              title={t('flows.trigger.webhook')}
+              description={t('flows.trigger.webhookHelp')}
             />
             <OptionCard
               selected={trigger.type === 'file-watch'}
@@ -307,8 +308,8 @@ const TriggerNodePropertiesModal = ({
                 if (trigger.type !== 'file-watch') setTrigger(DEFAULT_FILE_WATCH);
               }}
               icon={<FolderOpenIcon />}
-              title="When files change"
-              description="Watch a folder on this computer and run when files appear, change, or disappear."
+              title={t('flows.trigger.files')}
+              description={t('flows.trigger.filesHelp')}
             />
             <OptionCard
               selected={trigger.type === 'mcp-poll'}
@@ -316,8 +317,8 @@ const TriggerNodePropertiesModal = ({
                 if (trigger.type !== 'mcp-poll') setTrigger(DEFAULT_MCP_POLL);
               }}
               icon={<TravelExploreIcon />}
-              title="Watch a tool"
-              description="Check one of your MCP tools regularly — run when its result changes."
+              title={t('flows.trigger.tool')}
+              description={t('flows.trigger.toolHelp')}
             />
             <OptionCard
               selected={trigger.type === 'url-watch'}
@@ -325,8 +326,8 @@ const TriggerNodePropertiesModal = ({
                 if (trigger.type !== 'url-watch') setTrigger(DEFAULT_URL_WATCH);
               }}
               icon={<LanguageIcon />}
-              title="When a website changes"
-              description="Check a URL regularly and run when its content is different from the last check."
+              title={t('flows.trigger.url')}
+              description={t('flows.trigger.urlHelp')}
             />
             <OptionCard
               selected={trigger.type === 'flow-event'}
@@ -334,8 +335,8 @@ const TriggerNodePropertiesModal = ({
                 if (trigger.type !== 'flow-event') setTrigger(DEFAULT_FLOW_EVENT);
               }}
               icon={<AltRouteIcon />}
-              title="When another flow finishes"
-              description="React to another flow completing or erroring."
+              title={t('flows.trigger.flow')}
+              description={t('flows.trigger.flowHelp')}
             />
           </Box>
 
@@ -375,30 +376,30 @@ const TriggerNodePropertiesModal = ({
           )}
 
           <FormControl fullWidth margin="normal">
-            <InputLabel id="overlap-strategy-label">If it&apos;s already running…</InputLabel>
+            <InputLabel id="overlap-strategy-label">{t('flows.trigger.overlap')}</InputLabel>
             <Select
               labelId="overlap-strategy-label"
-              label="If it's already running…"
+              label={t('flows.trigger.overlap')}
               value={overlapStrategy}
               onChange={(e) => setOverlapStrategy(e.target.value as OverlapStrategy)}
             >
-              <MenuItem value="skip">Skip the new run (default)</MenuItem>
-              <MenuItem value="queue">Queue it — run after the current one finishes</MenuItem>
-              <MenuItem value="parallel">Run in parallel — allow concurrent runs</MenuItem>
-              <MenuItem value="error">Reject the new run with an error</MenuItem>
+              <MenuItem value="skip">{t('flows.trigger.overlapSkip')}</MenuItem>
+              <MenuItem value="queue">{t('flows.trigger.overlapQueue')}</MenuItem>
+              <MenuItem value="parallel">{t('flows.trigger.overlapParallel')}</MenuItem>
+              <MenuItem value="error">{t('flows.trigger.overlapError')}</MenuItem>
             </Select>
           </FormControl>
 
           <TextField
             fullWidth
-            label="Initial prompt (optional)"
+            label={t('flows.trigger.prompt')}
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             margin="normal"
             multiline
             minRows={2}
-            placeholder="Optional prompt override for the triggered run"
-            helperText="Leave blank to use the flow's default prompt. When set, this overrides the Start node prompt template for runs fired by this trigger."
+            placeholder={t('flows.trigger.promptPlaceholder')}
+            helperText={t('flows.trigger.promptHelp')}
           />
 
           {saveError && (
@@ -409,7 +410,7 @@ const TriggerNodePropertiesModal = ({
         </DialogContent>
 
         <DialogActions>
-          <Button onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button onClick={onClose} disabled={saving}>{t('flows.modal.cancel')}</Button>
           <Button
             onClick={handleSave}
             variant="contained"
@@ -417,7 +418,7 @@ const TriggerNodePropertiesModal = ({
             startIcon={saving ? <CircularProgress size={16} /> : undefined}
             sx={{ backgroundColor: '#E91E63', '&:hover': { backgroundColor: '#C2185B' } }}
           >
-            {saving ? 'Saving…' : 'Save'}
+            {saving ? t('flows.builder.saving') : t('flows.modal.save')}
           </Button>
         </DialogActions>
       </Dialog>

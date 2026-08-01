@@ -22,6 +22,8 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import SearchIcon from '@mui/icons-material/Search';
 import { createLogger } from '@/utils/logger';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import Trans from '@/frontend/components/shared/Trans';
 
 const log = createLogger('frontend/components/Packages/InstalledPackagesList');
 
@@ -54,6 +56,7 @@ interface UninstallSummary {
  * deleting only entities the install created and preserving adopted ones.
  */
 export default function InstalledPackagesList() {
+  const { t, tp, formatDate, formatNumber } = useI18n();
   const [packages, setPackages] = useState<InstalledPackage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -67,7 +70,7 @@ export default function InstalledPackagesList() {
     setError(null);
     try {
       const res = await fetch('/api/packages/installed');
-      if (!res.ok) throw new Error(`Failed to load installed packages (${res.status})`);
+      if (!res.ok) throw new Error(t('packages.installed.loadFailed', { status: res.status }));
       const data = (await res.json()) as { packages: InstalledPackage[] };
       setPackages(data.packages ?? []);
     } catch (err) {
@@ -76,7 +79,7 @@ export default function InstalledPackagesList() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     void load();
@@ -93,7 +96,7 @@ export default function InstalledPackagesList() {
       });
       const summary = (await res.json()) as UninstallSummary;
       if (!res.ok) {
-        throw new Error((summary as unknown as { error?: string }).error ?? `Uninstall failed (${res.status})`);
+        throw new Error((summary as unknown as { error?: string }).error ?? t('packages.installed.uninstallFailed', { status: res.status }));
       }
       setLastResult(summary);
       await load();
@@ -104,7 +107,7 @@ export default function InstalledPackagesList() {
       setBusy(false);
       setConfirmTarget(null);
     }
-  }, [load]);
+  }, [load, t]);
 
   const filteredPackages = useMemo(() => {
     const q = searchTerm.trim().toLowerCase();
@@ -117,9 +120,9 @@ export default function InstalledPackagesList() {
   return (
     <Box sx={{ maxWidth: { xs: '100%', md: 1100 }, mx: 'auto', mt: 3 }}>
       <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
-        <Typography variant="h6">Installed packages</Typography>
+        <Typography variant="h6">{t('packages.installed.title')}</Typography>
         <Button size="small" startIcon={<RefreshIcon />} onClick={() => void load()} disabled={loading}>
-          Refresh
+          {t('packages.installed.refresh')}
         </Button>
       </Stack>
 
@@ -127,7 +130,7 @@ export default function InstalledPackagesList() {
         <TextField
           size="small"
           fullWidth
-          placeholder="Search installed packages…"
+          placeholder={t('packages.installed.search')}
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
           InputProps={{
@@ -145,9 +148,14 @@ export default function InstalledPackagesList() {
 
       {lastResult && (
         <Alert severity={lastResult.hasErrors ? 'warning' : 'success'} sx={{ mb: 2 }} onClose={() => setLastResult(null)}>
-          Uninstalled &quot;{lastResult.packageName}&quot;: {lastResult.removed.length} removed,{' '}
-          {lastResult.skipped.length} preserved/skipped
-          {lastResult.hasErrors ? `, ${lastResult.errors.length} error(s)` : ''}.
+          {t('packages.installed.result', {
+            name: lastResult.packageName,
+            removed: tp('packages.installed.removed', lastResult.removed.length),
+            skipped: tp('packages.installed.skipped', lastResult.skipped.length),
+            errors: lastResult.hasErrors
+              ? tp('packages.installed.errors', lastResult.errors.length)
+              : '',
+          })}
         </Alert>
       )}
 
@@ -157,11 +165,11 @@ export default function InstalledPackagesList() {
         </Box>
       ) : packages.length === 0 ? (
         <Typography variant="body2" color="text.secondary">
-          No packages installed yet.
+          {t('packages.installed.empty')}
         </Typography>
       ) : filteredPackages.length === 0 ? (
         <Typography variant="body2" color="text.secondary">
-          No packages match “{searchTerm}”.
+          {t('packages.installed.noMatches', { search: searchTerm })}
         </Typography>
       ) : (
         <Stack spacing={1}>
@@ -173,9 +181,15 @@ export default function InstalledPackagesList() {
                   <Chip label={`v${pkg.version}`} size="small" variant="outlined" />
                 </Stack>
                 <Typography variant="caption" color="text.secondary">
-                  {pkg.entityCounts.flows} flows · {pkg.entityCounts.models} models ·{' '}
-                  {pkg.entityCounts.servers} servers · {pkg.entityCounts.plannedExecutions} planned ·
-                  installed {new Date(pkg.installedAt).toLocaleString()}
+                  {tp('packages.installed.flows', pkg.entityCounts.flows, { count: formatNumber(pkg.entityCounts.flows) })}
+                  {' · '}
+                  {tp('packages.installed.models', pkg.entityCounts.models, { count: formatNumber(pkg.entityCounts.models) })}
+                  {' · '}
+                  {tp('packages.installed.servers', pkg.entityCounts.servers, { count: formatNumber(pkg.entityCounts.servers) })}
+                  {' · '}
+                  {tp('packages.installed.planned', pkg.entityCounts.plannedExecutions, { count: formatNumber(pkg.entityCounts.plannedExecutions) })}
+                  {' · '}
+                  {t('packages.installed.installedAt', { date: formatDate(pkg.installedAt, { dateStyle: 'medium', timeStyle: 'short' }) })}
                 </Typography>
               </Box>
               <Button
@@ -185,7 +199,7 @@ export default function InstalledPackagesList() {
                 onClick={() => setConfirmTarget(pkg)}
                 disabled={busy}
               >
-                Uninstall
+                {t('packages.installed.uninstall')}
               </Button>
             </Paper>
           ))}
@@ -193,16 +207,17 @@ export default function InstalledPackagesList() {
       )}
 
       <Dialog open={confirmTarget !== null} onClose={() => (busy ? undefined : setConfirmTarget(null))}>
-        <DialogTitle>Uninstall &quot;{confirmTarget?.packageName}&quot;?</DialogTitle>
+        <DialogTitle>{t('packages.installed.confirmTitle', { name: confirmTarget?.packageName ?? '' })}</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            This removes the flows, models, MCP servers and planned executions this package
-            <strong> created</strong>. Pre-existing entities the package merely updated in place are
-            preserved. This cannot be undone.
+            <Trans
+              message="packages.installed.confirmHelp"
+              values={{ created: <strong>{t('packages.installed.created')}</strong> }}
+            />
           </DialogContentText>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setConfirmTarget(null)} disabled={busy}>Cancel</Button>
+          <Button onClick={() => setConfirmTarget(null)} disabled={busy}>{t('packages.installed.cancel')}</Button>
           <Button
             color="error"
             variant="contained"
@@ -210,7 +225,7 @@ export default function InstalledPackagesList() {
             disabled={busy}
             startIcon={busy ? <CircularProgress size={16} /> : <DeleteOutlineIcon />}
           >
-            Uninstall
+            {t('packages.installed.uninstall')}
           </Button>
         </DialogActions>
       </Dialog>

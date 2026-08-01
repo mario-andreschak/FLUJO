@@ -15,6 +15,7 @@ import { CardPickerItem } from '@/frontend/components/shared/CardPickerGrid';
 import FlowCard, { FlowCardSkeleton } from '@/frontend/components/Flow/FlowDashboard/FlowCard';
 import { useCardPicker } from '@/frontend/hooks/useCardPicker';
 import { CardGroup } from '@/utils/shared/cardGrouping';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface FlowSelectorProps {
   selectedFlowId: string | null;
@@ -30,6 +31,7 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
   disabled = false, // Default to false
   hideLabel = false
 }) => {
+  const { t } = useI18n();
   const [flows, setFlows] = useState<Flow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -46,14 +48,14 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
         setFlows(loadedFlows);
       } catch (err) {
         console.error('Error loading flows:', err);
-        setError('Failed to load agents');
+        setError(t('chat.selector.loadFailed'));
       } finally {
         setIsLoading(false);
       }
     };
 
     loadFlows();
-  }, []);
+  }, [t]);
 
   // Get selected flow name
   const getSelectedFlowName = () => {
@@ -109,7 +111,7 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
     <Box>
       {!hideLabel && (
         <Typography variant="subtitle1" gutterBottom>
-          Select Agent
+          {t('chat.selector.title')}
         </Typography>
       )}
 
@@ -117,7 +119,7 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <CircularProgress size={20} />
           <Typography variant="body2" color="text.secondary">
-          Loading agents...
+          {t('chat.selector.loading')}
           </Typography>
         </Box>
       ) : error ? (
@@ -126,7 +128,7 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
         </Typography>
       ) : flows.length === 0 ? (
         <Typography variant="body2" color="text.secondary">
-          No agents available. Create an agent first.
+          {t('chat.selector.empty')}
         </Typography>
       ) : (
         <>
@@ -140,24 +142,24 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
             sx={{ textTransform: 'none', maxWidth: '100%' }}
           >
             <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {selectedFlowId ? (selectedFlowName || 'Select an agent') : 'Select an agent'}
+              {selectedFlowId ? (selectedFlowName || t('chat.selector.title')) : t('chat.selector.title')}
             </Box>
           </Button>
           <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
             {selectedFlowId
-              ? `Using "${selectedFlowName}" agent for this conversation`
-              : 'Select an agent for this conversation'}
+              ? t('chat.selector.using', { agent: selectedFlowName })
+              : t('chat.selector.help')}
           </Typography>
 
           <CardPickerDialog
             open={pickerOpen}
             onClose={() => setPickerOpen(false)}
-            title="Select an agent"
-            description="Pick the agent for this conversation."
+            title={t('chat.selector.title')}
+            description={t('chat.selector.dialogHelp')}
             skeleton={<FlowCardSkeleton />}
-            emptyMessage="No agents available. Create an agent first."
+            emptyMessage={t('chat.selector.empty')}
             searchable
-            searchPlaceholder="Search agents…"
+            searchPlaceholder={t('flows.dashboard.search')}
             searchTerm={flowPicker.searchTerm}
             onSearchChange={flowPicker.setSearchTerm}
             items={flowPickerItems}

@@ -60,7 +60,6 @@ import {
   plannedExecutionTriggerGroup,
   PlannedExecutionFilter,
   PlannedExecutionSortOption,
-  PLANNED_EXECUTION_SORT_LABELS,
   sortPlannedExecutions,
   TRIGGER_TYPE_LABELS,
 } from '@/utils/shared/plannedExecutionGrouping';
@@ -69,6 +68,7 @@ import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCard
 import PageHeader from '@/frontend/components/shared/PageHeader';
 import ExecutionCard from './ExecutionCard';
 import ExecutionModal from './ExecutionModal';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/PlannedExecutions');
 
@@ -79,6 +79,7 @@ type GroupMode = 'none' | 'folder' | 'trigger' | 'status';
  */
 const PlannedExecutionsManager = () => {
   const theme = useTheme();
+  const { t, tp, formatNumber } = useI18n();
   const [entries, setEntries] = useState<PlannedExecutionListEntry[]>([]);
   const [paused, setPaused] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -154,7 +155,7 @@ const PlannedExecutionsManager = () => {
     if (!result.success) {
       // Don't let the switch silently snap back on the next poll with no
       // explanation — tell the user why it didn't take.
-      const message = result.error || 'Failed to update the trigger.';
+      const message = result.error || t('automations.list.updateFailed');
       log.warn('Failed to toggle enabled', message);
       setToggleError(message);
     }
@@ -168,7 +169,7 @@ const PlannedExecutionsManager = () => {
       folder: folder ?? '',
     });
     if (!result.success) {
-      const message = result.error || 'Failed to move the trigger.';
+      const message = result.error || t('automations.list.moveFailed');
       log.warn('Failed to update folder', message);
       setToggleError(message);
     }
@@ -187,27 +188,50 @@ const PlannedExecutionsManager = () => {
     [entries],
   );
 
+  const triggerLabel = (type: TriggerType) => t(`automations.list.trigger.${type}`);
+  const sortLabel = (option: PlannedExecutionSortOption) => t(`automations.list.sort.${option}`);
+
   const filteredEntries = useMemo(() => {
+    const localizedNeedle = searchTerm.trim().toLocaleLowerCase();
     const filtered = entries.filter(entry =>
-      matchesPlannedExecutionSearch(entry, searchTerm) &&
+      (matchesPlannedExecutionSearch(entry, searchTerm) ||
+        Boolean(localizedNeedle && triggerLabel(entry.execution.trigger.type)
+          .toLocaleLowerCase().includes(localizedNeedle))) &&
       matchesPlannedExecutionStatus(entry, statusFilter) &&
       (triggerFilter === 'all' || entry.execution.trigger.type === triggerFilter)
     );
     return sortPlannedExecutions(filtered, sortOption);
-  }, [entries, searchTerm, statusFilter, triggerFilter, sortOption]);
+  }, [entries, searchTerm, statusFilter, triggerFilter, sortOption, t]);
 
   const groups = useMemo<CardGroup<PlannedExecutionListEntry>[]>(() => {
     if (groupMode === 'folder') {
-      return groupByFolder(filteredEntries, entry => entry.execution.folder);
+      return groupByFolder(
+        filteredEntries,
+        entry => entry.execution.folder,
+        t('automations.list.ungrouped'),
+      );
     }
     if (groupMode === 'trigger') {
-      return groupItems(filteredEntries, plannedExecutionTriggerGroup);
+      return groupItems(filteredEntries, (entry) => {
+        const group = plannedExecutionTriggerGroup(entry);
+        return { ...group, label: triggerLabel(entry.execution.trigger.type) };
+      });
     }
     if (groupMode === 'status') {
-      return groupItems(filteredEntries, plannedExecutionStateGroup);
+      return groupItems(filteredEntries, (entry) => {
+        const group = plannedExecutionStateGroup(entry);
+        const label = group.key === 'state:running'
+          ? t('automations.list.running')
+          : group.key === 'state:attention'
+            ? t('automations.list.attention')
+            : group.key === 'state:disabled'
+              ? t('automations.list.off')
+              : t('automations.list.active');
+        return { ...group, label };
+      });
     }
     return [];
-  }, [filteredEntries, groupMode]);
+  }, [filteredEntries, groupMode, t]);
 
   const toggleCollapsed = (key: string) => {
     setCollapsedList(previous =>
@@ -250,15 +274,15 @@ const PlannedExecutionsManager = () => {
   return (
     <Box sx={{ width: '100%' }}>
       <PageHeader
-        eyebrow="Automate"
-        title="Triggers"
-        description="Run flows on a schedule or when the world changes — without opening chat."
+        eyebrowKey="automations.list.eyebrow"
+        titleKey="automations.list.title"
+        descriptionKey="automations.list.description"
         icon={ScheduleRoundedIcon}
         maxWidth={1200}
         actions={(
           <>
-          <Tooltip title="Refresh">
-            <IconButton onClick={() => void refresh()} aria-label="Refresh triggers">
+          <Tooltip title={t('automations.list.refresh')}>
+            <IconButton onClick={() => void refresh()} aria-label={t('automations.list.refreshAria')}>
               <RefreshIcon />
             </IconButton>
           </Tooltip>
@@ -269,7 +293,7 @@ const PlannedExecutionsManager = () => {
                 onChange={(e) => handleTogglePaused(!e.target.checked)}
               />
             }
-            label={paused ? 'Paused' : 'Active'}
+            label={paused ? t('automations.list.paused') : t('automations.list.active')}
           />
           <Button
             variant="contained"
@@ -280,7 +304,7 @@ const PlannedExecutionsManager = () => {
             }}
             data-tour="add-execution"
           >
-            Add trigger
+            {t('automations.list.add')}
           </Button>
           </>
         )}
@@ -288,14 +312,12 @@ const PlannedExecutionsManager = () => {
 
       <Box sx={{ p: { xs: 2, md: 3 }, maxWidth: 1200, mx: 'auto', width: '100%' }}>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-        FLUJO must be running for triggers to fire. The Active/Paused switch above gates all triggers globally.
+        {t('automations.list.runningRequirement')}
       </Typography>
 
       {paused && entries.length > 0 && (
         <Alert severity="info" sx={{ mb: 3 }}>
-          The scheduler is paused — no triggers will fire, so every trigger
-          below shows “Paused (global)”. Switch it to Active (top right) to arm
-          them.
+          {t('automations.list.pausedAlert')}
         </Alert>
       )}
 
@@ -312,7 +334,7 @@ const PlannedExecutionsManager = () => {
               }}
             >
               <TextField
-                placeholder="Search triggers..."
+                placeholder={t('automations.list.search')}
                 variant="outlined"
                 size="small"
                 fullWidth
@@ -337,52 +359,53 @@ const PlannedExecutionsManager = () => {
                 }}
               >
                 <FormControl size="small" sx={{ minWidth: 130 }}>
-                  <InputLabel id="execution-status-filter-label">Status</InputLabel>
+                  <InputLabel id="execution-status-filter-label">{t('automations.list.status')}</InputLabel>
                   <Select
                     labelId="execution-status-filter-label"
-                    label="Status"
+                    label={t('automations.list.status')}
                     value={statusFilter}
                     onChange={(event) =>
                       setStatusFilter(event.target.value as PlannedExecutionFilter)
                     }
                   >
-                    <MenuItem value="all">All statuses</MenuItem>
-                    <MenuItem value="enabled">Active</MenuItem>
-                    <MenuItem value="disabled">Off</MenuItem>
-                    <MenuItem value="running">Running</MenuItem>
-                    <MenuItem value="attention">Needs attention</MenuItem>
+                    <MenuItem value="all">{t('automations.list.allStatuses')}</MenuItem>
+                    <MenuItem value="enabled">{t('automations.list.active')}</MenuItem>
+                    <MenuItem value="disabled">{t('automations.list.off')}</MenuItem>
+                    <MenuItem value="running">{t('automations.list.running')}</MenuItem>
+                    <MenuItem value="attention">{t('automations.list.attention')}</MenuItem>
                   </Select>
                 </FormControl>
 
                 <FormControl size="small" sx={{ minWidth: 140 }}>
-                  <InputLabel id="execution-trigger-filter-label">Trigger</InputLabel>
+                  <InputLabel id="execution-trigger-filter-label">{t('automations.list.trigger')}</InputLabel>
                   <Select
                     labelId="execution-trigger-filter-label"
-                    label="Trigger"
+                    label={t('automations.list.trigger')}
                     value={triggerFilter}
                     onChange={(event) =>
                       setTriggerFilter(event.target.value as 'all' | TriggerType)
                     }
                   >
-                    <MenuItem value="all">All triggers</MenuItem>
+                    <MenuItem value="all">{t('automations.list.allTriggers')}</MenuItem>
                     {(Object.entries(TRIGGER_TYPE_LABELS) as Array<[TriggerType, string]>)
-                      .map(([value, label]) => (
-                        <MenuItem key={value} value={value}>{label}</MenuItem>
+                      .map(([value]) => (
+                        <MenuItem key={value} value={value}>{triggerLabel(value)}</MenuItem>
                       ))}
                   </Select>
                 </FormControl>
 
                 {hasActiveFilters && (
                   <Button size="small" onClick={clearFilters}>
-                    Clear
+                    {t('automations.list.clear')}
                   </Button>
                 )}
 
-                <Tooltip title="Group cards">
+                <Tooltip title={t('automations.list.groupCards')}>
                   <IconButton
                     size="small"
                     onClick={(event) => setGroupAnchorEl(event.currentTarget)}
                     color={groupMode !== 'none' ? 'primary' : 'default'}
+                    aria-label={t('automations.list.groupCards')}
                     sx={{
                       border: `1px solid ${theme.palette.divider}`,
                       backgroundColor: theme.palette.background.default,
@@ -392,10 +415,11 @@ const PlannedExecutionsManager = () => {
                   </IconButton>
                 </Tooltip>
 
-                <Tooltip title="Sort triggers">
+                <Tooltip title={t('automations.list.sortTriggers')}>
                   <IconButton
                     size="small"
                     onClick={(event) => setSortAnchorEl(event.currentTarget)}
+                    aria-label={t('automations.list.sortTriggers')}
                     sx={{
                       border: `1px solid ${theme.palette.divider}`,
                       backgroundColor: theme.palette.background.default,
@@ -419,12 +443,14 @@ const PlannedExecutionsManager = () => {
             }}
           >
             <Typography variant="body2" color="text.secondary">
-              {filteredEntries.length} of {entries.length} trigger
-              {entries.length === 1 ? '' : 's'}
-              {searchTerm && ` matching "${searchTerm}"`}
+              {tp('automations.list.count', entries.length, {
+                shown: formatNumber(filteredEntries.length),
+                total: formatNumber(entries.length),
+              })}
+              {searchTerm && t('automations.list.matching', { search: searchTerm })}
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              Sorted by: {PLANNED_EXECUTION_SORT_LABELS[sortOption]}
+              {t('automations.list.sortedBy', { sort: sortLabel(sortOption) })}
             </Typography>
           </Box>
         </>
@@ -448,10 +474,10 @@ const PlannedExecutionsManager = () => {
           }}
         >
           <Typography variant="h6" sx={{ mb: 1 }}>
-            No triggers yet
+            {t('automations.list.noTriggers')}
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Create your first trigger to run a flow automatically.
+            {t('automations.list.noTriggersHelp')}
           </Typography>
           <Button
             variant="contained"
@@ -461,7 +487,7 @@ const PlannedExecutionsManager = () => {
               setModalOpen(true);
             }}
           >
-            New trigger
+            {t('automations.list.newTrigger')}
           </Button>
         </Box>
       )}
@@ -477,11 +503,11 @@ const PlannedExecutionsManager = () => {
             textAlign: 'center',
           }}
         >
-          <Typography variant="h6" sx={{ mb: 1 }}>No matches</Typography>
+          <Typography variant="h6" sx={{ mb: 1 }}>{t('automations.list.noMatches')}</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Try a different search or filter.
+            {t('automations.list.noMatchesHelp')}
           </Typography>
-          <Button variant="outlined" onClick={clearFilters}>Clear filters</Button>
+          <Button variant="outlined" onClick={clearFilters}>{t('automations.list.clearFilters')}</Button>
         </Box>
       )}
 
@@ -514,28 +540,28 @@ const PlannedExecutionsManager = () => {
           onClick={() => { setGroupMode('none'); setGroupAnchorEl(null); }}
         >
           <ListItemIcon><LayersClearIcon fontSize="small" /></ListItemIcon>
-          <ListItemText primary="No grouping" />
+          <ListItemText primary={t('automations.list.group.none')} />
         </MenuItem>
         <MenuItem
           selected={groupMode === 'folder'}
           onClick={() => { setGroupMode('folder'); setGroupAnchorEl(null); }}
         >
           <ListItemIcon><FolderOutlinedIcon fontSize="small" /></ListItemIcon>
-          <ListItemText primary="By folder" />
+          <ListItemText primary={t('automations.list.group.folder')} />
         </MenuItem>
         <MenuItem
           selected={groupMode === 'trigger'}
           onClick={() => { setGroupMode('trigger'); setGroupAnchorEl(null); }}
         >
           <ListItemIcon><BoltOutlinedIcon fontSize="small" /></ListItemIcon>
-          <ListItemText primary="By trigger" />
+          <ListItemText primary={t('automations.list.group.trigger')} />
         </MenuItem>
         <MenuItem
           selected={groupMode === 'status'}
           onClick={() => { setGroupMode('status'); setGroupAnchorEl(null); }}
         >
           <ListItemIcon><MonitorHeartOutlinedIcon fontSize="small" /></ListItemIcon>
-          <ListItemText primary="By status" />
+          <ListItemText primary={t('automations.list.group.status')} />
         </MenuItem>
       </Menu>
 
@@ -551,7 +577,7 @@ const PlannedExecutionsManager = () => {
           onClick={() => { setSortOption('name-asc'); setSortAnchorEl(null); }}
         >
           <ListItemIcon><SortByAlphaIcon fontSize="small" /></ListItemIcon>
-          <ListItemText primary="Name (A-Z)" />
+          <ListItemText primary={sortLabel('name-asc')} />
         </MenuItem>
         <MenuItem
           selected={sortOption === 'name-desc'}
@@ -560,14 +586,14 @@ const PlannedExecutionsManager = () => {
           <ListItemIcon>
             <SortByAlphaIcon fontSize="small" sx={{ transform: 'scaleX(-1)' }} />
           </ListItemIcon>
-          <ListItemText primary="Name (Z-A)" />
+          <ListItemText primary={sortLabel('name-desc')} />
         </MenuItem>
         <MenuItem
           selected={sortOption === 'newest'}
           onClick={() => { setSortOption('newest'); setSortAnchorEl(null); }}
         >
           <ListItemIcon><UpdateIcon fontSize="small" /></ListItemIcon>
-          <ListItemText primary="Newest first" />
+          <ListItemText primary={sortLabel('newest')} />
         </MenuItem>
         <MenuItem
           selected={sortOption === 'oldest'}
@@ -576,14 +602,14 @@ const PlannedExecutionsManager = () => {
           <ListItemIcon>
             <UpdateIcon fontSize="small" sx={{ transform: 'scaleX(-1)' }} />
           </ListItemIcon>
-          <ListItemText primary="Oldest first" />
+          <ListItemText primary={sortLabel('oldest')} />
         </MenuItem>
         <MenuItem
           selected={sortOption === 'last-run'}
           onClick={() => { setSortOption('last-run'); setSortAnchorEl(null); }}
         >
           <ListItemIcon><MonitorHeartOutlinedIcon fontSize="small" /></ListItemIcon>
-          <ListItemText primary="Most recently run" />
+          <ListItemText primary={sortLabel('last-run')} />
         </MenuItem>
       </Menu>
 
@@ -606,17 +632,16 @@ const PlannedExecutionsManager = () => {
       </Snackbar>
 
       <Dialog open={deleting !== null} onClose={() => setDeleting(null)}>
-        <DialogTitle>Delete “{deleting?.name}”?</DialogTitle>
+        <DialogTitle>{t('automations.list.deleteTitle', { name: deleting?.name ?? '' })}</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary">
-            This removes the trigger and its run history. The flow itself is
-            not affected.
+            {t('automations.list.deleteHelp')}
           </Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDeleting(null)}>Cancel</Button>
+          <Button onClick={() => setDeleting(null)}>{t('automations.list.cancel')}</Button>
           <Button color="error" variant="contained" onClick={handleDelete}>
-            Delete
+            {t('automations.list.delete')}
           </Button>
         </DialogActions>
       </Dialog>

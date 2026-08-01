@@ -21,6 +21,7 @@ import { Flow } from '@/shared/types/flow';
 import { flowService, FlowVersionSummary } from '@/frontend/services/flow';
 import { FlowPreview } from '../FlowPreview';
 import { createLogger } from '@/utils/logger';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('components/flow/FlowBuilder/Modals/FlowVersionHistoryDialog');
 
@@ -35,20 +36,13 @@ interface FlowVersionHistoryDialogProps {
   onRestore: (flow: Flow) => void;
 }
 
-function formatSavedAt(ms: number): string {
-  try {
-    return new Date(ms).toLocaleString();
-  } catch {
-    return String(ms);
-  }
-}
-
 const FlowVersionHistoryDialog: React.FC<FlowVersionHistoryDialogProps> = ({
   open,
   flowId,
   onClose,
   onRestore,
 }) => {
+  const { t, tp, formatDate } = useI18n();
   const [loadingList, setLoadingList] = useState(false);
   const [versions, setVersions] = useState<FlowVersionSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -106,7 +100,7 @@ const FlowVersionHistoryDialog: React.FC<FlowVersionHistoryDialogProps> = ({
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth>
-      <DialogTitle>Version History</DialogTitle>
+      <DialogTitle>{t('flows.history.title')}</DialogTitle>
       <DialogContent dividers sx={{ p: 0 }}>
         <Box sx={{ display: 'flex', height: '65vh' }}>
           {/* Version list */}
@@ -118,8 +112,7 @@ const FlowVersionHistoryDialog: React.FC<FlowVersionHistoryDialogProps> = ({
             ) : versions.length === 0 ? (
               <Box sx={{ p: 3 }}>
                 <Typography variant="body2" color="text.secondary">
-                  No saved versions yet. A version is archived automatically each time you save a
-                  change to this flow.
+                  {t('flows.history.empty')}
                 </Typography>
               </Box>
             ) : (
@@ -133,11 +126,13 @@ const FlowVersionHistoryDialog: React.FC<FlowVersionHistoryDialogProps> = ({
                       <ListItemText
                         primary={
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                            <Typography variant="body2">{formatSavedAt(v.savedAt)}</Typography>
-                            {index === 0 && <Chip label="most recent" size="small" />}
+                            <Typography variant="body2">
+                              {formatDate(v.savedAt, { dateStyle: 'medium', timeStyle: 'short' })}
+                            </Typography>
+                            {index === 0 && <Chip label={t('flows.history.mostRecent')} size="small" />}
                           </Box>
                         }
-                        secondary={`${v.nodeCount} node${v.nodeCount === 1 ? '' : 's'} · ${v.edgeCount} edge${v.edgeCount === 1 ? '' : 's'}`}
+                        secondary={`${tp('flows.history.node', v.nodeCount)} · ${tp('flows.history.edge', v.edgeCount)}`}
                       />
                     </ListItemButton>
                     <Divider component="li" />
@@ -159,8 +154,8 @@ const FlowVersionHistoryDialog: React.FC<FlowVersionHistoryDialogProps> = ({
               <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', p: 4 }}>
                 <Typography variant="body2" color="text.secondary" align="center">
                   {versions.length === 0
-                    ? 'Versions appear here after you save changes.'
-                    : 'Select a version on the left to preview it.'}
+                    ? t('flows.history.afterSave')
+                    : t('flows.history.select')}
                 </Typography>
               </Box>
             )}
@@ -168,7 +163,7 @@ const FlowVersionHistoryDialog: React.FC<FlowVersionHistoryDialogProps> = ({
         </Box>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Close</Button>
+        <Button onClick={onClose}>{t('common.close')}</Button>
         <Button
           variant="contained"
           color="primary"
@@ -176,7 +171,7 @@ const FlowVersionHistoryDialog: React.FC<FlowVersionHistoryDialogProps> = ({
           onClick={handleRestore}
           disabled={!previewFlow}
         >
-          Restore this version
+          {t('flows.history.restore')}
         </Button>
       </DialogActions>
     </Dialog>

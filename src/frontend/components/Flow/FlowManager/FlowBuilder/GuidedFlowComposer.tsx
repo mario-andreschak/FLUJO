@@ -24,6 +24,8 @@ import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
 import PlayArrowRoundedIcon from '@mui/icons-material/PlayArrowRounded';
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
 import type { FlowNode, NodeType } from '@/frontend/types/flow/flow';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { Translator } from '@/frontend/i18n/core';
 
 interface GuidedFlowComposerProps {
   nodes: FlowNode[];
@@ -48,39 +50,36 @@ interface GuidedFlowComposerProps {
   onCheckPlausibility?: () => void;
 }
 
-const defaultFriendlyLabels: Partial<Record<NodeType, string>> = {
-  process: 'AI works on the task',
-  subflow: 'Ask another agent',
-  signal: 'Notify another automation',
-};
-
 const technicalDefaultLabels = new Set([
   'Process Node',
   'Subflow Node',
   'Signal Node',
 ]);
 
-const friendlyType = (type: NodeType) => {
-  if (type === 'subflow') return 'Another agent';
-  if (type === 'signal') return 'Notification';
-  return 'AI step';
+const friendlyType = (type: NodeType, t: Translator) => {
+  if (type === 'subflow') return t('flows.guided.type.subflow');
+  if (type === 'signal') return t('flows.guided.type.signal');
+  return t('flows.guided.type.process');
 };
 
-const friendlyTitle = (node: FlowNode) => {
+const friendlyTitle = (node: FlowNode, t: Translator) => {
   const label = node.data.label?.trim();
   if (!label || technicalDefaultLabels.has(label)) {
-    return defaultFriendlyLabels[node.data.type as NodeType] ?? 'Agent step';
+    if (node.data.type === 'process') return t('flows.guided.default.process');
+    if (node.data.type === 'subflow') return t('flows.guided.default.subflow');
+    if (node.data.type === 'signal') return t('flows.guided.default.signal');
+    return t('flows.guided.default.step');
   }
   return label;
 };
 
-const friendlySummary = (node: FlowNode) => {
+const friendlySummary = (node: FlowNode, t: Translator) => {
   const prompt = String(node.data.properties?.promptTemplate ?? '').trim();
   if (prompt) return prompt;
   if (node.data.description?.trim()) return node.data.description.trim();
-  if (node.data.type === 'subflow') return 'Hand this part of the job to another saved agent.';
-  if (node.data.type === 'signal') return 'Let another automation know that this point was reached.';
-  return 'Click this step to describe the result you want.';
+  if (node.data.type === 'subflow') return t('flows.guided.summary.subflow');
+  if (node.data.type === 'signal') return t('flows.guided.summary.signal');
+  return t('flows.guided.summary.process');
 };
 
 const StepNumber = ({ children, complete = false }: { children: React.ReactNode; complete?: boolean }) => (
@@ -128,6 +127,7 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
   onModelChange,
   onCheckPlausibility,
 }) => {
+  const { t } = useI18n();
   const [taskPrompt, setTaskPrompt] = useState('');
   const steps = useMemo(
     () => {
@@ -159,7 +159,7 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
 
   return (
     <Box
-      aria-label="Guided agent builder"
+      aria-label={t('flows.guided.aria')}
       sx={{
         flex: 1,
         minHeight: 0,
@@ -172,14 +172,14 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
         <Stack spacing={0.8} sx={{ mb: 2.5 }}>
           <Chip
             icon={<AutoAwesomeRoundedIcon />}
-            label="Simple setup"
+            label={t('flows.guided.simple')}
             color="primary"
             variant="outlined"
             sx={{ alignSelf: 'flex-start' }}
           />
-          <Typography variant="h4">Build it like a simple recipe.</Typography>
+          <Typography variant="h4">{t('flows.guided.recipe')}</Typography>
           <Typography color="text.secondary">
-            No diagrams or technical setup needed. Tell FLUJO what you want, one step at a time.
+            {t('flows.guided.intro')}
           </Typography>
         </Stack>
 
@@ -191,30 +191,30 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
             >
               <Stack spacing={1.5}>
                 <Box>
-                  <Typography variant="h6">May one of your connected AIs help build this?</Typography>
+                  <Typography variant="h6">{t('flows.guided.aiQuestion')}</Typography>
                   <Typography variant="body2" color="text.secondary">
-                    If you say yes, choose the AI that should suggest connected tools and check the finished workflow.
+                    {t('flows.guided.aiHelp')}
                   </Typography>
                 </Box>
                 {aiAssistance === 'unasked' ? (
                   <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
                     <Button variant="contained" startIcon={<AutoAwesomeRoundedIcon />} onClick={() => onChooseAssistance('assisted')}>
-                      Yes, help me
+                      {t('flows.guided.yesHelp')}
                     </Button>
-                    <Button variant="outlined" onClick={() => onChooseAssistance('manual')}>No, I’ll build it myself</Button>
+                    <Button variant="outlined" onClick={() => onChooseAssistance('manual')}>{t('flows.guided.manual')}</Button>
                   </Stack>
                 ) : (
                   <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ sm: 'center' }}>
                     <Chip
                       color={aiAssistance === 'assisted' ? 'primary' : 'default'}
-                      label={aiAssistance === 'assisted' ? 'AI help is on' : 'Manual setup'}
+                      label={aiAssistance === 'assisted' ? t('flows.guided.aiOn') : t('flows.guided.manualSetup')}
                     />
                     {aiAssistance === 'assisted' && onModelChange && (
                       <FormControl size="small" sx={{ minWidth: 260 }}>
-                        <InputLabel id="guided-helper-model-label">AI helper</InputLabel>
+                        <InputLabel id="guided-helper-model-label">{t('flows.guided.aiHelper')}</InputLabel>
                         <Select
                           labelId="guided-helper-model-label"
-                          label="AI helper"
+                          label={t('flows.guided.aiHelper')}
                           value={selectedModelId ?? ''}
                           onChange={(event) => onModelChange(String(event.target.value))}
                         >
@@ -225,7 +225,7 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
                       </FormControl>
                     )}
                     <Button size="small" onClick={() => onChooseAssistance(aiAssistance === 'assisted' ? 'manual' : 'assisted')}>
-                      {aiAssistance === 'assisted' ? 'Turn off' : 'Turn on AI help'}
+                      {aiAssistance === 'assisted' ? t('flows.guided.turnOff') : t('flows.guided.turnOn')}
                     </Button>
                   </Stack>
                 )}
@@ -246,17 +246,17 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
             <Stack direction="row" spacing={1.5} alignItems="flex-start">
               <StepNumber complete={hasUsefulName}>1</StepNumber>
               <Box sx={{ flex: 1, minWidth: 0 }}>
-                <Typography variant="h6">Give your agent a name</Typography>
+                <Typography variant="h6">{t('flows.guided.nameTitle')}</Typography>
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-                  Pick something you will recognize later, like “Trip planner” or “Weekly report helper.”
+                  {t('flows.guided.nameHelp')}
                 </Typography>
                 <TextField
                   fullWidth
                   size="small"
-                  label="Agent name"
+                  label={t('flows.guided.name')}
                   value={flowName}
                   error={!!flowNameError}
-                  helperText={flowNameError ?? (hasUsefulName ? 'Looks good.' : 'Use a short, memorable name.')}
+                  helperText={flowNameError ?? (hasUsefulName ? t('flows.guided.looksGood') : t('flows.guided.nameHint'))}
                   onChange={(event) => onFlowNameChange(event.target.value)}
                   onFocus={(event) => {
                     if (/^(?:NewFlow\d*|Untitled (?:assistant|agent)(?: \d+)?)$/i.test(event.currentTarget.value)) {
@@ -281,11 +281,11 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
             <Stack direction="row" spacing={1.5} alignItems="flex-start">
               <StepNumber complete={steps.length > 0}>2</StepNumber>
               <Box sx={{ flex: 1, minWidth: 0 }}>
-                <Typography variant="h6">{steps.length ? 'Add another step' : 'What is the goal of this workflow?'}</Typography>
+                <Typography variant="h6">{steps.length ? t('flows.guided.addAnother') : t('flows.guided.goalQuestion')}</Typography>
                 <Typography variant="body2" color="text.secondary">
                   {steps.length
-                    ? 'Write it the same way you would explain the next job to a helpful person.'
-                    : 'This goal becomes the first AI step’s prompt, exactly as if you added that step yourself.'}
+                    ? t('flows.guided.nextHelp')
+                    : t('flows.guided.goalHelp')}
                 </Typography>
 
                 {hasAdvancedFeatures && (
@@ -293,12 +293,12 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
                     severity="info"
                     action={
                       <Button color="inherit" size="small" onClick={onSwitchAdvanced}>
-                        Open expert view
+                        {t('flows.guided.openExpert')}
                       </Button>
                     }
                     sx={{ mt: 1.5 }}
                   >
-                    This agent uses branches or expert settings. You can review it here and make structural changes in Expert view.
+                    {t('flows.guided.advancedWarning')}
                   </Alert>
                 )}
 
@@ -315,9 +315,9 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
                     }}
                   >
                     <Typography variant="caption" fontWeight={800} color="primary.main">
-                      WHEN
+                      {t('flows.guided.when').toLocaleUpperCase()}
                     </Typography>
-                    <Typography variant="body2" fontWeight={700}>Someone asks this agent for help</Typography>
+                    <Typography variant="body2" fontWeight={700}>{t('flows.guided.someoneAsks')}</Typography>
                   </Box>
 
                   {steps.map((node, index) => (
@@ -364,10 +364,10 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
                             </Box>
                             <Box sx={{ minWidth: 0, flex: 1 }}>
                               <Typography variant="overline" color="primary.main">
-                                {friendlyType(node.data.type as NodeType)}
+                                {friendlyType(node.data.type as NodeType, t)}
                               </Typography>
                               <Typography variant="subtitle1" fontWeight={800}>
-                                {friendlyTitle(node)}
+                                {friendlyTitle(node, t)}
                               </Typography>
                               <Typography
                                 variant="body2"
@@ -380,7 +380,7 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
                                   WebkitLineClamp: 2,
                                 }}
                               >
-                                {friendlySummary(node)}
+                                {friendlySummary(node, t)}
                               </Typography>
                             </Box>
                             <TuneRoundedIcon color="action" fontSize="small" />
@@ -406,9 +406,9 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
                     }}
                   >
                     <Typography variant="caption" fontWeight={800} color="success.main">
-                      THEN
+                      {t('flows.guided.then').toLocaleUpperCase()}
                     </Typography>
-                    <Typography variant="body2" fontWeight={700}>Send the finished answer back</Typography>
+                    <Typography variant="body2" fontWeight={700}>{t('flows.guided.sendAnswer')}</Typography>
                   </Box>
                 </Stack>
 
@@ -418,8 +418,8 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
                     multiline
                     minRows={2}
                     maxRows={5}
-                    label={steps.length ? 'Add another thing it should do' : 'Workflow goal'}
-                    placeholder="Example: Read my notes, find the important points, and explain them simply."
+                    label={steps.length ? t('flows.guided.nextLabel') : t('flows.guided.goalLabel')}
+                    placeholder={t('flows.guided.goalPlaceholder')}
                     value={taskPrompt}
                     disabled={hasAdvancedFeatures}
                     onChange={(event) => setTaskPrompt(event.target.value)}
@@ -437,7 +437,7 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
                     onClick={addTask}
                     sx={{ minWidth: { sm: 150 } }}
                   >
-                    {steps.length ? 'Add this step' : 'Create goal step'}
+                    {steps.length ? t('flows.guided.addStep') : t('flows.guided.createGoal')}
                   </Button>
                 </Stack>
               </Box>
@@ -457,13 +457,13 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ sm: 'center' }}>
               <StepNumber>3</StepNumber>
               <Box sx={{ flex: 1 }}>
-                <Typography variant="h6">Try it with a real question</Typography>
+                <Typography variant="h6">{t('flows.guided.tryTitle')}</Typography>
                 <Typography variant="body2" color="text.secondary">
-                  FLUJO will save your changes, then open a normal chat so you can see how it feels.
+                  {t('flows.guided.tryHelp')}
                 </Typography>
                 {needsAIConnection && steps.some(node => node.data.type === 'process') && (
                   <Alert severity="warning" sx={{ mt: 1 }}>
-                    This step still needs an AI. Select the step, choose More options, and connect the AI you want to use.
+                    {t('flows.guided.needsAi')}
                   </Alert>
                 )}
               </Box>
@@ -471,7 +471,7 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
                 <Stack spacing={1}>
                   {onCheckPlausibility && aiAssistance === 'assisted' && (
                     <Button variant="outlined" startIcon={<AutoAwesomeRoundedIcon />} disabled={steps.length === 0} onClick={onCheckPlausibility}>
-                      Check setup with AI
+                      {t('flows.guided.checkAi')}
                     </Button>
                   )}
                   <Button
@@ -481,7 +481,7 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
                     disabled={!canTry}
                     onClick={onTry}
                   >
-                    {isSaving ? 'Saving…' : 'Try my agent'}
+                    {isSaving ? t('flows.guided.saving') : t('flows.guided.tryAgent')}
                   </Button>
                 </Stack>
               )}

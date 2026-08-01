@@ -44,6 +44,8 @@ import {
   StatisticsRunSource,
   StatisticsStatusFilter,
 } from '@/shared/types/statistics';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { TranslationKey } from '@/frontend/i18n/messages';
 
 const RUN_SOURCES: StatisticsRunSource[] = [
   'chat',
@@ -67,41 +69,37 @@ const STATUSES: StatisticsStatusFilter[] = [
 type ArrayFilterKey = Exclude<keyof StatisticsDashboardFilters, 'range'>;
 type TabKey = 'overview' | 'flows' | 'executions' | 'models' | 'providers';
 
-const IDENTIFIER_FILTERS: Array<{ field: ArrayFilterKey; label: string }> = [
-  { field: 'flowIds', label: 'Flow IDs' },
-  { field: 'plannedExecutionIds', label: 'Planned execution IDs' },
-  { field: 'modelIds', label: 'Model IDs' },
-  { field: 'providerIds', label: 'Provider IDs' },
-  { field: 'credentialIds', label: 'Credential IDs' },
+const IDENTIFIER_FILTERS: Array<{ field: ArrayFilterKey; labelKey: TranslationKey }> = [
+  { field: 'flowIds', labelKey: 'statistics.filter.flowIds' },
+  { field: 'plannedExecutionIds', labelKey: 'statistics.filter.executionIds' },
+  { field: 'modelIds', labelKey: 'statistics.filter.modelIds' },
+  { field: 'providerIds', labelKey: 'statistics.filter.providerIds' },
+  { field: 'credentialIds', labelKey: 'statistics.filter.credentialIds' },
 ];
 
-const integerFormat = new Intl.NumberFormat();
-const compactFormat = new Intl.NumberFormat(undefined, {
-  notation: 'compact',
-  maximumFractionDigits: 1,
-});
-
-function formatDuration(milliseconds: number): string {
-  if (milliseconds < 1_000) return `${Math.round(milliseconds)} ms`;
+function formatDuration(
+  milliseconds: number,
+  formatNumber: (value: number, options?: Intl.NumberFormatOptions) => string,
+  daysLabel: (value: number) => string,
+): string {
+  if (milliseconds < 1_000) return `${formatNumber(Math.round(milliseconds))} ms`;
   const seconds = milliseconds / 1_000;
-  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)} s`;
+  if (seconds < 60) return `${formatNumber(seconds, { maximumFractionDigits: seconds < 10 ? 1 : 0 })} s`;
   const minutes = seconds / 60;
-  if (minutes < 60) return `${minutes.toFixed(minutes < 10 ? 1 : 0)} min`;
+  if (minutes < 60) return `${formatNumber(minutes, { maximumFractionDigits: minutes < 10 ? 1 : 0 })} min`;
   const hours = minutes / 60;
-  if (hours < 24) return `${hours.toFixed(hours < 10 ? 1 : 0)} hr`;
-  return `${(hours / 24).toFixed(1)} days`;
+  if (hours < 24) return `${formatNumber(hours, { maximumFractionDigits: hours < 10 ? 1 : 0 })} h`;
+  return daysLabel(hours / 24);
 }
 
-function formatPercent(value: number): string {
-  return `${(value * 100).toFixed(value > 0 && value < 0.1 ? 1 : 0)}%`;
-}
-
-function displayDate(date: string): string {
-  return new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: 'numeric',
-    timeZone: 'UTC',
-  }).format(new Date(`${date}T00:00:00Z`));
+function formatPercent(
+  value: number,
+  formatNumber: (value: number, options?: Intl.NumberFormatOptions) => string,
+): string {
+  return formatNumber(value, {
+    style: 'percent',
+    maximumFractionDigits: value > 0 && value < 0.1 ? 1 : 0,
+  });
 }
 
 function parseIdentifiers(value: string): string[] {
@@ -117,6 +115,7 @@ interface IdentifierFilterProps {
 }
 
 function IdentifierFilter({ label, values, onChange }: IdentifierFilterProps) {
+  const { t } = useI18n();
   const [draft, setDraft] = useState(values.join(', '));
 
   useEffect(() => {
@@ -139,8 +138,8 @@ function IdentifierFilter({ label, values, onChange }: IdentifierFilterProps) {
       }}
       size="small"
       fullWidth
-      helperText="Comma-separated exact IDs"
-      inputProps={{ 'aria-label': `${label}, comma-separated` }}
+      helperText={t('statistics.commaSeparated')}
+      inputProps={{ 'aria-label': t('statistics.commaSeparatedAria', { label }) }}
     />
   );
 }
@@ -186,6 +185,7 @@ function TimeSeries({
   formatValue,
   onSelectDate,
 }: TimeSeriesProps) {
+  const { t, formatDate } = useI18n();
   const values = buckets.map(metric);
   const maximum = Math.max(...values, 1);
 
@@ -197,7 +197,7 @@ function TimeSeries({
       </Typography>
       <Box
         component="ul"
-        aria-label={`${title} by UTC day`}
+        aria-label={t('statistics.byUtcDayAria', { title })}
         sx={{
           display: 'grid',
           gridTemplateColumns: `repeat(${Math.max(buckets.length, 1)}, minmax(40px, 1fr))`,
@@ -212,10 +212,10 @@ function TimeSeries({
           const value = values[index];
           return (
             <Box component="li" key={bucket.date} sx={{ minWidth: 0 }}>
-              <Tooltip title="Filter the dashboard to this UTC day">
+              <Tooltip title={t('statistics.filterDayTooltip')}>
                 <ButtonBase
                   onClick={() => onSelectDate(bucket.date)}
-                  aria-label={`${title}: ${formatValue(value)} on ${bucket.date}. Filter to this day.`}
+                  aria-label={t('statistics.filterDayAria', { title, value: formatValue(value), date: bucket.date })}
                   sx={{
                     width: '100%',
                     height: 180,
@@ -242,7 +242,7 @@ function TimeSeries({
                     }}
                   />
                   <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
-                    {displayDate(bucket.date)}
+                    {formatDate(`${bucket.date}T00:00:00Z`, { month: 'short', day: 'numeric', timeZone: 'UTC' })}
                   </Typography>
                 </ButtonBase>
               </Tooltip>
@@ -260,35 +260,41 @@ interface RankingTableProps {
   selectedIds: readonly string[];
   mode: 'runs' | 'providers';
   onSelect: (row: StatisticsRankingRow) => void;
+  credentials?: boolean;
 }
 
-function RankingTable({ title, rows, selectedIds, mode, onSelect }: RankingTableProps) {
+function RankingTable({ title, rows, selectedIds, mode, onSelect, credentials = false }: RankingTableProps) {
+  const { t, tp, formatNumber } = useI18n();
   const providerMode = mode === 'providers';
+  const compact = (value: number) => formatNumber(value, { notation: 'compact', maximumFractionDigits: 1 });
+  const duration = (value: number) => formatDuration(value, formatNumber, (days) => tp('statistics.duration.days', days, {
+    value: formatNumber(days, { maximumFractionDigits: 1 }),
+  }));
 
   return (
     <Paper component="section" variant="outlined" sx={{ minWidth: 0 }}>
       <Box sx={{ px: 2, pt: 2 }}>
         <Typography component="h3" variant="h6">{title}</Typography>
         <Typography color="text.secondary" variant="body2">
-          Select a row to apply it as a dashboard-wide filter.
+          {t('statistics.rankingHint')}
         </Typography>
       </Box>
       <TableContainer sx={{ mt: 1 }}>
-        <Table size="small" aria-label={`${title} ranking`}>
+        <Table size="small" aria-label={t('statistics.rankingAria', { title })}>
           <TableHead>
             <TableRow>
-              <TableCell>Name</TableCell>
-              <TableCell align="right">{providerMode ? 'Attempts' : 'Logical runs'}</TableCell>
-              <TableCell align="right">{providerMode ? 'Provider failures' : 'Failures'}</TableCell>
-              {!providerMode && <TableCell align="right">Skips</TableCell>}
-              <TableCell align="right">Tokens</TableCell>
+              <TableCell>{t('statistics.name')}</TableCell>
+              <TableCell align="right">{providerMode ? t('statistics.attempts') : t('statistics.logicalRuns')}</TableCell>
+              <TableCell align="right">{providerMode ? t('statistics.providerFailures') : t('statistics.failures')}</TableCell>
+              {!providerMode && <TableCell align="right">{t('statistics.skips')}</TableCell>}
+              <TableCell align="right">{t('statistics.tokens')}</TableCell>
               <TableCell align="right">
-                {providerMode ? 'Provider wall-clock' : 'Run wall-clock'}
+                {providerMode ? t('statistics.providerWallClock') : t('statistics.runWallClock')}
               </TableCell>
               {providerMode ? (
-                <TableCell align="right">Peak context</TableCell>
+                <TableCell align="right">{t('statistics.peakContext')}</TableCell>
               ) : (
-                <TableCell align="right">Tool failures</TableCell>
+                <TableCell align="right">{t('statistics.toolFailures')}</TableCell>
               )}
             </TableRow>
           </TableHead>
@@ -297,19 +303,19 @@ function RankingTable({ title, rows, selectedIds, mode, onSelect }: RankingTable
               <TableRow>
                 <TableCell colSpan={providerMode ? 6 : 7}>
                   <Typography color="text.secondary" align="center" sx={{ py: 2 }}>
-                    No ranked items match the current filters.
+                    {t('statistics.noRankedItems')}
                   </Typography>
                 </TableCell>
               </TableRow>
             ) : rows.map((row) => {
-              const label = title === 'Credentials' ? row.id : row.name || row.id;
+              const label = credentials ? row.id : row.name || row.id;
               return (
                 <TableRow
                   key={row.id}
                   hover
                   selected={selectedIds.includes(row.id)}
                   tabIndex={0}
-                  aria-label={`Filter by ${title}: ${label}`}
+                  aria-label={t('statistics.filterByAria', { title, label })}
                   onClick={() => onSelect(row)}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter' || event.key === ' ') {
@@ -324,29 +330,29 @@ function RankingTable({ title, rows, selectedIds, mode, onSelect }: RankingTable
                 >
                   <TableCell>
                     <Typography variant="body2" fontWeight={600}>{label}</Typography>
-                    {title !== 'Credentials' && row.name && (
+                    {!credentials && row.name && (
                       <Typography variant="caption" color="text.secondary">{row.id}</Typography>
                     )}
                   </TableCell>
                   <TableCell align="right">
-                    {integerFormat.format(providerMode ? row.providerAttempts : row.runs)}
+                    {formatNumber(providerMode ? row.providerAttempts : row.runs)}
                   </TableCell>
                   <TableCell align="right">
-                    {integerFormat.format(providerMode ? row.providerErrors : row.errors)}
+                    {formatNumber(providerMode ? row.providerErrors : row.errors)}
                   </TableCell>
                   {!providerMode && (
-                    <TableCell align="right">{integerFormat.format(row.schedulerSkips)}</TableCell>
+                    <TableCell align="right">{formatNumber(row.schedulerSkips)}</TableCell>
                   )}
-                  <TableCell align="right">{compactFormat.format(row.usage.totalTokens)}</TableCell>
+                  <TableCell align="right">{compact(row.usage.totalTokens)}</TableCell>
                   <TableCell align="right">
-                    {formatDuration(
+                    {duration(
                       providerMode ? row.providerDuration.totalMs : row.runDuration.totalMs,
                     )}
                   </TableCell>
                   {providerMode ? (
-                    <TableCell align="right">{formatPercent(row.peakContextUtilization)}</TableCell>
+                    <TableCell align="right">{formatPercent(row.peakContextUtilization, formatNumber)}</TableCell>
                   ) : (
-                    <TableCell align="right">{integerFormat.format(row.toolFailures)}</TableCell>
+                    <TableCell align="right">{formatNumber(row.toolFailures)}</TableCell>
                   )}
                 </TableRow>
               );
@@ -359,6 +365,7 @@ function RankingTable({ title, rows, selectedIds, mode, onSelect }: RankingTable
 }
 
 export default function Statistics() {
+  const { t, tp, formatNumber } = useI18n();
   const [filters, setFilters] = useState<StatisticsDashboardFilters>(
     () => createDefaultStatisticsFilters(),
   );
@@ -369,9 +376,9 @@ export default function Statistics() {
   const [tab, setTab] = useState<TabKey>('overview');
 
   const rangeError = !filters.range.from || !filters.range.to
-    ? 'Choose both UTC dates.'
+    ? t('statistics.chooseBothDates')
     : filters.range.from > filters.range.to
-      ? 'The start date must be on or before the end date.'
+      ? t('statistics.invalidRange')
       : null;
 
   useEffect(() => {
@@ -388,7 +395,7 @@ export default function Statistics() {
       .then((response) => setData(response))
       .catch((requestError: unknown) => {
         if (!controller.signal.aborted) {
-          setError(requestError instanceof Error ? requestError.message : 'Statistics are unavailable.');
+          setError(requestError instanceof Error ? requestError.message : t('statistics.unavailable'));
         }
       })
       .finally(() => {
@@ -396,7 +403,7 @@ export default function Statistics() {
       });
 
     return () => controller.abort();
-  }, [filters, refreshVersion, rangeError]);
+  }, [filters, refreshVersion, rangeError, t]);
 
   const updateArrayFilter = (field: ArrayFilterKey, values: readonly string[]) => {
     setFilters((current) => ({
@@ -413,13 +420,13 @@ export default function Statistics() {
   const activeFilters = useMemo(() => {
     const labels: Array<{ field: ArrayFilterKey; value: string; label: string }> = [];
     const fieldLabels: Record<ArrayFilterKey, string> = {
-      flowIds: 'Flow',
-      plannedExecutionIds: 'Execution',
-      sources: 'Source',
-      statuses: 'Status',
-      modelIds: 'Model',
-      providerIds: 'Provider',
-      credentialIds: 'Credential',
+      flowIds: t('statistics.field.flow'),
+      plannedExecutionIds: t('statistics.field.execution'),
+      sources: t('statistics.field.source'),
+      statuses: t('statistics.field.status'),
+      modelIds: t('statistics.field.model'),
+      providerIds: t('statistics.field.provider'),
+      credentialIds: t('statistics.field.credential'),
     };
     (Object.keys(fieldLabels) as ArrayFilterKey[]).forEach((field) => {
       const values = filters[field] as readonly string[] | undefined;
@@ -430,7 +437,7 @@ export default function Statistics() {
       }));
     });
     return labels;
-  }, [filters]);
+  }, [filters, t]);
 
   const selectRanking = (field: ArrayFilterKey) => (row: StatisticsRankingRow) => {
     updateArrayFilter(field, [row.id]);
@@ -451,15 +458,37 @@ export default function Statistics() {
   const successRate = data && data.summary.runs > 0
     ? data.summary.successes / data.summary.runs
     : 0;
+  const compact = (value: number) => formatNumber(value, { notation: 'compact', maximumFractionDigits: 1 });
+  const duration = (value: number) => formatDuration(value, formatNumber, (days) => tp('statistics.duration.days', days, {
+    value: formatNumber(days, { maximumFractionDigits: 1 }),
+  }));
+  const sourceLabels: Record<StatisticsRunSource, TranslationKey> = {
+    chat: 'statistics.source.chat',
+    api: 'statistics.source.api',
+    schedule: 'statistics.source.schedule',
+    trigger: 'statistics.source.trigger',
+    subflow: 'statistics.source.subflow',
+    mcp: 'statistics.source.mcp',
+    internal: 'statistics.source.internal',
+    'internal-tool': 'statistics.source.internalTool',
+  };
+  const statusLabels: Record<StatisticsStatusFilter, TranslationKey> = {
+    completed: 'statistics.status.completed',
+    error: 'statistics.status.error',
+    capped: 'statistics.status.capped',
+    cancelled: 'statistics.status.cancelled',
+    paused: 'statistics.status.paused',
+    skipped: 'statistics.status.skipped',
+  };
 
   return (
     <Box component="section" sx={{ overflow: 'auto' }}>
       <PageHeader
-        eyebrow="Observe"
-        title="Statistics"
-        description="Redacted execution analytics that reveal how your agent systems are behaving."
+        eyebrow={t('statistics.header.eyebrow')}
+        title={t('statistics.header.title')}
+        description={t('statistics.header.description')}
         icon={InsightsRoundedIcon}
-        badge={<Chip label="Experimental" size="small" color="secondary" variant="outlined" />}
+        badge={<Chip label={t('statistics.experimental')} size="small" color="secondary" variant="outlined" />}
         actions={(
           <>
           <Button
@@ -468,7 +497,7 @@ export default function Statistics() {
             onClick={reset}
             disabled={loading && !data}
           >
-            Reset
+            {t('statistics.reset')}
           </Button>
           <Button
             variant="contained"
@@ -476,7 +505,7 @@ export default function Statistics() {
             onClick={() => setRefreshVersion((version) => version + 1)}
             disabled={loading || !!rangeError}
           >
-            Refresh
+            {t('statistics.refresh')}
           </Button>
           </>
         )}
@@ -484,7 +513,7 @@ export default function Statistics() {
 
       <Box sx={{ p: { xs: 2, md: 3 }, width: '100%', maxWidth: 1440, mx: 'auto' }}>
       <Paper component="section" variant="outlined" sx={{ p: 2, mb: 2 }}>
-        <Typography component="h2" variant="h6" sx={{ mb: 1.5 }}>Shared filters</Typography>
+        <Typography component="h2" variant="h6" sx={{ mb: 1.5 }}>{t('statistics.sharedFilters')}</Typography>
         <Box
           sx={{
             display: 'grid',
@@ -494,7 +523,7 @@ export default function Statistics() {
           }}
         >
           <TextField
-            label="From (UTC)"
+            label={t('statistics.fromUtc')}
             type="date"
             value={filters.range.from}
             onChange={(event) => setFilters((current) => ({
@@ -504,10 +533,10 @@ export default function Statistics() {
             size="small"
             fullWidth
             InputLabelProps={{ shrink: true }}
-            inputProps={{ 'aria-label': 'Statistics start date in UTC' }}
+            inputProps={{ 'aria-label': t('statistics.startDateAria') }}
           />
           <TextField
-            label="To (UTC)"
+            label={t('statistics.toUtc')}
             type="date"
             value={filters.range.to}
             onChange={(event) => setFilters((current) => ({
@@ -517,14 +546,14 @@ export default function Statistics() {
             size="small"
             fullWidth
             InputLabelProps={{ shrink: true }}
-            inputProps={{ 'aria-label': 'Statistics end date in UTC' }}
+            inputProps={{ 'aria-label': t('statistics.endDateAria') }}
           />
           <FormControl size="small" fullWidth>
-            <InputLabel id="statistics-source-label">Sources</InputLabel>
+            <InputLabel id="statistics-source-label">{t('statistics.sources')}</InputLabel>
             <Select
               labelId="statistics-source-label"
               multiple
-              label="Sources"
+              label={t('statistics.sources')}
               value={filters.sources ?? []}
               onChange={(event) => updateArrayFilter(
                 'sources',
@@ -535,16 +564,16 @@ export default function Statistics() {
               renderValue={(selected) => selected.join(', ')}
             >
               {RUN_SOURCES.map((source) => (
-                <MenuItem key={source} value={source}>{source}</MenuItem>
+                <MenuItem key={source} value={source}>{t(sourceLabels[source])}</MenuItem>
               ))}
             </Select>
           </FormControl>
           <FormControl size="small" fullWidth>
-            <InputLabel id="statistics-status-label">Statuses</InputLabel>
+            <InputLabel id="statistics-status-label">{t('statistics.statuses')}</InputLabel>
             <Select
               labelId="statistics-status-label"
               multiple
-              label="Statuses"
+              label={t('statistics.statuses')}
               value={filters.statuses ?? []}
               onChange={(event) => updateArrayFilter(
                 'statuses',
@@ -555,14 +584,14 @@ export default function Statistics() {
               renderValue={(selected) => selected.join(', ')}
             >
               {STATUSES.map((status) => (
-                <MenuItem key={status} value={status}>{status}</MenuItem>
+                <MenuItem key={status} value={status}>{t(statusLabels[status])}</MenuItem>
               ))}
             </Select>
           </FormControl>
-          {IDENTIFIER_FILTERS.map(({ field, label }) => (
+          {IDENTIFIER_FILTERS.map(({ field, labelKey }) => (
             <IdentifierFilter
               key={field}
-              label={label}
+              label={t(labelKey)}
               values={(filters[field] as readonly string[] | undefined) ?? []}
               onChange={(values) => updateArrayFilter(field, values)}
             />
@@ -573,11 +602,11 @@ export default function Statistics() {
           flexWrap="wrap"
           gap={1}
           alignItems="center"
-          aria-label="Active statistics filters"
+          aria-label={t('statistics.activeFiltersAria')}
           sx={{ mt: activeFilters.length > 0 ? 2 : 1 }}
         >
           {activeFilters.length === 0 ? (
-            <Typography variant="body2" color="text.secondary">No dimension filters applied.</Typography>
+            <Typography variant="body2" color="text.secondary">{t('statistics.noDimensionFilters')}</Typography>
           ) : activeFilters.map((filter) => (
             <Chip
               key={`${filter.field}:${filter.value}`}
@@ -589,14 +618,14 @@ export default function Statistics() {
         </Stack>
       </Paper>
 
-      {loading && <LinearProgress aria-label="Refreshing statistics" sx={{ mb: 2 }} />}
+      {loading && <LinearProgress aria-label={t('statistics.refreshingAria')} sx={{ mb: 2 }} />}
       {error && (
         <Alert
           severity="error"
           sx={{ mb: 2 }}
           action={(
             <Button color="inherit" size="small" onClick={() => setRefreshVersion((version) => version + 1)}>
-              Retry
+              {t('statistics.retry')}
             </Button>
           )}
         >
@@ -607,22 +636,20 @@ export default function Statistics() {
       {loading && !data ? (
         <Stack alignItems="center" spacing={1.5} sx={{ py: 8 }}>
           <Spinner size="large" />
-          <Typography>Loading aggregate statistics…</Typography>
+          <Typography>{t('statistics.loading')}</Typography>
         </Stack>
       ) : !data ? null : !hasData ? (
         <Paper variant="outlined" sx={{ p: 4, textAlign: 'center' }}>
-          <Typography component="h2" variant="h6">No telemetry for this selection</Typography>
+          <Typography component="h2" variant="h6">{t('statistics.noTelemetry')}</Typography>
           <Typography color="text.secondary" sx={{ mt: 1, maxWidth: 620, mx: 'auto' }}>
-            Reliable collection begins after experimental statistics are enabled. Runs from before
-            collection started are not reconstructed, and no raw conversations or credentials are
-            downloaded to build this view.
+            {t('statistics.noTelemetryDescription')}
           </Typography>
         </Paper>
       ) : (
         <>
           <Box
             component="section"
-            aria-label="Statistics summary"
+            aria-label={t('statistics.summaryAria')}
             sx={{
               display: 'grid',
               gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', lg: 'repeat(5, 1fr)' },
@@ -631,29 +658,29 @@ export default function Statistics() {
             }}
           >
             <SummaryCard
-              label="Logical runs"
-              value={integerFormat.format(data.summary.runs)}
-              detail={`${integerFormat.format(data.summary.schedulerSkips)} scheduler skips`}
+              label={t('statistics.logicalRuns')}
+              value={formatNumber(data.summary.runs)}
+              detail={t('statistics.schedulerSkips', { count: formatNumber(data.summary.schedulerSkips) })}
             />
             <SummaryCard
-              label="Success rate"
-              value={formatPercent(successRate)}
-              detail={`${integerFormat.format(data.summary.successes)} completed successfully`}
+              label={t('statistics.successRate')}
+              value={formatPercent(successRate, formatNumber)}
+              detail={t('statistics.completedSuccessfully', { count: formatNumber(data.summary.successes) })}
             />
             <SummaryCard
-              label="Tokens"
-              value={compactFormat.format(data.summary.usage.totalTokens)}
-              detail={`${compactFormat.format(data.summary.usage.inputTokens)} input · ${compactFormat.format(data.summary.usage.outputTokens)} output`}
+              label={t('statistics.tokens')}
+              value={compact(data.summary.usage.totalTokens)}
+              detail={t('statistics.inputOutputTokens', { input: compact(data.summary.usage.inputTokens), output: compact(data.summary.usage.outputTokens) })}
             />
             <SummaryCard
-              label="Run wall-clock time"
-              value={formatDuration(data.summary.runDuration.totalMs)}
-              detail={`P95 ${formatDuration(data.summary.runDuration.p95Ms)}`}
+              label={t('statistics.runWallClock')}
+              value={duration(data.summary.runDuration.totalMs)}
+              detail={`P95 ${duration(data.summary.runDuration.p95Ms)}`}
             />
             <SummaryCard
-              label="Failed tool calls"
-              value={integerFormat.format(data.summary.toolFailures)}
-              detail={`${integerFormat.format(data.summary.toolCalls)} total tool calls`}
+              label={t('statistics.failedToolCalls')}
+              value={formatNumber(data.summary.toolFailures)}
+              detail={t('statistics.totalToolCalls', { count: formatNumber(data.summary.toolCalls) })}
             />
           </Box>
 
@@ -663,13 +690,13 @@ export default function Statistics() {
               onChange={(_, value: TabKey) => setTab(value)}
               variant="scrollable"
               scrollButtons="auto"
-              aria-label="Statistics views"
+              aria-label={t('statistics.viewsAria')}
             >
-              <Tab value="overview" label="Overview" id="statistics-tab-overview" />
-              <Tab value="flows" label="Flows" id="statistics-tab-flows" />
-              <Tab value="executions" label="Executions" id="statistics-tab-executions" />
-              <Tab value="models" label="Models" id="statistics-tab-models" />
-              <Tab value="providers" label="Providers & Keys" id="statistics-tab-providers" />
+              <Tab value="overview" label={t('statistics.tab.overview')} id="statistics-tab-overview" />
+              <Tab value="flows" label={t('statistics.tab.flows')} id="statistics-tab-flows" />
+              <Tab value="executions" label={t('statistics.tab.executions')} id="statistics-tab-executions" />
+              <Tab value="models" label={t('statistics.tab.models')} id="statistics-tab-models" />
+              <Tab value="providers" label={t('statistics.tab.providers')} id="statistics-tab-providers" />
             </Tabs>
           </Paper>
 
@@ -684,26 +711,26 @@ export default function Statistics() {
                 }}
               >
                 <TimeSeries
-                  title="Executions"
-                  description="Logical runs by UTC day. Select a bar to drill into that day."
+                  title={t('statistics.executions')}
+                  description={t('statistics.executionsDescription')}
                   buckets={data.daily}
                   metric={(bucket) => bucket.summary.runs}
-                  formatValue={(value) => integerFormat.format(value)}
+                  formatValue={(value) => formatNumber(value)}
                   onSelectDate={selectDate}
                 />
                 <TimeSeries
-                  title="Tokens"
-                  description="Aggregate token usage by UTC day. Select a bar to drill into that day."
+                  title={t('statistics.tokens')}
+                  description={t('statistics.tokensDescription')}
                   buckets={data.daily}
                   metric={(bucket) => bucket.summary.usage.totalTokens}
-                  formatValue={(value) => compactFormat.format(value)}
+                  formatValue={compact}
                   onSelectDate={selectDate}
                 />
               </Box>
             )}
             {tab === 'flows' && (
               <RankingTable
-                title="Flows"
+                title={t('statistics.tab.flows')}
                 rows={data.rankings.flows}
                 selectedIds={filters.flowIds ?? []}
                 mode="runs"
@@ -712,7 +739,7 @@ export default function Statistics() {
             )}
             {tab === 'executions' && (
               <RankingTable
-                title="Planned executions"
+                title={t('statistics.plannedExecutions')}
                 rows={data.rankings.plannedExecutions}
                 selectedIds={filters.plannedExecutionIds ?? []}
                 mode="runs"
@@ -722,11 +749,10 @@ export default function Statistics() {
             {tab === 'models' && (
               <Box>
                 <Alert severity="info" sx={{ mb: 2 }}>
-                  Summed active time is not available in the current aggregate contract. The table
-                  reports summed provider-attempt wall-clock duration without inferring a new metric.
+                  {t('statistics.modelMetricNote')}
                 </Alert>
                 <RankingTable
-                  title="Models"
+                  title={t('statistics.tab.models')}
                   rows={data.rankings.models}
                   selectedIds={filters.modelIds ?? []}
                   mode="providers"
@@ -737,22 +763,22 @@ export default function Statistics() {
             {tab === 'providers' && (
               <Stack spacing={2}>
                 <Alert severity="info">
-                  Summed active time is not available in the current aggregate contract. Credential
-                  values below are opaque backend-generated identifiers only.
+                  {t('statistics.credentialMetricNote')}
                 </Alert>
                 <RankingTable
-                  title="Providers"
+                  title={t('statistics.providers')}
                   rows={data.rankings.providers}
                   selectedIds={filters.providerIds ?? []}
                   mode="providers"
                   onSelect={selectRanking('providerIds')}
                 />
                 <RankingTable
-                  title="Credentials"
+                  title={t('statistics.credentials')}
                   rows={data.rankings.credentials}
                   selectedIds={filters.credentialIds ?? []}
                   mode="providers"
                   onSelect={selectRanking('credentialIds')}
+                  credentials
                 />
               </Stack>
             )}

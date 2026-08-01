@@ -7,6 +7,8 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import FolderIcon from '@mui/icons-material/Folder';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import FolderPickerDialog from '@/frontend/components/shared/FolderPickerDialog';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import Trans from '@/frontend/components/shared/Trans';
 
 interface RootsManagerProps {
   roots: string[];
@@ -20,6 +22,7 @@ interface RootsManagerProps {
  * this empty means the server's own root dir (rootPath) is its default workspace folder.
  */
 const RootsManager: React.FC<RootsManagerProps> = ({ roots, onChange }) => {
+  const { t } = useI18n();
   const list = Array.isArray(roots) ? roots : [];
   // Which row's backend folder picker is open (null = closed).
   const [pickIndex, setPickIndex] = useState<number | null>(null);
@@ -34,12 +37,13 @@ const RootsManager: React.FC<RootsManagerProps> = ({ roots, onChange }) => {
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
         <FolderIcon fontSize="small" sx={{ mr: 1, color: 'text.secondary' }} />
-        <Typography variant="subtitle1">Workspace folders</Typography>
+        <Typography variant="subtitle1">{t('mcp.local.roots.title')}</Typography>
       </Box>
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
-        Limit which folders this server may work in. Advisory only — the server is told these
-        paths via MCP roots; it is not a hard sandbox. Leave empty to default to the
-        server&apos;s own root dir. Supports <code>{'${global:VAR}'}</code>.
+        <Trans
+          message="mcp.local.roots.help"
+          values={{ binding: <code>{'${global:VAR}'}</code> }}
+        />
       </Typography>
 
       <Stack spacing={1}>
@@ -52,13 +56,13 @@ const RootsManager: React.FC<RootsManagerProps> = ({ roots, onChange }) => {
               value={root}
               onChange={(e) => update(index, e.target.value)}
             />
-            <Tooltip title="Browse folders (on the FLUJO machine)">
-              <IconButton size="small" onClick={() => setPickIndex(index)} aria-label="browse for folder">
+            <Tooltip title={t('mcp.local.roots.browse')}>
+              <IconButton size="small" onClick={() => setPickIndex(index)} aria-label={t('mcp.local.roots.browse')}>
                 <FolderOpenIcon fontSize="small" />
               </IconButton>
             </Tooltip>
-            <Tooltip title="Remove">
-              <IconButton size="small" onClick={() => remove(index)} aria-label="remove workspace folder">
+            <Tooltip title={t('mcp.local.roots.remove')}>
+              <IconButton size="small" onClick={() => remove(index)} aria-label={t('mcp.local.roots.remove')}>
                 <DeleteIcon fontSize="small" />
               </IconButton>
             </Tooltip>
@@ -67,12 +71,12 @@ const RootsManager: React.FC<RootsManagerProps> = ({ roots, onChange }) => {
       </Stack>
 
       <Button size="small" startIcon={<AddIcon />} onClick={add} sx={{ mt: 1 }}>
-        Add folder
+        {t('mcp.local.roots.add')}
       </Button>
 
       <FolderPickerDialog
         open={pickIndex !== null}
-        title="Choose a workspace folder"
+        title={t('mcp.local.roots.choose')}
         initialPath={pickIndex !== null ? list[pickIndex] || undefined : undefined}
         onClose={() => setPickIndex(null)}
         onSelect={(path) => {

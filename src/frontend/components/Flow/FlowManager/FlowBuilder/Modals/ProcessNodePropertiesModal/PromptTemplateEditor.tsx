@@ -3,6 +3,7 @@ import { Box, Typography, CircularProgress, Alert, Paper, Button } from '@mui/ma
 import PromptBuilder, { PromptBuilderRef } from '@/frontend/components/shared/PromptBuilder';
 import { createLogger } from '@/utils/logger';
 import { PromptReferenceSuggestion } from '@/utils/shared/promptRefs';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal/PromptTemplateEditor');
 
@@ -29,6 +30,7 @@ interface PromptTemplateEditorProps {
  * by the tool panels and capture fields in other tabs — keeps working.
  */
 const PromptTemplateEditor = forwardRef<PromptBuilderRef, PromptTemplateEditorProps>((props, ref) => {
+  const { t } = useI18n();
   const {
     promptTemplate,
     handlePromptChange,
@@ -66,7 +68,7 @@ const PromptTemplateEditor = forwardRef<PromptBuilderRef, PromptTemplateEditorPr
   const fetchRenderedPrompt = async () => {
     log.debug('fetchRenderedPrompt called with:', { flowId, nodeId: nodeData?.id });
     if (!flowId || !nodeData || !nodeData.id) {
-      setRenderError('Flow ID or Node ID is missing');
+      setRenderError(t('flows.promptPreview.missingIds'));
       return;
     }
 
@@ -95,14 +97,14 @@ const PromptTemplateEditor = forwardRef<PromptBuilderRef, PromptTemplateEditorPr
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to render prompt');
+        throw new Error(data.error || t('flows.promptPreview.failed'));
       }
 
       log.debug('Rendered prompt received', { promptLength: data.prompt?.length });
-      setRenderedPrompt(data.prompt + '\n\n [Messages sent by User]');
+      setRenderedPrompt(`${data.prompt}\n\n[${t('flows.promptPreview.userMessages')}]`);
     } catch (error) {
       log.error('Error fetching rendered prompt', error);
-      setRenderError(error instanceof Error ? error.message : 'An unknown error occurred');
+      setRenderError(error instanceof Error ? error.message : t('flows.promptPreview.unknownError'));
     } finally {
       setIsRendering(false);
     }
@@ -142,7 +144,7 @@ const PromptTemplateEditor = forwardRef<PromptBuilderRef, PromptTemplateEditorPr
             sx={{ mb: 2 }}
             action={
               <Button color="inherit" size="small" onClick={fetchRenderedPrompt}>
-                Retry
+                {t('flows.promptPreview.retry')}
               </Button>
             }
           >
@@ -150,8 +152,8 @@ const PromptTemplateEditor = forwardRef<PromptBuilderRef, PromptTemplateEditorPr
           </Alert>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2, textAlign: 'center' }}>
             {!flowId
-              ? "This flow hasn't been saved yet. Save the flow first to enable complete preview."
-              : "Check that the flow and node IDs are valid and try again."}
+              ? t('flows.promptPreview.unsaved')
+              : t('flows.promptPreview.checkIds')}
           </Typography>
         </Box>
       );
@@ -160,7 +162,7 @@ const PromptTemplateEditor = forwardRef<PromptBuilderRef, PromptTemplateEditorPr
     return (
       <Box sx={{ p: 2 }}>
         <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 'medium' }}>
-          Complete Rendered Prompt
+          {t('flows.promptPreview.title')}
         </Typography>
         <Paper
           elevation={0}
@@ -182,7 +184,7 @@ const PromptTemplateEditor = forwardRef<PromptBuilderRef, PromptTemplateEditorPr
               m: 0
             }}
           >
-            {renderedPrompt || 'No rendered prompt available. Please check your flow configuration.'}
+            {renderedPrompt || t('flows.promptPreview.empty')}
           </Box>
         </Paper>
       </Box>

@@ -28,6 +28,7 @@ import type {
   MessageExtraInfo,
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 import type {
   Transport,
   TransportSendOptions,
@@ -745,6 +746,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   docked = false,
   visible = true,
 }) => {
+  const { t } = useI18n();
   const theme = useTheme();
   const frameInstanceId = useId();
   const ownerScope = useMemo(
@@ -929,9 +931,9 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       ]);
       if (!isCurrentMount()) return;
       if (read?.httpStatus === 403) {
-        throw new Error(read?.error || 'MCP Apps access was disabled for this server');
+        throw new Error(read?.error || t('chat.app.accessDisabled'));
       }
-      if (!read || read.success === false) throw new Error(read?.error || 'Failed to read the UI resource.');
+      if (!read || read.success === false) throw new Error(read?.error || t('chat.app.readFailed'));
       const app = extractAppResource(read.data, uri);
 
       // 2. Resolve the foreign sandbox origin.
@@ -940,7 +942,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
 
       // 3. Create the OUTER (sandbox-proxy) iframe.
       const iframe = document.createElement('iframe');
-      iframe.title = `MCP App: ${uri}`;
+      iframe.title = t('chat.app.frameTitle', { uri });
       iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
       iframe.referrerPolicy = 'origin'; // the sandbox validates the embedder via referrer
       const allow = buildAllowAttribute(app.permissions as any);
@@ -960,7 +962,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       const proxyReady = new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => {
           window.removeEventListener('message', onMsg);
-          reject(new Error('Timed out waiting for the sandbox proxy.'));
+          reject(new Error(t('chat.app.proxyTimeout')));
         }, PROXY_READY_TIMEOUT_MS);
         const onMsg = (ev: MessageEvent) => {
           if (
@@ -1209,7 +1211,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
           modes,
         );
         if (verifiedDisplayMode === null) {
-          setError('This app does not declare support for the canvas (pip) display mode.');
+          setError(t('chat.app.canvasUnsupported'));
           setLoading(false);
           void teardown();
           return;
@@ -1272,7 +1274,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
     } catch (e) {
       if (!isCurrentMount()) return;
       log.warn(`Failed to mount MCP App ${uri} from ${serverName}`, e);
-      setError(e instanceof Error ? e.message : 'Failed to load the app.');
+      setError(e instanceof Error ? e.message : t('chat.app.loadFailed'));
       setLoading(false);
       void teardown();
     }
@@ -1285,6 +1287,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
     theme.palette.mode,
     toolName,
     uri,
+    t,
   ]);
 
   const handleToggle = useCallback(() => {
@@ -1377,7 +1380,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
           && detail.config?.disabled !== true
         )
       ) return;
-      setError('MCP Apps access was disabled for this server.');
+      setError(t('chat.app.accessDisabled'));
       setLoading(false);
       void teardown().finally(() => {
         if (dockedRef.current) onRequestCloseRef.current?.();
@@ -1387,7 +1390,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
     return () => {
       window.removeEventListener('flujo:mcp-server-config-changed', onServerConfigChanged);
     };
-  }, [serverName, teardown]);
+  }, [serverName, teardown, t]);
 
   // Tear down on unmount and prevent pending restart continuations.
   useEffect(() => {
@@ -1416,7 +1419,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
         {loading && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 2, justifyContent: 'center' }}>
             <CircularProgress size={16} thickness={6} />
-            <Typography variant="body2" color="text.secondary">Loading the app…</Typography>
+            <Typography variant="body2" color="text.secondary">{t('chat.app.loading')}</Typography>
           </Box>
         )}
         {error && <Alert severity="error" sx={{ m: 1 }}>{error}</Alert>}
@@ -1449,9 +1452,9 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1, py: 0.5, bgcolor: 'action.hover' }}>
         <WidgetsIcon fontSize="small" color="primary" />
         <Typography variant="body2" sx={{ fontWeight: 500 }}>
-          Interactive app from {serverName}
+          {t('chat.app.fromServer', { server: serverName })}
         </Typography>
-        <Tooltip title="Runs in a separate-origin sandbox (no access to FLUJO's origin, cookies, storage, or DOM). Its tool calls are brokered through this server only.">
+        <Tooltip title={t('chat.app.sandboxHelp')}>
           <ShieldOutlinedIcon fontSize="small" color="action" />
         </Tooltip>
         <Box sx={{ flex: 1 }} />
@@ -1460,14 +1463,14 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
             size="small"
             onClick={handoffToDock}
           >
-            Canvas
+            {t('chat.app.canvas')}
           </Button>
         )}
         {expanded && (
           <Tooltip
             title={canToggleFullscreen
-              ? (displayMode === 'fullscreen' ? 'Exit fullscreen' : 'Fullscreen')
-              : 'This app did not declare inline and fullscreen support'}
+              ? (displayMode === 'fullscreen' ? t('chat.app.exitFullscreen') : t('chat.app.fullscreen'))
+              : t('chat.app.fullscreenUnsupported')}
           >
             <span>
               <Button
@@ -1492,7 +1495,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
           onClick={handleToggle}
           startIcon={expanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
         >
-          {expanded ? 'Hide' : 'Open app'}
+          {expanded ? t('chat.app.hide') : t('chat.app.open')}
         </Button>
       </Box>
 
@@ -1501,7 +1504,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
           {loading && (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 2, justifyContent: 'center' }}>
               <CircularProgress size={16} thickness={6} />
-              <Typography variant="body2" color="text.secondary">Loading the app…</Typography>
+              <Typography variant="body2" color="text.secondary">{t('chat.app.loading')}</Typography>
             </Box>
           )}
           {error && <Alert severity="error" sx={{ my: 1 }}>{error}</Alert>}

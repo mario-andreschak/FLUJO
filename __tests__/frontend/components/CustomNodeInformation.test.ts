@@ -67,6 +67,20 @@ describe('buildNodeInformation', () => {
       .toBe('sequential fan-out · map list (json-array (default)) · 2 spawn briefs');
   });
 
+  it('shows a subflow target name while retaining the stable id in technical details', () => {
+    const information = buildNodeInformation(
+      { properties: { subflowId: '5ad8d44d-7c01-4a45-97bf-728ec9d02e72' } },
+      'subflow',
+      undefined,
+      new Map([['5ad8d44d-7c01-4a45-97bf-728ec9d02e72', 'Research assistant']]),
+    );
+
+    expect(information.summary.find((entry) => entry.key === 'target')?.value)
+      .toBe('Research assistant');
+    expect(information.technicalDetails.find((entry) => entry.key === 'subflowId')?.value)
+      .toBe('5ad8d44d-7c01-4a45-97bf-728ec9d02e72');
+  });
+
   it('caps MCP tools in the compact summary while retaining a bounded technical count', () => {
     const tools = ['search', 'fetch', 'store', 'delete', 'list'];
     const information = buildNodeInformation({

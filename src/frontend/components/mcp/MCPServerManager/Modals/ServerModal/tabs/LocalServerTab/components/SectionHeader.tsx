@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface SectionHeaderProps {
   title: string;
@@ -17,6 +18,7 @@ const SectionHeader: React.FC<SectionHeaderProps> = ({
   status = 'default',
   rightContent
 }) => {
+  const { t } = useI18n();
   // Determine text color based on status
   const getTextColorClass = () => {
     switch (status) {
@@ -40,7 +42,7 @@ const SectionHeader: React.FC<SectionHeaderProps> = ({
           type="button"
           onClick={onToggle}
           className="mr-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
-          title={isExpanded ? "Collapse section" : "Expand section"}
+          title={isExpanded ? t('mcp.local.section.collapse') : t('mcp.local.section.expand')}
         >
           {isExpanded ? '▼' : '►'}
         </button>

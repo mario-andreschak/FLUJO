@@ -5,6 +5,7 @@ import { MCPServerConfig, MCPServerState, MCPStreamableConfig } from '@/shared/t
 import { createLogger } from '@/utils/logger';
 import { Grid, Box, Typography, Paper } from '@mui/material';
 import { ServerUpdateInfo } from './utils/serverUpdates';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/mcp/MCPServerManager/ServerList');
 
@@ -50,6 +51,7 @@ const ServerList: React.FC<ServerListProps> = ({
   onServerSetFolder,
   onServerToggleFavorite,
 }) => {
+  const { t } = useI18n();
   log.debug('Rendering ServerList', { 
     serverCount: servers.length, 
     isLoading, 
@@ -68,7 +70,7 @@ const ServerList: React.FC<ServerListProps> = ({
       }}>
         <Spinner size="large" color="primary" />
         <Typography sx={{ mt: 2, color: 'text.secondary' }}>
-          Loading servers...
+          {t('mcp.list.loading')}
         </Typography>
       </Box>
     );
@@ -87,7 +89,7 @@ const ServerList: React.FC<ServerListProps> = ({
     return (
       <Paper sx={{ p: 3, textAlign: 'center', borderRadius: 1 }}>
         <Typography color="text.secondary">
-          No servers configured. Click "Add Server" to get started.
+          {t('mcp.list.empty')}
         </Typography>
       </Paper>
     );

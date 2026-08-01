@@ -8,6 +8,7 @@ import ContentPasteIcon from '@mui/icons-material/ContentPaste';
 import EditIcon from '@mui/icons-material/Edit';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface ContextMenuProps {
   open: boolean;
@@ -46,6 +47,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   selection,
   edgeId,
 }) => {
+  const { t } = useI18n();
   const handleDelete = () => {
     onDelete();
     onClose();
@@ -92,7 +94,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         <ListItemIcon>
           <EditIcon fontSize="small" />
         </ListItemIcon>
-        <ListItemText>Edit Properties</ListItemText>
+        <ListItemText>{t('flows.context.editProperties')}</ListItemText>
       </MenuItem>
     );
     if (onConvertToSubflow) {
@@ -101,7 +103,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
           <ListItemIcon>
             <AccountTreeIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText>Convert to subflow</ListItemText>
+          <ListItemText>{t('flows.context.convertSubflow')}</ListItemText>
         </MenuItem>
       );
     }
@@ -116,7 +118,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
           <ListItemIcon>
             <EditIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText>Edit Properties</ListItemText>
+          <ListItemText>{t('flows.context.editProperties')}</ListItemText>
         </MenuItem>
       );
     }
@@ -126,7 +128,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
           <ListItemIcon>
             <SwapHorizIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText>Toggle Bidirectional</ListItemText>
+          <ListItemText>{t('flows.context.toggleBidirectional')}</ListItemText>
         </MenuItem>
       );
     }
@@ -139,7 +141,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         <ListItemIcon>
           <ContentCopyIcon fontSize="small" />
         </ListItemIcon>
-        <ListItemText>Copy</ListItemText>
+        <ListItemText>{t('flows.context.copy')}</ListItemText>
       </MenuItem>
     );
   }
@@ -152,7 +154,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         <ListItemIcon>
           <ContentPasteIcon fontSize="small" />
         </ListItemIcon>
-        <ListItemText>Paste</ListItemText>
+        <ListItemText>{t('flows.context.paste')}</ListItemText>
       </MenuItem>
     );
   }
@@ -165,7 +167,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         <ListItemIcon sx={{ color: 'error.main' }}>
           <DeleteIcon fontSize="small" />
         </ListItemIcon>
-        <ListItemText>Delete</ListItemText>
+        <ListItemText>{t('flows.context.delete')}</ListItemText>
       </MenuItem>
     );
   }

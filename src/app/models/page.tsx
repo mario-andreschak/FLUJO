@@ -29,9 +29,9 @@ async function ModelsPage() {
     return (
       <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
         <PageHeader
-          eyebrow="Step 1"
-          title="AI Setup"
-          description="Connect the AI provider FLUJO will use for every agent and conversation."
+          eyebrowKey="models.header.eyebrow"
+          titleKey="models.header.title"
+          descriptionKey="models.header.description"
           icon={MemoryRoundedIcon}
           maxWidth="none"
         />

@@ -1,4 +1,4 @@
-import React, { memo, useState } from 'react';
+import React, { memo, useContext, useState } from 'react';
 import { 
   Handle, 
   Position, 
@@ -25,6 +25,8 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import type { NodeType } from '@/frontend/types/flow/flow';
 import { flowNodeColors, flowNodeLightColors } from '@/frontend/utils/flowPaletteTokens';
 import { buildNodeInformation } from './nodeInformation';
+import { FlowNamesContext } from './flowNamesContext';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 // Resource, signal, and trigger nodes use shared semantic tokens because the
 // MUI palette slots are already occupied by the other FlowBuilder node types.
@@ -171,8 +173,10 @@ const getResourceHandleStyle = (theme: any) => ({
 
 const CustomNode = ({ id, data, nodeType, selected }: CustomNodeProps & { selected?: boolean }) => {
   const theme = useTheme();
+  const { t, tp, formatList } = useI18n();
+  const flowNames = useContext(FlowNamesContext);
   const [expanded, setExpanded] = useState(false);
-  const information = buildNodeInformation(data, nodeType);
+  const information = buildNodeInformation(data, nodeType, { t, tp, formatList }, flowNames);
 
   const stopNodeInteraction = (event: React.SyntheticEvent) => {
     event.stopPropagation();
@@ -389,7 +393,7 @@ const CustomNode = ({ id, data, nodeType, selected }: CustomNodeProps & { select
         </NodeHeader>
 
         {information.summary.length > 0 && (
-          <NodeDetails aria-label="Node summary">
+          <NodeDetails aria-label={t('flows.nodeInfo.summary')}>
             {information.summary.map((entry) => (
               <Box key={entry.key} sx={{ mb: 0.5 }}>
                 <Typography
@@ -439,7 +443,7 @@ const CustomNode = ({ id, data, nodeType, selected }: CustomNodeProps & { select
             }}
           >
             <Typography variant="caption" color="text.secondary">
-              Technical details
+              {t('flows.nodeInfo.technical')}
             </Typography>
           </AccordionSummary>
           <AccordionDetails

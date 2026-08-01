@@ -18,6 +18,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Typography, Tooltip, IconButton, Badge, useTheme } from '@mui/material';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 import WidgetsIcon from '@mui/icons-material/Widgets';
 import CloseIcon from '@mui/icons-material/Close';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -85,6 +86,7 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
   onUpdateModelContext,
   onRegisterTeardown,
 }) => {
+  const { t } = useI18n();
   const theme = useTheme();
   const [collapsed, setCollapsed] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
@@ -184,7 +186,7 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
       {/* Tab strip + dock controls */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 1, py: 0.5, bgcolor: 'action.hover' }}>
         <WidgetsIcon fontSize="small" color="primary" />
-        <Typography variant="caption" sx={{ fontWeight: 600, mr: 1 }}>Canvas</Typography>
+        <Typography variant="caption" sx={{ fontWeight: 600, mr: 1 }}>{t('chat.canvas.title')}</Typography>
 
         <Box sx={{ display: 'flex', gap: 0.5, overflowX: 'auto', flex: 1, minWidth: 0 }}>
           {entries.map((e) => {
@@ -217,23 +219,23 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
                 <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
                   {e.serverName}
                 </Typography>
-                <Tooltip title={inSplit ? 'Remove from split' : 'Add to split view'}>
+                <Tooltip title={inSplit ? t('chat.canvas.removeSplit') : t('chat.canvas.addSplit')}>
                   <IconButton
                     size="small"
                     sx={{ p: 0.25 }}
                     color={inSplit ? 'primary' : 'default'}
                     onClick={(ev) => { ev.stopPropagation(); toggleSplit(e.key); }}
-                    aria-label="Toggle split view"
+                    aria-label={t('chat.canvas.toggleSplit')}
                   >
                     <ViewColumnIcon sx={{ fontSize: 14 }} />
                   </IconButton>
                 </Tooltip>
-                <Tooltip title="Close">
+                <Tooltip title={t('common.close')}>
                   <IconButton
                     size="small"
                     sx={{ p: 0.25 }}
                     onClick={(ev) => { ev.stopPropagation(); onCloseTab(e.key); }}
-                    aria-label="Close canvas tab"
+                    aria-label={t('chat.canvas.closeTab')}
                   >
                     <CloseIcon sx={{ fontSize: 14 }} />
                   </IconButton>
@@ -245,30 +247,30 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
 
         <Tooltip
           title={fullscreen
-            ? 'Exit fullscreen'
+            ? t('chat.canvas.exitFullscreen')
             : fullscreenAvailable
-              ? 'Fullscreen'
-              : 'Every visible app must declare pip and fullscreen support'}
+              ? t('chat.canvas.fullscreen')
+              : t('chat.canvas.fullscreenUnavailable')}
         >
           <span>
             <IconButton
               size="small"
               disabled={!fullscreen && !fullscreenAvailable}
               onClick={() => setFullscreen((value) => !value)}
-              aria-label="Toggle canvas fullscreen"
+              aria-label={t('chat.canvas.toggleFullscreen')}
             >
               {fullscreen ? <FullscreenExitIcon fontSize="small" /> : <FullscreenIcon fontSize="small" />}
             </IconButton>
           </span>
         </Tooltip>
-        <Tooltip title={collapsed ? 'Expand canvas' : 'Collapse canvas'}>
+        <Tooltip title={collapsed ? t('chat.canvas.expand') : t('chat.canvas.collapse')}>
           <IconButton
             size="small"
             onClick={() => {
               if (!collapsed && fullscreen) setFullscreen(false);
               setCollapsed((value) => !value);
             }}
-            aria-label="Toggle canvas collapse"
+            aria-label={t('chat.canvas.toggleCollapse')}
           >
             {collapsed ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
           </IconButton>

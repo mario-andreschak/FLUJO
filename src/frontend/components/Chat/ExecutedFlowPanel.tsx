@@ -18,6 +18,7 @@ import { Box, Typography, CircularProgress, Alert, IconButton, Tooltip } from '@
 import CloseIcon from '@mui/icons-material/Close';
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import { useTheme } from '@mui/material/styles';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 import { ReactFlow, useNodesState, useEdgesState, Node, Edge, ReactFlowProvider } from '@xyflow/react';
 import { Flow } from '@/shared/types/flow';
 import { flowService } from '@/frontend/services/flow';
@@ -68,6 +69,7 @@ const ExecutedFlowPanel: React.FC<ExecutedFlowPanelProps> = ({
   liveActivity,
   onClose,
 }) => {
+  const { t } = useI18n();
   const theme = useTheme();
   const [flowDefinition, setFlowDefinition] = useState<Flow | null>(null);
   const [flowLoading, setFlowLoading] = useState<boolean>(true);
@@ -88,16 +90,16 @@ const ExecutedFlowPanel: React.FC<ExecutedFlowPanelProps> = ({
           return;
         }
         if (!flowId) {
-          throw new Error('No agent is associated with this conversation yet.');
+          throw new Error(t('chat.executed.noAgent'));
         }
         log.debug(`Loading flow definition for ID: ${flowId}`);
         const flow = await flowService.getFlow(flowId);
-        if (!flow) throw new Error(`Flow with ID ${flowId} not found.`);
+        if (!flow) throw new Error(t('chat.executed.notFound', { id: flowId }));
         if (!cancelled) setFlowDefinition(flow);
       } catch (err) {
         log.error('Error loading flow definition:', err);
         if (!cancelled) {
-          setFlowError(err instanceof Error ? err.message : 'Failed to load the agent.');
+          setFlowError(err instanceof Error ? err.message : t('chat.executed.loadFailed'));
           setFlowDefinition(null);
         }
       } finally {
@@ -106,7 +108,7 @@ const ExecutedFlowPanel: React.FC<ExecutedFlowPanelProps> = ({
     };
     load();
     return () => { cancelled = true; };
-  }, [flowId, flowSnapshot]);
+  }, [flowId, flowSnapshot, t]);
 
   // Feed the flow into React Flow with all interactivity disabled (read-only).
   useEffect(() => {
@@ -184,10 +186,10 @@ const ExecutedFlowPanel: React.FC<ExecutedFlowPanelProps> = ({
       >
         <AccountTreeOutlinedIcon fontSize="small" color="action" />
         <Typography variant="subtitle2" sx={{ flex: 1, minWidth: 0 }} noWrap>
-          Executed Steps
+          {t('chat.executed.title')}
         </Typography>
-        <Tooltip title="Hide panel">
-          <IconButton size="small" onClick={onClose} aria-label="Hide executed steps panel">
+        <Tooltip title={t('chat.executed.hide')}>
+          <IconButton size="small" onClick={onClose} aria-label={t('chat.executed.hide')}>
             <CloseIcon fontSize="small" />
           </IconButton>
         </Tooltip>

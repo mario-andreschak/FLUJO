@@ -179,6 +179,16 @@ export type WriteRunResourceInput = {
 
 export type WriteRunResourceResult = RunResourceEntry | { skipped: 'size-cap' | 'conversation-cap' };
 
+export type CopyRunResourceInput = {
+  /** Existing flujo://run/... resource to copy. */
+  uri: string;
+  /** Conversation that will own the durable copy. */
+  conversationId: string;
+  /** Optional stable destination name. Omitted for ordinary generated media. */
+  name?: string;
+  producedBy: RunResourceProducer;
+};
+
 export async function writeRunResource(input: WriteRunResourceInput): Promise<WriteRunResourceResult> {
   assertSafeId(input.conversationId, 'conversationId');
   const settings = await getRunResourceSettings();
@@ -357,6 +367,71 @@ export async function readRunResource(
     }
   }
   return { entry, contents };
+}
+
+/**
+ * Copy a run resource into another conversation's resource scope.
+ *
+ * Subflows persist generated media under the child conversation. Downstream
+ * parent steps may only use resources owned by the parent run, so returning the
+ * child URI directly creates a visible attachment that `read_resource` quite
+ * correctly refuses. This promotion helper preserves the bytes and MIME/kind
+ * metadata while issuing a new parent-owned URI. It deliberately goes through
+ * the normal read/write APIs so size and conversation caps remain authoritative.
+ */
+export async function copyRunResourceToConversation(
+  input: CopyRunResourceInput,
+): Promise<WriteRunResourceResult | null> {
+  assertSafeId(input.conversationId, 'conversationId');
+  const source = await readRunResource(input.uri);
+  if (!source) return null;
+  if (source.entry.conversationId === input.conversationId) return source.entry;
+
+  const content = source.contents.contents[0] as { text?: unknown; blob?: unknown } | undefined;
+  let data: WriteRunResourceInput['data'];
+  if (source.entry.kind !== 'link') {
+    if (typeof content?.text === 'string') {
+      data = { text: content.text };
+    } else if (typeof content?.blob === 'string') {
+      data = { base64: content.blob };
+    } else {
+      log.warn(`Run-resource copy has no readable payload: ${input.uri}`);
+      return null;
+    }
+  }
+
+  return writeRunResource({
+    conversationId: input.conversationId,
+    name: input.name,
+    mimeType: source.entry.mimeType,
+    kind: source.entry.kind,
+    data,
+    producedBy: input.producedBy,
+    origin: source.entry.kind === 'link'
+      ? source.entry.origin
+      : { server: 'flujo', uri: source.entry.uri },
+    archive: source.entry.archive,
+  });
+}
+
+/**
+ * Resolve a stored run resource to its validated, host-local payload path.
+ * Returns null for links, missing resources/payloads, and malformed URIs.
+ * Callers must still enforce conversation ownership before exposing this path.
+ */
+export async function getRunResourceLocalPath(uri: string): Promise<string | null> {
+  const parsed = parseRunResourceUri(uri);
+  if (!parsed) return null;
+  const entries = await loadIndex(parsed.conversationId);
+  const entry = entries.find(candidate => candidate.id === parsed.id);
+  if (!entry || entry.kind === 'link' || entry.size <= 0) return null;
+  const localPath = path.resolve(payloadPath(parsed.conversationId, parsed.id));
+  try {
+    await fs.access(localPath);
+    return localPath;
+  } catch {
+    return null;
+  }
 }
 
 /**

@@ -33,6 +33,7 @@ import { Model } from '@/shared/types/model';
 import { flowService } from '@/frontend/services/flow';
 import { modelService } from '@/frontend/services/model';
 import { createLogger } from '@/utils/logger';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/Flow/FlowManager/ImproveFlowDialog');
 
@@ -58,6 +59,7 @@ interface ImproveFlowDialogProps {
 }
 
 const ImproveFlowDialog = ({ open, onClose, currentFlow, onImproved, initialDescription }: ImproveFlowDialogProps) => {
+  const { t } = useI18n();
   const [description, setDescription] = useState('');
   const [models, setModels] = useState<Model[]>([]);
   const [modelId, setModelId] = useState('');
@@ -84,12 +86,12 @@ const ImproveFlowDialog = ({ open, onClose, currentFlow, onImproved, initialDesc
       })
       .catch((err) => {
         log.warn('Failed to load models for the improve dialog', err);
-        if (!cancelled) setError('Could not load your models. Configure a model first.');
+        if (!cancelled) setError(t('flows.generator.modelsFailed'));
       });
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, t]);
 
   const handleClose = useCallback(() => {
     if (isImproving) return; // no closing mid-flight; the request is not cancellable
@@ -136,12 +138,10 @@ const ImproveFlowDialog = ({ open, onClose, currentFlow, onImproved, initialDesc
 
   return (
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
-      <DialogTitle>Improve this flow with AI</DialogTitle>
+      <DialogTitle>{t('flows.improve.title')}</DialogTitle>
       <DialogContent>
         <DialogContentText sx={{ mb: 2 }}>
-          Describe the changes you want — add or remove a step, rewrite a prompt, wire up a
-          tool, rename a node. The model revises the <strong>current</strong> flow and the
-          result opens on the canvas as an unsaved change you can review, undo, and save.
+          {t('flows.improve.description')}
         </DialogContentText>
         {error && (
           <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
@@ -153,18 +153,18 @@ const ImproveFlowDialog = ({ open, onClose, currentFlow, onImproved, initialDesc
           fullWidth
           multiline
           minRows={4}
-          label="What should change?"
-          placeholder="e.g. Add a step after the research that emails the summary, and make the research step use the full conversation"
+          label={t('flows.improve.change')}
+          placeholder={t('flows.improve.placeholder')}
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           disabled={isImproving}
           sx={{ mb: 2 }}
         />
         <FormControl fullWidth disabled={isImproving || models.length === 0}>
-          <InputLabel id="improve-flow-model-label">Generator model</InputLabel>
+          <InputLabel id="improve-flow-model-label">{t('flows.improve.model')}</InputLabel>
           <Select
             labelId="improve-flow-model-label"
-            label="Generator model"
+            label={t('flows.improve.model')}
             value={modelId}
             onChange={(e) => setModelId(e.target.value)}
           >
@@ -184,14 +184,11 @@ const ImproveFlowDialog = ({ open, onClose, currentFlow, onImproved, initialDesc
               disabled={isImproving}
             />
           }
-          label="Let the improver install MCP servers it needs (self-improve)"
+          label={t('flows.improve.allowInstall')}
         />
         {allowInstall && (
           <Alert severity="warning" sx={{ mt: 1 }}>
-            The improver may <strong>download, install, and run third-party MCP servers</strong> from
-            the public registry on this machine — without asking again. It prefers servers that need
-            no API keys, but anything it installs executes real code with your user&apos;s permissions.
-            Installed servers stay configured afterwards (remove them on the MCP page).
+            {t('flows.improve.installWarning')}
           </Alert>
         )}
         {isImproving && (
@@ -199,15 +196,15 @@ const ImproveFlowDialog = ({ open, onClose, currentFlow, onImproved, initialDesc
             <CircularProgress size={20} />
             <DialogContentText>
               {allowInstall
-                ? 'Improving… the model may search the marketplace and install servers (this can take a few minutes).'
-                : 'Improving… the model revises the flow and FLUJO checks it (this can take up to a minute).'}
+                ? t('flows.improve.workingInstall')
+                : t('flows.improve.working')}
             </DialogContentText>
           </Box>
         )}
       </DialogContent>
       <DialogActions>
         <Button onClick={handleClose} disabled={isImproving}>
-          Cancel
+          {t('flows.improve.cancel')}
         </Button>
         <Button
           onClick={handleImprove}
@@ -216,7 +213,7 @@ const ImproveFlowDialog = ({ open, onClose, currentFlow, onImproved, initialDesc
           startIcon={<AutoFixHighIcon />}
           disabled={!canImprove}
         >
-          Improve
+          {t('flows.improve.action')}
         </Button>
       </DialogActions>
     </Dialog>

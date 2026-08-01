@@ -14,6 +14,7 @@ import {
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import CardPickerGrid, { CardPickerGridProps } from './CardPickerGrid';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 export interface CardPickerDialogProps extends CardPickerGridProps {
   open: boolean;
@@ -38,12 +39,13 @@ const CardPickerDialog: React.FC<CardPickerDialogProps> = ({
   maxWidth = 'md',
   ...gridProps
 }) => {
+  const { t } = useI18n();
   return (
     <Dialog open={open} onClose={onClose} maxWidth={maxWidth} fullWidth>
       <DialogTitle component="div">
         <Box display="flex" alignItems="center" justifyContent="space-between">
           <Typography variant="h6">{title}</Typography>
-          <IconButton edge="end" color="inherit" onClick={onClose} aria-label="close">
+          <IconButton edge="end" color="inherit" onClick={onClose} aria-label={t('common.close')}>
             <CloseIcon />
           </IconButton>
         </Box>
@@ -58,7 +60,7 @@ const CardPickerDialog: React.FC<CardPickerDialogProps> = ({
         <CardPickerGrid {...gridProps} />
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose}>{t('common.cancel')}</Button>
       </DialogActions>
     </Dialog>
   );

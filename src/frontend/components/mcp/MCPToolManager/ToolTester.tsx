@@ -25,6 +25,7 @@ import SchemaParamsForm from '@/frontend/components/shared/SchemaParamsForm';
 import { useThemeUtils } from '@/frontend/utils/theme';
 import { extractUiResourceUri } from '@/shared/utils/mcpApps';
 import McpAppFrame from '@/frontend/components/Chat/McpAppFrame'; // #97: render a tool's MCP App here too
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/mcp/MCPToolManager/ToolTester');
 
@@ -60,6 +61,7 @@ const ToolTester: React.FC<ToolTesterProps> = ({
   onClose,
   prefill,
 }) => {
+  const { t, formatNumber } = useI18n();
   log.debug('Props:', { serverName, toolsCount: tools?.length });
   // Ensure tools is always an array
   const toolsArray = Array.isArray(tools) ? tools : [];
@@ -160,7 +162,7 @@ const ToolTester: React.FC<ToolTesterProps> = ({
       setResult({
         success: false,
         output: '',
-        error: error instanceof Error ? error.message : 'Unknown error occurred',
+        error: error instanceof Error ? error.message : t('mcp.tester.unknownError'),
       });
     }
     setIsLoading(false);
@@ -187,21 +189,25 @@ const ToolTester: React.FC<ToolTesterProps> = ({
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          reason: 'User cancelled operation'
+          reason: t('mcp.tester.cancel')
         })
       });
       
       if (response.ok) {
         log.info(`Successfully sent cancellation request`);
-        setErrorNotification('Cancellation request sent. The operation should stop shortly.');
+        setErrorNotification(t('mcp.tester.cancelSent'));
       } else {
         const errorData = await response.json();
         log.warn(`Failed to cancel operation:`, errorData);
-        setErrorNotification(`Failed to cancel: ${errorData.error || 'Unknown error'}`);
+        setErrorNotification(t('mcp.tester.cancelFailed', {
+          error: errorData.error || t('mcp.tester.unknownError'),
+        }));
       }
     } catch (error) {
       log.error(`Error cancelling tool:`, error);
-      setErrorNotification(`Error cancelling: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      setErrorNotification(t('mcp.tester.cancelError', {
+        error: error instanceof Error ? error.message : t('mcp.tester.unknownError'),
+      }));
     } finally {
       setIsCancelling(false);
     }
@@ -225,11 +231,11 @@ const ToolTester: React.FC<ToolTesterProps> = ({
     >
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
         <Typography variant="h6" sx={{ fontWeight: 'semibold' }}>
-          Tool Tester - {serverName}
+          {t('mcp.tester.title', { server: serverName })}
         </Typography>
         {onClose && (
-          <Tooltip title="Close tool tester">
-            <IconButton size="small" onClick={onClose} aria-label="Close tool tester">
+          <Tooltip title={t('mcp.tester.close')}>
+            <IconButton size="small" onClick={onClose} aria-label={t('mcp.tester.close')}>
               <CloseIcon fontSize="small" />
             </IconButton>
           </Tooltip>
@@ -254,7 +260,7 @@ const ToolTester: React.FC<ToolTesterProps> = ({
             color: (theme) => theme.palette.mode === 'dark' ? '#d1d5db' : '#4b5563'
           }}
         >
-          Select Tool
+          {t('mcp.tester.select')}
         </Typography>
         <Select
           fullWidth
@@ -268,7 +274,7 @@ const ToolTester: React.FC<ToolTesterProps> = ({
             }
           }}
         >
-          <MenuItem value="">Choose a tool...</MenuItem>
+          <MenuItem value="">{t('mcp.tester.choose')}</MenuItem>
           {toolsArray.map((tool) => (
             <MenuItem key={tool.name} value={tool.name}>
               {tool.name}
@@ -308,7 +314,7 @@ const ToolTester: React.FC<ToolTesterProps> = ({
                   color: (theme) => theme.palette.mode === 'dark' ? '#d1d5db' : '#4b5563'
                 }}
               >
-                Timeout (seconds)
+                {t('mcp.tester.timeout')}
               </Typography>
               <TextField
                 type="number"
@@ -316,7 +322,7 @@ const ToolTester: React.FC<ToolTesterProps> = ({
                 size="small"
                 value={timeoutValue === 60 ? '' : timeoutValue}
                 onChange={(e) => handleTimeoutChange(e.target.value)}
-                placeholder="Default: 60 seconds, -1 for no timeout"
+                placeholder={t('mcp.tester.timeoutPlaceholder')}
                 sx={{
                   bgcolor: (theme) => theme.palette.background.paper,
                   '& .MuiOutlinedInput-notchedOutline': {
@@ -332,7 +338,7 @@ const ToolTester: React.FC<ToolTesterProps> = ({
                   color: (theme) => theme.palette.mode === 'dark' ? '#9ca3af' : '#6b7280'
                 }}
               >
-                Default: 60 seconds. Use -1 for no timeout. Value of 0 will be treated as 60.
+                {t('mcp.tester.timeoutHelp')}
               </Typography>
             </Box>
           </Box>
@@ -345,7 +351,7 @@ const ToolTester: React.FC<ToolTesterProps> = ({
               disabled={isLoading}
               startIcon={isLoading && <Spinner size="small" color="white" />}
             >
-              {isLoading ? 'Testing...' : 'Test Tool'}
+              {isLoading ? t('mcp.tester.testing') : t('mcp.tester.test')}
             </Button>
             
             {/* Show cancel button whenever a tool is being executed */}
@@ -370,7 +376,7 @@ const ToolTester: React.FC<ToolTesterProps> = ({
                   </Box>
                 }
               >
-                {isCancelling ? 'Cancelling...' : 'Cancel'}
+                {isCancelling ? t('mcp.tester.cancelling') : t('mcp.tester.cancel')}
               </Button>
             )}
           </Box>
@@ -382,18 +388,18 @@ const ToolTester: React.FC<ToolTesterProps> = ({
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
                   <Spinner size="small" color="primary" />
                   <Typography variant="body2" color="text.secondary">
-                    Processing request...
+                    {t('mcp.tester.processing')}
                   </Typography>
                 </Box>
               )}
               {progress && (
                 <>
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                    <Typography variant="body2" color="text.secondary">Progress:</Typography>
+                    <Typography variant="body2" color="text.secondary">{t('mcp.tester.progress')}</Typography>
                     <Typography variant="body2" color="text.secondary">
                       {progress.total 
-                        ? `${Math.round(progress.current)}/${Math.round(progress.total)} (${Math.round((progress.current / progress.total) * 100)}%)`
-                        : `${Math.round(progress.current)}%`}
+                        ? `${formatNumber(Math.round(progress.current))}/${formatNumber(Math.round(progress.total))} (${formatNumber(progress.current / progress.total, { style: 'percent', maximumFractionDigits: 0 })})`
+                        : formatNumber(progress.current / 100, { style: 'percent', maximumFractionDigits: 0 })}
                     </Typography>
                   </Box>
                   <LinearProgress 
@@ -409,7 +415,7 @@ const ToolTester: React.FC<ToolTesterProps> = ({
           )}
         </>
       ) : (
-        <Typography color="text.secondary">No tool selected or tool details not found.</Typography>
+        <Typography color="text.secondary">{t('mcp.tester.noSelection')}</Typography>
       )}
 
       {result && (
@@ -421,10 +427,10 @@ const ToolTester: React.FC<ToolTesterProps> = ({
           }}
         >
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-            <Typography variant="subtitle1" sx={{ fontWeight: 'medium' }}>Result:</Typography>
+            <Typography variant="subtitle1" sx={{ fontWeight: 'medium' }}>{t('mcp.tester.result')}</Typography>
             <FormControlLabel
               control={<Switch checked={showRawResult} onChange={(e) => setShowRawResult(e.target.checked)} size="small" />}
-              label="Show Raw"
+              label={t('mcp.tester.showRaw')}
               sx={{ mr: 0 }}
             />
           </Box>
@@ -447,7 +453,7 @@ const ToolTester: React.FC<ToolTesterProps> = ({
                 maxHeight: '400px', // Limit height for raw view
               }}
             >
-              {result.success ? result.output : `Error: ${result.error}`}
+              {result.success ? result.output : t('mcp.tester.error', { error: result.error ?? '' })}
             </Box>
           ) : (
             // Show rendered output or error
@@ -467,7 +473,7 @@ const ToolTester: React.FC<ToolTesterProps> = ({
                               <img
                                 key={index}
                                 src={`data:${item.mimeType};base64,${item.data}`}
-                                alt={`Tool Result Image ${index + 1}`}
+                                alt={t('mcp.tester.imageAlt', { number: formatNumber(index + 1) })}
                                 style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px' }}
                               />
                             );
@@ -479,7 +485,7 @@ const ToolTester: React.FC<ToolTesterProps> = ({
                                 src={`data:${item.mimeType};base64,${item.data}`}
                                 style={{ width: '100%' }}
                               >
-                                Your browser does not support the audio element.
+                                {t('mcp.tester.audioUnsupported')}
                               </audio>
                             );
                           } else {
@@ -537,7 +543,7 @@ const ToolTester: React.FC<ToolTesterProps> = ({
               })()
             ) : (
               <Typography color="error.main">
-                Error: {result.error}
+                {t('mcp.tester.error', { error: result.error ?? '' })}
               </Typography>
             )
           )}

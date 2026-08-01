@@ -10,6 +10,7 @@ import type { WaveChainNode } from '@/shared/types/waves/waves';
 import { triggerKindMeta } from './triggerKindMeta';
 import { formatIn } from './waveTimeline';
 import SubflowTree from './SubflowTree';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 export interface TriggerChainNodeData {
   chainNode: WaveChainNode;
@@ -34,20 +35,21 @@ export interface TriggerChainNodeData {
  * revealed by hovering (handled by the canvas).
  */
 export default function TriggerChainNode({ data }: NodeProps) {
+  const { t } = useI18n();
   const { chainNode, now, runAt, isRoot, hasSuccessors, expanded, pinned } =
     data as unknown as TriggerChainNodeData;
   const meta = triggerKindMeta(chainNode.triggerKind);
 
   let timingLabel = '';
   if (chainNode.timing.mode === 'timeline') {
-    timingLabel = isRoot ? formatIn(runAt, now) : 'on schedule';
+    timingLabel = isRoot ? formatIn(runAt, now, t) : t('waves.onSchedule');
   } else if (chainNode.timing.mode === 'fixed') {
-    timingLabel = 'fires when it happens';
+    timingLabel = t('waves.firesWhenHappens');
   } else if (chainNode.timing.mode === 'event') {
     timingLabel =
       chainNode.timing.via === 'signal'
-        ? `on signal "${chainNode.timing.topic ?? ''}"`
-        : 'when its upstream runs';
+        ? t('waves.onSignal', { topic: chainNode.timing.topic ?? '' })
+        : t('waves.whenUpstreamRuns');
   }
 
   const signals = chainNode.emittedSignals ?? [];
@@ -77,13 +79,13 @@ export default function TriggerChainNode({ data }: NodeProps) {
       <Handle type="target" position={Position.Top} id="up" style={{ background: meta.color }} />
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 0.5 }}>
         <Chip
-          label={meta.label}
+          label={meta.labelKey ? t(meta.labelKey) : meta.label}
           size="small"
           sx={{ bgcolor: meta.color, color: '#fff', height: 18, fontSize: 10 }}
         />
         {isRoot && (
           <Typography variant="caption" sx={{ opacity: 0.6 }}>
-            root
+            {t('waves.root')}
           </Typography>
         )}
       </Box>
@@ -102,14 +104,14 @@ export default function TriggerChainNode({ data }: NodeProps) {
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.25 }}>
             <BoltIcon sx={{ fontSize: 13, color: '#7b1fa2' }} />
             <Typography variant="caption" sx={{ opacity: 0.7 }}>
-              Signals
+              {t('waves.signals')}
             </Typography>
           </Box>
           <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
             {signals.map((s) => (
               <Tooltip
                 key={s.topic}
-                title={s.direct ? 'Emitted by this flow' : 'Emitted via a subflow'}
+                title={s.direct ? t('waves.signalDirect') : t('waves.signalSubflow')}
                 arrow
               >
                 <Chip
@@ -136,7 +138,7 @@ export default function TriggerChainNode({ data }: NodeProps) {
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, mt: 0.5, color: meta.color }}>
           <PushPinIcon sx={{ fontSize: 13 }} />
           <Typography variant="caption" sx={{ fontSize: 10, fontWeight: 600 }}>
-            pinned
+            {t('waves.pinned')}
           </Typography>
         </Box>
       )}
@@ -145,7 +147,7 @@ export default function TriggerChainNode({ data }: NodeProps) {
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, mt: 0.5, opacity: 0.55 }}>
           <UnfoldMoreIcon sx={{ fontSize: 13, transform: 'rotate(90deg)' }} />
           <Typography variant="caption" sx={{ fontSize: 10 }}>
-            hover to follow chain
+            {t('waves.hoverFollow')}
           </Typography>
         </Box>
       )}

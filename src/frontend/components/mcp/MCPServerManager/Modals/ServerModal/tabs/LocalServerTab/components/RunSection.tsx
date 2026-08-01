@@ -6,6 +6,7 @@ import { MessageState } from '../../../types';
 import RunTools from '../RunTools';
 import ArgumentsManager from '../ArgumentsManager';
 import SectionHeader from './SectionHeader';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface RunSectionProps {
   localConfig: MCPServerConfig;
@@ -66,6 +67,7 @@ const RunSection: React.FC<RunSectionProps> = ({
   isExpanded,
   toggleSection
 }) => {
+  const { t } = useI18n();
   // Determine section status based on run state
   const getSectionStatus = () => {
     if (message?.type === 'error' && !isRunning) {
@@ -85,7 +87,7 @@ const RunSection: React.FC<RunSectionProps> = ({
         isRunning ? 'border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/20' :
         'border-gray-200 dark:border-gray-700'}`}>
       <SectionHeader
-        title="Third, define how to run your server"
+        title={t('mcp.local.section.run')}
         isExpanded={isExpanded}
         onToggle={toggleSection}
         status={getSectionStatus()}
@@ -114,7 +116,7 @@ const RunSection: React.FC<RunSectionProps> = ({
           />
           
           <div className="mt-6">
-            <h4 className="text-md font-medium mb-4">Arguments</h4>
+            <h4 className="text-md font-medium mb-4">{t('mcp.local.arguments')}</h4>
             <ArgumentsManager
               args={localConfig.transport === 'stdio' ? (localConfig as any).args || [] : []}
               onArgChange={handleArgChange}

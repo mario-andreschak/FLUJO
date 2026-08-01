@@ -14,11 +14,13 @@ import { createLogger } from '@/utils/logger';
 import { SpeechSettings } from '@/shared/types/storage/storage';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import { checkWebSpeechSupport } from '@/frontend/services/transcription/webSpeech';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/Settings/SpeechRecognitionSettings');
 
 export default function SpeechRecognitionSettings() {
   const { settings, updateSettings } = useStorage();
+  const { t } = useI18n();
   
   // Check if Web Speech API is supported in this browser
   const speechSupport = checkWebSpeechSupport();
@@ -42,7 +44,7 @@ export default function SpeechRecognitionSettings() {
     <Box sx={{ p: 2 }}>
       {!speechSupport.supported && (
         <Alert severity="warning" sx={{ mb: 3 }}>
-          Speech recognition is not supported in your browser. Please use Chrome, Edge, or Safari for the best experience.
+          {t('settings.speech.unsupported')}
         </Alert>
       )}
       
@@ -56,38 +58,38 @@ export default function SpeechRecognitionSettings() {
               disabled={!speechSupport.supported}
             />
           }
-          label="Enable speech recognition"
+          label={t('settings.speech.enable')}
         />
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          When enabled, audio recordings will be transcribed using your browser's built-in offfline speech recognition capabilities.
+          {t('settings.speech.enableDescription')}
         </Typography>
       </FormControl>
       
       <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
         <Typography variant="subtitle2" gutterBottom>
-          Speech Recognition Information
+          {t('settings.speech.infoTitle')}
         </Typography>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-          <Typography variant="body2">Technology:</Typography>
+          <Typography variant="body2">{t('settings.speech.technology')}</Typography>
           <Typography variant="body2">Web Speech API</Typography>
         </Box>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-          <Typography variant="body2">Processing:</Typography>
-          <Typography variant="body2">Browser-based</Typography>
+          <Typography variant="body2">{t('settings.speech.processing')}</Typography>
+          <Typography variant="body2">{t('settings.speech.browserBased')}</Typography>
         </Box>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-          <Typography variant="body2">Language:</Typography>
-          <Typography variant="body2">Automatically uses browser language</Typography>
+          <Typography variant="body2">{t('settings.speech.language')}</Typography>
+          <Typography variant="body2">{t('settings.speech.autoLanguage')}</Typography>
         </Box>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-          <Typography variant="body2">Privacy:</Typography>
-          <Typography variant="body2">Depends on browser implementation</Typography>
+          <Typography variant="body2">{t('settings.speech.privacy')}</Typography>
+          <Typography variant="body2">{t('settings.speech.browserPrivacy')}</Typography>
         </Box>
       </Paper>
       
       <Alert severity="info" sx={{ mt: 3 }}>
         <Typography variant="body2">
-          Speech recognition quality may vary based on your browser, microphone quality, and background noise. For best results, speak clearly and use a good quality microphone.
+          {t('settings.speech.quality')}
         </Typography>
       </Alert>
     </Box>

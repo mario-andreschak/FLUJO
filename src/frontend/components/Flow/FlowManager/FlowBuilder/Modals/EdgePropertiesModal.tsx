@@ -31,6 +31,7 @@ import {
   EDGE_CONDITION_TARGETS,
   isRegexCompilable,
 } from '@/utils/shared/edgeConditions';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface EdgePropertiesModalProps {
   open: boolean;
@@ -40,18 +41,6 @@ interface EdgePropertiesModalProps {
   onSave: (edgeId: string, condition?: EdgeCondition) => void;
 }
 
-const KIND_LABELS: Record<EdgeConditionKind, string> = {
-  contains: 'Contains',
-  regex: 'Regex',
-  equals: 'Equals',
-  always: 'Always (any reply)',
-};
-
-const TARGET_LABELS: Record<EdgeConditionTarget, string> = {
-  'last-assistant': "Last agent reply (this step's output)",
-  'last-message': 'Last message (any role)',
-};
-
 /**
  * Edits the Tier 2b deterministic-routing predicate (`edge.data.condition`) on
  * a standard flow-control edge. Intentionally lean (no async hooks) — mirrors
@@ -60,6 +49,17 @@ const TARGET_LABELS: Record<EdgeConditionTarget, string> = {
  * with the compiler's plain-edge output.
  */
 export const EdgePropertiesModal = ({ open, edge, onClose, onSave }: EdgePropertiesModalProps) => {
+  const { t } = useI18n();
+  const kindLabels: Record<EdgeConditionKind, string> = {
+    contains: t('flows.edgeModal.contains'),
+    regex: t('flows.edgeModal.regex'),
+    equals: t('flows.edgeModal.equals'),
+    always: t('flows.edgeModal.always'),
+  };
+  const targetLabels: Record<EdgeConditionTarget, string> = {
+    'last-assistant': t('flows.edgeModal.lastAgent'),
+    'last-message': t('flows.edgeModal.lastMessage'),
+  };
   const [conditional, setConditional] = useState(false);
   const [kind, setKind] = useState<EdgeConditionKind>('contains');
   const [value, setValue] = useState('');
@@ -131,8 +131,8 @@ export const EdgePropertiesModal = ({ open, edge, onClose, onSave }: EdgePropert
     >
       <DialogTitle component="div">
         <Box display="flex" alignItems="center" justifyContent="space-between">
-          <Typography variant="h6">Edge Properties</Typography>
-          <IconButton edge="end" color="inherit" onClick={onClose} aria-label="close">
+          <Typography variant="h6">{t('flows.edgeModal.title')}</Typography>
+          <IconButton edge="end" color="inherit" onClick={onClose} aria-label={t('flows.modal.close')}>
             <CloseIcon />
           </IconButton>
         </Box>
@@ -142,9 +142,7 @@ export const EdgePropertiesModal = ({ open, edge, onClose, onSave }: EdgePropert
 
       <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, p: 3 }}>
         <Typography variant="body2" color="text.secondary">
-          A conditional edge is taken only when its predicate matches the selected
-          message at runtime. The flow takes the first matching outgoing edge; a
-          plain (condition-less) edge is the default/fallback.
+          {t('flows.edgeModal.help')}
         </Typography>
 
         <FormControlLabel
@@ -154,22 +152,22 @@ export const EdgePropertiesModal = ({ open, edge, onClose, onSave }: EdgePropert
               onChange={(e) => setConditional(e.target.checked)}
             />
           }
-          label="Conditional edge"
+          label={t('flows.edgeModal.conditional')}
         />
 
         {conditional && (
           <>
             <FormControl fullWidth size="small">
-              <InputLabel id="edge-condition-kind-label">Kind</InputLabel>
+              <InputLabel id="edge-condition-kind-label">{t('flows.edgeModal.kind')}</InputLabel>
               <Select
                 labelId="edge-condition-kind-label"
-                label="Kind"
+                label={t('flows.edgeModal.kind')}
                 value={kind}
                 onChange={(e) => setKind(e.target.value as EdgeConditionKind)}
               >
                 {EDGE_CONDITION_KINDS.map((k) => (
                   <MenuItem key={k} value={k}>
-                    {KIND_LABELS[k]}
+                    {kindLabels[k]}
                   </MenuItem>
                 ))}
               </Select>
@@ -179,31 +177,31 @@ export const EdgePropertiesModal = ({ open, edge, onClose, onSave }: EdgePropert
               <TextField
                 fullWidth
                 size="small"
-                label={kind === 'regex' ? 'Pattern (JS regex source)' : 'Value'}
+                label={kind === 'regex' ? t('flows.edgeModal.pattern') : t('flows.edgeModal.value')}
                 value={value}
                 onChange={(e) => setValue(e.target.value)}
                 error={regexInvalid || valueMissing}
                 helperText={
                   regexInvalid
-                    ? 'Invalid regular expression — will never match at runtime.'
+                    ? t('flows.edgeModal.invalidRegex')
                     : valueMissing
-                    ? 'A value is required for this kind (an empty value never matches).'
+                    ? t('flows.edgeModal.valueRequired')
                     : ' '
                 }
               />
             )}
 
             <FormControl fullWidth size="small">
-              <InputLabel id="edge-condition-target-label">Test against</InputLabel>
+              <InputLabel id="edge-condition-target-label">{t('flows.edgeModal.testAgainst')}</InputLabel>
               <Select
                 labelId="edge-condition-target-label"
-                label="Test against"
+                label={t('flows.edgeModal.testAgainst')}
                 value={target}
                 onChange={(e) => setTarget(e.target.value as EdgeConditionTarget)}
               >
                 {EDGE_CONDITION_TARGETS.map((t) => (
                   <MenuItem key={t} value={t}>
-                    {TARGET_LABELS[t]}
+                    {targetLabels[t]}
                   </MenuItem>
                 ))}
               </Select>
@@ -218,28 +216,28 @@ export const EdgePropertiesModal = ({ open, edge, onClose, onSave }: EdgePropert
                       onChange={(e) => setIgnoreCase(e.target.checked)}
                     />
                   }
-                  label="Ignore case"
+                  label={t('flows.edgeModal.ignoreCase')}
                 />
               )}
               <FormControlLabel
                 control={
                   <Checkbox checked={negate} onChange={(e) => setNegate(e.target.checked)} />
                 }
-                label="Negate (match when NOT true)"
+                label={t('flows.edgeModal.negate')}
               />
             </Box>
 
             <FormHelperText>
-              Predicates never throw at runtime: a broken regex simply never matches.
+              {t('flows.edgeModal.runtimeSafety')}
             </FormHelperText>
           </>
         )}
       </DialogContent>
 
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose}>{t('flows.modal.cancel')}</Button>
         <Button onClick={handleSave} variant="contained" color="primary" disabled={saveDisabled}>
-          Save
+          {t('flows.modal.save')}
         </Button>
       </DialogActions>
     </Dialog>

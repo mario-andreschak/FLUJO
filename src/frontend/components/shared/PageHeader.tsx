@@ -3,11 +3,16 @@
 import { Box, Stack, Typography, useTheme } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import type { ElementType, ReactNode } from 'react';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { TranslationKey } from '@/frontend/i18n/messages';
 
 export interface PageHeaderProps {
-  title: ReactNode;
+  title?: ReactNode;
+  titleKey?: TranslationKey;
   description?: ReactNode;
+  descriptionKey?: TranslationKey;
   eyebrow?: string;
+  eyebrowKey?: TranslationKey;
   icon?: ElementType;
   leading?: ReactNode;
   badge?: ReactNode;
@@ -23,8 +28,11 @@ export interface PageHeaderProps {
  */
 export default function PageHeader({
   title,
+  titleKey,
   description,
+  descriptionKey,
   eyebrow,
+  eyebrowKey,
   icon: Icon,
   leading,
   badge,
@@ -33,6 +41,10 @@ export default function PageHeader({
   maxWidth = 1440,
 }: PageHeaderProps) {
   const theme = useTheme();
+  const { t } = useI18n();
+  const resolvedTitle = titleKey ? t(titleKey) : title;
+  const resolvedDescription = descriptionKey ? t(descriptionKey) : description;
+  const resolvedEyebrow = eyebrowKey ? t(eyebrowKey) : eyebrow;
 
   return (
     <Box
@@ -98,7 +110,7 @@ export default function PageHeader({
           <Box sx={{ minWidth: 0 }}>
             {(eyebrow || badge) && (
               <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.35 }}>
-                {eyebrow && (
+          {resolvedEyebrow && (
                   <Typography
                     sx={{
                       color: 'primary.light',
@@ -108,7 +120,7 @@ export default function PageHeader({
                       textTransform: 'uppercase',
                     }}
                   >
-                    {eyebrow}
+              {resolvedEyebrow}
                   </Typography>
                 )}
                 {badge}
@@ -124,9 +136,9 @@ export default function PageHeader({
                 whiteSpace: { xs: 'normal', sm: 'nowrap' },
               }}
             >
-              {title}
+            {resolvedTitle}
             </Typography>
-            {description && (
+          {resolvedDescription && (
               <Typography
                 variant="body2"
                 color="text.secondary"
@@ -136,7 +148,7 @@ export default function PageHeader({
                   textWrap: 'balance',
                 }}
               >
-                {description}
+              {resolvedDescription}
               </Typography>
             )}
           </Box>

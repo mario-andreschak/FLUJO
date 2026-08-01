@@ -45,6 +45,7 @@ import { findNodeById } from './utils/nodeUtils';
 import { CanvasControls } from './components/CanvasControls';
 import { createLogger } from '@/utils/logger';
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 // Create a logger instance for this file
 const log = createLogger('components/flow/FlowBuilder/Canvas/Canvas.tsx');
@@ -99,6 +100,7 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
   sourceHandleId,
 }) => {
   const theme = useTheme();
+  const { t } = useI18n();
   const [query, setQuery] = useState('');
 
   useEffect(() => {
@@ -121,38 +123,38 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
   }> = [
     {
       type: 'process',
-      label: 'Process Node',
-      description: 'Let a LLM do your work',
+      label: t('flows.canvas.processNode'),
+      description: t('flows.canvas.processDescription'),
     },
     {
       type: 'finish',
-      label: 'Finish Node',
-      description: 'End your flow here',
+      label: t('flows.canvas.finishNode'),
+      description: t('flows.canvas.finishDescription'),
     },
     {
       type: 'mcp',
-      label: 'MCP Node',
-      description: 'Add functionality',
+      label: t('flows.canvas.mcpNode'),
+      description: t('flows.canvas.mcpDescription'),
     },
     {
       type: 'subflow',
-      label: 'Subflow Node',
-      description: 'Run another flow',
+      label: t('flows.canvas.subflowNode'),
+      description: t('flows.canvas.subflowDescription'),
     },
     {
       type: 'resource',
-      label: 'Resource Node',
-      description: 'A data artifact steps read or write',
+      label: t('flows.canvas.resourceNode'),
+      description: t('flows.canvas.resourceDescription'),
     },
     {
       type: 'signal',
-      label: 'Signal Node',
-      description: 'Emit an event to trigger another flow',
+      label: t('flows.canvas.signalNode'),
+      description: t('flows.canvas.signalDescription'),
     },
     {
       type: 'trigger',
-      label: 'Trigger Node',
-      description: 'Schedule or event-trigger for this flow',
+      label: t('flows.canvas.triggerNode'),
+      description: t('flows.canvas.triggerDescription'),
     },
   ];
 
@@ -234,10 +236,10 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
         }}
         >
         <Typography id="node-selection-title" variant="subtitle1" fontWeight={800}>
-          Add the next step
+          {t('flows.canvas.addNext')}
         </Typography>
         <Typography variant="caption" color="text.secondary">
-          It will be connected and selected automatically.
+          {t('flows.canvas.autoConnect')}
         </Typography>
         <TextField
           autoFocus
@@ -245,8 +247,8 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
           size="small"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search legal node types"
-          inputProps={{ 'aria-label': 'Search legal node types' }}
+          placeholder={t('flows.canvas.searchTypes')}
+          inputProps={{ 'aria-label': t('flows.canvas.searchTypes') }}
           sx={{ my: 1.25 }}
           InputProps={{
             startAdornment: (
@@ -305,7 +307,7 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
           ))}
           {availableNodeTypes.length === 0 && (
             <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>
-              No matching node types are valid for this connection.
+              {t('flows.canvas.noTypes')}
             </Typography>
           )}
         </Box>

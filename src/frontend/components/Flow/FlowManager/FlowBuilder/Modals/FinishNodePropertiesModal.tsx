@@ -15,6 +15,7 @@ import {
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import { FlowNode } from '@/frontend/types/flow/flow';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface FinishNodePropertiesModalProps {
   open: boolean;
@@ -24,6 +25,7 @@ interface FinishNodePropertiesModalProps {
 }
 
 export const FinishNodePropertiesModal = ({ open, node, onClose, onSave }: FinishNodePropertiesModalProps) => {
+  const { t } = useI18n();
   // Clone node data to avoid direct mutation
   const [nodeData, setNodeData] = useState<{
     label: string;
@@ -70,9 +72,9 @@ export const FinishNodePropertiesModal = ({ open, node, onClose, onSave }: Finis
       <DialogTitle component="div">
         <Box display="flex" alignItems="center" justifyContent="space-between">
           <Typography variant="h6">
-            {nodeData.label || 'Finish Node'} Properties
+            {t('flows.modal.properties', { name: nodeData.label || t('flows.modal.finishNode') })}
           </Typography>
-          <IconButton edge="end" color="inherit" onClick={onClose} aria-label="close">
+          <IconButton edge="end" color="inherit" onClick={onClose} aria-label={t('flows.modal.close')}>
             <CloseIcon />
           </IconButton>
         </Box>
@@ -102,22 +104,22 @@ export const FinishNodePropertiesModal = ({ open, node, onClose, onSave }: Finis
             }}
           >
             <Typography variant="h6" color="success.main" gutterBottom>
-              Finish Node
+              {t('flows.modal.finishNode')}
             </Typography>
             <Typography variant="body1" color="text.secondary">
-              This is the end point of your flow. No additional configuration is needed.
+              {t('flows.modal.finishHelp')}
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mt: 2, fontStyle: 'italic' }}>
-              Future versions will support output formatting options.
+              {t('flows.modal.finishFuture')}
             </Typography>
           </Paper>
         </Box>
       </DialogContent>
       
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose}>{t('flows.modal.cancel')}</Button>
         <Button onClick={handleSave} variant="contained" color="primary">
-          Save
+          {t('flows.modal.save')}
         </Button>
       </DialogActions>
     </Dialog>

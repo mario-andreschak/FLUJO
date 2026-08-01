@@ -32,6 +32,7 @@ import { Model } from '@/shared/types';
 import { getModelService, ModelResult } from '@/frontend/services/model';
 import Spinner from '@/frontend/components/shared/Spinner';
 import { collectFolders } from '@/utils/shared/cardGrouping';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('app/models/ModelClient');
 
@@ -40,6 +41,7 @@ interface ModelClientProps {
 }
 
 export default function ModelClient({ initialModels }: ModelClientProps) {
+  const { t } = useI18n();
   const router = useRouter();
   const searchParams = useSearchParams();
   const [models, setModels] = useState(initialModels);
@@ -132,13 +134,13 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
         router.push('/models');
         return { success: true, model: result.model };
       } else {
-        setError(result.error || 'Failed to save model.');
+        setError(result.error || t('models.saveFailed'));
         return { success: false, error: result.error };
       }
     } catch (error: any) {
       log.error('Failed to save model', error);
-      setError(error?.message || 'Failed to save model. Please try again.');
-      return { success: false, error: error?.message || 'Failed to save model' };
+      setError(error?.message || t('models.saveFailedRetry'));
+      return { success: false, error: error?.message || t('models.saveFailed') };
     } finally {
       setIsLoading(false);
     }
@@ -208,7 +210,7 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
             success: false,
             created,
             existing,
-            error: result.error || `Could not create ${displayName}.`,
+            error: result.error || t('models.createNamedFailed', { name: displayName }),
           };
         }
         created.push(result.model);
@@ -221,7 +223,7 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
       return { success: true, created, existing };
     } catch (guidedError: any) {
       log.error('Failed to create guided model bundle', guidedError);
-      const message = guidedError?.message || 'Failed to create the guided model bundle.';
+      const message = guidedError?.message || t('models.guidedBundleFailed');
       setError(message);
       return { success: false, created, existing, error: message };
     } finally {
@@ -242,7 +244,7 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
       
     } catch (error) {
       log.error('Failed to delete model', error);
-      setError('Failed to delete model. Please try again.');
+      setError(t('models.deleteFailed'));
     } finally {
       setIsLoading(false);
     }
@@ -260,19 +262,19 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
       const service = getModelService();
       const model = await service.getModel(modelId);
       if (!model) {
-        setError('Model not found.');
+        setError(t('models.notFound'));
         return;
       }
       const result = await service.updateModel({ ...model, folder });
       if (!result.success) {
-        setError(result.error || 'Failed to move model to folder.');
+        setError(result.error || t('models.moveFailed'));
         return;
       }
       const updatedModels = await service.loadModels();
       setModels(updatedModels);
     } catch (error: any) {
       log.error('Failed to set model folder', error);
-      setError(error?.message || 'Failed to move model to folder. Please try again.');
+      setError(error?.message || t('models.moveFailedRetry'));
     } finally {
       setIsLoading(false);
     }
@@ -290,20 +292,20 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
       const service = getModelService();
       const model = await service.getModel(modelId);
       if (!model) {
-        setError('Model not found.');
+        setError(t('models.notFound'));
         return;
       }
       const nextFavorite = !model.favorite;
       const result = await service.updateModel({ ...model, favorite: nextFavorite || undefined });
       if (!result.success) {
-        setError(result.error || 'Failed to update favorite.');
+        setError(result.error || t('models.favoriteFailed'));
         return;
       }
       const updatedModels = await service.loadModels();
       setModels(updatedModels);
     } catch (error: any) {
       log.error('Failed to toggle model favorite', error);
-      setError(error?.message || 'Failed to update favorite. Please try again.');
+      setError(error?.message || t('models.favoriteFailedRetry'));
     } finally {
       setIsLoading(false);
     }
@@ -345,7 +347,7 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
           }}
         >
           <TextField
-            placeholder="Search AI connections..."
+            placeholder={t('models.searchPlaceholder')}
             variant="outlined"
             size="small"
             value={searchTerm}
@@ -360,13 +362,13 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
             sx={{ maxWidth: { sm: 300 }, width: '100%' }}
           />
           <>
-            <ButtonGroup variant="contained" color="primary" aria-label="AI connection options">
+            <ButtonGroup variant="contained" color="primary" aria-label={t('models.connectionOptionsAria')}>
               <Button startIcon={<AddIcon />} onClick={handleAdd} data-tour="add-model">
-                Connect AI
+                {t('models.connectAi')}
               </Button>
               <Button
                 size="small"
-                aria-label="More AI connection options"
+                aria-label={t('models.moreOptionsAria')}
                 aria-controls={addMenuAnchor ? 'add-model-menu' : undefined}
                 aria-haspopup="menu"
                 aria-expanded={addMenuAnchor ? 'true' : undefined}
@@ -384,11 +386,11 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
             >
               <MenuItem onClick={handleAdd}>
                 <ListItemIcon><AutoAwesomeRoundedIcon fontSize="small" /></ListItemIcon>
-                <ListItemText primary="Guided connection" secondary="Let FLUJO choose the setup" />
+                <ListItemText primary={t('models.guidedConnection')} secondary={t('models.guidedConnectionDescription')} />
               </MenuItem>
               <MenuItem onClick={handleManualAdd}>
                 <ListItemIcon><TuneRoundedIcon fontSize="small" /></ListItemIcon>
-                <ListItemText primary="Manual Creation" secondary="Configure every model field" />
+                <ListItemText primary={t('models.manualCreation')} secondary={t('models.manualCreationDescription')} />
               </MenuItem>
             </Menu>
           </>

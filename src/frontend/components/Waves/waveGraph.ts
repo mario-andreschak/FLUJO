@@ -18,6 +18,7 @@
  */
 
 import type { Wave, WaveChainEdge, WaveChainNode } from '@/shared/types/waves/waves';
+import type { Translator } from '@/frontend/i18n/core';
 import { buildWaveAdjacency } from '@/utils/shared/waveHierarchy';
 import { enumerateOccurrences, timelineFraction } from './waveTimeline';
 
@@ -241,9 +242,11 @@ export function buildWaveGraph(input: BuildWaveGraphInput): WaveGraph {
 
 /** Concrete, human-readable label for a chain edge (#144 — replaces the old
  *  unhelpful "on upstream completion"). */
-export function edgeLabel(edge: WaveChainEdge, fromName: string | undefined): string {
-  if (edge.via === 'signal') return `⚡ ${edge.topic ?? 'signal'}`;
-  const on = edge.on && edge.on.length > 0 ? edge.on.join(' / ') : 'completes';
+export function edgeLabel(edge: WaveChainEdge, fromName: string | undefined, t?: Translator): string {
+  if (edge.via === 'signal') return `⚡ ${edge.topic ?? (t ? t('waves.signalFallback') : 'signal')}`;
+  const on = edge.on && edge.on.length > 0
+    ? edge.on.map((status) => t ? t(status === 'completed' ? 'waves.edgeCompleted' : 'waves.edgeError') : status).join(' / ')
+    : (t ? t('waves.edgeCompleted') : 'completes');
   const who = fromName ? `${fromName} ` : '';
-  return `when ${who}${on}`;
+  return t ? t('waves.edgeWhen', { condition: `${who}${on}` }) : `when ${who}${on}`;
 }

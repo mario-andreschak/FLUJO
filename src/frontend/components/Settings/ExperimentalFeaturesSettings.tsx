@@ -11,12 +11,14 @@ import {
 } from '@mui/material';
 import { createLogger } from '@/utils/logger';
 import { ExperimentalSettings } from '@/shared/types/storage/storage';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 
 const log = createLogger('frontend/components/Settings/ExperimentalFeaturesSettings');
 
 export default function ExperimentalFeaturesSettings() {
   const { settings, updateSettings } = useStorage();
+  const { t } = useI18n();
 
   // Missing/undefined is treated as disabled — the "experimental" default.
   const experimental: ExperimentalSettings = settings?.experimental ?? { enabled: false };
@@ -153,14 +155,10 @@ export default function ExperimentalFeaturesSettings() {
               name="experimentalEnabled"
             />
           }
-          label="Enable Experimental Features"
+          label={t('settings.experimental.enable')}
         />
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          Experimental features may be incomplete or unstable and can change or be
-          removed at any time. Enabling this makes them visible in the app — for
-          example the <strong>Waves</strong> entry in the top navigation — and also
-          turns on the new <strong>Living Watershed</strong> animated interface in
-          Modern themes.
+          {t('settings.experimental.enableDescription')}
         </Typography>
       </FormControl>
 
@@ -173,15 +171,10 @@ export default function ExperimentalFeaturesSettings() {
               name="claudeSessionResume"
             />
           }
-          label="Reuse Claude session across turns (reduce token usage)"
+          label={t('settings.experimental.claudeResume')}
         />
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          For models using the <strong>Claude&nbsp;subscription</strong> (Agent&nbsp;SDK)
-          adapter, resume one session per node instead of re-sending the whole
-          conversation each turn — so only the newest message is sent. This can
-          dramatically cut token usage on long chats. It changes how conversation
-          context reaches the model, so it is off by default; if you notice a model
-          losing track of earlier context, turn it back off.
+          {t('settings.experimental.claudeResumeDescription')}
         </Typography>
       </FormControl>
 
@@ -194,14 +187,10 @@ export default function ExperimentalFeaturesSettings() {
               name="visualCompactionEnabled"
             />
           }
-          label="Visual context compaction"
+          label={t('settings.experimental.visualCompaction')}
         />
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          Experimental and off by default. For explicitly vision-capable models,
-          FLUJO may replace a complete old, bulky context range with dense PNG
-          pages only when provider-aware estimates show a context reduction. Exact
-          source remains in run data; secrets, uncertain capability, and failures
-          always keep the safe text route.
+          {t('settings.experimental.visualCompactionDescription')}
         </Typography>
       </FormControl>
 
@@ -215,12 +204,10 @@ export default function ExperimentalFeaturesSettings() {
               disabled={!experimental.visualCompactionEnabled}
             />
           }
-          label="Only archive old tool results"
+          label={t('settings.experimental.toolResultsOnly')}
         />
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          Safe default: only complete oversized tool-call/result groups are
-          eligible. Turn this off to let the router consider other old bulky text;
-          recent turns and incomplete tool pairs are never archived.
+          {t('settings.experimental.toolResultsOnlyDescription')}
         </Typography>
       </FormControl>
 
@@ -234,12 +221,10 @@ export default function ExperimentalFeaturesSettings() {
               disabled={!experimental.visualCompactionEnabled}
             />
           }
-          label="Evaluate visual routing without sending images"
+          label={t('settings.experimental.evaluation')}
         />
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          Records comparable raw, text, summary, and image estimates in the
-          debugger while preserving the current text wire. Use this for live
-          evaluation before enabling automatic image selection.
+          {t('settings.experimental.evaluationDescription')}
         </Typography>
       </FormControl>
 
@@ -252,13 +237,10 @@ export default function ExperimentalFeaturesSettings() {
               name="autoUnloadOllamaModels"
             />
           }
-          label="Auto-unload idle Ollama models"
+          label={t('settings.experimental.ollama')}
         />
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          When a flow switches between different Ollama models on the same server,
-          automatically unload the previous model from VRAM before loading the new
-          one. Recommended for GPU-constrained hardware. Note: concurrent Ollama
-          requests to the same server are serialised while this is on.
+          {t('settings.experimental.ollamaDescription')}
         </Typography>
       </FormControl>
 
@@ -271,12 +253,10 @@ export default function ExperimentalFeaturesSettings() {
               name="showModelsWithoutToolCapabilities"
             />
           }
-          label="Show Models without tool capabilities"
+          label={t('settings.experimental.modelsWithoutTools')}
         />
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          Provider model lists hide models explicitly known not to support tool
-          calls. Turn this on to reveal image generators and other non-tool
-          models. Models with unknown capabilities remain visible either way.
+          {t('settings.experimental.modelsWithoutToolsDescription')}
         </Typography>
       </FormControl>
 
@@ -289,17 +269,10 @@ export default function ExperimentalFeaturesSettings() {
               name="mcpBetaProtocol"
             />
           }
-          label="MCP beta protocol (spec 2026-07-28)"
+          label={t('settings.experimental.mcpBeta')}
         />
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          Connect to MCP servers using the <strong>v2 beta SDK</strong> with automatic
-          version negotiation: servers that already speak the new stateless
-          2026-07-28 protocol are used natively, and every other server
-          transparently falls back to the classic handshake — so existing servers
-          keep working. The beta SDK&apos;s API may still change before its stable
-          release; if a server misbehaves with this on, turn it off and reconnect.
-          Websocket servers always use the stable SDK. Changing this rebuilds
-          server connections on their next use.
+          {t('settings.experimental.mcpBetaDescription')}
         </Typography>
       </FormControl>
 
@@ -313,14 +286,10 @@ export default function ExperimentalFeaturesSettings() {
               disabled={!experimental.enabled}
             />
           }
-          label="Flow-based Flow Generator"
+          label={t('settings.experimental.flowGenerator')}
         />
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          Run Generate Flow through an editable, multi-stage FLUJO Flow. Its
-          architect inventories real building blocks and authors the complete
-          specification; its compiler validates, repairs, and returns an unsaved
-          draft. The proven generator plus AI-Improve remains the default when
-          this is off.
+          {t('settings.experimental.flowGeneratorDescription')}
         </Typography>
       </FormControl>
 
@@ -333,14 +302,10 @@ export default function ExperimentalFeaturesSettings() {
               name="protectedPathsEnabled"
             />
           }
-          label="Protect sensitive home-directory paths"
+          label={t('settings.experimental.protectedPaths')}
         />
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          Add a defense-in-depth deny list to installed <strong>filesystem</strong>
-          {' '}and <strong>bash</strong> MCP packages. When enabled, sensitive locations
-          such as Documents, Desktop, Downloads, and credential directories remain
-          blocked even when they are included in a configured root. This is off by
-          default, so configured roots normally grant access to their full contents.
+          {t('settings.experimental.protectedPathsDescription')}
         </Typography>
       </FormControl>
 
@@ -353,20 +318,16 @@ export default function ExperimentalFeaturesSettings() {
               name="snapshotsEnabled"
             />
           }
-          label="Enable filesystem snapshots"
+          label={t('settings.experimental.snapshots')}
         />
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          Capture restorable snapshots around installed <strong>filesystem</strong>
-          {' '}and <strong>bash</strong> package writes. Turning this off prevents new
-          captures and snapshot-based revert. An operator can always disable
-          snapshots with <strong>FLUJO_SNAPSHOTS=0</strong>.
+          {t('settings.experimental.snapshotsDescription')}
         </Typography>
       </FormControl>
 
       <Alert severity="info">
         <Typography variant="body2">
-          Turning this off again hides experimental features from the navigation. It
-          does not delete any data.
+          {t('settings.experimental.disableInfo')}
         </Typography>
       </Alert>
     </Box>

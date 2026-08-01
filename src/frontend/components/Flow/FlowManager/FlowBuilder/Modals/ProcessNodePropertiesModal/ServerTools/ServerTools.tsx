@@ -35,6 +35,7 @@ import { CardPickerItem } from '@/frontend/components/shared/CardPickerGrid';
 import ServerCard from '@/frontend/components/mcp/MCPServerManager/ServerCard';
 import { useCardPicker } from '@/frontend/hooks/useCardPicker';
 import { CardGroup } from '@/utils/shared/cardGrouping';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/flow/FlowBuilder/Modals/ProcessNodePropertiesModal/ServerTools');
 
@@ -97,6 +98,7 @@ const ServerTools: React.FC<ServerToolsProps> = ({
   handleRestartServer,
   // flowNodes // Removed if not needed
 }) => {
+  const { t, tp } = useI18n();
   // The selected server node is derived — the parent owns the selection, and
   // the first connected node is the default (no mirrored local state to
   // drift).
@@ -144,11 +146,11 @@ const ServerTools: React.FC<ServerToolsProps> = ({
     <CardPickerDialog
       open={connectPickerOpen}
       onClose={() => setConnectPickerOpen(false)}
-      title="Connect an MCP server"
-      description="Pick a server to add to this flow and wire to this Process node."
-      emptyMessage="No more servers to connect."
+      title={t('flows.serverTools.connectTitle')}
+      description={t('flows.serverTools.connectDescription')}
+      emptyMessage={t('flows.serverTools.noneToConnect')}
       searchable
-      searchPlaceholder="Search servers…"
+      searchPlaceholder={t('flows.serverTools.searchServers')}
       searchTerm={serverPicker.searchTerm}
       onSearchChange={serverPicker.setSearchTerm}
       columns={{ xs: 12, sm: 6 }}
@@ -195,9 +197,12 @@ const ServerTools: React.FC<ServerToolsProps> = ({
 
   const getParameterSummary = (inputSchema: any): string => {
     const parameterCount = Object.keys(inputSchema?.properties ?? {}).length;
-    if (parameterCount === 0) return 'No parameters';
+    if (parameterCount === 0) return t('flows.serverTools.parameter.none');
     const requiredCount = Array.isArray(inputSchema?.required) ? inputSchema.required.length : 0;
-    return `${parameterCount} parameter${parameterCount === 1 ? '' : 's'}${requiredCount > 0 ? ` · ${requiredCount} required` : ''}`;
+    const required = requiredCount > 0
+      ? tp('flows.serverTools.required', requiredCount)
+      : '';
+    return tp('flows.serverTools.parameter', parameterCount, { required });
   };
 
   // Get enabled tools for a specific MCP node instance
@@ -314,7 +319,7 @@ const ServerTools: React.FC<ServerToolsProps> = ({
     return (
       <Box sx={{ mt: 1 }}>
         <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 'medium' }}>
-          Parameters:
+          {t('flows.agentTools.parameters')}
         </Typography>
         <Box sx={{ pl: 1, mt: 0.5 }}>
           {Object.entries(inputSchema.properties).map(([paramName, paramDetails]: [string, any]) => (
@@ -327,7 +332,7 @@ const ServerTools: React.FC<ServerToolsProps> = ({
                 {': '}
               </Typography>
               <Typography variant="caption" component="span" color="text.secondary">
-                {paramDetails.description || paramDetails.type || 'No description'}
+                {paramDetails.description || paramDetails.type || t('flows.agentTools.noDescription')}
               </Typography>
             </Box>
           ))}
@@ -352,23 +357,23 @@ const ServerTools: React.FC<ServerToolsProps> = ({
   return (
     <Box sx={{ mt: 4, display: 'flex', flexDirection: 'column', height: '100%' }}>
       <Typography variant="subtitle1" gutterBottom>
-        Connected MCP Servers and Tools
+        {t('flows.serverTools.title')}
       </Typography>
 
       {isLoadingServers ? (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <CircularProgress size={20} />
-          <Typography color="text.secondary">Loading connected MCP nodes...</Typography>
+          <Typography color="text.secondary">{t('flows.serverTools.loadingNodes')}</Typography>
         </Box>
       ) : connectedMcpNodes.length === 0 ? (
         <Box sx={{ p: 2, border: '1px dashed rgba(0, 0, 0, 0.12)', borderRadius: 1 }}>
           <Typography color="text.secondary" align="center">
-            No MCP nodes connected to this Process node.
+            {t('flows.serverTools.noneConnected')}
           </Typography>
           <Typography variant="caption" color="text.secondary" align="center" display="block" sx={{ mt: 1 }}>
             {canConnectServer
-              ? 'Pick a server below — the MCP node is added to the flow and wired up for you.'
-              : 'Connect MCP nodes to this Process node using the side handles to access their tools.'}
+              ? t('flows.serverTools.pickHelp')
+              : t('flows.serverTools.connectHelp')}
           </Typography>
           {canConnectServer && (
             <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
@@ -378,7 +383,7 @@ const ServerTools: React.FC<ServerToolsProps> = ({
                 startIcon={<AddIcon />}
                 onClick={() => setConnectPickerOpen(true)}
               >
-                Connect MCP Server
+                {t('flows.serverTools.connect')}
               </Button>
             </Box>
           )}
@@ -446,7 +451,7 @@ const ServerTools: React.FC<ServerToolsProps> = ({
             })}
           </Tabs>
           {canConnectServer && (
-            <Tooltip title="Connect another MCP server">
+            <Tooltip title={t('flows.serverTools.connectAnother')}>
               <IconButton size="small" onClick={() => setConnectPickerOpen(true)} sx={{ ml: 1 }}>
                 <AddIcon fontSize="small" />
               </IconButton>
@@ -458,7 +463,7 @@ const ServerTools: React.FC<ServerToolsProps> = ({
           {/* Server actions for the selected node */}
           {currentSelectedMcpNode && currentSelectedServerName && (
             <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
-              <Tooltip title={`Retry connection for ${currentSelectedServerName}`}>
+              <Tooltip title={t('flows.serverTools.retry', { server: currentSelectedServerName })}>
                 <span>
                   <IconButton
                     size="small"
@@ -475,7 +480,7 @@ const ServerTools: React.FC<ServerToolsProps> = ({
               </Tooltip>
 
               {currentSelectedMcpNode.status === 'connected' && handleRestartServer && (
-                <Tooltip title={`Restart server ${currentSelectedServerName}`}>
+                <Tooltip title={t('flows.serverTools.restart', { server: currentSelectedServerName })}>
                   <span>
                     <IconButton
                       size="small"
@@ -493,7 +498,7 @@ const ServerTools: React.FC<ServerToolsProps> = ({
 
           {/* Search input */}
           <TextField
-            placeholder="Search enabled tools..."
+            placeholder={t('flows.serverTools.searchTools')}
             variant="outlined"
             size="small"
             fullWidth
@@ -529,7 +534,7 @@ const ServerTools: React.FC<ServerToolsProps> = ({
                 return (
                   <Box key={nodeId} sx={{ p: 2, textAlign: 'center' }}>
                     <Typography color="text.secondary">
-                      Server '{serverName}' is not connected. Connect to view tools.
+                      {t('flows.serverTools.notConnectedTools', { server: serverName })}
                     </Typography>
                   </Box>
                 );
@@ -552,10 +557,10 @@ const ServerTools: React.FC<ServerToolsProps> = ({
                   <Box key={nodeId} sx={{ p: 2, textAlign: 'center' }}>
                     <Typography color="text.secondary">
                       {searchQuery.trim()
-                        ? `No enabled tools match "${searchQuery}" for this node.`
+                        ? t('flows.serverTools.noMatch', { search: searchQuery })
                         : enabledToolsCount === 0
-                        ? `No tools are enabled for this node instance. Enable tools in the MCP Node properties.`
-                        : "No tools available or enabled for this node instance."}
+                        ? t('flows.serverTools.noneEnabled')
+                        : t('flows.serverTools.noneAvailable')}
                     </Typography>
                   </Box>
                 );
@@ -566,7 +571,7 @@ const ServerTools: React.FC<ServerToolsProps> = ({
                   {tools.map((tool) => {
                     const toolKey = getToolKey(nodeId, tool.name);
                     const isExpanded = !!expandedToolKeys[toolKey];
-                    const description = tool.description || 'No description available';
+                    const description = tool.description || t('flows.agentTools.noDescription');
                     const parameterSummary = getParameterSummary(tool.inputSchema);
                     return (
                       <Card
@@ -574,7 +579,7 @@ const ServerTools: React.FC<ServerToolsProps> = ({
                         variant="outlined"
                         role="button"
                         tabIndex={0}
-                        aria-label={`Add ${tool.name} from ${serverName} to prompt`}
+                        aria-label={t('flows.serverTools.addTool', { tool: tool.name, server: serverName })}
                         onClick={() => insertToolForSelectedNode(nodeId, serverName, tool.name)}
                         onKeyDown={(event) => {
                           if (event.target !== event.currentTarget) return;
@@ -629,10 +634,10 @@ const ServerTools: React.FC<ServerToolsProps> = ({
                                 {parameterSummary}
                               </Typography>
                             </Box>
-                            <Tooltip title={`${isExpanded ? 'Collapse' : 'Expand'} ${tool.name} details`}>
+                            <Tooltip title={t(isExpanded ? 'flows.serverTools.collapse' : 'flows.serverTools.expand', { tool: tool.name })}>
                               <IconButton
                                 size="small"
-                                aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${tool.name} details`}
+                                aria-label={t(isExpanded ? 'flows.serverTools.collapse' : 'flows.serverTools.expand', { tool: tool.name })}
                                 aria-expanded={isExpanded}
                                 aria-controls={`${toolKey}-details`}
                                 onClick={(event) => toggleToolDetails(toolKey, event)}

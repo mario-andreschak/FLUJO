@@ -25,6 +25,8 @@ import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
 import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
 import type { FlowNode } from '@/frontend/types/flow/flow';
 import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { Translator } from '@/frontend/i18n/core';
 
 const InspectorSurface = styled(Paper)(({ theme }) => ({
   width: 320,
@@ -76,20 +78,20 @@ interface InspectorPanelProps {
   onCheckPlausibility?: () => void;
 }
 
-const typeLabel = (node: FlowNode, beginnerMode: boolean) => {
+const typeLabel = (node: FlowNode, beginnerMode: boolean, t: Translator) => {
   const type = String(node.data.type || node.type || 'node');
   if (beginnerMode) {
     const friendlyTypes: Record<string, string> = {
-      start: 'When it starts',
-      process: 'AI step',
-      finish: 'Final answer',
-      mcp: 'Connected app',
-      subflow: 'Another agent',
-      resource: 'Saved information',
-      signal: 'Notification',
-      trigger: 'Automatic start',
+      start: t('flows.inspector.type.start'),
+      process: t('flows.inspector.type.process'),
+      finish: t('flows.inspector.type.finish'),
+      mcp: t('flows.inspector.type.mcp'),
+      subflow: t('flows.inspector.type.subflow'),
+      resource: t('flows.inspector.type.resource'),
+      signal: t('flows.inspector.type.signal'),
+      trigger: t('flows.inspector.type.trigger'),
     };
-    return friendlyTypes[type] ?? 'Step';
+    return friendlyTypes[type] ?? t('flows.inspector.type.step');
   }
   if (type === 'mcp') return 'MCP';
   return `${type.charAt(0).toUpperCase()}${type.slice(1)}`;
@@ -113,6 +115,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onSuggestTools,
   onCheckPlausibility,
 }) => {
+  const { t, tp } = useI18n();
   const [tab, setTab] = useState<InspectorTab>(selectedNode ? 'node' : 'flow');
   const [label, setLabel] = useState(selectedNode?.data.label ?? '');
   const [description, setDescription] = useState(selectedNode?.data.description ?? '');
@@ -136,21 +139,21 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     const properties = selectedNode.data.properties ?? {};
     const entries: Array<{ label: string; value: string }> = [];
     if (typeof properties.modelId === 'string' && properties.modelId) {
-      entries.push({ label: beginnerMode ? 'AI' : 'Model', value: properties.modelId });
+      entries.push({ label: beginnerMode ? t('flows.inspector.summary.ai') : t('flows.inspector.summary.model'), value: properties.modelId });
     } else if (typeof properties.model === 'string' && properties.model) {
-      entries.push({ label: beginnerMode ? 'AI' : 'Model', value: properties.model });
+      entries.push({ label: beginnerMode ? t('flows.inspector.summary.ai') : t('flows.inspector.summary.model'), value: properties.model });
     }
     if (typeof properties.boundServer === 'string' && properties.boundServer) {
-      entries.push({ label: beginnerMode ? 'App' : 'Server', value: properties.boundServer });
+      entries.push({ label: beginnerMode ? t('flows.inspector.summary.app') : t('flows.inspector.summary.server'), value: properties.boundServer });
     }
     if (typeof properties.subflowId === 'string' && properties.subflowId) {
-      entries.push({ label: beginnerMode ? 'Agent' : 'Flow', value: properties.subflowId });
+      entries.push({ label: beginnerMode ? t('flows.inspector.summary.agent') : t('flows.inspector.flow'), value: properties.subflowId });
     }
     if (typeof properties.signalName === 'string' && properties.signalName) {
-      entries.push({ label: beginnerMode ? 'Notification' : 'Signal', value: properties.signalName });
+      entries.push({ label: beginnerMode ? t('flows.inspector.summary.notification') : t('flows.inspector.summary.signal'), value: properties.signalName });
     }
     return entries;
-  }, [selectedNode, beginnerMode]);
+  }, [selectedNode, beginnerMode, t]);
 
   const commitNode = (): FlowNode | null => {
     if (!selectedNode) return null;
@@ -173,23 +176,23 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   return (
     <InspectorSurface
       elevation={0}
-      aria-label={beginnerMode && selectedNode ? 'Step settings' : beginnerMode ? 'Agent settings' : 'Flow inspector'}
+      aria-label={beginnerMode && selectedNode ? t('flows.inspector.stepSettings') : beginnerMode ? t('flows.inspector.agentSettings') : t('flows.inspector.flowInspector')}
     >
       <Box sx={{ px: 1.5, pt: 1.25 }}>
         <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1}>
           <Box sx={{ minWidth: 0 }}>
             <Typography variant="overline" color="text.secondary" sx={{ letterSpacing: '.12em' }}>
               {beginnerMode
-                ? selectedNode ? 'Edit this step' : 'Agent settings'
-                : 'Inspector'}
+                ? selectedNode ? t('flows.inspector.editStep') : t('flows.inspector.agentSettings')
+                : t('flows.inspector.inspector')}
             </Typography>
             <Typography variant="subtitle1" fontWeight={800} noWrap>
               {selectedNode ? selectedNode.data.label : flowName}
             </Typography>
           </Box>
           {selectedNode && (
-            <Tooltip title={beginnerMode ? 'Close step settings' : 'Clear node selection'}>
-              <IconButton size="small" aria-label={beginnerMode ? 'Close step settings' : 'Close node inspector'} onClick={onClearSelection}>
+            <Tooltip title={beginnerMode ? t('flows.inspector.closeStep') : t('flows.inspector.clearSelection')}>
+              <IconButton size="small" aria-label={beginnerMode ? t('flows.inspector.closeStep') : t('flows.inspector.closeNode')} onClick={onClearSelection}>
                 <CloseRoundedIcon fontSize="small" />
               </IconButton>
             </Tooltip>
@@ -203,8 +206,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             variant="fullWidth"
             sx={{ mt: 0.5, minHeight: 38, '& .MuiTab-root': { minHeight: 38 } }}
           >
-            <Tab value="node" label="Node" disabled={!selectedNode} />
-            <Tab value="flow" label="Flow" />
+            <Tab value="node" label={t('flows.inspector.node')} disabled={!selectedNode} />
+            <Tab value="flow" label={t('flows.inspector.flow')} />
           </Tabs>
         )}
       </Box>
@@ -217,7 +220,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             <Stack direction="row" alignItems="center" gap={1}>
               <Chip
                 size="small"
-                label={typeLabel(selectedNode, beginnerMode)}
+                label={typeLabel(selectedNode, beginnerMode, t)}
                 color={selectedNode.data.type === 'finish' ? 'success' : 'primary'}
                 variant="outlined"
               />
@@ -229,7 +232,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             </Stack>
 
             <TextField
-              label={beginnerMode ? 'Step name' : 'Node name'}
+              label={beginnerMode ? t('flows.inspector.stepName') : t('flows.inspector.nodeName')}
               size="small"
               fullWidth
               value={label}
@@ -241,7 +244,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             />
 
             <TextField
-              label={beginnerMode ? 'Short note (optional)' : 'What this step does'}
+              label={beginnerMode ? t('flows.inspector.shortNote') : t('flows.inspector.whatStepDoes')}
               size="small"
               fullWidth
               multiline
@@ -250,15 +253,15 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               value={description}
               onChange={(event) => setDescription(event.target.value)}
               onBlur={commitNode}
-              placeholder={beginnerMode ? 'A reminder about why this step is here' : 'Optional note for future you'}
+              placeholder={beginnerMode ? t('flows.inspector.notePlaceholder') : t('flows.inspector.optionalNote')}
             />
 
             {(selectedNode.data.type === 'process' || selectedNode.data.type === 'start') && (
               <TextField
                 label={
                   beginnerMode
-                    ? selectedNode.data.type === 'start' ? 'Helpful background' : 'What should the AI do?'
-                    : selectedNode.data.type === 'start' ? 'Starting context' : 'Task prompt'
+                    ? selectedNode.data.type === 'start' ? t('flows.inspector.helpfulBackground') : t('flows.inspector.aiTask')
+                    : selectedNode.data.type === 'start' ? t('flows.inspector.startingContext') : t('flows.inspector.taskPrompt')
                 }
                 size="small"
                 fullWidth
@@ -276,13 +279,13 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 }}
                 placeholder={
                   selectedNode.data.type === 'start'
-                    ? beginnerMode ? 'Anything the agent should always know' : 'Optional context injected when the flow starts'
-                    : beginnerMode ? 'Explain the job in everyday language' : 'Describe the result this step should produce'
+                    ? beginnerMode ? t('flows.inspector.startBeginnerPlaceholder') : t('flows.inspector.startPlaceholder')
+                    : beginnerMode ? t('flows.inspector.taskBeginnerPlaceholder') : t('flows.inspector.taskPlaceholder')
                 }
                 helperText={
                   beginnerMode
-                    ? 'Your change is applied when you leave this field.'
-                    : 'Changes apply when you leave the field. Ctrl/⌘ + Enter applies immediately.'
+                    ? t('flows.inspector.blurHelp')
+                    : t('flows.inspector.keyboardHelp')
                 }
               />
             )}
@@ -314,7 +317,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 if (updatedNode) onOpenAdvanced(updatedNode);
               }}
             >
-              {beginnerMode ? 'More options' : 'Full settings'}
+              {beginnerMode ? t('flows.inspector.moreOptions') : t('flows.inspector.fullSettings')}
             </Button>
 
             {selectedNode.data.type === 'process' && onSuggestTools && (
@@ -326,14 +329,14 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   if (updatedNode) onSuggestTools(updatedNode);
                 }}
               >
-                Suggest connected tools
+                {t('flows.inspector.suggestTools')}
               </Button>
             )}
 
             <Typography variant="caption" color="text.secondary">
               {beginnerMode
-                ? 'Most people only need the fields above. More options contains AI and connected-app controls.'
-                : 'Single-click any node to inspect it. Double-click opens full settings immediately.'}
+                ? t('flows.inspector.beginnerTip')
+                : t('flows.inspector.expertTip')}
             </Typography>
           </Stack>
         ) : (
@@ -342,45 +345,45 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               <SettingsSuggestRoundedIcon color="primary" fontSize="small" />
               <Box>
                 <Typography variant="subtitle2" fontWeight={800}>
-                  {beginnerMode ? 'About your agent' : 'Flow details'}
+                  {beginnerMode ? t('flows.inspector.aboutAgent') : t('flows.inspector.flowDetails')}
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
                   {beginnerMode
-                    ? 'Give it a clear name and say what it is for.'
-                    : 'Name, describe, and tune the whole workflow.'}
+                    ? t('flows.inspector.aboutHelp')
+                    : t('flows.inspector.flowHelp')}
                 </Typography>
               </Box>
             </Stack>
 
             <TextField
               size="small"
-              label={beginnerMode ? 'Agent name' : 'Flow Name'}
+              label={beginnerMode ? t('flows.inspector.agentName') : t('flows.inspector.flowName')}
               value={flowName}
               onChange={(event) => onFlowNameChange(event.target.value)}
               error={!!flowNameError}
               helperText={
                 flowNameError
-                  ?? (beginnerMode ? 'Use a short name you will recognize.' : 'Renames save directly—Duplicate is a separate command.')
+                  ?? (beginnerMode ? t('flows.inspector.agentNameHelp') : t('flows.inspector.renameHelp'))
               }
               fullWidth
             />
 
             {onCheckPlausibility && (
               <Button variant="outlined" startIcon={<AutoAwesomeRoundedIcon />} onClick={onCheckPlausibility}>
-                Check whole agent
+                {t('flows.inspector.checkAgent')}
               </Button>
             )}
 
             <TextField
               size="small"
-              label={beginnerMode ? 'What should it help with?' : 'Description'}
+              label={beginnerMode ? t('flows.inspector.helpQuestion') : t('flows.inspector.description')}
               value={flowDescription}
               onChange={(event) => onFlowDescriptionChange(event.target.value)}
               multiline
               minRows={3}
               maxRows={7}
               fullWidth
-              placeholder={beginnerMode ? 'Example: Turns long notes into a short, friendly summary' : 'What this flow accomplishes'}
+              placeholder={beginnerMode ? t('flows.inspector.agentDescriptionPlaceholder') : t('flows.inspector.flowDescriptionPlaceholder')}
             />
 
             {!beginnerMode && (
@@ -400,12 +403,12 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                     onChange={(event) => onAuthoringModeChange(event.target.checked ? 'advanced' : 'guided')}
                   />
                 }
-                label={authoringMode === 'advanced' ? 'Advanced' : 'Guided'}
+                label={authoringMode === 'advanced' ? t('flows.inspector.advanced') : t('flows.inspector.guided')}
               />
               <Typography variant="caption" color="text.secondary" display="block">
                 {authoringMode === 'advanced'
-                  ? 'Runtime, routing, resources, signals, and scheduling are visible.'
-                  : 'The common authoring controls stay focused and calm.'}
+                  ? t('flows.inspector.advancedHelp')
+                  : t('flows.inspector.guidedHelp')}
               </Typography>
             </Box>
             )}
@@ -416,7 +419,9 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 onClick={onOpenPermissionRules}
                 startIcon={<SettingsSuggestRoundedIcon />}
               >
-                Permission rules{permissionRuleCount ? ` (${permissionRuleCount})` : ''}
+                {permissionRuleCount
+                  ? tp('flows.inspector.permissionRules', permissionRuleCount)
+                  : t('flows.inspector.permissionRules')}
               </Button>
             )}
 
@@ -424,7 +429,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               <>
                 <Divider />
                 <Typography variant="caption" color="text.secondary">
-                  Shortcuts: A or / adds a step · Ctrl/⌘ S saves · Ctrl/⌘ Z undoes.
+                  {t('flows.inspector.shortcuts')}
                 </Typography>
               </>
             )}

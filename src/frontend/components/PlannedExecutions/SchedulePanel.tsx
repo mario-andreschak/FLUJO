@@ -18,6 +18,7 @@ import {
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { plannedExecutionsService } from '@/frontend/services/plannedExecutions';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 type PresetMode = 'seconds' | 'minutes' | 'hours' | 'daily' | 'weekdays' | 'custom';
 
@@ -79,10 +80,12 @@ const SchedulePanel = ({
   cron: cronProp,
   timezone,
   onChange,
-  verb = 'Runs',
+  verb,
   catchUp,
   onCatchUpChange,
 }: SchedulePanelProps) => {
+  const { t, formatDate } = useI18n();
+  const resolvedVerb = verb ?? t('automations.schedule.runsVerb');
   const initial = useMemo(() => presetFromCron(cronProp), []); // eslint-disable-line react-hooks/exhaustive-deps
   const [mode, setMode] = useState<PresetMode>(initial.mode);
   const [n, setN] = useState<number>(initial.n);
@@ -120,25 +123,25 @@ const SchedulePanel = ({
     <Box>
       <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center', mt: 1 }}>
         <FormControl sx={{ minWidth: 180 }}>
-          <InputLabel id="schedule-preset-label">{verb}</InputLabel>
+          <InputLabel id="schedule-preset-label">{resolvedVerb}</InputLabel>
           <Select
             labelId="schedule-preset-label"
-            label={verb}
+            label={resolvedVerb}
             value={mode}
             onChange={(e) => setMode(e.target.value as PresetMode)}
           >
-            <MenuItem value="seconds">Every N seconds</MenuItem>
-            <MenuItem value="minutes">Every N minutes</MenuItem>
-            <MenuItem value="hours">Every N hours</MenuItem>
-            <MenuItem value="daily">Daily at a time</MenuItem>
-            <MenuItem value="weekdays">Weekdays at a time</MenuItem>
-            <MenuItem value="custom">Custom (cron)</MenuItem>
+            <MenuItem value="seconds">{t('automations.schedule.everySeconds')}</MenuItem>
+            <MenuItem value="minutes">{t('automations.schedule.everyMinutes')}</MenuItem>
+            <MenuItem value="hours">{t('automations.schedule.everyHours')}</MenuItem>
+            <MenuItem value="daily">{t('automations.schedule.daily')}</MenuItem>
+            <MenuItem value="weekdays">{t('automations.schedule.weekdays')}</MenuItem>
+            <MenuItem value="custom">{t('automations.schedule.custom')}</MenuItem>
           </Select>
         </FormControl>
 
         {(mode === 'seconds' || mode === 'minutes' || mode === 'hours') && (
           <TextField
-            label={mode === 'seconds' ? 'Seconds' : mode === 'minutes' ? 'Minutes' : 'Hours'}
+            label={mode === 'seconds' ? t('automations.schedule.seconds') : mode === 'minutes' ? t('automations.schedule.minutes') : t('automations.schedule.hours')}
             type="number"
             value={n}
             onChange={(e) => setN(Number(e.target.value))}
@@ -149,7 +152,7 @@ const SchedulePanel = ({
 
         {(mode === 'daily' || mode === 'weekdays') && (
           <TextField
-            label="Time"
+            label={t('automations.schedule.time')}
             type="time"
             value={time}
             onChange={(e) => setTime(e.target.value)}
@@ -160,7 +163,7 @@ const SchedulePanel = ({
 
         {mode === 'custom' && (
           <TextField
-            label="Cron pattern"
+            label={t('automations.schedule.cron')}
             value={customCron}
             onChange={(e) => setCustomCron(e.target.value)}
             sx={{ minWidth: 220 }}
@@ -171,12 +174,12 @@ const SchedulePanel = ({
 
       {preview && !preview.valid && (
         <Alert severity="error" sx={{ mt: 2 }}>
-          {preview.error || 'This schedule is not valid.'}
+          {preview.error || t('automations.schedule.invalid')}
         </Alert>
       )}
       {preview && preview.valid && preview.nextRuns.length > 0 && (
         <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
-          Next: {preview.nextRuns.map(iso => new Date(iso).toLocaleString()).join('  ·  ')}
+          {t('automations.schedule.next', { times: preview.nextRuns.map(iso => formatDate(iso, { dateStyle: 'short', timeStyle: 'short' })).join('  ·  ') })}
         </Typography>
       )}
 
@@ -189,33 +192,33 @@ const SchedulePanel = ({
               onChange={(e) => onCatchUpChange(e.target.checked)}
             />
           }
-          label="If FLUJO was closed when this trigger was scheduled, run it once on startup"
+          label={t('automations.schedule.catchUp')}
         />
       )}
 
       <Accordion disableGutters elevation={0} sx={{ mt: 1, '&:before': { display: 'none' } }}>
         <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ px: 0 }}>
-          <Typography variant="body2" color="text.secondary">Advanced</Typography>
+          <Typography variant="body2" color="text.secondary">{t('automations.advanced')}</Typography>
         </AccordionSummary>
         <AccordionDetails sx={{ px: 0 }}>
           <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
             <TextField
-              label="Timezone (optional)"
+              label={t('automations.schedule.timezone')}
               value={timezone || ''}
               onChange={(e) => onChange({ cron, timezone: e.target.value || undefined })}
-              placeholder="e.g. Europe/Berlin"
-              helperText="IANA timezone name. Empty = this computer's timezone."
+              placeholder={t('automations.schedule.timezonePlaceholder')}
+              helperText={t('automations.schedule.timezoneHelp')}
               sx={{ minWidth: 260 }}
             />
             <TextField
-              label="Generated cron pattern"
+              label={t('automations.schedule.generatedCron')}
               value={cron}
               InputProps={{ readOnly: mode !== 'custom' }}
               onChange={(e) => {
                 setMode('custom');
                 setCustomCron(e.target.value);
               }}
-              helperText="Editing switches to Custom mode."
+              helperText={t('automations.schedule.editCustom')}
               sx={{ minWidth: 220 }}
             />
           </Box>

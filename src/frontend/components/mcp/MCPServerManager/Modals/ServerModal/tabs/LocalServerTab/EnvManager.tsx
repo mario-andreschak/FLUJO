@@ -13,6 +13,7 @@ import {
   TextField,
   Typography
 } from '@mui/material';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/LocalServerTab/EnvManager');
 
@@ -33,6 +34,7 @@ const EnvManager: React.FC<EnvManagerProps> = ({
   isParsingEnv = false,
   serverName
 }) => {
+  const { t } = useI18n();
   const handleEnvTextChange = async (text: string) => {
     try {
       const envObj = text.split('\n')
@@ -56,7 +58,7 @@ const EnvManager: React.FC<EnvManagerProps> = ({
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
         <Typography variant="subtitle2">
-          Environment Variables (KEY=value, one per line)
+          {t('mcp.local.env.title')}
         </Typography>
         {(onParseEnvExample || onParseEnvClipboard) && (
           <Stack direction="row" spacing={1}>
@@ -69,7 +71,7 @@ const EnvManager: React.FC<EnvManagerProps> = ({
                 color="inherit"
                 sx={{ color: 'text.secondary' }}
               >
-                Parse .env.example
+                {t('mcp.local.env.parseExample')}
               </Button>
             )}
             {onParseEnvClipboard && (
@@ -81,7 +83,7 @@ const EnvManager: React.FC<EnvManagerProps> = ({
                 color="inherit"
                 sx={{ color: 'text.secondary' }}
               >
-                Parse Env from Clipboard
+                {t('mcp.local.env.parseClipboard')}
               </Button>
             )}
           </Stack>

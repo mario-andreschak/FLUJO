@@ -17,6 +17,8 @@ import {
 import { registryService } from '@/frontend/services/registry';
 import type { RegistryAccountStatus, RegistryOAuthProvider } from '@/shared/types/registry';
 import { createLogger } from '@/utils/logger';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import Trans from '@/frontend/components/shared/Trans';
 
 const log = createLogger('frontend/components/Packages/RegistryAccountSettings');
 
@@ -29,6 +31,7 @@ type Feedback = { type: 'success' | 'error' | 'info'; text: string } | null;
  * publisher handle.
  */
 export default function RegistryAccountSettings() {
+  const { t } = useI18n();
   const [status, setStatus] = useState<RegistryAccountStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -72,14 +75,14 @@ export default function RegistryAccountSettings() {
     if (!outcome) return;
     setMessage(
       outcome === 'success'
-        ? { type: 'success', text: 'Signed in to the package registry.' }
-        : { type: 'error', text: 'OAuth sign-in did not complete. Please try again.' },
+        ? { type: 'success', text: t('packages.account.signedIn') }
+        : { type: 'error', text: t('packages.account.oauthFailed') },
     );
     void refresh();
     params.delete('registry_oauth');
     const qs = params.toString();
     window.history.replaceState({}, '', window.location.pathname + (qs ? `?${qs}` : ''));
-  }, [refresh]);
+  }, [refresh, t]);
 
   const handleAuth = async () => {
     setBusy(true);
@@ -89,18 +92,18 @@ export default function RegistryAccountSettings() {
         ? await registryService.signup(email.trim(), password, handle.trim())
         : await registryService.login(email.trim(), password);
       if (result.status === 'authenticated') {
-        setMessage({ type: 'success', text: 'Signed in to the package registry.' });
+        setMessage({ type: 'success', text: t('packages.account.signedIn') });
         setPassword('');
       } else if (result.status === 'confirmation_required') {
-        setMessage({ type: 'info', text: result.message || 'Check your inbox to confirm your email.' });
+        setMessage({ type: 'info', text: result.message || t('packages.account.checkInbox') });
         setPassword('');
       } else {
-        setMessage({ type: 'error', text: result.message || 'Authentication failed.' });
+        setMessage({ type: 'error', text: result.message || t('packages.account.authFailed') });
       }
       if (result.account) setStatus(result.account);
       else await refresh();
     } catch (err) {
-      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Authentication failed.' });
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : t('packages.account.authFailed') });
     } finally {
       setBusy(false);
     }
@@ -112,9 +115,9 @@ export default function RegistryAccountSettings() {
     try {
       await registryService.logout();
       await refresh();
-      setMessage({ type: 'success', text: 'Logged out.' });
+      setMessage({ type: 'success', text: t('packages.account.loggedOut') });
     } catch (err) {
-      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to log out.' });
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : t('packages.account.logoutFailed') });
     } finally {
       setBusy(false);
     }
@@ -128,7 +131,7 @@ export default function RegistryAccountSettings() {
       // Hand off to the registry's authorize page; we return here via the callback.
       window.location.assign(authorizationUrl);
     } catch (err) {
-      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to start OAuth sign-in.' });
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : t('packages.account.oauthStartFailed') });
       setBusy(false);
     }
   };
@@ -140,8 +143,8 @@ export default function RegistryAccountSettings() {
       const result = await registryService.resendConfirmation();
       setMessage(
         result.success
-          ? { type: 'success', text: 'Confirmation email sent.' }
-          : { type: 'error', text: result.message || 'Failed to resend confirmation.' },
+          ? { type: 'success', text: t('packages.account.confirmationSent') }
+          : { type: 'error', text: result.message || t('packages.account.resendFailed') },
       );
     } finally {
       setBusy(false);
@@ -151,7 +154,7 @@ export default function RegistryAccountSettings() {
   const handleForgotPassword = async () => {
     const address = email.trim();
     if (!address) {
-      setMessage({ type: 'info', text: 'Enter your account email above, then tap “Forgot password?”.' });
+      setMessage({ type: 'info', text: t('packages.account.enterEmail') });
       return;
     }
     setBusy(true);
@@ -161,10 +164,10 @@ export default function RegistryAccountSettings() {
       await registryService.requestPasswordReset(address);
       setMessage({
         type: 'info',
-        text: 'If an account exists for that email, a password-reset link is on its way. Follow the link to set a new password.',
+        text: t('packages.account.resetSent'),
       });
     } catch (err) {
-      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to request a password reset.' });
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : t('packages.account.resetFailed') });
     } finally {
       setBusy(false);
     }
@@ -177,8 +180,8 @@ export default function RegistryAccountSettings() {
       const result = await registryService.saveSettings(baseUrl.trim());
       setMessage(
         result.success
-          ? { type: 'success', text: 'Registry URL saved.' }
-          : { type: 'error', text: result.message || 'Invalid registry URL.' },
+          ? { type: 'success', text: t('packages.account.urlSaved') }
+          : { type: 'error', text: result.message || t('packages.account.invalidUrl') },
       );
     } finally {
       setBusy(false);
@@ -199,9 +202,7 @@ export default function RegistryAccountSettings() {
   return (
     <Box sx={{ width: '100%' }}>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Sign in to the FLUJO package registry to publish packages. Browsing and installing
-        packages does not require an account — only publishing does, and your email must be
-        confirmed first. Your registry tokens are encrypted at rest and never shown here.
+        {t('packages.account.intro')}
       </Typography>
 
       {message && (
@@ -216,40 +217,42 @@ export default function RegistryAccountSettings() {
             <Typography variant="subtitle1">{status?.email}</Typography>
             {status?.publisherHandle && <Chip size="small" label={`@${status.publisherHandle}`} />}
             {status?.isConfirmed ? (
-              <Chip size="small" color="success" label="Confirmed" />
+              <Chip size="small" color="success" label={t('packages.account.confirmed')} />
             ) : (
-              <Chip size="small" color="warning" label="Unconfirmed" />
+              <Chip size="small" color="warning" label={t('packages.account.unconfirmed')} />
             )}
           </Stack>
           <Box>
             <Button variant="outlined" onClick={handleLogout} disabled={busy}>
-              Log out
+              {t('packages.account.logout')}
             </Button>
           </Box>
         </Stack>
       ) : pendingConfirmation ? (
         <Stack spacing={2}>
           <Alert severity="info">
-            We sent a confirmation link to <strong>{status?.email}</strong>. Confirm your email,
-            then log in to start publishing.
+            <Trans
+              message="packages.account.confirmationHelp"
+              values={{ email: <strong>{status?.email}</strong> }}
+            />
           </Alert>
           <Stack direction="row" spacing={1}>
             <Button variant="outlined" onClick={handleResend} disabled={busy}>
-              Resend confirmation email
+              {t('packages.account.resend')}
             </Button>
             <Button onClick={handleLogout} disabled={busy}>
-              Use a different account
+              {t('packages.account.different')}
             </Button>
           </Stack>
         </Stack>
       ) : (
         <Stack spacing={2}>
           <Tabs value={tab} onChange={(_e, v) => setTab(v)}>
-            <Tab value="login" label="Log in" />
-            <Tab value="signup" label="Sign up" />
+            <Tab value="login" label={t('packages.account.login')} />
+            <Tab value="signup" label={t('packages.account.signup')} />
           </Tabs>
           <TextField
-            label="Email"
+            label={t('packages.account.email')}
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
@@ -257,7 +260,7 @@ export default function RegistryAccountSettings() {
             autoComplete="username"
           />
           <TextField
-            label="Password"
+            label={t('packages.account.password')}
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
@@ -266,12 +269,12 @@ export default function RegistryAccountSettings() {
           />
           {tab === 'signup' && (
             <TextField
-              label="Publisher handle"
+              label={t('packages.account.handle')}
               value={handle}
               onChange={(e) => setHandle(e.target.value)}
               fullWidth
               autoComplete="username"
-              helperText="A unique handle for publishing packages, e.g. your-name"
+              helperText={t('packages.account.handleHelp')}
             />
           )}
           <Box>
@@ -280,7 +283,7 @@ export default function RegistryAccountSettings() {
               onClick={handleAuth}
               disabled={busy || !email.trim() || !password || (tab === 'signup' && !handle.trim())}
             >
-              {tab === 'signup' ? 'Sign up' : 'Log in'}
+              {tab === 'signup' ? t('packages.account.signup') : t('packages.account.login')}
             </Button>
           </Box>
           {tab === 'login' && (
@@ -292,14 +295,14 @@ export default function RegistryAccountSettings() {
                 disabled={busy}
                 sx={{ textTransform: 'none', px: 0 }}
               >
-                Forgot password?
+                {t('packages.account.forgot')}
               </Button>
             </Box>
           )}
-          <Divider>or</Divider>
+          <Divider>{t('packages.account.or')}</Divider>
           <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
             <Button variant="outlined" onClick={() => handleOAuth('github')} disabled={busy}>
-              Continue with GitHub
+              {t('packages.account.github')}
             </Button>
           </Stack>
         </Stack>
@@ -308,10 +311,10 @@ export default function RegistryAccountSettings() {
       <Divider sx={{ my: 3 }} />
 
       <Typography variant="subtitle2" gutterBottom>
-        Registry URL
+        {t('packages.account.registryUrl')}
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-        Leave blank to use the default ({defaultUrl}).
+        {t('packages.account.defaultUrl', { url: defaultUrl })}
       </Typography>
       <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
         <TextField
@@ -322,7 +325,7 @@ export default function RegistryAccountSettings() {
           sx={{ minWidth: 320 }}
         />
         <Button variant="outlined" onClick={handleSaveSettings} disabled={busy}>
-          Save
+          {t('packages.account.save')}
         </Button>
       </Stack>
     </Box>

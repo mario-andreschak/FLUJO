@@ -1,0 +1,188 @@
+import type { SupportedLocale } from './locales';
+import { globalMessageRows } from './catalogs/global';
+import { sharedMessageRows } from './catalogs/shared';
+import { settingsMessageRows } from './catalogs/settings';
+import { wavesMessageRows } from './catalogs/waves';
+import { statisticsMessageRows } from './catalogs/statistics';
+import { modelsMessageRows } from './catalogs/models';
+import { automationsMessageRows } from './catalogs/automations';
+import { packagesMessageRows } from './catalogs/packages';
+import { mcpMessageRows } from './catalogs/mcp';
+import { flowMessageRows } from './catalogs/flows';
+import { chatMessageRows } from './catalogs/chat';
+import { docsMessageRows } from './catalogs/docs';
+import { validationMessageRows } from './catalogs/validation';
+import type { MessageRow } from './schema';
+
+/**
+ * Message order is English, Spanish, German, French, Italian, Portuguese,
+ * Simplified Chinese. Keeping each translation beside its source makes missing
+ * locale entries impossible and keeps copy reviews pleasantly mechanical.
+ */
+const messageRows = {
+  'common.settings': ['Settings', 'Configuración', 'Einstellungen', 'Paramètres', 'Impostazioni', 'Configurações', '设置'],
+  'common.cancel': ['Cancel', 'Cancelar', 'Abbrechen', 'Annuler', 'Annulla', 'Cancelar', '取消'],
+  'shell.skipToContent': ['Skip to content', 'Saltar al contenido', 'Zum Inhalt springen', 'Aller au contenu', 'Vai al contenuto', 'Ir para o conteúdo', '跳到内容'],
+  'shell.loading.preparing': ['Preparing your workspace', 'Preparando tu espacio de trabajo', 'Arbeitsbereich wird vorbereitet', 'Préparation de votre espace de travail', 'Preparazione dello spazio di lavoro', 'Preparando seu espaço de trabalho', '正在准备工作区'],
+  'shell.loading.theme': ['Lighting up FLUJO', 'Iluminando FLUJO', 'FLUJO wird beleuchtet', 'Mise en lumière de FLUJO', 'Illuminazione di FLUJO', 'Iluminando o FLUJO', '正在点亮 FLUJO'],
+  'shell.loading.workspace': ['Opening your workspace', 'Abriendo tu espacio de trabajo', 'Arbeitsbereich wird geöffnet', 'Ouverture de votre espace de travail', 'Apertura dello spazio di lavoro', 'Abrindo seu espaço de trabalho', '正在打开工作区'],
+  'shell.loading.navigation': ['Loading navigation', 'Cargando navegación', 'Navigation wird geladen', 'Chargement de la navigation', 'Caricamento della navigazione', 'Carregando a navegação', '正在加载导航'],
+  'shell.error.title': ['The workspace hit a snag', 'El espacio de trabajo tuvo un problema', 'Im Arbeitsbereich ist ein Problem aufgetreten', 'Un problème est survenu dans l’espace de travail', 'Si è verificato un problema nello spazio di lavoro', 'O espaço de trabalho encontrou um problema', '工作区遇到了问题'],
+  'shell.error.body': ['Your data is safe. Reload FLUJO to reconnect the interface to the local runtime.', 'Tus datos están seguros. Recarga FLUJO para volver a conectar la interfaz con el entorno local.', 'Deine Daten sind sicher. Lade FLUJO neu, um die Oberfläche wieder mit der lokalen Laufzeit zu verbinden.', 'Vos données sont en sécurité. Rechargez FLUJO pour reconnecter l’interface au moteur local.', 'I tuoi dati sono al sicuro. Ricarica FLUJO per riconnettere l’interfaccia al runtime locale.', 'Seus dados estão seguros. Recarregue o FLUJO para reconectar a interface ao ambiente local.', '你的数据是安全的。请重新加载 FLUJO，以将界面重新连接到本地运行环境。'],
+  'shell.error.reload': ['Reload workspace', 'Recargar espacio de trabajo', 'Arbeitsbereich neu laden', 'Recharger l’espace de travail', 'Ricarica spazio di lavoro', 'Recarregar espaço de trabalho', '重新加载工作区'],
+  'nav.aiSetup': ['AI Setup', 'Configuración de IA', 'KI-Einrichtung', 'Configuration IA', 'Configurazione IA', 'Configuração de IA', 'AI 设置'],
+  'nav.connectedApps': ['Connected Apps', 'Aplicaciones conectadas', 'Verbundene Apps', 'Applications connectées', 'App collegate', 'Aplicativos conectados', '已连接应用'],
+  'nav.agents': ['Agents', 'Agentes', 'Agenten', 'Agents', 'Agenti', 'Agentes', '智能体'],
+  'nav.talk': ['Talk', 'Conversar', 'Chat', 'Discussion', 'Chat', 'Conversar', '对话'],
+  'nav.more': ['More', 'Más', 'Mehr', 'Plus', 'Altro', 'Mais', '更多'],
+  'nav.automations': ['Automations', 'Automatizaciones', 'Automatisierungen', 'Automatisations', 'Automazioni', 'Automações', '自动化'],
+  'nav.extensions': ['Extensions', 'Extensiones', 'Erweiterungen', 'Extensions', 'Estensioni', 'Extensões', '扩展'],
+  'nav.activity': ['Activity', 'Actividad', 'Aktivität', 'Activité', 'Attività', 'Atividade', '活动'],
+  'nav.help': ['Help', 'Ayuda', 'Hilfe', 'Aide', 'Aiuto', 'Ajuda', '帮助'],
+  'nav.settings': ['Settings', 'Configuración', 'Einstellungen', 'Paramètres', 'Impostazioni', 'Configurações', '设置'],
+  'nav.tagline': ['Private AI, made simple', 'IA privada, sin complicaciones', 'Private KI, ganz einfach', 'L’IA privée, en toute simplicité', 'IA privata, resa semplice', 'IA privada, de forma simples', '私有 AI，简单易用'],
+  'nav.privateDevice': ['Private on this device', 'Privado en este dispositivo', 'Privat auf diesem Gerät', 'Privé sur cet appareil', 'Privato su questo dispositivo', 'Privado neste dispositivo', '仅存于此设备'],
+  'nav.privateWorkspace': ['Private workspace on this device', 'Espacio privado en este dispositivo', 'Privater Arbeitsbereich auf diesem Gerät', 'Espace privé sur cet appareil', 'Spazio privato su questo dispositivo', 'Espaço privado neste dispositivo', '此设备上的私有工作区'],
+  'nav.primaryAria': ['Primary navigation', 'Navegación principal', 'Hauptnavigation', 'Navigation principale', 'Navigazione principale', 'Navegação principal', '主导航'],
+  'nav.openMenu': ['Open navigation menu', 'Abrir menú de navegación', 'Navigationsmenü öffnen', 'Ouvrir le menu de navigation', 'Apri il menu di navigazione', 'Abrir menu de navegação', '打开导航菜单'],
+  'nav.closeMenu': ['Close navigation menu', 'Cerrar menú de navegación', 'Navigationsmenü schließen', 'Fermer le menu de navigation', 'Chiudi il menu di navigazione', 'Fechar menu de navegação', '关闭导航菜单'],
+  'nav.homeAria': ['FLUJO home', 'Inicio de FLUJO', 'FLUJO-Startseite', 'Accueil FLUJO', 'Home di FLUJO', 'Início do FLUJO', 'FLUJO 首页'],
+  'nav.groupSections': ['{group} sections', 'Secciones de {group}', 'Bereiche von {group}', 'Sections de {group}', 'Sezioni di {group}', 'Seções de {group}', '{group}分区'],
+  'nav.lightMode': ['Switch to light mode', 'Cambiar al modo claro', 'Zum hellen Modus wechseln', 'Passer au mode clair', 'Passa alla modalità chiara', 'Mudar para o modo claro', '切换到浅色模式'],
+  'nav.darkMode': ['Switch to dark mode', 'Cambiar al modo oscuro', 'Zum dunklen Modus wechseln', 'Passer au mode sombre', 'Passa alla modalità scura', 'Mudar para o modo escuro', '切换到深色模式'],
+  'language.menu': ['Change language', 'Cambiar idioma', 'Sprache ändern', 'Changer de langue', 'Cambia lingua', 'Alterar idioma', '更改语言'],
+  'language.title': ['Language', 'Idioma', 'Sprache', 'Langue', 'Lingua', 'Idioma', '语言'],
+  'language.description': ['Choose the language used by FLUJO’s interface.', 'Elige el idioma de la interfaz de FLUJO.', 'Wähle die Sprache der FLUJO-Oberfläche.', 'Choisissez la langue de l’interface FLUJO.', 'Scegli la lingua dell’interfaccia di FLUJO.', 'Escolha o idioma da interface do FLUJO.', '选择 FLUJO 界面所使用的语言。'],
+  'language.help': ['The setting is saved on this device and takes effect immediately.', 'La opción se guarda en este dispositivo y se aplica de inmediato.', 'Die Einstellung wird auf diesem Gerät gespeichert und sofort angewendet.', 'Ce choix est enregistré sur cet appareil et appliqué immédiatement.', 'La scelta viene salvata su questo dispositivo e applicata subito.', 'A opção é salva neste dispositivo e aplicada imediatamente.', '此设置会保存在本设备上并立即生效。'],
+  'language.current': ['Current language', 'Idioma actual', 'Aktuelle Sprache', 'Langue actuelle', 'Lingua attuale', 'Idioma atual', '当前语言'],
+  'settings.controls': ['Workspace controls', 'Controles del espacio de trabajo', 'Arbeitsbereich-Steuerung', 'Commandes de l’espace de travail', 'Controlli dello spazio di lavoro', 'Controles do espaço de trabalho', '工作区控制'],
+  'settings.title': ['Settings', 'Configuración', 'Einstellungen', 'Paramètres', 'Impostazioni', 'Configurações', '设置'],
+  'settings.intro': ['Shape FLUJO around the way you work. Your data, experience, and system controls live in one focused workspace.', 'Adapta FLUJO a tu forma de trabajar. Tus datos, experiencia y controles del sistema viven en un único espacio.', 'Passe FLUJO an deine Arbeitsweise an. Daten, Bedienung und Systemsteuerung sind an einem Ort gebündelt.', 'Adaptez FLUJO à votre façon de travailler. Données, expérience et commandes système sont réunies au même endroit.', 'Adatta FLUJO al tuo modo di lavorare. Dati, esperienza e controlli di sistema sono riuniti in un unico spazio.', 'Adapte o FLUJO à sua forma de trabalhar. Dados, experiência e controles do sistema ficam reunidos em um só espaço.', '让 FLUJO 适应你的工作方式。数据、体验和系统控制集中在一个工作区中。'],
+  'settings.sectionLabel': ['Settings section', 'Sección de configuración', 'Einstellungsbereich', 'Section des paramètres', 'Sezione impostazioni', 'Seção de configurações', '设置分区'],
+  'settings.sectionsAria': ['Settings sections', 'Secciones de configuración', 'Einstellungsbereiche', 'Sections des paramètres', 'Sezioni delle impostazioni', 'Seções de configurações', '设置分区'],
+  'settings.category.security': ['Data & security', 'Datos y seguridad', 'Daten & Sicherheit', 'Données et sécurité', 'Dati e sicurezza', 'Dados e segurança', '数据与安全'],
+  'settings.category.securityDescription': ['Credentials, protection and portability', 'Credenciales, protección y portabilidad', 'Zugangsdaten, Schutz und Portabilität', 'Identifiants, protection et portabilité', 'Credenziali, protezione e portabilità', 'Credenciais, proteção e portabilidade', '凭据、保护与可移植性'],
+  'settings.category.experience': ['Experience', 'Experiencia', 'Erlebnis', 'Expérience', 'Esperienza', 'Experiência', '体验'],
+  'settings.category.experienceDescription': ['Appearance, language, voice and guidance', 'Apariencia, idioma, voz y guía', 'Darstellung, Sprache, Stimme und Hilfe', 'Apparence, langue, voix et accompagnement', 'Aspetto, lingua, voce e guida', 'Aparência, idioma, voz e orientação', '外观、语言、语音与引导'],
+  'settings.category.system': ['System', 'Sistema', 'System', 'Système', 'Sistema', 'Sistema', '系统'],
+  'settings.category.systemDescription': ['Maintenance, privacy and labs', 'Mantenimiento, privacidad y laboratorio', 'Wartung, Datenschutz und Labor', 'Maintenance, confidentialité et laboratoire', 'Manutenzione, privacy e laboratorio', 'Manutenção, privacidade e laboratório', '维护、隐私与实验功能'],
+  'settings.section.globalEnv': ['Global variables', 'Variables globales', 'Globale Variablen', 'Variables globales', 'Variabili globali', 'Variáveis globais', '全局变量'],
+  'settings.section.globalEnvDescription': ['Manage shared values and secrets used by your connected services.', 'Administra valores compartidos y secretos usados por tus servicios conectados.', 'Verwalte gemeinsame Werte und Geheimnisse für verbundene Dienste.', 'Gérez les valeurs partagées et les secrets utilisés par vos services connectés.', 'Gestisci valori condivisi e segreti usati dai servizi collegati.', 'Gerencie valores compartilhados e segredos usados pelos serviços conectados.', '管理已连接服务使用的共享值和密钥。'],
+  'settings.section.encryption': ['Encryption', 'Cifrado', 'Verschlüsselung', 'Chiffrement', 'Crittografia', 'Criptografia', '加密'],
+  'settings.section.encryptionDescription': ['Control how credentials and other sensitive local data are protected.', 'Controla cómo se protegen las credenciales y otros datos locales sensibles.', 'Lege fest, wie Zugangsdaten und andere sensible lokale Daten geschützt werden.', 'Contrôlez la protection des identifiants et autres données locales sensibles.', 'Controlla come vengono protette le credenziali e gli altri dati locali sensibili.', 'Controle como credenciais e outros dados locais sensíveis são protegidos.', '控制凭据和其他敏感本地数据的保护方式。'],
+  'settings.section.backup': ['Backup & restore', 'Copia y restauración', 'Sichern & Wiederherstellen', 'Sauvegarde et restauration', 'Backup e ripristino', 'Backup e restauração', '备份与恢复'],
+  'settings.section.backupDescription': ['Export your setup for safekeeping or restore it on this installation.', 'Exporta tu configuración para guardarla o restáurala en esta instalación.', 'Exportiere deine Einrichtung zur Sicherung oder stelle sie hier wieder her.', 'Exportez votre configuration pour la conserver ou restaurez-la sur cette installation.', 'Esporta la configurazione per conservarla o ripristinala in questa installazione.', 'Exporte sua configuração para guardá-la ou restaure-a nesta instalação.', '导出配置以便妥善保存，或在此安装中恢复。'],
+  'settings.section.theme': ['Appearance', 'Apariencia', 'Darstellung', 'Apparence', 'Aspetto', 'Aparência', '外观'],
+  'settings.section.themeDescription': ['Choose the visual mode that makes FLUJO most comfortable to use.', 'Elige el modo visual que te resulte más cómodo para usar FLUJO.', 'Wähle die Darstellung, mit der FLUJO für dich am angenehmsten ist.', 'Choisissez le mode visuel qui rend FLUJO le plus agréable à utiliser.', 'Scegli la modalità visiva che rende FLUJO più comodo da usare.', 'Escolha o modo visual que torna o FLUJO mais confortável para você.', '选择让 FLUJO 使用起来最舒适的视觉模式。'],
+  'settings.section.speech': ['Speech recognition', 'Reconocimiento de voz', 'Spracherkennung', 'Reconnaissance vocale', 'Riconoscimento vocale', 'Reconhecimento de voz', '语音识别'],
+  'settings.section.speechDescription': ['Configure voice input and browser speech-recognition preferences.', 'Configura la entrada de voz y las preferencias de reconocimiento del navegador.', 'Konfiguriere Spracheingabe und Browser-Spracherkennung.', 'Configurez la saisie vocale et la reconnaissance vocale du navigateur.', 'Configura l’input vocale e il riconoscimento del browser.', 'Configure a entrada de voz e o reconhecimento de fala do navegador.', '配置语音输入和浏览器语音识别偏好。'],
+  'settings.section.onboarding': ['Onboarding', 'Primeros pasos', 'Einführung', 'Prise en main', 'Introduzione', 'Primeiros passos', '入门引导'],
+  'settings.section.onboardingDescription': ['Review the guided setup experience or launch the product tour again.', 'Revisa la configuración guiada o inicia de nuevo el recorrido del producto.', 'Sieh dir die Einführung an oder starte die Produkttour erneut.', 'Revoyez la configuration guidée ou relancez la visite du produit.', 'Rivedi la configurazione guidata o avvia di nuovo il tour del prodotto.', 'Reveja a configuração guiada ou inicie o tour do produto novamente.', '查看引导式设置体验，或重新启动产品导览。'],
+  'settings.section.updates': ['Updates', 'Actualizaciones', 'Updates', 'Mises à jour', 'Aggiornamenti', 'Atualizações', '更新'],
+  'settings.section.updatesDescription': ['Check your installed version and manage automatic update checks.', 'Comprueba la versión instalada y gestiona la búsqueda automática de actualizaciones.', 'Prüfe die installierte Version und verwalte automatische Update-Suchen.', 'Vérifiez la version installée et gérez la recherche automatique de mises à jour.', 'Controlla la versione installata e gestisci la ricerca automatica degli aggiornamenti.', 'Verifique a versão instalada e gerencie a busca automática por atualizações.', '检查已安装版本并管理自动更新检查。'],
+  'settings.section.privacy': ['Privacy & usage', 'Privacidad y uso', 'Datenschutz & Nutzung', 'Confidentialité et utilisation', 'Privacy e utilizzo', 'Privacidade e uso', '隐私与使用情况'],
+  'settings.section.privacyDescription': ['Decide which anonymous usage signals this installation may share.', 'Decide qué señales anónimas de uso puede compartir esta instalación.', 'Entscheide, welche anonymen Nutzungssignale diese Installation teilen darf.', 'Décidez quels signaux d’utilisation anonymes cette installation peut partager.', 'Decidi quali dati anonimi sull’utilizzo può condividere questa installazione.', 'Decida quais sinais anônimos de uso esta instalação pode compartilhar.', '决定此安装可以分享哪些匿名使用信号。'],
+  'settings.section.experimental': ['Experimental features', 'Funciones experimentales', 'Experimentelle Funktionen', 'Fonctionnalités expérimentales', 'Funzioni sperimentali', 'Recursos experimentais', '实验性功能'],
+  'settings.section.experimentalDescription': ['Preview advanced capabilities that are still under active development.', 'Prueba capacidades avanzadas que aún están en desarrollo activo.', 'Teste erweiterte Funktionen, die noch aktiv entwickelt werden.', 'Découvrez des fonctions avancées encore en développement actif.', 'Prova funzionalità avanzate ancora in fase di sviluppo.', 'Experimente recursos avançados que ainda estão em desenvolvimento.', '预览仍在积极开发中的高级功能。'],
+  'home.updateNow': ['Update now', 'Actualizar ahora', 'Jetzt aktualisieren', 'Mettre à jour', 'Aggiorna ora', 'Atualizar agora', '立即更新'],
+  'home.updating': ['Updating…', 'Actualizando…', 'Aktualisierung…', 'Mise à jour…', 'Aggiornamento…', 'Atualizando…', '正在更新…'],
+  'home.updateProgress': ['Updating FLUJO and restarting — this page will reconnect automatically.', 'Actualizando y reiniciando FLUJO; esta página se reconectará automáticamente.', 'FLUJO wird aktualisiert und neu gestartet – diese Seite verbindet sich automatisch neu.', 'Mise à jour et redémarrage de FLUJO — cette page se reconnectera automatiquement.', 'Aggiornamento e riavvio di FLUJO: la pagina si riconnetterà automaticamente.', 'Atualizando e reiniciando o FLUJO — esta página se reconectará automaticamente.', '正在更新并重启 FLUJO，此页面将自动重新连接。'],
+  'home.updateReady.one': ['A FLUJO update is ready (1 new change on {branch}).', 'Hay una actualización de FLUJO disponible (1 cambio nuevo en {branch}).', 'Ein FLUJO-Update ist verfügbar (1 neue Änderung auf {branch}).', 'Une mise à jour de FLUJO est prête (1 nouvelle modification sur {branch}).', 'È disponibile un aggiornamento di FLUJO (1 nuova modifica su {branch}).', 'Uma atualização do FLUJO está pronta (1 nova alteração em {branch}).', 'FLUJO 更新已就绪（{branch} 上有 1 项新更改）。'],
+  'home.updateReady.other': ['A FLUJO update is ready ({count} new changes on {branch}).', 'Hay una actualización de FLUJO disponible ({count} cambios nuevos en {branch}).', 'Ein FLUJO-Update ist verfügbar ({count} neue Änderungen auf {branch}).', 'Une mise à jour de FLUJO est prête ({count} nouvelles modifications sur {branch}).', 'È disponibile un aggiornamento di FLUJO ({count} nuove modifiche su {branch}).', 'Uma atualização do FLUJO está pronta ({count} novas alterações em {branch}).', 'FLUJO 更新已就绪（{branch} 上有 {count} 项新更改）。'],
+  'home.updateFailed': ['Update failed.', 'La actualización falló.', 'Aktualisierung fehlgeschlagen.', 'Échec de la mise à jour.', 'Aggiornamento non riuscito.', 'Falha na atualização.', '更新失败。'],
+  'home.passwordRequired': ['Add a private password to protect your connected accounts in', 'Añade una contraseña privada para proteger tus cuentas conectadas en', 'Füge unter folgendem Punkt ein privates Passwort hinzu, um verbundene Konten zu schützen:', 'Ajoutez un mot de passe privé pour protéger vos comptes connectés dans', 'Aggiungi una password privata per proteggere gli account collegati in', 'Adicione uma senha privada para proteger suas contas conectadas em', '请在以下位置添加私有密码，以保护已连接的账户：'],
+  'home.passwordOptional': ['Your information stays on this device. For extra protection, choose a private password in', 'Tu información permanece en este dispositivo. Para mayor protección, elige una contraseña privada en', 'Deine Daten bleiben auf diesem Gerät. Wähle für zusätzlichen Schutz ein privates Passwort unter', 'Vos informations restent sur cet appareil. Pour plus de protection, choisissez un mot de passe privé dans', 'Le tue informazioni restano su questo dispositivo. Per una protezione extra, scegli una password privata in', 'Suas informações permanecem neste dispositivo. Para proteção extra, escolha uma senha privada em', '你的信息保留在此设备上。若需额外保护，请在以下位置设置私有密码：'],
+  'home.eyebrow': ['Your FLUJO setup', 'Tu configuración de FLUJO', 'Deine FLUJO-Einrichtung', 'Votre configuration FLUJO', 'La tua configurazione FLUJO', 'Sua configuração do FLUJO', '你的 FLUJO 设置'],
+  'home.heading': ['Set up once. Then just use it.', 'Configúralo una vez. Después, solo úsalo.', 'Einmal einrichten. Danach einfach nutzen.', 'Configurez une fois. Puis utilisez-le.', 'Configuralo una volta. Poi usalo.', 'Configure uma vez. Depois, é só usar.', '设置一次，之后即可使用。'],
+  'home.intro': ['Follow these three steps in order. FLUJO keeps technical details available without putting them in your way.', 'Sigue estos tres pasos en orden. FLUJO mantiene los detalles técnicos disponibles sin estorbarte.', 'Folge diesen drei Schritten. FLUJO hält technische Details bereit, ohne dich aufzuhalten.', 'Suivez ces trois étapes dans l’ordre. FLUJO garde les détails techniques accessibles sans vous encombrer.', 'Segui questi tre passaggi in ordine. FLUJO mantiene i dettagli tecnici disponibili senza intralciarti.', 'Siga estas três etapas em ordem. O FLUJO mantém os detalhes técnicos acessíveis sem atrapalhar.', '请按顺序完成这三个步骤。FLUJO 会保留技术细节，但不会让它们妨碍你。'],
+  'home.openGuide': ['Open setup guide', 'Abrir guía de configuración', 'Einrichtungsassistent öffnen', 'Ouvrir le guide de configuration', 'Apri la guida alla configurazione', 'Abrir guia de configuração', '打开设置指南'],
+  'home.gettingStarted': ['Getting started', 'Primeros pasos', 'Erste Schritte', 'Bien démarrer', 'Per iniziare', 'Primeiros passos', '开始使用'],
+  'home.step': ['Step {number}', 'Paso {number}', 'Schritt {number}', 'Étape {number}', 'Passaggio {number}', 'Etapa {number}', '第 {number} 步'],
+  'home.checking': ['Checking…', 'Comprobando…', 'Prüfung…', 'Vérification…', 'Verifica…', 'Verificando…', '正在检查…'],
+  'home.connected': ['Connected', 'Conectado', 'Verbunden', 'Connecté', 'Collegato', 'Conectado', '已连接'],
+  'home.openToCheck': ['Open to check', 'Abrir para comprobar', 'Zum Prüfen öffnen', 'Ouvrir pour vérifier', 'Apri per verificare', 'Abrir para verificar', '打开检查'],
+  'home.required': ['Required', 'Obligatorio', 'Erforderlich', 'Requis', 'Obbligatorio', 'Obrigatório', '必需'],
+  'home.next': ['Next', 'Siguiente', 'Als Nächstes', 'Suivant', 'Avanti', 'Próximo', '下一步'],
+  'home.ready': ['Ready', 'Listo', 'Bereit', 'Prêt', 'Pronto', 'Pronto', '就绪'],
+  'home.readyCount.one': ['1 ready', '1 listo', '1 bereit', '1 prêt', '1 pronto', '1 pronto', '1 个已就绪'],
+  'home.readyCount.other': ['{count} ready', '{count} listos', '{count} bereit', '{count} prêts', '{count} pronti', '{count} prontos', '{count} 个已就绪'],
+  'home.afterAi': ['After AI setup', 'Después de configurar la IA', 'Nach der KI-Einrichtung', 'Après la configuration IA', 'Dopo la configurazione IA', 'Após configurar a IA', '完成 AI 设置后'],
+  'home.afterAgent': ['After your first agent', 'Después de tu primer agente', 'Nach deinem ersten Agenten', 'Après votre premier agent', 'Dopo il tuo primo agente', 'Após seu primeiro agente', '创建第一个智能体后'],
+  'home.connectAi.title': ['Connect your AI', 'Conecta tu IA', 'Verbinde deine KI', 'Connectez votre IA', 'Collega la tua IA', 'Conecte sua IA', '连接你的 AI'],
+  'home.connectAi.description': ['Choose the AI provider and model FLUJO will use. Everything else starts here.', 'Elige el proveedor y el modelo de IA que usará FLUJO. Todo lo demás empieza aquí.', 'Wähle KI-Anbieter und Modell für FLUJO. Alles Weitere beginnt hier.', 'Choisissez le fournisseur et le modèle IA utilisés par FLUJO. Tout commence ici.', 'Scegli il provider e il modello IA che userà FLUJO. Tutto il resto parte da qui.', 'Escolha o provedor e o modelo de IA que o FLUJO usará. Todo o resto começa aqui.', '选择 FLUJO 使用的 AI 提供商和模型。一切从这里开始。'],
+  'home.connectAi.manage': ['Manage AI setup', 'Administrar configuración de IA', 'KI-Einrichtung verwalten', 'Gérer la configuration IA', 'Gestisci configurazione IA', 'Gerenciar configuração de IA', '管理 AI 设置'],
+  'home.connectAi.open': ['Open AI setup', 'Abrir configuración de IA', 'KI-Einrichtung öffnen', 'Ouvrir la configuration IA', 'Apri configurazione IA', 'Abrir configuração de IA', '打开 AI 设置'],
+  'home.connectAi.action': ['Connect AI', 'Conectar IA', 'KI verbinden', 'Connecter l’IA', 'Collega IA', 'Conectar IA', '连接 AI'],
+  'home.agent.title': ['Create an agent', 'Crea un agente', 'Erstelle einen Agenten', 'Créez un agent', 'Crea un agente', 'Crie um agente', '创建智能体'],
+  'home.agent.description': ['Name it and add its job one plain-language step at a time in the simple builder.', 'Ponle un nombre y añade su trabajo paso a paso con lenguaje sencillo en el editor simple.', 'Gib ihm einen Namen und beschreibe seine Aufgabe Schritt für Schritt im einfachen Editor.', 'Donnez-lui un nom et décrivez son travail étape par étape dans l’éditeur simple.', 'Dagli un nome e aggiungi il suo compito, un passaggio alla volta, nell’editor semplice.', 'Dê um nome e adicione sua tarefa passo a passo no editor simples.', '为它命名，然后在简易构建器中用自然语言逐步添加任务。'],
+  'home.agent.another': ['Create another', 'Crear otro', 'Weiteren erstellen', 'En créer un autre', 'Creane un altro', 'Criar outro', '再创建一个'],
+  'home.agent.openBuilder': ['Open simple builder', 'Abrir editor simple', 'Einfachen Editor öffnen', 'Ouvrir l’éditeur simple', 'Apri editor semplice', 'Abrir editor simples', '打开简易构建器'],
+  'home.agent.connectFirst': ['Connect AI first', 'Conecta la IA primero', 'Zuerst KI verbinden', 'Connectez d’abord l’IA', 'Prima collega l’IA', 'Conecte a IA primeiro', '请先连接 AI'],
+  'home.talk.title': ['Talk to your agent', 'Habla con tu agente', 'Sprich mit deinem Agenten', 'Parlez à votre agent', 'Parla con il tuo agente', 'Converse com seu agente', '与你的智能体对话'],
+  'home.talk.description': ['Use it in a familiar chat. Return to its recipe whenever you want to improve it.', 'Úsalo en un chat familiar. Vuelve a su receta cuando quieras mejorarlo.', 'Nutze ihn in einem vertrauten Chat. Kehre jederzeit zu seinem Ablauf zurück, um ihn zu verbessern.', 'Utilisez-le dans un chat familier. Revenez à sa recette dès que vous souhaitez l’améliorer.', 'Usalo in una chat familiare. Torna alla sua ricetta ogni volta che vuoi migliorarlo.', 'Use-o em um chat familiar. Volte à receita sempre que quiser melhorá-lo.', '在熟悉的聊天界面中使用它。想改进时，随时返回它的流程。'],
+  'home.talk.finishAi': ['Finish AI setup first', 'Termina primero la configuración de IA', 'Zuerst KI-Einrichtung abschließen', 'Terminez d’abord la configuration IA', 'Prima completa la configurazione IA', 'Conclua primeiro a configuração de IA', '请先完成 AI 设置'],
+  'home.talk.start': ['Start talking', 'Empezar a conversar', 'Chat starten', 'Commencer à discuter', 'Inizia a parlare', 'Começar a conversar', '开始对话'],
+  'home.talk.createFirst': ['Create an agent first', 'Crea primero un agente', 'Zuerst Agenten erstellen', 'Créez d’abord un agent', 'Prima crea un agente', 'Crie um agente primeiro', '请先创建智能体'],
+  'home.apps.title': ['Connected Apps are optional', 'Las aplicaciones conectadas son opcionales', 'Verbundene Apps sind optional', 'Les applications connectées sont facultatives', 'Le app collegate sono facoltative', 'Aplicativos conectados são opcionais', '连接应用为可选项'],
+  'home.apps.description': ['Add files or services only when an agent needs them. A basic agent works with AI setup alone.', 'Añade archivos o servicios solo cuando un agente los necesite. Un agente básico funciona solo con la IA configurada.', 'Füge Dateien oder Dienste nur hinzu, wenn ein Agent sie braucht. Ein einfacher Agent benötigt nur die KI-Einrichtung.', 'Ajoutez des fichiers ou services uniquement lorsqu’un agent en a besoin. Un agent simple fonctionne avec la seule configuration IA.', 'Aggiungi file o servizi solo quando servono a un agente. Un agente di base funziona con la sola configurazione IA.', 'Adicione arquivos ou serviços apenas quando um agente precisar. Um agente básico funciona somente com a configuração de IA.', '仅在智能体需要时添加文件或服务。基础智能体仅需完成 AI 设置即可工作。'],
+  'home.trait.private': ['Private on your device', 'Privado en tu dispositivo', 'Privat auf deinem Gerät', 'Privé sur votre appareil', 'Privato sul tuo dispositivo', 'Privado no seu dispositivo', '数据仅存于你的设备'],
+  'home.trait.simple': ['Simple mode by default', 'Modo simple de forma predeterminada', 'Standardmäßig einfacher Modus', 'Mode simple par défaut', 'Modalità semplice predefinita', 'Modo simples por padrão', '默认使用简易模式'],
+  'home.trait.expert': ['Expert controls when you need them', 'Controles expertos cuando los necesites', 'Expertenfunktionen bei Bedarf', 'Commandes expertes quand vous en avez besoin', 'Controlli avanzati quando servono', 'Controles avançados quando precisar', '需要时提供专家控制'],
+  'feedback.title': ['Are you happy with FLUJO?', '¿Estás satisfecho con FLUJO?', 'Bist du mit FLUJO zufrieden?', 'Êtes-vous satisfait de FLUJO ?', 'Sei soddisfatto di FLUJO?', 'Você está satisfeito com o FLUJO?', '你对 FLUJO 满意吗？'],
+  'feedback.description': ['Tell us what is working—or what could be better.', 'Cuéntanos qué funciona o qué podría mejorar.', 'Sag uns, was gut funktioniert oder besser sein könnte.', 'Dites-nous ce qui fonctionne ou ce qui pourrait être amélioré.', 'Dicci cosa funziona o cosa potrebbe migliorare.', 'Conte o que está funcionando ou o que poderia melhorar.', '告诉我们哪些方面做得好，或哪些方面可以改进。'],
+  'feedback.yes': ['Yes', 'Sí', 'Ja', 'Oui', 'Sì', 'Sim', '是'],
+  'feedback.yesAria': ['Yes, I am happy', 'Sí, estoy satisfecho', 'Ja, ich bin zufrieden', 'Oui, je suis satisfait', 'Sì, sono soddisfatto', 'Sim, estou satisfeito', '是的，我很满意'],
+  'feedback.no': ['Not really', 'No mucho', 'Nicht wirklich', 'Pas vraiment', 'Non proprio', 'Não muito', '不太满意'],
+  'feedback.noAria': ['No, I am not happy', 'No, no estoy satisfecho', 'Nein, ich bin nicht zufrieden', 'Non, je ne suis pas satisfait', 'No, non sono soddisfatto', 'Não, não estou satisfeito', '不，我不太满意'],
+  'feedback.placeholder': ['Share your feedback', 'Comparte tus comentarios', 'Teile dein Feedback', 'Partagez votre avis', 'Condividi il tuo feedback', 'Compartilhe seu feedback', '分享你的反馈'],
+  'feedback.inputAria': ['Feedback', 'Comentarios', 'Feedback', 'Avis', 'Feedback', 'Feedback', '反馈'],
+  'feedback.send': ['Send', 'Enviar', 'Senden', 'Envoyer', 'Invia', 'Enviar', '发送'],
+  'feedback.sending': ['Sending…', 'Enviando…', 'Wird gesendet…', 'Envoi…', 'Invio…', 'Enviando…', '正在发送…'],
+  'feedback.thanks': ['Thanks for helping improve FLUJO.', 'Gracias por ayudar a mejorar FLUJO.', 'Danke, dass du hilfst, FLUJO zu verbessern.', 'Merci de nous aider à améliorer FLUJO.', 'Grazie per averci aiutato a migliorare FLUJO.', 'Obrigado por ajudar a melhorar o FLUJO.', '感谢你帮助改进 FLUJO。'],
+  'feedback.submitFailed': ['Could not submit feedback.', 'No se pudieron enviar los comentarios.', 'Feedback konnte nicht gesendet werden.', 'Impossible d’envoyer votre avis.', 'Impossibile inviare il feedback.', 'Não foi possível enviar o feedback.', '无法提交反馈。'],
+  'feedback.unavailable': ['The feedback service is temporarily unavailable.', 'El servicio de comentarios no está disponible temporalmente.', 'Der Feedback-Dienst ist vorübergehend nicht verfügbar.', 'Le service d’avis est temporairement indisponible.', 'Il servizio di feedback non è temporaneamente disponibile.', 'O serviço de feedback está temporariamente indisponível.', '反馈服务暂时不可用。'],
+  'feedback.openGitHub': ['Open on GitHub', 'Abrir en GitHub', 'Auf GitHub öffnen', 'Ouvrir sur GitHub', 'Apri su GitHub', 'Abrir no GitHub', '在 GitHub 上打开'],
+  'feedback.githubFallback': ['You can send it through a pre-filled GitHub issue instead.', 'También puedes enviarlos mediante un reporte de GitHub ya preparado.', 'Du kannst es stattdessen über ein vorausgefülltes GitHub-Ticket senden.', 'Vous pouvez l’envoyer à la place via un ticket GitHub prérempli.', 'Puoi inviarlo tramite una segnalazione GitHub precompilata.', 'Você pode enviar por uma issue do GitHub já preenchida.', '你也可以改用预先填写的 GitHub Issue 发送。'],
+  ...globalMessageRows,
+  ...sharedMessageRows,
+  ...settingsMessageRows,
+  ...wavesMessageRows,
+  ...statisticsMessageRows,
+  ...modelsMessageRows,
+  ...automationsMessageRows,
+  ...packagesMessageRows,
+  ...mcpMessageRows,
+  ...flowMessageRows,
+  ...chatMessageRows,
+  ...docsMessageRows,
+  ...validationMessageRows,
+} satisfies Record<string, MessageRow>;
+
+export type TranslationKey = keyof typeof messageRows;
+export type MessageCatalog = Record<TranslationKey, string>;
+export type PluralCategory = 'zero' | 'one' | 'two' | 'few' | 'many' | 'other';
+export type PluralTranslationKey = {
+  [Key in TranslationKey]: Key extends `${infer Base}.${PluralCategory}` ? Base : never;
+}[TranslationKey];
+
+/** Translator guidance for messages whose meaning is not obvious from the key. */
+export const messageContexts: Partial<Record<TranslationKey, string>> = {
+  'nav.openMenu': 'Open is a verb: reveal the navigation menu.',
+  'nav.closeMenu': 'Close is a verb: dismiss the navigation menu.',
+  'home.openToCheck': 'Status/action inviting the user to open AI settings so FLUJO can check them.',
+  'home.afterAi': 'A disabled step becomes available after AI setup is complete.',
+  'home.updateReady.one': 'Exactly one source-control change; branch is a Git branch name and must not be translated.',
+  'home.updateReady.other': 'count is a number of source-control changes; branch is a Git branch name and must not be translated.',
+  'language.current': 'Labels the language currently selected for the interface.',
+};
+
+const localeOrder: SupportedLocale[] = ['en', 'es', 'de', 'fr', 'it', 'pt', 'zh-CN'];
+
+export const catalogs = Object.fromEntries(
+  localeOrder.map((locale, index) => [
+    locale,
+    Object.fromEntries(
+      Object.entries(messageRows).map(([key, row]) => [key, row[index]]),
+    ) as MessageCatalog,
+  ]),
+) as Record<SupportedLocale, MessageCatalog>;

@@ -11,6 +11,7 @@ import { ModelInputSnapshot } from '@/backend/execution/flow/types';
 import type { ChatMessage } from './index';
 import ChatMessages from './ChatMessages';
 import { AnnotatedHistory, wireSummary } from './DebuggerModelInput';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 /**
  * Conversation section of the Visual Debugger (issue #162).
@@ -38,6 +39,7 @@ interface DebuggerConversationProps {
 }
 
 const DebuggerConversation: React.FC<DebuggerConversationProps> = ({ modelInput, conversationId }) => {
+  const { t } = useI18n();
   const [view, setView] = useState<'wire' | 'annotated'>('wire');
   const { systemMessage, wireMessages, provenance, counts, inputMode } = modelInput;
 
@@ -53,7 +55,7 @@ const DebuggerConversation: React.FC<DebuggerConversationProps> = ({ modelInput,
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', p: 1 }}>
       {/* Summary + input mode */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap', mb: 1 }}>
-        <Typography variant="caption" color="textSecondary">{wireSummary(counts)}</Typography>
+        <Typography variant="caption" color="textSecondary">{wireSummary(counts, t)}</Typography>
         {inputMode && inputMode !== 'full-history' && (
           <Chip size="small" variant="outlined" label={`inputMode: ${inputMode}`} />
         )}
@@ -62,7 +64,7 @@ const DebuggerConversation: React.FC<DebuggerConversationProps> = ({ modelInput,
       {/* Resolved system message — prominent, collapsible. */}
       <Accordion sx={{ boxShadow: 'none', '&:before': { display: 'none' } }}>
         <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ minHeight: '36px', '& .MuiAccordionSummary-content': { margin: '8px 0' } }}>
-          <Typography variant="caption"><b>System message</b></Typography>
+          <Typography variant="caption"><b>{t('chat.debug.systemMessage')}</b></Typography>
         </AccordionSummary>
         <AccordionDetails sx={{ p: 0 }}>
           {systemMessage && systemMessage.content.trim().length > 0 ? (
@@ -72,7 +74,7 @@ const DebuggerConversation: React.FC<DebuggerConversationProps> = ({ modelInput,
               </pre>
             </Paper>
           ) : (
-            <Typography variant="caption" color="textSecondary">(no system message)</Typography>
+            <Typography variant="caption" color="textSecondary">{t('chat.debug.noSystem')}</Typography>
           )}
         </AccordionDetails>
       </Accordion>
@@ -85,8 +87,8 @@ const DebuggerConversation: React.FC<DebuggerConversationProps> = ({ modelInput,
         onChange={(_e, v) => { if (v) setView(v); }}
         sx={{ my: 1 }}
       >
-        <ToggleButton value="wire">What the model sees</ToggleButton>
-        <ToggleButton value="annotated">Full history (annotated)</ToggleButton>
+        <ToggleButton value="wire">{t('chat.debug.modelView')}</ToggleButton>
+        <ToggleButton value="annotated">{t('chat.debug.fullHistory')}</ToggleButton>
       </ToggleButtonGroup>
 
       {/* Content-capped preview note (WIRE_CONTENT_MAX): so truncation isn't
@@ -95,7 +97,7 @@ const DebuggerConversation: React.FC<DebuggerConversationProps> = ({ modelInput,
         {view === 'wire' ? (
           wireBody.length === 0 ? (
             <Typography variant="body2" color="textSecondary" sx={{ p: 1 }}>
-              No conversation messages — the model sees only the system message.
+              {t('chat.debug.noConversation')}
             </Typography>
           ) : (
             <ChatMessages

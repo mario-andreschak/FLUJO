@@ -2,6 +2,8 @@ import { v4 as uuidv4 } from 'uuid';
 import type { Edge } from '@xyflow/react';
 import type { Flow, FlowNode } from '@/shared/types/flow';
 import { isAttachmentEdge } from '@/utils/shared/connectionRules';
+import type { TranslationValues, Translator } from '@/frontend/i18n/core';
+import type { PluralTranslationKey, TranslationKey } from '@/frontend/i18n/messages';
 
 export interface ProcessToSubflowError {
   code: string;
@@ -48,7 +50,23 @@ export interface BuildProcessToSubflowDraftOptions {
   existingFlowNames?: string[];
   /** Test seam that also keeps the graph rewrite deterministic for callers that need it. */
   createId?: () => string;
+  t?: Translator;
+  tp?: (key: PluralTranslationKey, count: number, values?: TranslationValues) => string;
 }
+
+const translateOr = (
+  t: Translator | undefined,
+  key: TranslationKey,
+  fallback: string,
+  values?: TranslationValues,
+) => t ? t(key, values) : fallback;
+
+const pluralOr = (
+  tp: BuildProcessToSubflowDraftOptions['tp'],
+  key: PluralTranslationKey,
+  count: number,
+  fallback: string,
+) => tp ? tp(key, count) : fallback;
 
 type LogicalBoundary = ConversionBoundary & { edge: Edge };
 
@@ -105,6 +123,8 @@ export function buildProcessToSubflowDraft({
   subflowName,
   existingFlowNames = [],
   createId = uuidv4,
+  t,
+  tp,
 }: BuildProcessToSubflowDraftOptions): ProcessToSubflowDraft {
   const errors: ProcessToSubflowError[] = [];
   const warnings: string[] = [];
@@ -117,19 +137,22 @@ export function buildProcessToSubflowDraft({
   if (!target || nodeType(target) !== 'process') {
     errors.push({
       code: 'target-not-process',
-      message: 'The selected node no longer exists or is not a Process node.',
+      message: translateOr(t, 'flows.convert.error.target', 'The selected node no longer exists or is not a Process node.'),
       nodeId: processNodeId,
     });
   }
   if (!trimmedName) {
-    errors.push({ code: 'name-required', message: 'Enter a name for the new subflow.' });
+    errors.push({ code: 'name-required', message: translateOr(t, 'flows.convert.error.nameRequired', 'Enter a name for the new subflow.') });
   } else if (!/^[\w-]+$/.test(trimmedName)) {
     errors.push({
       code: 'invalid-name',
-      message: 'The subflow name may contain only letters, numbers, underscores, and dashes.',
+      message: translateOr(t, 'flows.convert.error.invalidName', 'The subflow name may contain only letters, numbers, underscores, and dashes.'),
     });
   } else if (existingFlowNames.some(name => name.toLowerCase() === trimmedName.toLowerCase())) {
-    errors.push({ code: 'duplicate-name', message: `A flow named "${trimmedName}" already exists.` });
+    errors.push({
+      code: 'duplicate-name',
+      message: translateOr(t, 'flows.convert.error.duplicateName', `A flow named "${trimmedName}" already exists.`, { name: trimmedName }),
+    });
   }
 
   const selected = new Set<string>();
@@ -152,7 +175,7 @@ export function buildProcessToSubflowDraft({
         if (!next) {
           errors.push({
             code: 'missing-edge-node',
-            message: `Edge "${edge.id}" points to a missing node. Repair the flow before converting.`,
+            message: translateOr(t, 'flows.convert.error.missingEdgeNode', `Edge "${edge.id}" points to a missing node. Repair the flow before converting.`, { edge: edge.id }),
             edgeId: edge.id,
           });
           continue;
@@ -164,7 +187,7 @@ export function buildProcessToSubflowDraft({
         } else if (type === 'mcp' || type === 'resource') {
           errors.push({
             code: 'attachment-on-control-edge',
-            message: `${nodeLabel(next)} is connected as control flow. Reconnect it with its ${type.toUpperCase()} attachment handles before converting.`,
+            message: translateOr(t, 'flows.convert.error.attachmentControl', `${nodeLabel(next)} is connected as control flow. Reconnect it with its ${type.toUpperCase()} attachment handles before converting.`, { node: nodeLabel(next), type: type.toUpperCase() }),
             nodeId: nextId,
             edgeId: edge.id,
           });
@@ -193,7 +216,7 @@ export function buildProcessToSubflowDraft({
       } else {
         errors.push({
           code: 'unsupported-attachment',
-          message: `Attachment edge "${edge.id}" does not connect to an MCP or Resource node.`,
+          message: translateOr(t, 'flows.convert.error.unsupportedAttachment', `Attachment edge "${edge.id}" does not connect to an MCP or Resource node.`, { edge: edge.id }),
           edgeId: edge.id,
           nodeId: otherId,
         });
@@ -214,7 +237,7 @@ export function buildProcessToSubflowDraft({
     if (isAttachmentEdge(edge as { data?: { edgeType?: unknown } | null })) {
       errors.push({
         code: 'shared-attachment',
-        message: `Attachment "${edge.id}" is also used outside the converted region. Duplicate or disconnect that attachment first.`,
+        message: translateOr(t, 'flows.convert.error.sharedAttachment', `Attachment "${edge.id}" is also used outside the converted region. Duplicate or disconnect that attachment first.`, { edge: edge.id }),
         edgeId: edge.id,
       });
       continue;
@@ -240,7 +263,7 @@ export function buildProcessToSubflowDraft({
       (sourceSelected ? boundaryInputs : boundaryOutputs).push(boundary);
       errors.push({
         code: 'bidirectional-boundary',
-        message: `Boundary edge "${edge.id}" is bidirectional. Make it one-way before converting; internal bidirectional edges are preserved.`,
+        message: translateOr(t, 'flows.convert.error.bidirectional', `Boundary edge "${edge.id}" is bidirectional. Make it one-way before converting; internal bidirectional edges are preserved.`, { edge: edge.id }),
         edgeId: edge.id,
       });
     }
@@ -250,7 +273,7 @@ export function buildProcessToSubflowDraft({
   if (uniqueOutputs.length > 1) {
     errors.push({
       code: 'multiple-outputs',
-      message: `This region has ${uniqueOutputs.length} distinct parent exits. A Subflow supports one outgoing control path; join the branches before converting.`,
+      message: pluralOr(tp, 'flows.convert.error.outputs', uniqueOutputs.length, `This region has ${uniqueOutputs.length} distinct parent exits. A Subflow supports one outgoing control path; join the branches before converting.`),
     });
   }
 
@@ -267,17 +290,22 @@ export function buildProcessToSubflowDraft({
       return { id, label: nodeLabel(node), type: nodeType(node) };
     }),
     rewires: [
-      `${new Set(boundaryInputs.map(boundary => boundary.edgeId)).size} parent input edge(s) will target the new Subflow node.`,
+      pluralOr(
+        tp,
+        'flows.convert.rewire.inputs',
+        new Set(boundaryInputs.map(boundary => boundary.edgeId)).size,
+        `${new Set(boundaryInputs.map(boundary => boundary.edgeId)).size} parent input edge(s) will target the new Subflow node.`,
+      ),
       uniqueOutputs.length === 1
-        ? `The parent output to ${uniqueOutputs[0].outsideLabel} will leave the new Subflow node.`
-        : 'The new Subflow node will have no parent output.',
-      'The child Start node will provide an isolated input to the converted Process.',
+        ? translateOr(t, 'flows.convert.rewire.output', `The parent output to ${uniqueOutputs[0].outsideLabel} will leave the new Subflow node.`, { node: uniqueOutputs[0].outsideLabel })
+        : translateOr(t, 'flows.convert.rewire.noOutput', 'The new Subflow node will have no parent output.'),
+      translateOr(t, 'flows.convert.rewire.childInput', 'The child Start node will provide an isolated input to the converted Process.'),
     ],
     warnings,
   };
 
   if (uniqueOutputs.length === 0) {
-    warnings.push('No parent follow-up exists; the extracted fan-out will finish inside the child flow.');
+    warnings.push(translateOr(t, 'flows.convert.warning.noFollowup', 'No parent follow-up exists; the extracted fan-out will finish inside the child flow.'));
   }
 
   const publicInputs = boundaryInputs.map(({ edge: _edge, ...boundary }) => boundary);
@@ -343,7 +371,7 @@ export function buildProcessToSubflowDraft({
     }));
     const effectiveLeaves = leaves.length > 0 ? leaves : [target];
     if (effectiveLeaves.length > 1) {
-      warnings.push(`${effectiveLeaves.length} internal branches will converge on the child Finish node.`);
+      warnings.push(pluralOr(tp, 'flows.convert.warning.branches', effectiveLeaves.length, `${effectiveLeaves.length} internal branches will converge on the child Finish node.`));
     }
     for (const leaf of effectiveLeaves) {
       childEdges.push(makeControlEdge(

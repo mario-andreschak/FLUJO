@@ -23,6 +23,8 @@ import { useStorage } from '@/frontend/contexts/StorageContext';
 import { isSecretHeaderKey } from '@/utils/shared/common';
 import { MASKED_API_KEY, MASKED_STRING } from '@/shared/types/constants';
 import { MCPHeaderValue } from '@/shared/types/mcp/mcp';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import Trans from '@/frontend/components/shared/Trans';
 
 interface HeadersEditorProps {
   headers: Record<string, MCPHeaderValue>;
@@ -77,6 +79,7 @@ const toRecord = (rows: HeaderRow[]): Record<string, MCPHeaderValue> => {
 
 const HeadersEditor: React.FC<HeadersEditorProps> = ({ headers, onChange }) => {
   const { globalEnvVars } = useStorage();
+  const { t } = useI18n();
   // Derive rows from props, but keep a local copy so an in-progress empty key isn't lost.
   const [rows, setRows] = React.useState<HeaderRow[]>(() => toRows(headers));
   const [showBindModal, setShowBindModal] = React.useState(false);
@@ -166,18 +169,22 @@ const HeadersEditor: React.FC<HeadersEditorProps> = ({ headers, onChange }) => {
   return (
     <Box>
       <Typography variant="subtitle2" gutterBottom>
-        Custom HTTP Headers
+        {t('mcp.local.headers.title')}
       </Typography>
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
-        Sent on every request to the server (e.g. an <code>Authorization</code> header or any
-        custom headers the server requires). Values can be marked <strong>secret</strong> (masked
-        in the UI, encrypted at rest) or bound to a global variable.
+        <Trans
+          message="mcp.local.headers.help"
+          values={{
+            authorization: <code>Authorization</code>,
+            secret: <strong>{t('mcp.local.headers.secretTerm')}</strong>,
+          }}
+        />
       </Typography>
 
       <Stack spacing={1.5}>
         {rows.length === 0 && (
           <Typography variant="body2" color="text.secondary">
-            No custom headers configured.
+            {t('mcp.local.headers.empty')}
           </Typography>
         )}
 
@@ -185,7 +192,7 @@ const HeadersEditor: React.FC<HeadersEditorProps> = ({ headers, onChange }) => {
           <Stack key={index} direction="row" spacing={1} alignItems="flex-start">
             <TextField
               size="small"
-              label="Header"
+              label={t('mcp.local.headers.header')}
               placeholder="Authorization"
               value={row.key}
               onChange={e => handleKeyChange(index, e.target.value)}
@@ -193,16 +200,16 @@ const HeadersEditor: React.FC<HeadersEditorProps> = ({ headers, onChange }) => {
             />
             <TextField
               size="small"
-              label="Value"
+              label={t('mcp.local.headers.value')}
               type={row.isSecret && !row.isBound ? 'password' : 'text'}
-              placeholder={row.showWarning ? 'Re-enter value' : (row.isMasked ? '(unchanged)' : 'Basic dXNlcjpwYXNz')}
+              placeholder={row.showWarning ? t('mcp.local.headers.reenter') : (row.isMasked ? t('mcp.local.headers.unchanged') : 'Basic dXNlcjpwYXNz')}
               value={row.isBound ? '' : row.value}
               onChange={e => handleValueChange(index, e.target.value)}
               error={row.showWarning}
               helperText={
                 row.showWarning
-                  ? 'Re-enter the value after turning off "Secret".'
-                  : (row.isMasked ? 'A secret is stored. Type to replace it, or bind to a global variable.' : '')
+                  ? t('mcp.local.headers.reenterHelp')
+                  : (row.isMasked ? t('mcp.local.headers.storedSecret') : '')
               }
               InputProps={{
                 readOnly: row.isBound,
@@ -210,7 +217,7 @@ const HeadersEditor: React.FC<HeadersEditorProps> = ({ headers, onChange }) => {
                   <InputAdornment position="end">
                     <Chip
                       size="small"
-                      label={`Bound: ${row.boundTo}`}
+                      label={t('mcp.local.headers.bound', { variable: row.boundTo ?? '' })}
                       color="primary"
                       variant="outlined"
                       onDelete={() => handleUnbind(index)}
@@ -229,13 +236,13 @@ const HeadersEditor: React.FC<HeadersEditorProps> = ({ headers, onChange }) => {
                   size="small"
                 />
               }
-              label="Secret"
+              label={t('mcp.local.headers.secret')}
               sx={{ mr: 0, mt: 0.25 }}
             />
             {!row.isBound && (
-              <Tooltip title="Bind to a global variable">
+              <Tooltip title={t('mcp.local.headers.bind')}>
                 <IconButton
-                  aria-label="bind header to global variable"
+                  aria-label={t('mcp.local.headers.bind')}
                   size="small"
                   color="primary"
                   onClick={() => { setSelectedRowIndex(index); setShowBindModal(true); }}
@@ -245,8 +252,8 @@ const HeadersEditor: React.FC<HeadersEditorProps> = ({ headers, onChange }) => {
                 </IconButton>
               </Tooltip>
             )}
-            <Tooltip title="Remove header">
-              <IconButton aria-label="remove header" onClick={() => handleRemove(index)} size="small" sx={{ mt: 0.25 }}>
+            <Tooltip title={t('mcp.local.headers.remove')}>
+              <IconButton aria-label={t('mcp.local.headers.remove')} onClick={() => handleRemove(index)} size="small" sx={{ mt: 0.25 }}>
                 <DeleteIcon fontSize="small" />
               </IconButton>
             </Tooltip>
@@ -255,7 +262,7 @@ const HeadersEditor: React.FC<HeadersEditorProps> = ({ headers, onChange }) => {
 
         <Box>
           <Button startIcon={<AddIcon />} onClick={handleAdd} size="small" variant="outlined">
-            Add Header
+            {t('mcp.local.headers.add')}
           </Button>
         </Box>
       </Stack>
@@ -278,11 +285,11 @@ const HeadersEditor: React.FC<HeadersEditorProps> = ({ headers, onChange }) => {
           borderRadius: 2
         }}>
           <Typography variant="h6" sx={{ mb: 2 }}>
-            Bind Header to Global Variable
+            {t('mcp.local.headers.bindTitle')}
           </Typography>
           {Object.keys(globalEnvVars).length === 0 ? (
             <Typography color="text.secondary" sx={{ mb: 2 }}>
-              No global variables available. Add some in Settings first.
+              {t('mcp.local.headers.noGlobals')}
             </Typography>
           ) : (
             <Box sx={{ maxHeight: 300, overflow: 'auto', mb: 2 }}>
@@ -302,7 +309,7 @@ const HeadersEditor: React.FC<HeadersEditorProps> = ({ headers, onChange }) => {
           )}
           <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
             <Button variant="outlined" onClick={() => { setShowBindModal(false); setSelectedRowIndex(null); }}>
-              Cancel
+              {t('mcp.local.cancel')}
             </Button>
           </Box>
         </Box>

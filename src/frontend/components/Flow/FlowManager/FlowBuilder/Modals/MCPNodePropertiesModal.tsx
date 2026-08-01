@@ -47,6 +47,7 @@ import ServerCard from '@/frontend/components/mcp/MCPServerManager/ServerCard';
 import { useCardPicker } from '@/frontend/hooks/useCardPicker';
 import { CardGroup } from '@/utils/shared/cardGrouping';
 import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface MCPNodePropertiesModalProps {
   open: boolean;
@@ -63,6 +64,7 @@ export const MCPNodePropertiesModal = ({
   onSave,
   authoringMode = 'advanced',
 }: MCPNodePropertiesModalProps) => {
+  const { t } = useI18n();
   // Clone node data to avoid direct mutation
   const [nodeData, setNodeData] = useState<{
     label: string;
@@ -330,9 +332,9 @@ export const MCPNodePropertiesModal = ({
       <DialogTitle component="div">
         <Box display="flex" alignItems="center" justifyContent="space-between">
           <Typography variant="h6">
-            {nodeData.label || 'MCP Node'} Properties
+            {t('flows.modal.properties', { name: nodeData.label || t('flows.mcpNode.title') })}
           </Typography>
-          <IconButton edge="end" color="inherit" onClick={onClose} aria-label="close">
+          <IconButton edge="end" color="inherit" onClick={onClose} aria-label={t('flows.modal.close')}>
             <CloseIcon />
           </IconButton>
         </Box>
@@ -344,22 +346,22 @@ export const MCPNodePropertiesModal = ({
         {/* Node Label Input */}
         <TextField
           fullWidth
-          label="Node Label"
+          label={t('flows.mcpNode.label')}
           value={nodeData.label || ''}
           onChange={handleLabelChange}
           margin="normal"
-          helperText="The display name for this node on the canvas"
+          helperText={t('flows.mcpNode.labelHelp')}
           sx={{ mb: 2 }} // Add some bottom margin
         />
 
         {/* Bind to MCP Server */}
         <Box sx={{ mb: 4 }}>
           <Typography variant="subtitle1" gutterBottom>
-            Bind to MCP Server
+            {t('flows.mcpNode.bind')}
           </Typography>
           
           <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
-            <Tooltip title="Retry all server connections">
+            <Tooltip title={t('flows.mcpNode.retryAll')}>
               <span>
                 <IconButton
                   size="small"
@@ -374,10 +376,10 @@ export const MCPNodePropertiesModal = ({
           <CardPickerGrid
             isLoading={isLoadingServers}
             error={loadError}
-            emptyMessage="No MCP servers available. Add some in the MCP Manager."
-            loadingMessage="Loading MCP servers…"
+            emptyMessage={t('flows.mcpNode.empty')}
+            loadingMessage={t('flows.mcpNode.loadingServers')}
             searchable
-            searchPlaceholder="Search servers…"
+            searchPlaceholder={t('flows.mcpNode.searchServers')}
             searchTerm={serverPicker.searchTerm}
             onSearchChange={serverPicker.setSearchTerm}
             columns={{ xs: 12, sm: 6 }}
@@ -388,36 +390,35 @@ export const MCPNodePropertiesModal = ({
           />
           <FormHelperText>
             {boundServer
-              ? `This node will use the "${boundServer}" MCP server for processing.`
-              : 'Select an MCP server to bind this node to.'}
+              ? t('flows.mcpNode.bound', { server: boundServer })
+              : t('flows.mcpNode.select')}
           </FormHelperText>
         </Box>
         
         {/* Description field - kept */}
         <TextField
           fullWidth
-          label="Description"
+          label={t('flows.mcpNode.description')}
           value={nodeData.description || ''}
           onChange={(e) => setNodeData({ ...nodeData, description: e.target.value })}
           margin="normal"
           multiline
           rows={2}
-          helperText="This description will be displayed on the node"
+          helperText={t('flows.mcpNode.descriptionHelp')}
         />
         
         {/* Tool Call Timeout section */}
         {boundServer && (
           <Box sx={{ mt: 4 }}>
             <Typography variant="subtitle1" gutterBottom>
-              Tool Call Timeout
+              {t('flows.mcpNode.timeoutTitle')}
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-              How long a single tool call on this server may run before it is aborted.
-              Tools that report progress keep the timeout alive while they work.
+              {t('flows.mcpNode.timeoutHelp')}
             </Typography>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
               <TextField
-                label="Timeout (seconds)"
+                label={t('flows.mcpNode.timeoutSeconds')}
                 type="number"
                 size="small"
                 sx={{ width: 200 }}
@@ -437,8 +438,8 @@ export const MCPNodePropertiesModal = ({
                   }
                 }}
                 helperText={isTimeoutInfinite
-                  ? 'No timeout — tool calls run until they finish.'
-                  : `Empty = default (${DEFAULT_TOOL_CALL_TIMEOUT_SECONDS} seconds / 5 minutes).`}
+                  ? t('flows.mcpNode.noTimeoutHelp')
+                  : t('flows.mcpNode.defaultTimeout', { seconds: DEFAULT_TOOL_CALL_TIMEOUT_SECONDS })}
               />
               <FormControlLabel
                 control={
@@ -450,7 +451,7 @@ export const MCPNodePropertiesModal = ({
                     )}
                   />
                 }
-                label="No timeout (infinite)"
+                label={t('flows.mcpNode.noTimeout')}
               />
             </Box>
           </Box>
@@ -460,14 +461,14 @@ export const MCPNodePropertiesModal = ({
         {boundServer && (
           <Box sx={{ mt: 4 }}>
             <Typography variant="subtitle1" gutterBottom>
-              Allowed Tools
+              {t('flows.mcpNode.allowedTools')}
             </Typography>
             
             {/* Show message if server is disconnected */}
             {servers.find(s => s.name === boundServer)?.status !== 'connected' && (
               <Box sx={{ mb: 2, p: 2, bgcolor: 'error.light', borderRadius: 1 }}>
                 <Typography color="error.dark">
-                  Server is disconnected. Tools cannot be fetched. Please retry the connection.
+                  {t('flows.mcpNode.disconnected')}
                 </Typography>
                 <Button 
                   variant="outlined" 
@@ -478,7 +479,7 @@ export const MCPNodePropertiesModal = ({
                   disabled={retryingServers[boundServer]}
                   sx={{ mt: 1 }}
                 >
-                  Retry Connection
+                  {t('flows.mcpNode.retry')}
                 </Button>
               </Box>
             )}
@@ -486,20 +487,20 @@ export const MCPNodePropertiesModal = ({
             {isLoadingTools ? (
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <CircularProgress size={20} />
-                <Typography color="text.secondary">Loading tools...</Typography>
+                <Typography color="text.secondary">{t('flows.mcpNode.loadingTools')}</Typography>
               </Box>
             ) : toolsError ? (
               <Typography color="error">{toolsError}</Typography>
             ) : !mcpTools || mcpTools.length === 0 ? (
               <Typography color="text.secondary">
                 {servers.find(s => s.name === boundServer)?.status === 'connected' 
-                  ? "No tools available for this MCP server." 
-                  : "Connect to the server to view available tools."}
+                  ? t('flows.mcpNode.noTools')
+                  : t('flows.mcpNode.connectForTools')}
               </Typography>
             ) : (
               <Box sx={{ mt: 2 }}>
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                  Select which tools this node will have access to. This helps limit the tools available to connected process nodes.
+                  {t('flows.mcpNode.toolsHelp')}
                 </Typography>
                 
                 <List>
@@ -541,18 +542,16 @@ export const MCPNodePropertiesModal = ({
               onChange={(roots) => handlePropertyChange('roots', roots)}
             />
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-              These folders apply to this node only and are <strong>added to</strong> the
-              workspace folders configured on the &quot;{boundServer}&quot; server itself.
-              When neither is set, the server sees its own root dir as its workspace folder.
+              {t('flows.mcpNode.rootsHelp', { server: boundServer })}
             </Typography>
           </Box>
         )}
       </DialogContent>
       
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose}>{t('flows.modal.cancel')}</Button>
         <Button onClick={handleSave} variant="contained" color="primary">
-          Save Changes
+          {t('flows.modal.saveChanges')}
         </Button>
       </DialogActions>
     </Dialog>

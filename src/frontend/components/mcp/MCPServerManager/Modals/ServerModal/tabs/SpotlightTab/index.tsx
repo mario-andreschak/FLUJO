@@ -39,6 +39,7 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import TerminalIcon from '@mui/icons-material/Terminal';
 import CloudIcon from '@mui/icons-material/Cloud';
 import StarIcon from '@mui/icons-material/Star';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 /** A resolved curated server plus its shipped env-var defaults. */
 interface SpotlightCard {
@@ -60,6 +61,7 @@ interface SpotlightCard {
  */
 const SpotlightTab: React.FC<TabProps> = ({ onClose, setActiveTab, onUpdate }) => {
   const theme = useTheme();
+  const { t, tp, formatDate } = useI18n();
   const [cache, setCache] = useState<SpotlightCache | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
@@ -75,14 +77,14 @@ const SpotlightTab: React.FC<TabProps> = ({ onClose, setActiveTab, onUpdate }) =
         const data = await response.json();
         if (cancelled) return;
         if (!response.ok || data.success === false) {
-          throw new Error(data.error || `Request failed with status ${response.status}`);
+          throw new Error(data.error || String(response.status));
         }
         setCache(data.cache ?? null);
       } catch (error) {
         if (!cancelled) {
           setMessage({
             type: 'error',
-            text: `Could not load spotlight servers: ${error instanceof Error ? error.message : 'Unknown error'}`
+            text: t('mcp.spotlight.loadError', { error: error instanceof Error ? error.message : t('mcp.server.unknownError') })
           });
         }
       } finally {
@@ -92,7 +94,7 @@ const SpotlightTab: React.FC<TabProps> = ({ onClose, setActiveTab, onUpdate }) =
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [t]);
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -101,13 +103,13 @@ const SpotlightTab: React.FC<TabProps> = ({ onClose, setActiveTab, onUpdate }) =
       const response = await fetch('/api/mcp-registry/spotlight', { method: 'POST' });
       const data = await response.json();
       if (!response.ok || data.success === false) {
-        throw new Error(data.error || `Request failed with status ${response.status}`);
+        throw new Error(data.error || String(response.status));
       }
       setCache(data.cache ?? null);
     } catch (error) {
       setMessage({
         type: 'error',
-        text: `Refresh failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+        text: t('mcp.spotlight.refreshError', { error: error instanceof Error ? error.message : t('mcp.server.unknownError') })
       });
     } finally {
       setIsRefreshing(false);
@@ -136,7 +138,7 @@ const SpotlightTab: React.FC<TabProps> = ({ onClose, setActiveTab, onUpdate }) =
     if (options.length === 0) {
       setMessage({
         type: 'warning',
-        text: `${displayName(card.server)} does not offer an installation method FLUJO can set up automatically.`
+        text: t('mcp.spotlight.noInstall', { server: displayName(card.server) })
       });
       return;
     }
@@ -163,7 +165,7 @@ const SpotlightTab: React.FC<TabProps> = ({ onClose, setActiveTab, onUpdate }) =
     <Box sx={{ width: '100%' }}>
       <Stack spacing={3}>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Typography variant="h6">Spotlight</Typography>
+          <Typography variant="h6">{t('mcp.spotlight.title')}</Typography>
           <Button
             variant="outlined"
             size="small"
@@ -171,14 +173,14 @@ const SpotlightTab: React.FC<TabProps> = ({ onClose, setActiveTab, onUpdate }) =
             disabled={isRefreshing}
             startIcon={isRefreshing ? <CircularProgress size={16} color="inherit" /> : <RefreshIcon />}
           >
-            {isRefreshing ? 'Refreshing…' : 'Refresh'}
+            {isRefreshing ? t('mcp.spotlight.refreshing') : t('mcp.spotlight.refresh')}
           </Button>
         </Box>
 
         <Typography variant="body2" color="text.secondary">
-          Hand-picked MCP servers that work well with FLUJO — installed with a single click.
+          {t('mcp.spotlight.help')}
           {cache?.updatedAt && (
-            <> Catalog updated {new Date(cache.updatedAt).toLocaleString()}.</>
+            <> {t('mcp.spotlight.updated', { date: formatDate(cache.updatedAt, { dateStyle: 'medium', timeStyle: 'short' }) })}</>
           )}
         </Typography>
 
@@ -194,8 +196,7 @@ const SpotlightTab: React.FC<TabProps> = ({ onClose, setActiveTab, onUpdate }) =
           </Box>
         ) : cards.length === 0 ? (
           <Typography variant="body1" color="text.secondary" sx={{ textAlign: 'center', my: 4 }}>
-            No spotlight servers cached yet. They are fetched when FLUJO starts —
-            click Refresh to fetch them now.
+            {t('mcp.spotlight.empty')}
           </Typography>
         ) : (
           <Grid container spacing={2}>
@@ -263,11 +264,11 @@ const SpotlightTab: React.FC<TabProps> = ({ onClose, setActiveTab, onUpdate }) =
                             overflow: 'hidden'
                           }}
                         >
-                          {server.description || 'No description provided.'}
+                          {server.description || t('mcp.spotlight.noDescription')}
                         </Typography>
                         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center' }}>
-                          {hasLocal && <Chip size="small" icon={<TerminalIcon />} label="Local" />}
-                          {hasRemote && <Chip size="small" icon={<CloudIcon />} label="Remote" />}
+                          {hasLocal && <Chip size="small" icon={<TerminalIcon />} label={t('mcp.spotlight.local')} />}
+                          {hasRemote && <Chip size="small" icon={<CloudIcon />} label={t('mcp.spotlight.remote')} />}
                           {server.version && (
                             <Chip size="small" variant="outlined" label={`v${server.version}`} />
                           )}
@@ -283,11 +284,10 @@ const SpotlightTab: React.FC<TabProps> = ({ onClose, setActiveTab, onUpdate }) =
 
         {failures.length > 0 && !isLoading && (
           <Alert severity="warning">
-            {failures.length} spotlight {failures.length === 1 ? 'entry' : 'entries'} could not be
-            resolved against the MCP Registry:
+            {tp('mcp.spotlight.failures', failures.length)}
             {failures.map(f => (
               <Typography key={f.url} variant="caption" component="div" sx={{ wordBreak: 'break-all' }}>
-                {f.url} — {f.error || 'unknown error'}
+                {f.url} — {f.error || t('mcp.server.unknownError')}
               </Typography>
             ))}
           </Alert>
@@ -295,7 +295,7 @@ const SpotlightTab: React.FC<TabProps> = ({ onClose, setActiveTab, onUpdate }) =
 
         <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1 }}>
           <Button variant="outlined" onClick={onClose}>
-            Cancel
+            {t('mcp.local.cancel')}
           </Button>
         </Box>
       </Stack>
@@ -307,7 +307,7 @@ const SpotlightTab: React.FC<TabProps> = ({ onClose, setActiveTab, onUpdate }) =
             <DialogTitle>{displayName(choiceCard.server)}</DialogTitle>
             <DialogContent>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                This server can run locally on your machine or connect to a hosted endpoint.
+                {t('mcp.spotlight.chooseHelp')}
               </Typography>
               <List>
                 {choicePackage && (
@@ -315,7 +315,7 @@ const SpotlightTab: React.FC<TabProps> = ({ onClose, setActiveTab, onUpdate }) =
                     <ListItemIcon>
                       <TerminalIcon />
                     </ListItemIcon>
-                    <ListItemText primary="Local" secondary="Runs on your machine" />
+                    <ListItemText primary={t('mcp.spotlight.local')} secondary={t('mcp.spotlight.localHelp')} />
                   </ListItemButton>
                 )}
                 {choiceRemote && (
@@ -323,13 +323,13 @@ const SpotlightTab: React.FC<TabProps> = ({ onClose, setActiveTab, onUpdate }) =
                     <ListItemIcon>
                       <CloudIcon />
                     </ListItemIcon>
-                    <ListItemText primary="Remote" secondary="Connects to a hosted endpoint" />
+                    <ListItemText primary={t('mcp.spotlight.remote')} secondary={t('mcp.spotlight.remoteHelp')} />
                   </ListItemButton>
                 )}
               </List>
             </DialogContent>
             <DialogActions>
-              <Button onClick={() => setChoiceCard(null)}>Cancel</Button>
+              <Button onClick={() => setChoiceCard(null)}>{t('mcp.local.cancel')}</Button>
             </DialogActions>
           </>
         )}

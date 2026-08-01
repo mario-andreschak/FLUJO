@@ -4,8 +4,10 @@ import { MessageState } from '../types';
 import { parseRepositoryConfig } from '@/utils/mcp/configparse';
 import { MCPServerConfig } from '@/shared/types/mcp/mcp';
 import { createLogger } from '@/utils/logger';
+import { translate, type Translator } from '@/frontend/i18n';
 
 const log = createLogger('frontend/components/mcp/MCPServerManager/Modals/ServerModal/utils/configDetection');
+const englishTranslator: Translator = (key, values) => translate('en', key, values);
 
 /**
  * Detect and parse configuration from a cloned repository
@@ -13,7 +15,8 @@ const log = createLogger('frontend/components/mcp/MCPServerManager/Modals/Server
 export async function detectRepositoryConfig(
   repoPath: string,
   repoName: string,
-  owner?: string
+  owner?: string,
+  t: Translator = englishTranslator
 ): Promise<{
   config: Partial<MCPServerConfig>;
   message: MessageState;
@@ -35,9 +38,9 @@ export async function detectRepositoryConfig(
       
       return {
         config: result.config,
-        message: result.message || {
+        message: {
           type: 'success',
-          text: `Configuration detected successfully.`
+          text: t('mcp.github.detectionSuccess')
         },
         success: true,
         language: result.language
@@ -59,9 +62,9 @@ export async function detectRepositoryConfig(
           _buildCommand: '',
           _installCommand: '',
         },
-        message: result.message || {
+        message: {
           type: 'warning',
-          text: 'Could not detect repository configuration. Please configure manually.'
+          text: t('mcp.github.detectionFailed')
         },
         success: false,
         language: result.language
@@ -86,7 +89,7 @@ export async function detectRepositoryConfig(
       },
       message: {
         type: 'error',
-        text: `Error detecting configuration: ${error instanceof Error ? error.message : 'Unknown error'}`
+        text: t('mcp.github.detectionError', { error: error instanceof Error ? error.message : t('mcp.server.unknownError') })
       },
       success: false
     };

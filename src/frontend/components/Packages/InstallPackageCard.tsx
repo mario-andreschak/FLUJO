@@ -39,6 +39,8 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { packageService, type InstallSummary, type RegistryPackageSearchResult } from '@/frontend/services/packages';
 import { registryService } from '@/frontend/services/registry';
 import { createLogger } from '@/utils/logger';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import Trans from '@/frontend/components/shared/Trans';
 
 const log = createLogger('frontend/components/Packages/InstallPackageCard');
 
@@ -71,6 +73,7 @@ export function isPackageOwnedBy(
  * (consentGranted: true).
  */
 export default function InstallPackageCard({ onInstalled }: { onInstalled?: () => void }) {
+  const { t, tp, formatNumber, formatList } = useI18n();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<RegistryPackageSummary[]>([]);
   const [searching, setSearching] = useState(false);
@@ -125,7 +128,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
     try {
       const deletion = await registryService.deletePackage(deleteTarget.id);
       if (!deletion.ok) {
-        setDeleteError(deletion.error || 'Failed to delete package.');
+        setDeleteError(deletion.error || t('packages.browse.deleteFailed'));
         return;
       }
       setResults((current) => current.filter((pkg) => pkg.id !== deleteTarget.id));
@@ -137,7 +140,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
     } finally {
       setDeleting(false);
     }
-  }, [deleteTarget, query, runSearch]);
+  }, [deleteTarget, query, runSearch, t]);
 
   const openPackage = useCallback(async (pkg: RegistryPackageSummary) => {
     setSelected(pkg);
@@ -159,7 +162,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
         consentGranted: false,
       });
       if (!summary.ok) {
-        setError(summary.errors?.[0] || 'Failed to fetch package preview.');
+        setError(summary.errors?.[0] || t('packages.browse.previewFailed'));
         return;
       }
       setPreview(summary);
@@ -172,7 +175,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   const install = useCallback(async () => {
     if (!selected || !preview) return;
@@ -198,7 +201,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
         });
         if (!envResponse.ok) {
           const body = await envResponse.json().catch(() => ({}));
-          throw new Error(body?.error || `Failed to save package globals (HTTP ${envResponse.status})`);
+          throw new Error(body?.error || t('packages.browse.globalsFailed', { status: envResponse.status }));
         }
       }
       const summary = await packageService.installFromRegistry({
@@ -217,7 +220,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
     } finally {
       setLoading(false);
     }
-  }, [selected, preview, secretValues, globalValues, modelMappings, onInstalled]);
+  }, [selected, preview, secretValues, globalValues, modelMappings, onInstalled, t]);
 
   const closeDialog = useCallback(() => {
     setSelected(null);
@@ -260,13 +263,13 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
     <Box sx={{ maxWidth: { xs: '100%', md: 1100 }, mx: 'auto', mt: 3 }}>
       <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
         <CloudDownloadOutlinedIcon color="action" />
-        <Typography variant="h6">Browse registry</Typography>
+        <Typography variant="h6">{t('packages.browse.title')}</Typography>
       </Stack>
 
       <TextField
         size="small"
         fullWidth
-        placeholder="Search published packages…"
+        placeholder={t('packages.browse.search')}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={(e) => {
@@ -295,7 +298,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
 
       {searched && !searching && results.length === 0 && !searchError && (
         <Typography variant="body2" color="text.secondary">
-          No packages match “{query}”.
+          {t('packages.browse.noMatches', { search: query })}
         </Typography>
       )}
 
@@ -313,7 +316,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                     {pkg.handle}
                   </Typography>
                   <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, minHeight: '2.5em' }}>
-                    {pkg.description || 'No description provided.'}
+                    {pkg.description || t('packages.browse.noDescription')}
                   </Typography>
                   <Stack direction="row" spacing={0.5} sx={{ mt: 1, flexWrap: 'wrap', gap: 0.5 }}>
                     {pkg.tags.map((t) => (
@@ -322,7 +325,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                   </Stack>
                   <Stack direction="row" spacing={0.5} alignItems="center" sx={{ mt: 1 }}>
                     <DownloadIcon fontSize="inherit" color="disabled" />
-                    <Typography variant="caption" color="text.secondary">{pkg.downloads}</Typography>
+                    <Typography variant="caption" color="text.secondary">{formatNumber(pkg.downloads)}</Typography>
                   </Stack>
                 </CardContent>
               </CardActionArea>
@@ -331,7 +334,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                   <IconButton
                     size="small"
                     color="error"
-                    aria-label={`Delete ${pkg.name}`}
+                    aria-label={t('packages.browse.deleteAria', { name: pkg.name })}
                     onClick={() => {
                       setDeleteError(null);
                       setDeleteTarget(pkg);
@@ -352,16 +355,18 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
         maxWidth="xs"
         fullWidth
       >
-        <DialogTitle>Delete package?</DialogTitle>
+        <DialogTitle>{t('packages.browse.deleteTitle')}</DialogTitle>
         <DialogContent>
           {deleteError && <Alert severity="error" sx={{ mb: 2 }}>{deleteError}</Alert>}
           <Typography variant="body2">
-            This permanently deletes <strong>{deleteTarget?.name}</strong> and all of its published
-            versions from the registry. This action cannot be undone.
+            <Trans
+              message="packages.browse.deleteHelp"
+              values={{ name: <strong>{deleteTarget?.name}</strong> }}
+            />
           </Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDeleteTarget(null)} disabled={deleting}>Cancel</Button>
+          <Button onClick={() => setDeleteTarget(null)} disabled={deleting}>{t('packages.browse.cancel')}</Button>
           <Button
             color="error"
             variant="contained"
@@ -369,7 +374,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
             disabled={deleting}
             startIcon={deleting ? <CircularProgress size={16} color="inherit" /> : <DeleteOutlineIcon />}
           >
-            Delete package
+            {t('packages.browse.delete')}
           </Button>
         </DialogActions>
       </Dialog>
@@ -391,10 +396,10 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
       >
         <DialogTitle sx={{ px: { xs: 2, md: 4 }, pt: { xs: 2, md: 3 }, pb: 1 }}>
           <Typography component="span" variant="h5" fontWeight={700}>
-            Install {selected?.name}
+            {t('packages.install.title', { name: selected?.name ?? '' })}
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-            Match the package to your FLUJO, then review and install it.
+            {t('packages.install.subtitle')}
           </Typography>
         </DialogTitle>
         <DialogContent sx={{ px: { xs: 2, md: 4 }, pb: 3 }}>
@@ -421,21 +426,25 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                     <Chip size="small" variant="outlined" label={preview.package.publisher} />
                   )}
                   <Typography variant="caption" color="text.secondary">
-                    {manifest.servers.length} server(s) · {manifest.models.length} model(s) ·{' '}
-                    {manifest.flows.length} flow(s) · {manifest.plannedExecutions.length} planned execution(s)
+                    {t('packages.install.summary', {
+                      servers: tp('packages.installed.servers', manifest.servers.length),
+                      models: tp('packages.installed.models', manifest.models.length),
+                      flows: tp('packages.installed.flows', manifest.flows.length),
+                      planned: tp('packages.installed.planned', manifest.plannedExecutions.length),
+                    })}
                   </Typography>
                 </Stack>
                 <Typography variant="caption" color="text.secondary">
-                  Step {installStep + 1} of 2
+                  {t('packages.install.step', { current: formatNumber(installStep + 1), total: formatNumber(2) })}
                 </Typography>
               </Stack>
 
               <Stepper activeStep={installStep} sx={{ maxWidth: 720, mx: 'auto', mb: 3 }}>
                 <Step>
-                  <StepLabel>Match models</StepLabel>
+                  <StepLabel>{t('packages.install.matchModels')}</StepLabel>
                 </Step>
                 <Step>
-                  <StepLabel>Review &amp; install</StepLabel>
+                  <StepLabel>{t('packages.install.reviewInstall')}</StepLabel>
                 </Step>
               </Stepper>
 
@@ -443,10 +452,10 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                 <Box>
                   <Box sx={{ textAlign: 'center', maxWidth: 820, mx: 'auto', mb: 3 }}>
                     <Typography variant="h4" fontWeight={750} sx={{ mb: 1 }}>
-                      The package was created with models that are not installed in your FLUJO.
+                      {t('packages.install.modelsMissing')}
                     </Typography>
                     <Typography variant="h6" color="text.secondary" fontWeight={400}>
-                      Let&apos;s replace or recreate them!
+                      {t('packages.install.replaceModels')}
                     </Typography>
                   </Box>
 
@@ -464,12 +473,15 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                     <Box>
                       <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1.25 }}>
                         <Typography variant="overline" color="text.secondary" fontWeight={700}>
-                          Models in this package
+                          {t('packages.install.packageModels')}
                         </Typography>
                         <Chip
                           size="small"
                           color={allModelsResolved ? 'success' : 'default'}
-                          label={`${resolvedModelCount}/${manifest.models.length} ready`}
+                          label={t('packages.install.ready', {
+                            resolved: formatNumber(resolvedModelCount),
+                            total: formatNumber(manifest.models.length),
+                          })}
                         />
                       </Stack>
                       <Stack spacing={1.25}>
@@ -492,7 +504,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                             >
                               <CardActionArea
                                 onClick={() => choosePackageModel(model.id)}
-                                aria-label={`Configure ${model.displayName}`}
+                                aria-label={t('packages.install.configureAria', { name: model.displayName })}
                                 sx={{ minHeight: 104, p: 2 }}
                               >
                                 <Stack direction="row" spacing={1.5} alignItems="center">
@@ -515,15 +527,15 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                                       {model.displayName}
                                     </Typography>
                                     <Typography variant="caption" color="text.secondary" display="block">
-                                      Package model
+                                      {t('packages.install.packageModel')}
                                     </Typography>
                                     {isResolved && (
                                       <Stack direction="row" spacing={0.5} alignItems="center" sx={{ mt: 0.5 }}>
                                         <CheckCircleRoundedIcon color="success" sx={{ fontSize: 16 }} />
                                         <Typography variant="caption" color="success.main" noWrap>
                                           {installedChoice
-                                            ? `Using ${installedChoice.displayName}`
-                                            : 'Will be created'}
+                                            ? t('packages.install.usingModel', { name: installedChoice.displayName })
+                                            : t('packages.install.willCreate')}
                                         </Typography>
                                       </Stack>
                                     )}
@@ -570,17 +582,17 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                       }}
                     >
                       <Typography variant="overline" color="text.secondary" fontWeight={700}>
-                        Replace {activeModel.displayName}
+                        {t('packages.install.replace', { name: activeModel.displayName })}
                       </Typography>
                       <Typography variant="h5" fontWeight={700} sx={{ mt: 0.25, mb: 2.5 }}>
-                        What would you like to do?
+                        {t('packages.install.whatDo')}
                       </Typography>
 
                       <Grid container spacing={2}>
                         <Grid item xs={12} sm={6}>
                           <Button
                             fullWidth
-                            aria-label="Create new one"
+                            aria-label={t('packages.install.createNew')}
                             variant={
                               Object.prototype.hasOwnProperty.call(modelMappings, activeModel.id)
                                 && modelMappings[activeModel.id] === ''
@@ -599,7 +611,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                           >
                             <Stack spacing={1} alignItems="flex-start">
                               <AddCircleOutlineRoundedIcon sx={{ fontSize: 36 }} />
-                              <Typography variant="h6" fontWeight={700}>Create new one</Typography>
+                              <Typography variant="h6" fontWeight={700}>{t('packages.install.createNew')}</Typography>
                               <Typography
                                 variant="body2"
                                 color={
@@ -609,7 +621,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                                     : 'text.secondary'
                                 }
                               >
-                                Recreate this model in your FLUJO with the package&apos;s configuration.
+                                {t('packages.install.createNewHelp')}
                               </Typography>
                             </Stack>
                           </Button>
@@ -617,7 +629,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                         <Grid item xs={12} sm={6}>
                           <Button
                             fullWidth
-                            aria-label="Use one of yours"
+                            aria-label={t('packages.install.useYours')}
                             variant={modelMappings[activeModel.id] ? 'contained' : 'outlined'}
                             onClick={() => setShowInstalledModels(true)}
                             sx={{
@@ -631,12 +643,12 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                           >
                             <Stack spacing={1} alignItems="flex-start">
                               <SmartToyOutlinedIcon sx={{ fontSize: 36 }} />
-                              <Typography variant="h6" fontWeight={700}>Use one of yours</Typography>
+                              <Typography variant="h6" fontWeight={700}>{t('packages.install.useYours')}</Typography>
                               <Typography
                                 variant="body2"
                                 color={modelMappings[activeModel.id] ? 'inherit' : 'text.secondary'}
                               >
-                                Connect the package to a model you already have installed.
+                                {t('packages.install.useYoursHelp')}
                               </Typography>
                             </Stack>
                           </Button>
@@ -647,7 +659,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                         <Box sx={{ mt: 2.5 }}>
                           <Divider sx={{ mb: 2 }} />
                           <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>
-                            Choose one of your installed models
+                            {t('packages.install.chooseInstalled')}
                           </Typography>
                           {manifest.installedModels.length > 0 ? (
                             <Grid container spacing={1.25}>
@@ -666,7 +678,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                                     >
                                       <CardActionArea
                                         onClick={() => resolveWithInstalledModel(activeModel.id, installed.id)}
-                                        aria-label={`Use ${installed.displayName}`}
+                                        aria-label={t('packages.install.useAria', { name: installed.displayName })}
                                         sx={{ minHeight: 76, p: 1.5 }}
                                       >
                                         <Stack direction="row" spacing={1.25} alignItems="center">
@@ -694,7 +706,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                             </Grid>
                           ) : (
                             <Alert severity="info">
-                              You do not have any installed models yet. Create this package model as new instead.
+                              {t('packages.install.noInstalledModels')}
                             </Alert>
                           )}
                         </Box>
@@ -704,11 +716,11 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
 
                   <Divider sx={{ my: 3 }} />
                   <Stack direction="row" spacing={1.5} justifyContent="space-between" alignItems="center">
-                    <Button onClick={closeDialog}>Cancel</Button>
+                    <Button onClick={closeDialog}>{t('packages.install.cancel')}</Button>
                     <Stack direction="row" spacing={1.5} alignItems="center">
                       {!allModelsResolved && (
                         <Typography variant="body2" color="text.secondary">
-                          Choose an option for every model to continue.
+                          {t('packages.install.resolveAll')}
                         </Typography>
                       )}
                       <Button
@@ -718,7 +730,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                         endIcon={<ArrowForwardRoundedIcon />}
                         onClick={() => setInstallStep(1)}
                       >
-                        Continue to review
+                        {t('packages.install.continueReview')}
                       </Button>
                     </Stack>
                   </Stack>
@@ -736,10 +748,10 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                   >
                     <Box>
                       <Typography variant="h4" fontWeight={750}>
-                        Review and install
+                        {t('packages.install.reviewTitle')}
                       </Typography>
                       <Typography variant="body1" color="text.secondary">
-                        Check your model choices and add the package configuration.
+                        {t('packages.install.reviewHelp')}
                       </Typography>
                     </Box>
                     {manifest.models.length > 0 && (
@@ -754,7 +766,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                           setShowInstalledModels(false);
                         }}
                       >
-                        Change model choices
+                        {t('packages.install.changeModels')}
                       </Button>
                     )}
                   </Stack>
@@ -762,7 +774,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                   {manifest.models.length > 0 && (
                     <Box sx={{ mb: 2.5 }}>
                       <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                        Model plan
+                        {t('packages.install.modelPlan')}
                       </Typography>
                       <Grid container spacing={1.5}>
                         {manifest.models.map((model) => {
@@ -774,13 +786,13 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                               <Card variant="outlined" sx={{ p: 1.75, height: '100%' }}>
                                 <Stack direction="row" spacing={1.25} alignItems="center">
                                   <Box sx={{ minWidth: 0, flex: 1 }}>
-                                    <Typography variant="caption" color="text.secondary">Package model</Typography>
+                                    <Typography variant="caption" color="text.secondary">{t('packages.install.packageModel')}</Typography>
                                     <Typography variant="subtitle2" noWrap>{model.displayName}</Typography>
                                   </Box>
                                   <ArrowForwardRoundedIcon color="action" />
                                   <Box sx={{ minWidth: 0, flex: 1 }}>
                                     <Typography variant="caption" color="text.secondary">
-                                      {installedChoice ? 'Your model' : 'New model'}
+                                      {installedChoice ? t('packages.install.yourModel') : t('packages.install.newModel')}
                                     </Typography>
                                     <Typography variant="subtitle2" noWrap>
                                       {installedChoice?.displayName ?? model.displayName}
@@ -797,8 +809,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
 
                   {manifest.servers.some((s) => s.requiredEnvMissing.length > 0) && (
                     <Alert severity="warning" sx={{ mb: 1.5 }}>
-                      Some MCP servers require environment values that aren&apos;t covered by a secret
-                      below — those servers will install disabled.
+                      {t('packages.install.envWarning')}
                     </Alert>
                   )}
 
@@ -806,8 +817,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                   {manifest.servers.some((server) => server.installCommand || server.buildCommand) && (
                     <Box sx={{ mb: 2.5 }}>
                       <Alert severity="warning" sx={{ mb: 1.5 }}>
-                        This package will run these repository-provided commands on your machine.
-                        Review them before installing.
+                        {t('packages.install.commandWarning')}
                       </Alert>
                       <Stack spacing={1.5}>
                         {manifest.servers
@@ -821,7 +831,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                               {server.installCommand && (
                                 <Box sx={{ mt: 1.25 }}>
                                   <Typography variant="caption" color="text.secondary" display="block">
-                                    Install command
+                                    {t('packages.install.installCommand')}
                                   </Typography>
                                   <Box
                                     component="code"
@@ -834,7 +844,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                               {server.buildCommand && (
                                 <Box sx={{ mt: 1.25 }}>
                                   <Typography variant="caption" color="text.secondary" display="block">
-                                    Build command
+                                    {t('packages.install.buildCommand')}
                                   </Typography>
                                   <Box
                                     component="code"
@@ -852,7 +862,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                   {manifest.globals.length > 0 && (
                     <>
                       <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                        Global variables requested by this package
+                        {t('packages.install.globalsTitle')}
                       </Typography>
                       <Stack spacing={1.5} sx={{ mb: 2.5 }}>
                         {manifest.globals.map((global) => (
@@ -861,7 +871,16 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                             size="small"
                             type={global.isSecret && !visibleSecrets[`global:${global.name}`] ? 'password' : 'text'}
                             label={global.name}
-                            helperText={`${global.description ?? (global.required ? 'Required' : 'Optional')}${manifest.missingGlobals.includes(global.name) ? ' — not currently set' : ' — leave blank to keep the current value'}`}
+                            helperText={t(
+                              manifest.missingGlobals.includes(global.name)
+                                ? 'packages.install.notSet'
+                                : 'packages.install.keepCurrent',
+                              {
+                                description: global.description ?? (global.required
+                                  ? t('packages.install.required')
+                                  : t('packages.install.optional')),
+                              },
+                            )}
                             value={globalValues[global.name] ?? ''}
                             onChange={(e) => setGlobalValues((prev) => ({ ...prev, [global.name]: e.target.value }))}
                             fullWidth
@@ -871,7 +890,9 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                                   <IconButton
                                     size="small"
                                     tabIndex={-1}
-                                    aria-label={visibleSecrets[`global:${global.name}`] ? 'Hide global' : 'Show global'}
+                                    aria-label={visibleSecrets[`global:${global.name}`]
+                                      ? t('packages.install.hideGlobal')
+                                      : t('packages.install.showGlobal')}
                                     onClick={() =>
                                       setVisibleSecrets((prev) => ({
                                         ...prev,
@@ -897,7 +918,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                   {manifest.secrets.length > 0 ? (
                     <>
                       <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                        Secrets requested by this package
+                        {t('packages.install.secretsTitle')}
                       </Typography>
                       <Stack spacing={1.5} sx={{ mb: 2.5 }}>
                         {manifest.secrets.map((s) => (
@@ -908,8 +929,8 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                             label={s.label || s.key}
                             helperText={
                               s.required
-                                ? 'Required — leave blank to install the dependent entity disabled'
-                                : 'Optional'
+                                ? t('packages.install.requiredSecret')
+                                : t('packages.install.optional')
                             }
                             value={secretValues[s.key] ?? ''}
                             onChange={(e) => setSecretValues((prev) => ({ ...prev, [s.key]: e.target.value }))}
@@ -920,7 +941,9 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                                   <IconButton
                                     size="small"
                                     tabIndex={-1}
-                                    aria-label={visibleSecrets[s.key] ? 'Hide secret' : 'Show secret'}
+                                    aria-label={visibleSecrets[s.key]
+                                      ? t('packages.install.hideSecret')
+                                      : t('packages.install.showSecret')}
                                     onClick={() =>
                                       setVisibleSecrets((prev) => ({ ...prev, [s.key]: !prev[s.key] }))
                                     }
@@ -938,7 +961,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                     </>
                   ) : (
                     <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
-                      This package doesn&apos;t request any secrets.
+                      {t('packages.install.noSecrets')}
                     </Typography>
                   )}
 
@@ -947,7 +970,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                       onClick={manifest.models.length > 0 ? () => setInstallStep(0) : closeDialog}
                       disabled={loading}
                     >
-                      {manifest.models.length > 0 ? 'Back' : 'Cancel'}
+                      {manifest.models.length > 0 ? t('packages.install.back') : t('packages.install.cancel')}
                     </Button>
                     <Button
                       variant="contained"
@@ -957,7 +980,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
                       disabled={loading}
                       startIcon={loading ? <CircularProgress size={16} /> : <CloudDownloadOutlinedIcon />}
                     >
-                      Install package
+                      {t('packages.install.action')}
                     </Button>
                   </Stack>
                 </Box>
@@ -969,17 +992,23 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
             <Box>
               <Alert severity={result.ok ? 'success' : 'error'} sx={{ mb: 1 }}>
                 {result.ok
-                  ? `Installed "${result.package?.name}": ${result.created.length} created, ${result.updated.length} updated, ${result.disabled.length} disabled.`
-                  : `Install failed: ${result.errors[0] ?? 'unknown error'}`}
+                  ? t('packages.install.success', {
+                      name: result.package?.name ?? '',
+                      created: tp('packages.install.created', result.created.length),
+                      updated: tp('packages.install.updated', result.updated.length),
+                      disabled: tp('packages.install.disabled', result.disabled.length),
+                    })
+                  : t('packages.install.failed', {
+                      error: result.errors[0] ?? t('packages.install.unknownError'),
+                    })}
               </Alert>
               {result.missingGlobals.length > 0 && (
                 <Alert severity="warning" sx={{ mb: 1 }}>
-                  Set these global variable(s) in Settings for the installed entities to work:{' '}
-                  {result.missingGlobals.join(', ')}.
+                  {t('packages.install.missingGlobals', { names: formatList(result.missingGlobals) })}
                 </Alert>
               )}
               <Button size="small" onClick={closeDialog}>
-                Close
+                {t('packages.install.close')}
               </Button>
             </Box>
           )}

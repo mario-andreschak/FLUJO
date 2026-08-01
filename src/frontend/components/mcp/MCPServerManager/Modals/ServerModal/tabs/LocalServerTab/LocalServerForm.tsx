@@ -10,6 +10,7 @@ import {
   TextField,
   Typography
 } from '@mui/material';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface LocalServerFormProps {
   name: string;
@@ -26,11 +27,12 @@ const LocalServerForm: React.FC<LocalServerFormProps> = ({
   setRootPath,
   onRootPathSelect
 }) => {
+  const { t } = useI18n();
   return (
     <Stack spacing={3}>
       <Box>
         <Typography variant="subtitle2" gutterBottom>
-          Server Name
+          {t('mcp.local.form.name')}
         </Typography>
         <TextField
           fullWidth
@@ -45,7 +47,7 @@ const LocalServerForm: React.FC<LocalServerFormProps> = ({
 
       <Box>
         <Typography variant="subtitle2" gutterBottom>
-          MCP Server Root Path
+          {t('mcp.local.form.rootPath')}
         </Typography>
         <TextField
           fullWidth
@@ -60,6 +62,7 @@ const LocalServerForm: React.FC<LocalServerFormProps> = ({
                 <IconButton
                   onClick={onRootPathSelect}
                   edge="end"
+                  aria-label={t('mcp.local.form.selectRoot')}
                 >
                   <FolderIcon />
                 </IconButton>

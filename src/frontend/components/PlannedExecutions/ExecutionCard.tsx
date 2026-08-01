@@ -31,6 +31,8 @@ import {
   PlannedExecutionListEntry,
 } from '@/frontend/services/plannedExecutions';
 import FolderAssignMenu from '@/frontend/components/shared/FolderAssignMenu';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { Translator } from '@/frontend/i18n/core';
 import { describeTrigger } from './triggerSummary';
 
 /** How many run records to show before the "Load more" button. */
@@ -46,21 +48,23 @@ const statusColor = (status: RunRecordStatus) => {
   }
 };
 
-const formatTime = (iso?: string) =>
-  iso
-    ? new Date(iso).toLocaleDateString(undefined, {
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      })
-    : '';
-
-const formatDuration = (record: RunRecord) => {
+const formatDuration = (record: RunRecord, t: Translator, formatNumber: (value: number) => string) => {
   if (!record.finishedAt) return '';
   const ms = new Date(record.finishedAt).getTime() - new Date(record.firedAt).getTime();
-  if (ms < 1000) return '<1s';
-  return ms < 60_000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60_000)}min`;
+  if (ms < 1000) return t('automations.card.lessThanSecond');
+  const count = Math.round(ms < 60_000 ? ms / 1000 : ms / 60_000);
+  return t(ms < 60_000 ? 'automations.card.seconds' : 'automations.card.minutes', {
+    count: formatNumber(count),
+  });
+};
+
+const runStatusLabel = (status: RunRecordStatus, t: Translator) => {
+  switch (status) {
+    case 'completed': return t('automations.card.status.completed');
+    case 'error': return t('automations.card.status.error');
+    case 'skipped': return t('automations.card.status.skipped');
+    default: return t('automations.card.status.running');
+  }
 };
 
 /**
@@ -74,27 +78,31 @@ const formatDuration = (record: RunRecord) => {
  *    POSITIVE confirmation ("Watching…"/"Listening…") instead of a blank line;
  *  - anything else that is enabled but not armed falls back to "Not armed".
  */
-const statusLine = (entry: PlannedExecutionListEntry): string => {
+const statusLine = (
+  entry: PlannedExecutionListEntry,
+  t: Translator,
+  formatTime: (iso?: string) => string,
+): string => {
   const { execution, status } = entry;
   if (!execution.enabled) return '';
-  if (status.nextRun) return `Next run: ${formatTime(status.nextRun)}`;
-  if (status.notArmedReason === 'paused') return 'Paused (global)';
+  if (status.nextRun) return t('automations.card.nextRun', { time: formatTime(status.nextRun) });
+  if (status.notArmedReason === 'paused') return t('automations.card.pausedGlobal');
   if (status.armed) {
     switch (execution.trigger.type) {
       case 'webhook':
-        return 'Listening for webhook';
+        return t('automations.card.listeningWebhook');
       case 'file-watch':
-        return `Watching ${execution.trigger.path}`;
+        return t('automations.card.watchingPath', { path: execution.trigger.path });
       case 'mcp-poll':
       case 'url-watch':
-        return 'Watching for changes';
+        return t('automations.card.watchingChanges');
       case 'flow-event':
-        return 'Waiting for flow event';
+        return t('automations.card.waitingFlowEvent');
       default:
-        return 'Armed';
+        return t('automations.card.armed');
     }
   }
-  return 'Not armed';
+  return t('automations.card.notArmed');
 };
 
 interface ExecutionCardProps {
@@ -122,6 +130,7 @@ const ExecutionCard = ({
   onSetFolder,
   onRanNow,
 }: ExecutionCardProps) => {
+  const { t, tp, formatDate, formatNumber } = useI18n();
   const { execution, status, lastRun } = entry;
   const [expanded, setExpanded] = useState(false);
   const [runs, setRuns] = useState<RunRecord[] | null>(null);
@@ -130,6 +139,14 @@ const ExecutionCard = ({
   const [detail, setDetail] = useState<RunRecord | null>(null);
   const [visibleCount, setVisibleCount] = useState(RUNS_PAGE_SIZE);
   const [folderAnchorEl, setFolderAnchorEl] = useState<null | HTMLElement>(null);
+  const formatTime = (iso?: string) => iso
+    ? formatDate(iso, {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    : '';
 
   const loadRuns = useCallback(async () => {
     setLoadingRuns(true);
@@ -167,13 +184,13 @@ const ExecutionCard = ({
             <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
               {execution.name}
             </Typography>
-            <Chip size="small" label={describeTrigger(execution.trigger)} />
+            <Chip size="small" label={describeTrigger(execution.trigger, t)} />
             {execution.exclusive && (
-              <Tooltip title="Only runs when the scheduler is idle; blocks other runs while active">
-                <Chip size="small" color="secondary" label="Exclusive" />
+              <Tooltip title={t('automations.card.exclusiveHelp')}>
+                <Chip size="small" color="secondary" label={t('automations.card.exclusive')} />
               </Tooltip>
             )}
-            {!execution.enabled && <Chip size="small" label="Off" variant="outlined" />}
+            {!execution.enabled && <Chip size="small" label={t('automations.card.off')} variant="outlined" />}
             {execution.folder && (
               <Chip
                 size="small"
@@ -190,25 +207,31 @@ const ExecutionCard = ({
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mt: 0.5 }}>
               <CircularProgress size={12} thickness={6} />
               <Typography variant="body2" color="text.secondary">
-                Running…{status.runningSince ? ` — started ${formatTime(status.runningSince)}` : ''}
+                {status.runningSince
+                  ? t('automations.card.runningSince', { time: formatTime(status.runningSince) })
+                  : t('automations.card.running')}
               </Typography>
             </Box>
           ) : status.blockedByExclusive ? (
             // A non-exclusive execution held off because an exclusive one holds
             // (or is waiting for) the scheduler-global lock (issue #171).
             <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-              Blocked — an exclusive trigger holds the scheduler
-              {status.lastTriggerError ? ` — trigger error: ${status.lastTriggerError}` : ''}
+              {t('automations.card.blockedExclusive')}
+              {status.lastTriggerError
+                ? ` — ${t('automations.card.triggerError', { error: status.lastTriggerError })}`
+                : ''}
             </Typography>
           ) : (
             <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-              {statusLine(entry)}
-              {status.lastTriggerError ? ` — trigger error: ${status.lastTriggerError}` : ''}
+              {statusLine(entry, t, formatTime)}
+              {status.lastTriggerError
+                ? ` — ${t('automations.card.triggerError', { error: status.lastTriggerError })}`
+                : ''}
             </Typography>
           )}
           {lastRun && (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mt: 0.5 }}>
-              <Tooltip title={lastRun.status}>
+              <Tooltip title={runStatusLabel(lastRun.status, t)}>
                 <Box
                   sx={{
                     width: 10,
@@ -220,14 +243,14 @@ const ExecutionCard = ({
                 />
               </Tooltip>
               <Typography variant="body2" color="text.secondary">
-                Last run {formatTime(lastRun.firedAt)}
+                {t('automations.card.lastRun', { time: formatTime(lastRun.firedAt) })}
                 {lastRun.status === 'error' && lastRun.error ? ` — ${lastRun.error}` : ''}
               </Typography>
             </Box>
           )}
         </Box>
 
-        <Tooltip title="Run now">
+        <Tooltip title={t('automations.card.runNow')}>
           <span>
             <IconButton onClick={handleRunNow} disabled={runningNow} color="primary">
               {runningNow ? <CircularProgress size={20} /> : <PlayArrowIcon />}
@@ -237,10 +260,10 @@ const ExecutionCard = ({
         <Tooltip
           title={
             paused
-              ? 'Scheduler is paused globally — switch it to Active (top right) to arm triggers'
+              ? t('automations.card.pausedHelp')
               : execution.enabled
-                ? 'Turn off'
-                : 'Turn on'
+                ? t('automations.card.turnOff')
+                : t('automations.card.turnOn')
           }
         >
           <Switch
@@ -248,26 +271,30 @@ const ExecutionCard = ({
             onChange={(e) => onToggleEnabled(e.target.checked)}
           />
         </Tooltip>
-        <Tooltip title="Edit">
+        <Tooltip title={t('automations.card.edit')}>
           <IconButton onClick={onEdit}>
             <EditIcon />
           </IconButton>
         </Tooltip>
-        <Tooltip title={execution.folder ? `Folder: ${execution.folder}` : 'Move to folder'}>
+        <Tooltip title={execution.folder
+          ? t('automations.card.folder', { folder: execution.folder })
+          : t('automations.card.moveFolder')}>
           <IconButton
             onClick={(event) => setFolderAnchorEl(event.currentTarget)}
             color={execution.folder ? 'primary' : 'default'}
-            aria-label="move to folder"
+            aria-label={t('automations.card.moveFolderAria')}
           >
             <DriveFileMoveOutlinedIcon />
           </IconButton>
         </Tooltip>
-        <Tooltip title="Delete">
+        <Tooltip title={t('automations.card.delete')}>
           <IconButton onClick={onDelete}>
             <DeleteIcon />
           </IconButton>
         </Tooltip>
-        <Tooltip title={expanded ? 'Hide run history' : 'Show run history'}>
+        <Tooltip title={expanded
+          ? t('automations.card.hideHistory')
+          : t('automations.card.showHistory')}>
           <IconButton onClick={() => setExpanded(v => !v)}>
             {expanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
           </IconButton>
@@ -277,11 +304,11 @@ const ExecutionCard = ({
       <Collapse in={expanded} timeout="auto" unmountOnExit>
         <Box sx={{ mt: 2, borderTop: 1, borderColor: 'divider', pt: 1.5 }}>
           {loadingRuns && !runs && (
-            <Typography variant="body2" color="text.secondary">Loading runs…</Typography>
+            <Typography variant="body2" color="text.secondary">{t('automations.card.loadingRuns')}</Typography>
           )}
           {runs && runs.length === 0 && (
             <Typography variant="body2" color="text.secondary">
-              No runs yet. Use the play button to try it now.
+              {t('automations.card.noRuns')}
             </Typography>
           )}
           {runs?.slice(0, visibleCount).map(record => (
@@ -308,9 +335,11 @@ const ExecutionCard = ({
               <Box sx={{ minWidth: 0, flexGrow: 1 }}>
                 <Typography variant="body2">
                   {formatTime(record.firedAt)}
-                  {formatDuration(record) ? ` · ${formatDuration(record)}` : ''}
+                  {formatDuration(record, t, formatNumber) ? ` · ${formatDuration(record, t, formatNumber)}` : ''}
                   {' · '}{record.triggerSummary}
-                  {record.usage?.totalTokens ? ` · ${record.usage.totalTokens.toLocaleString()} tokens` : ''}
+                  {record.usage?.totalTokens
+                    ? ` · ${t('automations.card.tokens', { count: formatNumber(record.usage.totalTokens) })}`
+                    : ''}
                 </Typography>
                 {record.error && (
                   <Typography variant="body2" color="error">
@@ -333,7 +362,7 @@ const ExecutionCard = ({
                   </Typography>
                 )}
               </Box>
-              <Tooltip title="Show full output">
+              <Tooltip title={t('automations.card.fullOutput')}>
                 <IconButton
                   className="run-detail-button"
                   size="small"
@@ -351,7 +380,7 @@ const ExecutionCard = ({
               onClick={() => setVisibleCount(c => c + RUNS_PAGE_SIZE)}
               sx={{ mt: 1 }}
             >
-              Load more ({runs.length - visibleCount} older)
+              {tp('automations.card.loadOlder', runs.length - visibleCount)}
             </Button>
           )}
         </Box>
@@ -387,11 +416,15 @@ const ExecutionCard = ({
           {detail && (
             <>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-                {detail.status}
-                {formatDuration(detail) ? ` · ${formatDuration(detail)}` : ''}
+                {runStatusLabel(detail.status, t)}
+                {formatDuration(detail, t, formatNumber) ? ` · ${formatDuration(detail, t, formatNumber)}` : ''}
                 {' · '}{detail.triggerSummary}
                 {detail.usage?.totalTokens
-                  ? ` · ${detail.usage.totalTokens.toLocaleString()} tokens (${detail.usage.promptTokens.toLocaleString()} in / ${detail.usage.completionTokens.toLocaleString()} out)`
+                  ? ` · ${t('automations.card.tokenBreakdown', {
+                      total: formatNumber(detail.usage.totalTokens),
+                      input: formatNumber(detail.usage.promptTokens),
+                      output: formatNumber(detail.usage.completionTokens),
+                    })}`
                   : ''}
               </Typography>
               {detail.error && (
@@ -417,7 +450,7 @@ const ExecutionCard = ({
               ) : (
                 !detail.error && (
                   <Typography variant="body2" color="text.secondary">
-                    This run produced no output text.
+                    {t('automations.card.noOutput')}
                   </Typography>
                 )
               )}
@@ -425,7 +458,7 @@ const ExecutionCard = ({
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDetail(null)}>Close</Button>
+          <Button onClick={() => setDetail(null)}>{t('automations.card.close')}</Button>
         </DialogActions>
       </Dialog>
     </Paper>

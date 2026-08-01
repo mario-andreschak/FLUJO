@@ -34,6 +34,8 @@ import { modelService } from '@/frontend/services/model';
 import { mcpService } from '@/frontend/services/mcp';
 import { MCPServerConfig } from '@/shared/types/mcp';
 import { createLogger } from '@/utils/logger';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import { localizeFlowIssue } from '@/frontend/i18n/flowValidation';
 
 const log = createLogger('components/flow/FlowBuilder/FlowValidationButton');
 
@@ -68,6 +70,7 @@ function fileAccessSnapshot(
  * `editNode` event the Canvas already listens for, so the user can jump straight to the fix.
  */
 export const FlowValidationButton: React.FC<FlowValidationButtonProps> = ({ nodes, edges }) => {
+  const { t, tp } = useI18n();
   const [open, setOpen] = useState(false);
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
   const [loading, setLoading] = useState(false);
@@ -178,11 +181,11 @@ export const FlowValidationButton: React.FC<FlowValidationButtonProps> = ({ node
     } catch (error) {
       log.warn('Flow validation failed to run', error);
       setIssues(null);
-      setCheckError('The flow check could not finish. Your graph was not marked healthy—try again.');
+      setCheckError(t('flows.validation.failed'));
     } finally {
       setLoading(false);
     }
-  }, [nodes, edges]);
+  }, [nodes, edges, t]);
 
   const handleOpen = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
     setAnchorEl(event.currentTarget);
@@ -217,7 +220,7 @@ export const FlowValidationButton: React.FC<FlowValidationButtonProps> = ({ node
         aria-controls={dialogId}
         sx={{ textTransform: 'none' }}
       >
-        Check Flow
+        {t('flows.validation.check')}
         {issues && issues.length > 0 && (
           <Chip
             size="small"
@@ -262,11 +265,11 @@ export const FlowValidationButton: React.FC<FlowValidationButtonProps> = ({ node
             }}
           >
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1.5 }}>
-              <Typography id={dialogTitleId} variant="subtitle1" fontWeight={800}>Flow Check</Typography>
+              <Typography id={dialogTitleId} variant="subtitle1" fontWeight={800}>{t('flows.validation.title')}</Typography>
               {issues && (
                 <Box sx={{ display: 'flex', gap: 0.75, ml: 0.5 }}>
-                  {errorCount > 0 && <Chip size="small" color="error" label={`${errorCount} error${errorCount === 1 ? '' : 's'}`} />}
-                  {warningCount > 0 && <Chip size="small" color="warning" label={`${warningCount} warning${warningCount === 1 ? '' : 's'}`} />}
+                  {errorCount > 0 && <Chip size="small" color="error" label={tp('flows.validation.error', errorCount)} />}
+                  {warningCount > 0 && <Chip size="small" color="warning" label={tp('flows.validation.warning', warningCount)} />}
                 </Box>
               )}
             </Box>
@@ -275,20 +278,20 @@ export const FlowValidationButton: React.FC<FlowValidationButtonProps> = ({ node
               {loading ? (
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, py: 3, justifyContent: 'center' }}>
                   <CircularProgress size={22} />
-                  <Typography color="text.secondary">Checking flow…</Typography>
+                  <Typography color="text.secondary">{t('flows.validation.checking')}</Typography>
                 </Box>
               ) : checkError ? (
                 <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5, py: 2, px: 1 }}>
                   <ErrorOutlineIcon color="error" />
                   <Box>
-                    <Typography fontWeight={700}>Check unavailable</Typography>
+                    <Typography fontWeight={700}>{t('flows.validation.unavailable')}</Typography>
                     <Typography variant="body2" color="text.secondary">{checkError}</Typography>
                   </Box>
                 </Box>
               ) : issues && issues.length === 0 ? (
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 3, px: 1, justifyContent: 'center' }}>
                   <CheckCircleIcon color="success" />
-                  <Typography>No problems found — this flow looks runnable.</Typography>
+                  <Typography>{t('flows.validation.healthy')}</Typography>
                 </Box>
               ) : (
                 <List dense disablePadding>
@@ -304,8 +307,8 @@ export const FlowValidationButton: React.FC<FlowValidationButtonProps> = ({ node
                           )}
                         </ListItemIcon>
                         <ListItemText
-                          primary={issue.message}
-                          secondary={clickable ? `Node: ${issue.nodeLabel ?? issue.nodeId} — reveal in inspector` : undefined}
+                          primary={localizeFlowIssue(issue, t)}
+                          secondary={clickable ? t('flows.validation.revealNode', { node: issue.nodeLabel ?? issue.nodeId ?? '' }) : undefined}
                         />
                       </>
                     );
@@ -324,8 +327,8 @@ export const FlowValidationButton: React.FC<FlowValidationButtonProps> = ({ node
             </Box>
             <Divider />
             <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, p: 1 }}>
-              <Button onClick={runCheck} disabled={loading}>Re-check</Button>
-              <Button onClick={closeAndRestoreFocus} variant="contained">Done</Button>
+              <Button onClick={runCheck} disabled={loading}>{t('flows.validation.recheck')}</Button>
+              <Button onClick={closeAndRestoreFocus} variant="contained">{t('flows.validation.done')}</Button>
             </Box>
           </Paper>
         </ClickAwayListener>

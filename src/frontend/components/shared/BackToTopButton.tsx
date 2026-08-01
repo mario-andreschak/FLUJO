@@ -4,6 +4,7 @@ import React from 'react';
 import { Fab, Fade } from '@mui/material';
 import type { SxProps, Theme } from '@mui/material/styles';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 export interface BackToTopButtonProps {
   /** Whether the button is visible (typically driven by useScrollRestoration). */
@@ -23,12 +24,13 @@ export interface BackToTopButtonProps {
  * the document, not an inner box).
  */
 export default function BackToTopButton({ show, onClick, sx }: BackToTopButtonProps) {
+  const { t } = useI18n();
   return (
     <Fade in={show} unmountOnExit>
       <Fab
         size="small"
         color="primary"
-        aria-label="Back to top"
+        aria-label={t('backToTop.action')}
         onClick={onClick}
         sx={{ position: 'fixed', bottom: 24, right: 24, zIndex: 1200, ...sx }}
       >

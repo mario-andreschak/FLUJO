@@ -47,6 +47,8 @@ import { useScrollRestoration } from '@/frontend/hooks/useScrollRestoration';
 import BackToTopButton from '@/frontend/components/shared/BackToTopButton';
 import { Flow } from '@/frontend/types/flow/flow';
 import { createLogger } from '@/utils/logger';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import Trans from '@/frontend/components/shared/Trans';
 
 const log = createLogger('components/Flow/FlowDashboard/FlowDashboard');
 
@@ -83,6 +85,7 @@ const FlowDashboard = ({
   onToggleFavorite,
   isLoading = false,
 }: FlowDashboardProps) => {
+  const { t, tp, formatNumber } = useI18n();
   const [searchTerm, setSearchTerm] = useState('');
   // Persisted view preferences (#93): survive navigating away and back. Search
   // is intentionally NOT persisted (session-scoped), and the transient menu
@@ -221,13 +224,37 @@ const FlowDashboard = ({
   // Grouped view of the filtered/sorted flows, driven by the active group mode.
   const groups = useMemo<CardGroup<Flow>[]>(() => {
     if (groupMode === 'folder') {
-      return groupByFolder(filteredFlows, (f) => f.folder);
+      return groupByFolder(filteredFlows, (f) => f.folder, t('flows.group.ungrouped'));
     }
     if (groupMode === 'sort') {
-      return groupItems(filteredFlows, (f) => deriveFlowSortGroup(f, sortOption));
+      return groupItems(filteredFlows, (f) => {
+        const group = deriveFlowSortGroup(f, sortOption);
+        const labels: Record<string, string> = {
+          'recency:unknown': t('flows.group.noDate'),
+          'recency:today': t('flows.group.today'),
+          'recency:week': t('flows.group.week'),
+          'recency:month': t('flows.group.month'),
+          'recency:older': t('flows.group.older'),
+          'nodes:0': t('flows.group.nodes0'),
+          'nodes:1-2': t('flows.group.nodes12'),
+          'nodes:3-5': t('flows.group.nodes35'),
+          'nodes:6-10': t('flows.group.nodes610'),
+          'nodes:11+': t('flows.group.nodes11'),
+          all: t('flows.group.all'),
+        };
+        return { ...group, label: labels[group.key] ?? group.label };
+      });
     }
     return [];
-  }, [groupMode, filteredFlows, sortOption]);
+  }, [groupMode, filteredFlows, sortOption, t]);
+
+  const sortLabel =
+    sortOption === 'name-asc' ? t('flows.sort.nameAsc') :
+    sortOption === 'name-desc' ? t('flows.sort.nameDesc') :
+    sortOption === 'newest' ? t('flows.sort.newest') :
+    sortOption === 'oldest' ? t('flows.sort.oldest') :
+    sortOption === 'most-nodes' ? t('flows.sort.mostSteps') :
+    t('flows.sort.fewestSteps');
   
   // Generate loading skeletons
   const renderSkeletons = () => {
@@ -285,7 +312,7 @@ const FlowDashboard = ({
         }}>
           {/* Search field */}
           <TextField
-            placeholder="Search agents..."
+            placeholder={t('flows.dashboard.search')}
             variant="outlined"
             size="small"
             fullWidth
@@ -311,7 +338,7 @@ const FlowDashboard = ({
               overflow: 'hidden'
             }}>
               <IconButton 
-                aria-label="Show agent cards"
+                aria-label={t('flows.dashboard.cards')}
                 size="small" 
                 onClick={() => setViewMode('grid')}
                 color={viewMode === 'grid' ? 'primary' : 'default'}
@@ -324,7 +351,7 @@ const FlowDashboard = ({
                 <ViewModuleIcon fontSize="small" />
               </IconButton>
               <IconButton 
-                aria-label="Show compact agent list"
+                aria-label={t('flows.dashboard.compact')}
                 size="small" 
                 onClick={() => setViewMode('compact')}
                 color={viewMode === 'compact' ? 'primary' : 'default'}
@@ -347,15 +374,15 @@ const FlowDashboard = ({
                 border: `1px solid ${theme.palette.divider}`,
                 backgroundColor: theme.palette.background.default
               }}
-              title="Group cards"
-              aria-label="Group agents"
+              title={t('flows.dashboard.groupCards')}
+              aria-label={t('flows.dashboard.groupAgents')}
             >
               <LayersIcon fontSize="small" />
             </IconButton>
             
             {/* Sort button */}
             <IconButton
-              aria-label="Sort agents"
+              aria-label={t('flows.dashboard.sortAgents')}
               size="small"
               onClick={handleSortMenuOpen}
               sx={{
@@ -379,19 +406,15 @@ const FlowDashboard = ({
         px: 1
       }}>
         <Typography variant="body2" color="textSecondary">
-          {filteredFlows.length} of {flows.length} agents
-          {searchTerm && ` matching "${searchTerm}"`}
+          {tp('flows.dashboard.count', flows.length, {
+            shown: formatNumber(filteredFlows.length),
+            total: formatNumber(flows.length),
+          })}
+          {searchTerm && t('flows.dashboard.matching', { search: searchTerm })}
         </Typography>
         
         <Typography variant="body2" color="textSecondary">
-          Showing: {
-            sortOption === 'name-asc' ? 'Name (A-Z)' :
-            sortOption === 'name-desc' ? 'Name (Z-A)' :
-            sortOption === 'newest' ? 'Newest first' :
-            sortOption === 'oldest' ? 'Oldest first' :
-            sortOption === 'most-nodes' ? 'Most steps' :
-            'Fewest steps'
-          }
+          {t('flows.dashboard.showing', { sort: sortLabel })}
         </Typography>
       </Box>
       
@@ -437,18 +460,21 @@ const FlowDashboard = ({
             minHeight: 200
           }}>
             <Typography variant="h6" gutterBottom color="textSecondary">
-              {searchTerm ? 'No matching agents' : 'No agents yet'}
+              {searchTerm ? t('flows.dashboard.noMatches') : t('flows.dashboard.empty')}
             </Typography>
             {searchTerm ? (
               <Typography variant="body2" color="textSecondary" align="center">
-                No agents match that search.
+                {t('flows.dashboard.noMatchHelp')}
                 <Box component="span" display="block" mt={1}>
-                  Try a different search term or <Button size="small" onClick={() => setSearchTerm('')}>clear the search</Button>
+                  <Trans
+                    message="flows.dashboard.trySearch"
+                    values={{ clearAction: <Button size="small" onClick={() => setSearchTerm('')}>{t('flows.dashboard.clearSearch')}</Button> }}
+                  />
                 </Box>
               </Typography>
             ) : (
               <Typography variant="body2" color="textSecondary" align="center">
-                Create a helper for something you do often. You can explain the job in everyday language.
+                {t('flows.dashboard.emptyHelp')}
                 {onCreateFlow && (
                   <Box component="span" display="block" mt={2}>
                     <Button 
@@ -457,7 +483,7 @@ const FlowDashboard = ({
                       startIcon={<AddIcon />}
                       onClick={onCreateFlow}
                     >
-                      Create My First Agent
+                      {t('flows.dashboard.createFirst')}
                     </Button>
                   </Box>
                 )}
@@ -479,19 +505,19 @@ const FlowDashboard = ({
           <ListItemIcon>
             <LayersClearIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText primary="No grouping" />
+          <ListItemText primary={t('flows.group.none')} />
         </MenuItem>
         <MenuItem selected={groupMode === 'folder'} onClick={() => handleGroupChange('folder')}>
           <ListItemIcon>
             <FolderOutlinedIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText primary="By folder" />
+          <ListItemText primary={t('flows.group.folder')} />
         </MenuItem>
         <MenuItem selected={groupMode === 'sort'} onClick={() => handleGroupChange('sort')}>
           <ListItemIcon>
             <LayersIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText primary="By sort setting" />
+          <ListItemText primary={t('flows.group.sort')} />
         </MenuItem>
       </Menu>
       
@@ -513,39 +539,39 @@ const FlowDashboard = ({
           <ListItemIcon>
             <SortByAlphaIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText primary="Name (A-Z)" />
+          <ListItemText primary={t('flows.sort.nameAsc')} />
         </MenuItem>
         <MenuItem onClick={() => handleSortChange('name-desc')}>
           <ListItemIcon>
             <SortByAlphaIcon fontSize="small" sx={{ transform: 'scaleX(-1)' }} />
           </ListItemIcon>
-          <ListItemText primary="Name (Z-A)" />
+          <ListItemText primary={t('flows.sort.nameDesc')} />
         </MenuItem>
         <Divider />
         <MenuItem onClick={() => handleSortChange('newest')}>
           <ListItemIcon>
             <UpdateIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText primary="Newest first" />
+          <ListItemText primary={t('flows.sort.newest')} />
         </MenuItem>
         <MenuItem onClick={() => handleSortChange('oldest')}>
           <ListItemIcon>
             <UpdateIcon fontSize="small" sx={{ transform: 'scaleX(-1)' }} />
           </ListItemIcon>
-          <ListItemText primary="Oldest first" />
+          <ListItemText primary={t('flows.sort.oldest')} />
         </MenuItem>
         <Divider />
         <MenuItem onClick={() => handleSortChange('most-nodes')}>
           <ListItemIcon>
             <FilterListIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText primary="Most nodes" />
+          <ListItemText primary={t('flows.sort.mostSteps')} />
         </MenuItem>
         <MenuItem onClick={() => handleSortChange('least-nodes')}>
           <ListItemIcon>
             <FilterListIcon fontSize="small" sx={{ transform: 'scaleY(-1)' }} />
           </ListItemIcon>
-          <ListItemText primary="Least nodes" />
+          <ListItemText primary={t('flows.sort.fewestSteps')} />
         </MenuItem>
       </Menu>
 

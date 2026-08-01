@@ -15,6 +15,8 @@ import {
   listRunResources,
   listAllRunResources,
   readRunResource,
+  copyRunResourceToConversation,
+  getRunResourceLocalPath,
   findRunResourceByName,
   deleteRunResources,
   buildRunResourceUri,
@@ -120,6 +122,50 @@ describe('write/read/list round-trip', () => {
   it('unknown uri reads as null', async () => {
     expect(await readRunResource(buildRunResourceUri('convA', 'no-such-id'))).toBeNull();
     expect(await readRunResource('flujo://run/never-seen-conv/no-such-id')).toBeNull();
+  });
+});
+
+describe('cross-conversation promotion', () => {
+  it('copies binary bytes into the parent scope and exposes a validated local path', async () => {
+    const payloadBytes = Buffer.from([0, 1, 2, 3, 250, 251, 252]);
+    const source = await writeRunResource({
+      conversationId: 'child-media',
+      mimeType: 'video/mp4',
+      kind: 'blob',
+      data: { base64: payloadBytes.toString('base64') },
+      producedBy: { source: 'model-output', nodeId: 'video-node' },
+    }) as RunResourceEntry;
+
+    const promoted = await copyRunResourceToConversation({
+      uri: source.uri,
+      conversationId: 'parent-media',
+      producedBy: { source: 'capture', nodeId: 'subflow-node' },
+    }) as RunResourceEntry;
+
+    expect(promoted.uri).not.toBe(source.uri);
+    expect(promoted.conversationId).toBe('parent-media');
+    expect(promoted).toMatchObject({ mimeType: 'video/mp4', kind: 'blob', size: payloadBytes.length });
+    expect(promoted.origin).toEqual({ server: 'flujo', uri: source.uri });
+
+    const parentRead = await readRunResource(promoted.uri);
+    expect((parentRead!.contents.contents[0] as { blob?: string }).blob).toBe(payloadBytes.toString('base64'));
+
+    const localPath = await getRunResourceLocalPath(promoted.uri);
+    expect(localPath).not.toBeNull();
+    expect(path.isAbsolute(localPath!)).toBe(true);
+    expect(await fs.readFile(localPath!)).toEqual(payloadBytes);
+  });
+
+  it('returns null for malformed, missing, and payload-less resources', async () => {
+    expect(await getRunResourceLocalPath('file:///tmp/not-a-run-resource')).toBeNull();
+    expect(await getRunResourceLocalPath(buildRunResourceUri('missing-conv', 'missing-id'))).toBeNull();
+    const link = await writeRunResource({
+      conversationId: 'parent-media',
+      kind: 'link',
+      producedBy: { source: 'mcp-link', server: 'srv' },
+      origin: { server: 'srv', uri: 'srv://remote/item' },
+    }) as RunResourceEntry;
+    expect(await getRunResourceLocalPath(link.uri)).toBeNull();
   });
 });
 

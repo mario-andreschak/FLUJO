@@ -33,6 +33,7 @@ import {
   createPromptReferenceSuggestion,
 } from '@/utils/shared/promptRefs';
 import './PromptBuilder/promptBuilder.css';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 export interface GlobalReferenceEditorRef {
   insertText: (text: string) => void;
@@ -248,6 +249,7 @@ const ReferencePill = ({
   invalid: boolean;
 }) => {
   const editor = useSlate();
+  const { t } = useI18n();
   const handoff = element.kind === 'tool' && element.server === 'handoff';
   const className =
     element.kind === 'global'
@@ -270,7 +272,7 @@ const ReferencePill = ({
     <span
       contentEditable={false}
       className={`tool-reference-container ${className}${invalid ? ' invalid' : ''}`}
-      title={invalid ? 'This reference is not available in the current context' : undefined}
+      title={invalid ? t('references.invalid') : undefined}
       aria-invalid={invalid || undefined}
     >
       <span className={`tool-reference ${className}${invalid ? ' invalid' : ''}`}>{promptRefLabel(element)}</span>
@@ -278,7 +280,7 @@ const ReferencePill = ({
         <span
           className={`tool-reference-delete ${className}`}
           role="button"
-          aria-label={`Remove ${promptRefLabel(element)}`}
+          aria-label={t('references.remove', { name: promptRefLabel(element) })}
           tabIndex={0}
           onClick={(event) => {
             event.preventDefault();
@@ -318,6 +320,7 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
   onKeyDown,
   onPaste,
 }, ref) => {
+  const { t } = useI18n();
   const editor = useMemo(() => withHistory(withReferencePills(withReact(createEditor()))), []);
   const initialValue = useMemo(() => deserializeReferenceValue(value || ''), []); // eslint-disable-line react-hooks/exhaustive-deps
   const [activeCompletion, setActiveCompletion] = useState<ActiveCompletion | null>(null);
@@ -505,7 +508,7 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
         <Paper
           elevation={8}
           role="listbox"
-          aria-label={activeCompletion.mode === 'at' ? 'Available references' : 'Global variables'}
+          aria-label={activeCompletion.mode === 'at' ? t('references.available') : t('references.globals')}
           sx={{
             position: 'absolute',
             zIndex: 1500,
@@ -519,17 +522,17 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
         >
           {activeCompletion.items.length === 0 ? (
             <Box sx={{ px: 1.5, py: 1.25 }}>
-              <Typography variant="body2" color="text.secondary">No matching references</Typography>
+              <Typography variant="body2" color="text.secondary">{t('references.none')}</Typography>
             </Box>
           ) : activeCompletion.items.map((item, index) => {
             const previousKind = activeCompletion.items[index - 1]?.kind;
             const groupLabel = item.kind === 'tool'
-              ? 'Tools'
+              ? t('references.tools')
               : item.kind === 'resource'
-                ? 'Resources'
+                ? t('references.resources')
                 : item.kind === 'global'
-                  ? 'Globals'
-                  : 'Temporary data';
+                  ? t('references.globals')
+                  : t('references.temporaryData');
             return (
               <React.Fragment key={item.value}>
                 {item.kind !== previousKind && (

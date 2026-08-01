@@ -4,6 +4,7 @@ import React from 'react';
 import { Box, Collapse, IconButton, Typography, Chip, useTheme } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 export interface CollapsibleCardSectionProps {
   /** Header text (folder name, sort bucket label, …). */
@@ -34,6 +35,7 @@ const CollapsibleCardSection = ({
   children,
 }: CollapsibleCardSectionProps) => {
   const theme = useTheme();
+  const { t } = useI18n();
 
   return (
     <Box sx={{ mb: 1.5 }}>
@@ -64,7 +66,7 @@ const CollapsibleCardSection = ({
       >
         <IconButton
           size="small"
-          aria-label={expanded ? 'Collapse section' : 'Expand section'}
+          aria-label={expanded ? t('common.collapseSection') : t('common.expandSection')}
           onClick={(e) => {
             e.stopPropagation();
             onToggle();

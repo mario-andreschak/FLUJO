@@ -8,6 +8,9 @@ import { isStdioConfig, isWebSocketConfig, isSSEConfig, isStreamableConfig } fro
 import { mcpService } from '@/frontend/services/mcp';
 import { TestConnectionEvent } from '@/shared/types/streaming';
 import { getTestConnectionTimeoutMs, isRunnerStdioConfig } from '@/utils/mcp/testConnectionTimeout';
+import { translate, type Translator } from '@/frontend/i18n';
+
+const englishTranslator: Translator = (key, values) => translate('en', key, values);
 
 /**
  * Assemble the final, saveable server config from the current form state, applying the
@@ -77,13 +80,14 @@ export const handleSubmit = (
   onAdd: (config: MCPServerConfig) => void,
   onUpdate?: (config: MCPServerConfig) => void,
   initialConfig?: MCPServerConfig | null,
-  onClose?: () => void
+  onClose?: () => void,
+  t: Translator = englishTranslator
 ) => {
   e.preventDefault();
   if (!localConfig.name || (isStdioConfig(localConfig) && !localConfig.command)) {
     setMessage({
       type: 'error',
-      text: 'Please fill in all required fields'
+      text: t('mcp.local.messages.required')
     });
     return;
   }
@@ -92,7 +96,7 @@ export const handleSubmit = (
   if (localConfig.transport === 'websocket' && !websocketUrl) {
     setMessage({
       type: 'error',
-      text: 'Please enter a valid WebSocket URL'
+      text: t('mcp.local.run.validWebsocket')
     });
     return;
   }
@@ -100,7 +104,7 @@ export const handleSubmit = (
   if ((localConfig.transport === 'sse' || localConfig.transport === 'streamable') && !serverUrl) {
     setMessage({
       type: 'error',
-      text: 'Please enter a valid Server URL'
+      text: t('mcp.local.run.validServer')
     });
     return;
   }
@@ -133,11 +137,12 @@ export const handleParseClipboard = async (
   setBuildCommand: (command: string) => void,
   setInstallCommand: (command: string) => void,
   setWebsocketUrl: (url: string) => void,
-  websocketUrl: string
+  websocketUrl: string,
+  t: Translator = englishTranslator
 ) => {
   // Parse only server config from clipboard (not env variables)
   // Pass the server name for path processing
-  const result = await parseConfigFromClipboard(localConfig, localConfig.name);
+  const result = await parseConfigFromClipboard(localConfig, localConfig.name, t);
   
   if (result.message) {
     setMessage(result.message);
@@ -178,16 +183,17 @@ export const handleParseEnvClipboard = async (
   localConfig: MCPServerConfig,
   setLocalConfig: (config: MCPServerConfig) => void,
   setMessage: (message: MessageState | null) => void,
-  setIsParsingEnv: (isParsingEnv: boolean) => void
+  setIsParsingEnv: (isParsingEnv: boolean) => void,
+  t: Translator = englishTranslator
 ) => {
   setIsParsingEnv(true);
   setMessage({
     type: 'success',
-    text: 'Parsing environment variables from clipboard...'
+    text: t('mcp.local.messages.parsingEnvClipboard')
   });
   
   try {
-    const result = await parseEnvFromClipboard();
+    const result = await parseEnvFromClipboard(t);
     
     if (result.message) {
       setMessage(result.message);
@@ -233,7 +239,7 @@ export const handleParseEnvClipboard = async (
     console.error('Error parsing env variables from clipboard:', error);
     setMessage({
       type: 'error',
-      text: `Error parsing env variables: ${(error as Error).message || 'Unknown error'}`
+      text: t('mcp.local.messages.envFileError', { error: (error as Error).message || t('mcp.server.unknownError') })
     });
   } finally {
     setIsParsingEnv(false);
@@ -244,24 +250,25 @@ export const handleParseEnvExample = async (
   localConfig: MCPServerConfig,
   setLocalConfig: (config: MCPServerConfig) => void,
   setMessage: (message: MessageState | null) => void,
-  setIsParsingEnv: (isParsingEnv: boolean) => void
+  setIsParsingEnv: (isParsingEnv: boolean) => void,
+  t: Translator = englishTranslator
 ) => {
   setIsParsingEnv(true);
   setMessage({
     type: 'success',
-    text: 'Parsing environment variables from .env.example...'
+    text: t('mcp.local.messages.parsingEnvExample')
   });
   
   try {
     if (!localConfig.name) {
-      throw new Error('Please specify a server name first');
+      throw new Error(t('mcp.local.messages.serverNameFirst'));
     }
     
     // Construct the .env.example path
     const serverName = localConfig.name;
     const envPath = `${serverName}/.env.example`;
     
-    const result = await parseEnvFromFile(envPath);
+    const result = await parseEnvFromFile(envPath, t);
     
     if (result.message) {
       setMessage(result.message);
@@ -307,7 +314,7 @@ export const handleParseEnvExample = async (
     console.error('Error parsing .env.example file:', error);
     setMessage({
       type: 'error',
-      text: `Error parsing .env.example: ${(error as Error).message || 'Unknown error'}`
+      text: t('mcp.local.messages.envFileError', { error: (error as Error).message || t('mcp.server.unknownError') })
     });
   } finally {
     setIsParsingEnv(false);
@@ -322,17 +329,18 @@ export const handleParseReadme = async (
   setBuildCommand: (command: string) => void,
   setInstallCommand: (command: string) => void,
   setWebsocketUrl: (url: string) => void,
-  websocketUrl: string
+  websocketUrl: string,
+  t: Translator = englishTranslator
 ) => {
   setIsParsingReadme(true);
   setMessage({
     type: 'success',
-    text: 'Parsing README.md from repository root...'
+    text: t('mcp.local.messages.parsingReadme')
   });
   
   try {
     if (!localConfig.name) {
-      throw new Error('Please specify a server name first');
+      throw new Error(t('mcp.local.messages.serverNameFirst'));
     }
     
     // Construct the README path - just the server name and README.md
@@ -357,19 +365,20 @@ export const handleParseReadme = async (
     console.log('DEBUG - API response status:', readmeResponse.status);
     
     if (!readmeResponse.ok) {
-      throw new Error('Failed to read README file from repository root');
+      throw new Error(t('mcp.local.messages.readmeReadFailed'));
     }
     
     const readmeResult = await readmeResponse.json();
     if (!readmeResult.content) {
-      throw new Error('README file is empty');
+      throw new Error(t('mcp.local.messages.readmeEmpty'));
     }
     
     // Parse README content
     const parseResult = await parseConfigFromReadme(
       readmeResult.content,
       localConfig,
-      localConfig.name  // Pass the server name for path processing
+      localConfig.name,  // Pass the server name for path processing
+      t
     );
     console.log('DEBUG - Parsing README content with repository root path:', localConfig.name);
     
@@ -412,7 +421,7 @@ export const handleParseReadme = async (
     console.error('Error parsing README:', error);
     setMessage({
       type: 'error',
-      text: `Error parsing README: ${(error as Error).message || 'Unknown error'}`
+      text: t('mcp.local.messages.readmeError', { error: (error as Error).message || t('mcp.server.unknownError') })
     });
   } finally {
     setIsParsingReadme(false);
@@ -427,12 +436,13 @@ export const handleInstall = async (
   setConsoleTitle: (title: string) => void,
   setIsConsoleVisible: (isVisible: boolean) => void,
   setConsoleOutput: (output: string | ((prev: string) => string)) => void,
-  setInstallCompleted: (completed: boolean) => void
+  setInstallCompleted: (completed: boolean) => void,
+  t: Translator = englishTranslator
 ) => {
   if (!localConfig.name) {
     setBuildMessage({
       type: 'error',
-      text: 'Please specify a server name first'
+      text: t('mcp.local.messages.serverNameFirst')
     });
     return;
   }
@@ -440,13 +450,13 @@ export const handleInstall = async (
   setIsInstalling(true);
   setBuildMessage({
     type: 'success',
-    text: 'Installing dependencies...'
+    text: t('mcp.local.progress.installingDependencies')
   });
 
   // Show the console up front and stream output into it as it arrives (#65).
-  setConsoleTitle('Install Dependencies Output');
+  setConsoleTitle(t('mcp.local.console.installTitle'));
   setIsConsoleVisible(true);
-  setConsoleOutput(`Executing: ${installCommand}\n\n`);
+  setConsoleOutput(`${t('mcp.local.console.executing', { command: installCommand })}\n\n`);
 
   console.log('DEBUG - Installing dependencies for server:', localConfig.name);
   // Use rootPath if available, otherwise fall back to name
@@ -455,13 +465,13 @@ export const handleInstall = async (
   const result = await installDependencies(serverPath, installCommand, (chunk) => {
     streamedAny = true;
     setConsoleOutput((prev: string) => prev + chunk);
-  });
+  }, t);
 
   // If nothing streamed (e.g. the non-streaming fallback ran), append the final blob so
   // the console is never left with only the "Executing:" header.
   if (!streamedAny) {
     setConsoleOutput((prev: string) => prev +
-      (result.output || 'Command completed successfully, but no output was returned.'));
+      (result.output || t('mcp.local.console.noCommandOutput')));
   }
   
   // Set a brief message with instructions to check the console
@@ -469,12 +479,12 @@ export const handleInstall = async (
     setInstallCompleted(true);
     setBuildMessage({
       type: 'success',
-      text: 'Dependencies installed successfully. Check the console for more information.'
+      text: t('mcp.local.messages.installSuccess')
     });
   } else {
     setBuildMessage({
       type: 'error',
-      text: `Failed to install dependencies. Check the console for more information.`
+      text: t('mcp.local.messages.installFailed')
     });
   }
   
@@ -489,12 +499,13 @@ export const handleBuild = async (
   setConsoleTitle: (title: string) => void,
   setIsConsoleVisible: (isVisible: boolean) => void,
   setConsoleOutput: (output: string | ((prev: string) => string)) => void,
-  setBuildCompleted: (completed: boolean) => void
+  setBuildCompleted: (completed: boolean) => void,
+  t: Translator = englishTranslator
 ) => {
   if (!localConfig.name) {
     setBuildMessage({
       type: 'error',
-      text: 'Please specify a server name first'
+      text: t('mcp.local.messages.serverNameFirst')
     });
     return;
   }
@@ -502,13 +513,13 @@ export const handleBuild = async (
   setIsBuilding(true);
   setBuildMessage({
     type: 'success',
-    text: 'Building server...'
+    text: t('mcp.local.progress.buildingServer')
   });
 
   // Show the console up front and stream output into it as it arrives (#65).
-  setConsoleTitle('Build Server Output');
+  setConsoleTitle(t('mcp.local.console.buildTitle'));
   setIsConsoleVisible(true);
-  setConsoleOutput(`Executing: ${buildCommand}\n\n`);
+  setConsoleOutput(`${t('mcp.local.console.executing', { command: buildCommand })}\n\n`);
 
   console.log('DEBUG - Building server:', localConfig.name);
   // Use rootPath if available, otherwise fall back to name with mcp-servers prefix
@@ -518,13 +529,13 @@ export const handleBuild = async (
   const result = await buildServer(serverPath, buildCommand, (chunk) => {
     streamedAny = true;
     setConsoleOutput((prev: string) => prev + chunk);
-  });
+  }, t);
 
   // If nothing streamed (e.g. the non-streaming fallback ran), append the final blob so
   // the console is never left with only the "Executing:" header.
   if (!streamedAny) {
     setConsoleOutput((prev: string) => prev +
-      (result.output || 'Command completed successfully, but no output was returned.'));
+      (result.output || t('mcp.local.console.noCommandOutput')));
   }
   
   // Set a brief message with instructions to check the console
@@ -532,12 +543,12 @@ export const handleBuild = async (
     setBuildCompleted(true);
     setBuildMessage({
       type: 'success',
-      text: 'Server built successfully. Check the console for more information.'
+      text: t('mcp.local.messages.buildSuccess')
     });
   } else {
     setBuildMessage({
       type: 'error',
-      text: `Failed to build server. Check the console for more information.`
+      text: t('mcp.local.messages.buildFailed')
     });
   }
   
@@ -560,14 +571,15 @@ export const handleRun = async (
   storedName?: string,
   // Reports whether a reachable-but-unauthenticated remote server advertises OAuth (RFC
   // 9728), so the modal can offer "Save & Authenticate" instead of only a header hint.
-  setOauthCapable?: (capable: boolean) => void
+  setOauthCapable?: (capable: boolean) => void,
+  t: Translator = englishTranslator
 ) => {
   // A fresh run supersedes any earlier auth verdict.
   setOauthCapable?.(false);
   if (!localConfig.name) {
     setMessage({
       type: 'error',
-      text: 'Please specify a server name first'
+      text: t('mcp.local.messages.serverNameFirst')
     });
     return;
   }
@@ -575,7 +587,7 @@ export const handleRun = async (
   if (isStdioConfig(localConfig) && !localConfig.command) {
     setMessage({
       type: 'error',
-      text: 'Please specify a run command first'
+      text: t('mcp.local.run.enterCommand')
     });
     return;
   }
@@ -584,7 +596,7 @@ export const handleRun = async (
   if (localConfig.transport === 'websocket' && !websocketUrl) {
     setMessage({
       type: 'error',
-      text: 'Please enter a valid WebSocket URL'
+      text: t('mcp.local.run.validWebsocket')
     });
     return;
   }
@@ -592,18 +604,18 @@ export const handleRun = async (
   if ((localConfig.transport === 'sse' || localConfig.transport === 'streamable') && !serverUrl) {
     setMessage({
       type: 'error',
-      text: 'Please enter a valid Server URL'
+      text: t('mcp.local.run.validServer')
     });
     return;
   }
   
   setIsRunning(true);
-  setConsoleTitle('Test Server Connection');
-  setConsoleOutput('Testing server connection...\n');
+  setConsoleTitle(t('mcp.local.console.testTitle'));
+  setConsoleOutput(`${t('mcp.local.messages.testing')}\n`);
   setIsConsoleVisible(true);
   setMessage({
     type: 'success',
-    text: 'Testing server connection...'
+    text: t('mcp.local.messages.testing')
   });
 
   // Forward live probe output (server stderr + lifecycle markers) to the console as it
@@ -623,14 +635,14 @@ export const handleRun = async (
   // custom headers, so a browser-side fetch fails with an opaque "Failed to fetch".
   if (localConfig.transport === 'sse' || localConfig.transport === 'streamable') {
     try {
-      setConsoleOutput((prev: string) => prev + `Attempting to connect (via FLUJO backend) to: ${serverUrl}\n`);
+      setConsoleOutput((prev: string) => prev + `${t('mcp.local.console.attempting', { url: serverUrl })}\n`);
 
       // Build the config to test from the current form state (serverUrl may be newer than
       // what is stored on localConfig). Custom headers already live on localConfig.
       const testConfig = { ...localConfig, serverUrl } as MCPServerConfig;
       const headerCount = Object.keys((localConfig as MCPStreamableConfig | MCPSSEConfig).headers || {}).length;
       if (headerCount > 0) {
-        setConsoleOutput((prev: string) => prev + `Sending ${headerCount} custom header(s).\n`);
+        setConsoleOutput((prev: string) => prev + `${t('mcp.local.console.headerCount', { count: headerCount })}\n`);
       }
 
       const testResult = await mcpService.testConnectionStreaming(testConfig, onStreamEvent, storedName);
@@ -640,16 +652,18 @@ export const handleRun = async (
         const toolCount = testResult.data?.toolCount;
         setMessage({
           type: 'success',
-          text: 'Connection test successful! Server is reachable.'
+          text: t('mcp.local.messages.testSuccessReachable')
         });
-        setConsoleOutput((prev: string) => prev +
-          `Connection test result: MCP handshake successful${typeof toolCount === 'number' ? ` (${toolCount} tool${toolCount === 1 ? '' : 's'} discovered)` : ''}\n`);
-        setConsoleOutput((prev: string) => prev + '\n✅ Server connection test passed!\n');
+        setConsoleOutput((prev: string) => prev + `${t('mcp.local.console.handshake')}\n`);
+        if (typeof toolCount === 'number') {
+          setConsoleOutput((prev: string) => prev + `${t('mcp.local.console.toolsFound', { count: toolCount })}\n`);
+        }
+        setConsoleOutput((prev: string) => prev + `\n✅ ${t('mcp.local.console.passed')}\n`);
       } else if (testResult.requiresAuthentication) {
         // Reachable, but needs auth — surface as actionable info rather than a hard failure.
-        setConsoleOutput((prev: string) => prev + `Connection test result: authentication required\n`);
+        setConsoleOutput((prev: string) => prev + `${t('mcp.local.console.authRequired')}\n`);
         if (testResult.error) {
-          setConsoleOutput((prev: string) => prev + `Details: ${testResult.error}\n`);
+          setConsoleOutput((prev: string) => prev + `${t('mcp.local.console.details', { details: testResult.error ?? '' })}\n`);
         }
 
         // OAuth-capable (RFC 9728) streamable servers get an in-modal "Save & Authenticate"
@@ -658,31 +672,31 @@ export const handleRun = async (
           setOauthCapable?.(true);
           setMessage({
             type: 'warning',
-            text: 'Server reachable — it uses OAuth. Click "Save & Authenticate" to sign in.'
+            text: t('mcp.local.messages.oauthReachable')
           });
-          setConsoleOutput((prev: string) => prev + '\n🔑 Server uses OAuth. Click "Save & Authenticate" to complete sign-in.\n');
+          setConsoleOutput((prev: string) => prev + `\n🔑 ${t('mcp.local.console.oauthAction')}\n`);
         } else {
           setMessage({
             type: 'warning',
-            text: 'Server reachable but requires authentication.'
+            text: t('mcp.local.messages.authReachable')
           });
-          setConsoleOutput((prev: string) => prev + '\n⚠️ Server requires authentication. Add the required headers (e.g. Authorization) and test again.\n');
+          setConsoleOutput((prev: string) => prev + `\n⚠️ ${t('mcp.local.console.authHeaders')}\n`);
         }
       } else {
         setMessage({
           type: 'error',
-          text: 'Connection test failed. Check the console for details.'
+          text: t('mcp.local.messages.testFailed')
         });
-        setConsoleOutput((prev: string) => prev + `Connection test result: Connection failed\n`);
-        setConsoleOutput((prev: string) => prev + `Details: ${testResult.error || 'Unknown error'}\n`);
-        setConsoleOutput((prev: string) => prev + '\n❌ Server connection test failed.\n');
+        setConsoleOutput((prev: string) => prev + `${t('mcp.local.console.failed')}\n`);
+        setConsoleOutput((prev: string) => prev + `${t('mcp.local.console.details', { details: testResult.error || t('mcp.server.unknownError') })}\n`);
+        setConsoleOutput((prev: string) => prev + `\n❌ ${t('mcp.local.messages.testFailed')}\n`);
       }
     } catch (error) {
       console.error('Error testing connection:', error);
-      setConsoleOutput((prev: string) => prev + `\nError during connection test: ${(error as Error).message}\n`);
+      setConsoleOutput((prev: string) => prev + `\n${t('mcp.local.console.testError', { error: (error as Error).message || t('mcp.server.unknownError') })}\n`);
       setMessage({
         type: 'error',
-        text: 'Connection test failed with an error.'
+        text: t('mcp.local.messages.testError')
       });
     } finally {
       setIsRunning(false);
@@ -697,7 +711,7 @@ export const handleRun = async (
   // custom headers, so its result could diverge from real usage.
   if (localConfig.transport === 'websocket') {
     try {
-      setConsoleOutput((prev: string) => prev + `Attempting to connect (via FLUJO backend) to: ${websocketUrl}\n`);
+      setConsoleOutput((prev: string) => prev + `${t('mcp.local.console.attempting', { url: websocketUrl })}\n`);
 
       // websocketUrl from form state may be newer than what's on localConfig.
       const testConfig = { ...localConfig, websocketUrl } as MCPServerConfig;
@@ -708,36 +722,38 @@ export const handleRun = async (
         const toolCount = testResult.data?.toolCount;
         setMessage({
           type: 'success',
-          text: 'Connection test successful! Server completed the MCP handshake.'
+          text: t('mcp.local.messages.testSuccessHandshake')
         });
-        setConsoleOutput((prev: string) => prev +
-          `Connection test result: MCP handshake successful${typeof toolCount === 'number' ? ` (${toolCount} tool${toolCount === 1 ? '' : 's'} discovered)` : ''}\n`);
-        setConsoleOutput((prev: string) => prev + '\n✅ Server connection test passed!\n');
+        setConsoleOutput((prev: string) => prev + `${t('mcp.local.console.handshake')}\n`);
+        if (typeof toolCount === 'number') {
+          setConsoleOutput((prev: string) => prev + `${t('mcp.local.console.toolsFound', { count: toolCount })}\n`);
+        }
+        setConsoleOutput((prev: string) => prev + `\n✅ ${t('mcp.local.console.passed')}\n`);
       } else if (testResult.requiresAuthentication) {
         setMessage({
           type: 'warning',
-          text: 'Server reachable but requires authentication.'
+          text: t('mcp.local.messages.authReachable')
         });
-        setConsoleOutput((prev: string) => prev + `Connection test result: authentication required\n`);
+        setConsoleOutput((prev: string) => prev + `${t('mcp.local.console.authRequired')}\n`);
         if (testResult.error) {
-          setConsoleOutput((prev: string) => prev + `Details: ${testResult.error}\n`);
+          setConsoleOutput((prev: string) => prev + `${t('mcp.local.console.details', { details: testResult.error ?? '' })}\n`);
         }
-        setConsoleOutput((prev: string) => prev + '\n⚠️ Server requires authentication. Add the required credentials and test again.\n');
+        setConsoleOutput((prev: string) => prev + `\n⚠️ ${t('mcp.local.console.authCredentials')}\n`);
       } else {
         setMessage({
           type: 'error',
-          text: 'Connection test failed. Check the console for details.'
+          text: t('mcp.local.messages.testFailed')
         });
-        setConsoleOutput((prev: string) => prev + `Connection test result: Connection failed\n`);
-        setConsoleOutput((prev: string) => prev + `Details: ${testResult.error || 'Unknown error'}\n`);
-        setConsoleOutput((prev: string) => prev + '\n❌ Server connection test failed.\n');
+        setConsoleOutput((prev: string) => prev + `${t('mcp.local.console.failed')}\n`);
+        setConsoleOutput((prev: string) => prev + `${t('mcp.local.console.details', { details: testResult.error || t('mcp.server.unknownError') })}\n`);
+        setConsoleOutput((prev: string) => prev + `\n❌ ${t('mcp.local.messages.testFailed')}\n`);
       }
     } catch (error) {
       console.error('Error testing WebSocket connection:', error);
-      setConsoleOutput((prev: string) => prev + `\nError during connection test: ${(error as Error).message}\n`);
+      setConsoleOutput((prev: string) => prev + `\n${t('mcp.local.console.testError', { error: (error as Error).message || t('mcp.server.unknownError') })}\n`);
       setMessage({
         type: 'error',
-        text: 'Connection test failed with an error.'
+        text: t('mcp.local.messages.testError')
       });
     } finally {
       setIsRunning(false);
@@ -756,7 +772,7 @@ export const handleRun = async (
     if (isStdioConfig(localConfig)) {
       const argString = (localConfig.args || []).join(' ');
       setConsoleOutput((prev: string) => prev +
-        `Launching (via FLUJO backend): ${localConfig.command}${argString ? ' ' + argString : ''}\n`);
+        `${t('mcp.local.console.launching', { command: `${localConfig.command}${argString ? ' ' + argString : ''}` })}\n`);
 
       // Package-runner commands (npx/uvx/bunx/pnpm dlx) may have to download the package
       // on first run, so the backend allows a longer handshake window (issue #43). Tell
@@ -764,8 +780,7 @@ export const handleRun = async (
       if (isRunnerStdioConfig(localConfig)) {
         const timeoutSeconds = Math.round(getTestConnectionTimeoutMs(localConfig) / 1000);
         setConsoleOutput((prev: string) => prev +
-          `This looks like a package-runner command (npx/uvx). The first run may need to download the package, ` +
-          `so the test waits up to ${timeoutSeconds}s before timing out — please wait...\n`);
+          `${t('mcp.local.console.runnerWait', { seconds: timeoutSeconds })}\n`);
       }
     }
 
@@ -776,36 +791,38 @@ export const handleRun = async (
       const toolCount = testResult.data?.toolCount;
       setMessage({
         type: 'success',
-        text: 'Connection test successful! Server started and completed the MCP handshake.'
+        text: t('mcp.local.messages.testSuccessStarted')
       });
-      setConsoleOutput((prev: string) => prev +
-        `Connection test result: MCP handshake successful${typeof toolCount === 'number' ? ` (${toolCount} tool${toolCount === 1 ? '' : 's'} discovered)` : ''}\n`);
-      setConsoleOutput((prev: string) => prev + '\n✅ Server connection test passed!\n');
+      setConsoleOutput((prev: string) => prev + `${t('mcp.local.console.handshake')}\n`);
+      if (typeof toolCount === 'number') {
+        setConsoleOutput((prev: string) => prev + `${t('mcp.local.console.toolsFound', { count: toolCount })}\n`);
+      }
+      setConsoleOutput((prev: string) => prev + `\n✅ ${t('mcp.local.console.passed')}\n`);
     } else if (testResult.requiresAuthentication) {
       setMessage({
         type: 'warning',
-        text: 'Server started but requires authentication.'
+        text: t('mcp.local.messages.authStarted')
       });
-      setConsoleOutput((prev: string) => prev + `Connection test result: authentication required\n`);
+      setConsoleOutput((prev: string) => prev + `${t('mcp.local.console.authRequired')}\n`);
       if (testResult.error) {
-        setConsoleOutput((prev: string) => prev + `Details: ${testResult.error}\n`);
+        setConsoleOutput((prev: string) => prev + `${t('mcp.local.console.details', { details: testResult.error ?? '' })}\n`);
       }
-      setConsoleOutput((prev: string) => prev + '\n⚠️ Server requires authentication. Add the required credentials (env/headers) and test again.\n');
+      setConsoleOutput((prev: string) => prev + `\n⚠️ ${t('mcp.local.console.authEnvHeaders')}\n`);
     } else {
       setMessage({
         type: 'error',
-        text: 'Connection test failed. Check the console for details.'
+        text: t('mcp.local.messages.testFailed')
       });
-      setConsoleOutput((prev: string) => prev + `Connection test result: Connection failed\n`);
-      setConsoleOutput((prev: string) => prev + `Details: ${testResult.error || 'Unknown error'}\n`);
-      setConsoleOutput((prev: string) => prev + '\n❌ Server connection test failed.\n');
+      setConsoleOutput((prev: string) => prev + `${t('mcp.local.console.failed')}\n`);
+      setConsoleOutput((prev: string) => prev + `${t('mcp.local.console.details', { details: testResult.error || t('mcp.server.unknownError') })}\n`);
+      setConsoleOutput((prev: string) => prev + `\n❌ ${t('mcp.local.messages.testFailed')}\n`);
     }
   } catch (error) {
     console.error('Error testing stdio connection:', error);
-    setConsoleOutput((prev: string) => prev + `\nError during connection test: ${(error as Error).message}\n`);
+    setConsoleOutput((prev: string) => prev + `\n${t('mcp.local.console.testError', { error: (error as Error).message || t('mcp.server.unknownError') })}\n`);
     setMessage({
       type: 'error',
-      text: 'Connection test failed with an error.'
+      text: t('mcp.local.messages.testError')
     });
   } finally {
     setIsRunning(false);

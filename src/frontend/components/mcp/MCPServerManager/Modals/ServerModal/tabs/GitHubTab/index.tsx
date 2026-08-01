@@ -13,6 +13,7 @@ import { MCPServerState } from '@/shared/types';
 import { MCPServerConfig, parseServerConfig } from '@/utils/mcp'; // Import parseServerConfig
 import path from 'path';
 import { Box, Paper, Stack, Typography } from '@mui/material';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const GitHubTab: React.FC<TabProps> = ({
   initialConfig,
@@ -22,6 +23,7 @@ const GitHubTab: React.FC<TabProps> = ({
   setActiveTab,
   initialGitHubUrl
 }) => {
+  const { t } = useI18n();
   // Prefilled when arriving from the marketplace's "Try manual installation" handoff
   const [githubUrl, setGithubUrl] = useState<string>(initialGitHubUrl || '');
   const [repoInfo, setRepoInfo] = useState<RepoInfo | null>(null);
@@ -62,7 +64,7 @@ const GitHubTab: React.FC<TabProps> = ({
     setMessage(null);
     setRepoExists(false);
     
-    const result = await validateGitHubUrl(githubUrl);
+    const result = await validateGitHubUrl(githubUrl, t);
     
     setRepoInfo(result.repoInfo);
     setMessage(result.message);
@@ -128,7 +130,7 @@ const GitHubTab: React.FC<TabProps> = ({
         setRepoExists(true);
         setMessage({
           type: 'warning',
-          text: `Repository already exists at ${repoPath}. You can re-clone to get the latest version.`
+          text: t('mcp.github.exists', { path: repoPath })
         });
       } else {
         setRepoExists(false);
@@ -145,12 +147,12 @@ const GitHubTab: React.FC<TabProps> = ({
     setIsCloning(true);
     setMessage({
       type: 'success',
-      text: forceClone ? 'Re-cloning repository...' : 'Cloning repository...'
+      text: forceClone ? t('mcp.github.recloning') : t('mcp.github.cloning')
     });
     
     try {
       // Clone the repository
-      const cloneResult = await cloneRepository(githubUrl, repoInfo, savePath, forceClone);
+      const cloneResult = await cloneRepository(githubUrl, repoInfo, savePath, forceClone, t);
       
       if (!cloneResult.success || !cloneResult.clonedRepoPath) {
         setMessage(cloneResult.message);
@@ -173,7 +175,8 @@ const GitHubTab: React.FC<TabProps> = ({
       const detectionResult = await detectRepositoryConfig(
         repoPath,
         repoInfo.repo,
-        repoInfo.owner
+        repoInfo.owner,
+        t
       );
       
       // Update message with detection result
@@ -252,19 +255,19 @@ const GitHubTab: React.FC<TabProps> = ({
             };
             
             // Update message based on README parsing result - use 'warning' if only partially extracted
-            finalMessage = readmeParseResult.message || { type: 'warning', text: 'Configuration partially extracted from README.md. Please review.' };
+            finalMessage = { type: 'warning', text: t('mcp.github.partialReadme') };
             
           } else {
             console.log('GitHubTab: Failed to read or parse README.md. Using default config.');
             // Failed to read README, use the default config and original warning
             finalConfig = defaultConfig;
-            finalMessage = createEmptyConfigWarningMessage(detectionResult.language);
+            finalMessage = createEmptyConfigWarningMessage(detectionResult.language, t);
           }
         } catch (readmeError) {
           console.error('GitHubTab: Error reading or parsing README.md:', readmeError);
           // Error during README processing, use default config and show error
           finalConfig = defaultConfig;
-          finalMessage = { type: 'error', text: `Error processing README.md: ${readmeError instanceof Error ? readmeError.message : 'Unknown error'}` };
+          finalMessage = { type: 'error', text: t('mcp.github.readmeError', { error: readmeError instanceof Error ? readmeError.message : t('mcp.server.unknownError') }) };
         }
       }
       
@@ -295,7 +298,7 @@ const GitHubTab: React.FC<TabProps> = ({
       console.error('Error during repository cloning or configuration detection:', error);
       setMessage({
         type: 'error',
-        text: `Error processing repository: ${error instanceof Error ? error.message : 'Unknown error'}`
+        text: t('mcp.github.repositoryError', { error: error instanceof Error ? error.message : t('mcp.server.unknownError') })
       });
     } finally {
       setIsCloning(false);
@@ -306,7 +309,7 @@ const GitHubTab: React.FC<TabProps> = ({
     <Paper elevation={0} sx={{ p: 0 }}>
       <Stack spacing={3}>
         <Typography variant="h6" gutterBottom>
-          Import from GitHub or MCP Platform
+          {t('mcp.github.title')}
         </Typography>
         <GitHubForm
           githubUrl={githubUrl}

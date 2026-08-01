@@ -60,6 +60,7 @@ import McpAppFrame from './McpAppFrame'; // #97: read-only, sandboxed MCP App (u
 import { createLogger } from '@/utils/logger'; // Import the logger
 import type { McpAppModelContext } from '@/shared/types/chat';
 import { mediaDataUrl, type ModelMediaPart } from '@/shared/types/model/media';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/Chat/ChatMessages'); // Initialize logger
 
@@ -279,8 +280,9 @@ const MARKDOWN_COMPONENTS: Components = {
   }
 };
 
-const MessageMediaView: React.FC<{ media: ModelMediaPart[] }> = ({ media }) => (
-  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mt: 1 }}>
+const MessageMediaView: React.FC<{ media: ModelMediaPart[] }> = ({ media }) => {
+  const { t } = useI18n();
+  return <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mt: 1 }}>
     {media.map((part, index) => {
       const src = mediaDataUrl(part);
       const key = part.resourceUri ?? part.url ?? `${part.type}-${index}`;
@@ -291,7 +293,7 @@ const MessageMediaView: React.FC<{ media: ModelMediaPart[] }> = ({ media }) => (
             key={key}
             component="img"
             src={src}
-            alt={part.name ?? `Generated image ${index + 1}`}
+            alt={part.name ?? t('chat.messages.generatedImage', { number: index + 1 })}
             sx={{ maxWidth: '100%', height: 'auto', borderRadius: 1 }}
           />
         );
@@ -332,12 +334,12 @@ const MessageMediaView: React.FC<{ media: ModelMediaPart[] }> = ({ media }) => (
           startIcon={<AttachFileIcon />}
           sx={{ alignSelf: 'flex-start' }}
         >
-          {part.name ?? 'Download generated file'}
+          {part.name ?? t('chat.messages.downloadFile')}
         </Button>
       );
     })}
-  </Box>
-);
+  </Box>;
+};
 
 /**
  * Renders a tool result body — either the raw string or the "rendered" view
@@ -503,6 +505,7 @@ const ToolCallTimeline: React.FC<{
   onRegisterAppTeardown,
   onOpenInCanvas,
 }) => {
+  const { t, tp } = useI18n();
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [rawByKey, setRawByKey] = useState<Record<string, boolean>>({});
   const keyFor = (pair: ToolCallPair<ChatMessage>, index: number) =>
@@ -513,7 +516,7 @@ const ToolCallTimeline: React.FC<{
       <Box sx={{ display: 'flex', alignItems: 'center', color: 'primary.main', mb: 1 }}>
         <HandymanIcon fontSize="small" sx={{ mr: 1 }} />
         <Typography variant="body2">
-          {pairs.length === 1 ? 'The agent used a tool' : `The agent used ${pairs.length} tools`}
+          {tp('chat.messages.toolUsed', pairs.length)}
         </Typography>
       </Box>
 
@@ -528,7 +531,7 @@ const ToolCallTimeline: React.FC<{
               {index > 0 && (
                 <Box sx={{ width: 14, height: '2px', bgcolor: 'divider', flexShrink: 0 }} />
               )}
-              <Tooltip title={isOpen ? 'Hide call & result' : 'Show call & result'}>
+              <Tooltip title={isOpen ? t('chat.messages.hideTool') : t('chat.messages.showTool')}>
                 <Chip
                   icon={toolCallStatusIcon(status)}
                   label={displayToolName(pair.toolCall.function.name)}
@@ -575,7 +578,7 @@ const ToolCallTimeline: React.FC<{
               {/* Call parameters */}
               <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
                 <HandymanIcon fontSize="small" sx={{ mr: 0.5, color: 'primary.main' }} />
-                <Typography variant="caption" sx={{ fontWeight: 'bold' }}>Parameters</Typography>
+                <Typography variant="caption" sx={{ fontWeight: 'bold' }}>{t('chat.messages.parameters')}</Typography>
                 <Chip
                   label={`ID: ${pair.toolCall.id ? pair.toolCall.id.substring(0, 8) : 'N/A'}...`}
                   size="small" color="default" variant="outlined"
@@ -596,14 +599,14 @@ const ToolCallTimeline: React.FC<{
                   onClick={openInToolTester}
                   sx={{ mt: 0.5 }}
                 >
-                  Execute in Tool Tester
+                  {t('chat.messages.toolTester')}
                 </Button>
               )}
 
               {/* Matching result (or a pending placeholder) */}
               <Box sx={{ display: 'flex', alignItems: 'center', mt: 1, mb: 0.5 }}>
                 <TerminalIcon fontSize="small" sx={{ mr: 0.5, color: 'text.secondary' }} />
-                <Typography variant="caption" sx={{ fontWeight: 'bold' }}>Result</Typography>
+                <Typography variant="caption" sx={{ fontWeight: 'bold' }}>{t('chat.messages.result')}</Typography>
                 {pair.result && (
                   <FormControlLabel
                     control={
@@ -613,7 +616,7 @@ const ToolCallTimeline: React.FC<{
                         onChange={(e) => setRawByKey((prev) => ({ ...prev, [key]: e.target.checked }))}
                       />
                     }
-                    label="Raw"
+                    label={t('chat.messages.raw')}
                     sx={{ ml: 'auto', mr: 0, '& .MuiTypography-root': { fontSize: '0.75rem' } }}
                   />
                 )}
@@ -627,7 +630,7 @@ const ToolCallTimeline: React.FC<{
                   color="text.secondary"
                   sx={{ display: 'flex', alignItems: 'center', gap: 1 }}
                 >
-                  <CircularProgress size={14} thickness={6} /> Waiting for the tool to respond…
+                   <CircularProgress size={14} thickness={6} /> {t('chat.messages.waitingTool')}
                 </Typography>
               )}
 
@@ -731,6 +734,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
   onMenuOpen,
   onToggleRaw,
 }) {
+  const { t, formatDate: formatLocalizedDate, formatNumber } = useI18n();
   // Subflow steps (depth > 0) render nested: indented per level, marked with a
   // guide line + chip. They are display-only (never sent back as history).
   const depth = message.depth ?? 0;
@@ -752,18 +756,20 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
         <Typography variant="caption" color="text.secondary" sx={{ mr: 1 }}>
           {message.role === 'user'
-            ? 'You'
+            ? t('chat.messages.you')
             : message.role === 'assistant'
-              ? 'Agent'
+              ? t('chat.messages.agent')
               : message.role === 'tool'
-                ? 'Tool'
-                : 'System'} • {formatTime(message.timestamp)}
+                ? t('chat.messages.tool')
+                : t('chat.messages.system')} • {typeof message.timestamp === 'number' && !Number.isNaN(message.timestamp)
+                  ? formatLocalizedDate(message.timestamp, { hour: '2-digit', minute: '2-digit' })
+                  : t('chat.messages.invalidDate')}
         </Typography>
 
         {message.processNodeId && (
-          <Tooltip title={`${nodeLabel ? `${nodeLabel} — ` : ''}Process Node ID: ${message.processNodeId}`}>
+          <Tooltip title={`${nodeLabel ? `${nodeLabel} — ` : ''}${t('chat.messages.processId', { id: message.processNodeId })}`}>
             <Chip
-              label={`Node: ${nodeLabel || `${message.processNodeId.substring(0, 6)}...`}`}
+              label={t('chat.messages.node', { node: nodeLabel || `${message.processNodeId.substring(0, 6)}...` })}
               size="small"
               color="primary"
               variant="outlined"
@@ -773,9 +779,9 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
         )}
 
         {depth > 0 && (
-          <Tooltip title={`Nested subflow step (depth ${depth})`}>
+          <Tooltip title={t('chat.messages.nested', { depth })}>
             <Chip
-              label="Subflow step"
+              label={t('chat.messages.subflowStep')}
               size="small"
               color="secondary"
               variant="outlined"
@@ -786,7 +792,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
 
         {message.disabled && (
           <Chip
-            label="Disabled"
+            label={t('chat.messages.disabled')}
             size="small"
             color="default"
             variant="outlined"
@@ -795,7 +801,10 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
         )}
 
         {message.usage && (
-          <Tooltip title={`${message.usage.promptTokens.toLocaleString()} prompt + ${message.usage.completionTokens.toLocaleString()} completion tokens (provider-reported)`}>
+          <Tooltip title={t('chat.messages.tokenUsage', {
+            prompt: formatNumber(message.usage.promptTokens),
+            completion: formatNumber(message.usage.completionTokens),
+          })}>
             <Chip
               label={`${formatTokenCount(message.usage.totalTokens)} tok`}
               size="small"
@@ -878,7 +887,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
                       <img
                         key={partIndex}
                         src={part.image_url.url}
-                        alt={`Image ${partIndex + 1}`}
+                        alt={t('chat.messages.generatedImage', { number: partIndex + 1 })}
                         style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px' }}
                       />
                     );
@@ -903,7 +912,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
             {/* Fallback for non-string, non-array content (e.g., assistant message with only tool calls) */}
             {message.role !== 'tool' && typeof message.content !== 'string' && !Array.isArray(message.content) && !hasToolCalls(message) && !message.media?.length && (
                <Typography variant="body2" fontStyle="italic" color="text.secondary">
-                 [No text content]
+                  {t('chat.messages.noText')}
                </Typography>
             )}
           </>
@@ -931,7 +940,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
                   variant="outlined"
                   color="secondary"
                   icon={<ArrowRightAltIcon fontSize="small" />}
-                  label={`Handoff → ${handoffTargetLabel(toolCall.function.name, availableNodes)}`}
+                  label={t('chat.messages.handoff', { target: handoffTargetLabel(toolCall.function.name, availableNodes) })}
                   sx={{ maxWidth: '100%', fontWeight: 500 }}
                 />
               ))}
@@ -962,7 +971,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
           <Box>
             <Typography variant="body2" sx={{ display: 'flex', alignItems: 'center', color: 'text.secondary', mb: 1 }}>
               <TerminalIcon fontSize="small" sx={{ mr: 1 }} />
-              The tool responded to the agent
+               {t('chat.messages.toolResponded')}
             </Typography>
 
             <Accordion
@@ -972,7 +981,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
               <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                 <Box sx={{ display: 'flex', alignItems: 'center' }}>
                   <TerminalIcon fontSize="small" sx={{ mr: 1, color: 'text.secondary' }} />
-                  <Typography variant="subtitle2">Tool Result</Typography>
+                   <Typography variant="subtitle2">{t('chat.messages.toolResult')}</Typography>
                   <Chip
                     label={`ID: ${message.tool_call_id.substring(0, 8)}...`}
                     size="small" color="default" variant="outlined"
@@ -988,7 +997,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
                         onClick={(e) => e.stopPropagation()} // Prevent accordion toggle on switch click
                       />
                     }
-                    label="Raw"
+                    label={t('chat.messages.raw')}
                     sx={{ mr: 1, ml: 'auto', '& .MuiTypography-root': { fontSize: '0.75rem' } }}
                     onClick={(e) => e.stopPropagation()} // Prevent accordion toggle on label click
                   />
@@ -1006,7 +1015,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
         {message.attachments && message.attachments.length > 0 && (
           <Box sx={{ mt: 1, pt: 1, borderTop: '1px solid', borderColor: 'divider' }}>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
-              Attachments:
+              {t('chat.messages.attachments')}
             </Typography>
 
             {message.attachments.map((attachment) => (
@@ -1014,7 +1023,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
                 <Box key={attachment.id} sx={{ mb: 0.5 }}>
                   <img
                     src={attachment.content}
-                    alt={attachment.originalName || 'image attachment'}
+                    alt={attachment.originalName || t('chat.messages.imageAttachment')}
                     style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px' }}
                   />
                 </Box>
@@ -1030,7 +1039,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
                   )}
                   {/* Ensure attachment names wrap */}
                   <Typography variant="caption" sx={{ wordBreak: 'break-all' }}>
-                    {attachment.originalName || `${attachment.type} attachment`}
+                    {attachment.originalName || t('chat.input.attachment', { type: attachment.type })}
                   </Typography>
                 </Box>
               )
@@ -1066,6 +1075,7 @@ interface ElicitationFormCardProps {
 }
 
 const ElicitationFormCard: React.FC<ElicitationFormCardProps> = ({ elicitation, onSubmit, onCancel }) => {
+  const { t } = useI18n();
   const { elicitationId, message, requestedSchema } = elicitation;
   const schemaProps = (requestedSchema?.properties ?? {}) as Record<string, FieldSchema>;
   const fieldNames = Object.keys(schemaProps);
@@ -1101,7 +1111,7 @@ const ElicitationFormCard: React.FC<ElicitationFormCardProps> = ({ elicitation, 
       elevation={2}
       sx={{ p: 2, mt: 2, bgcolor: 'info.light', border: '1px solid', borderColor: 'info.main', borderRadius: 2 }}
     >
-      <Typography variant="h6" sx={{ mb: 1 }}>Server needs more information</Typography>
+      <Typography variant="h6" sx={{ mb: 1 }}>{t('chat.elicitation.title')}</Typography>
       <Typography variant="body2" sx={{ mb: 2 }}>{message}</Typography>
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
         {fieldNames.map((key) => {
@@ -1175,10 +1185,10 @@ const ElicitationFormCard: React.FC<ElicitationFormCardProps> = ({ elicitation, 
       </Box>
       <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, mt: 2 }}>
         <Button variant="outlined" color="inherit" size="small" onClick={handleCancel} disabled={!onCancel}>
-          Cancel
+          {t('common.cancel')}
         </Button>
         <Button variant="contained" color="primary" size="small" onClick={handleSubmit} disabled={!onSubmit}>
-          Submit
+          {t('chat.elicitation.submit')}
         </Button>
       </Box>
     </Paper>
@@ -1198,6 +1208,7 @@ interface QuestionCardProps {
 const CUSTOM_OPTION_LABEL = 'Type your own answer';
 
 const QuestionCard: React.FC<QuestionCardProps> = ({ question, onAnswer, onDecline }) => {
+  const { t } = useI18n();
   const { questionId, questions } = question;
   // Per-question selected option labels + free-text value for the custom option.
   const [selected, setSelected] = useState<string[][]>(() => questions.map(() => []));
@@ -1248,7 +1259,7 @@ const QuestionCard: React.FC<QuestionCardProps> = ({ question, onAnswer, onDecli
       elevation={2}
       sx={{ p: 2, mt: 2, bgcolor: 'info.light', border: '1px solid', borderColor: 'info.main', borderRadius: 2 }}
     >
-      <Typography variant="h6" sx={{ mb: 1 }}>The agent is asking</Typography>
+      <Typography variant="h6" sx={{ mb: 1 }}>{t('chat.question.title')}</Typography>
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
         {questions.map((q, qi) => (
           <FormControl key={qi} component="fieldset" sx={{ display: 'flex' }}>
@@ -1265,7 +1276,7 @@ const QuestionCard: React.FC<QuestionCardProps> = ({ question, onAnswer, onDecli
                         onChange={() => toggleMulti(qi, opt)}
                       />
                     }
-                    label={opt}
+                    label={isCustom(opt) ? t('chat.question.custom') : opt}
                   />
                 ))}
               </Box>
@@ -1275,7 +1286,7 @@ const QuestionCard: React.FC<QuestionCardProps> = ({ question, onAnswer, onDecli
                 onChange={(e) => setSingle(qi, e.target.value)}
               >
                 {q.options.map((opt) => (
-                  <FormControlLabel key={opt} value={opt} control={<Radio size="small" />} label={opt} />
+                  <FormControlLabel key={opt} value={opt} control={<Radio size="small" />} label={isCustom(opt) ? t('chat.question.custom') : opt} />
                 ))}
               </RadioGroup>
             )}
@@ -1283,7 +1294,7 @@ const QuestionCard: React.FC<QuestionCardProps> = ({ question, onAnswer, onDecli
               <TextField
                 size="small"
                 sx={{ mt: 1 }}
-                placeholder="Your answer…"
+                placeholder={t('chat.question.placeholder')}
                 value={customText[qi]}
                 onChange={(e) =>
                   setCustomText((prev) => {
@@ -1299,10 +1310,10 @@ const QuestionCard: React.FC<QuestionCardProps> = ({ question, onAnswer, onDecli
       </Box>
       <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, mt: 2 }}>
         <Button variant="outlined" color="inherit" size="small" onClick={handleDecline} disabled={!onDecline}>
-          Decline
+          {t('chat.question.decline')}
         </Button>
         <Button variant="contained" color="primary" size="small" onClick={handleSubmit} disabled={!onAnswer || !canSubmit}>
-          Answer
+          {t('chat.question.answer')}
         </Button>
       </Box>
     </Paper>
@@ -1336,6 +1347,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   queuedMessages = [], // #221: inline pending bubbles
   queueHoldReason = null,
 }) => {
+  const { t, tp } = useI18n();
   // Issue #247: per-tool-call rejection feedback text (keyed by tool-call id),
   // so the user can tell the model *why* a call was rejected / what to do instead.
   const [rejectFeedback, setRejectFeedback] = useState<Record<string, string>>({});
@@ -1482,7 +1494,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
             variant="outlined"
             onClick={() => setVisibleCount(count => count + MESSAGES_WINDOW_STEP)}
           >
-            Show earlier messages ({hiddenCount} more)
+            {t('chat.messages.earlier', { count: hiddenCount })}
           </Button>
         </Box>
       )}
@@ -1564,12 +1576,12 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
             }}
           >
             <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-              {q.content || (q.attachments.length > 0 ? `${q.attachments.length} attachment(s)` : '')}
+              {q.content || (q.attachments.length > 0 ? tp('chat.messages.attachment', q.attachments.length) : '')}
             </Typography>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, justifyContent: 'flex-end' }}>
               {!queueHoldReason && <CircularProgress size={10} color="inherit" />}
               <Typography variant="caption" sx={{ opacity: 0.85 }}>
-                {queueHoldReason ?? 'Queued'}
+                {queueHoldReason ?? t('chat.messages.queued')}
               </Typography>
             </Box>
           </Box>
@@ -1598,7 +1610,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
               return (
                 <MenuItem onClick={handleStartEditing}>
                   <ListItemIcon><EditIcon fontSize="small" /></ListItemIcon>
-                  <ListItemText>Edit Message</ListItemText>
+                   <ListItemText>{t('chat.actions.edit')}</ListItemText>
                 </MenuItem>
               );
             }
@@ -1614,17 +1626,17 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
           <ListItemIcon><BlockIcon fontSize="small" /></ListItemIcon>
           <ListItemText>
             {/* Use activeMsgForMenu here as well for consistency */}
-            {activeMsgForMenu?.disabled ? 'Enable Message' : 'Disable Message'}
+            {activeMsgForMenu?.disabled ? t('chat.actions.enable') : t('chat.actions.disable')}
           </ListItemText>
         </MenuItem>
         <MenuItem onClick={handleSplitConversation}>
           <ListItemIcon><CallSplitIcon fontSize="small" /></ListItemIcon>
-          <ListItemText>Split Conversation Here</ListItemText>
+          <ListItemText>{t('chat.actions.split')}</ListItemText>
         </MenuItem>
         {FEATURES.ENABLE_REVERT_TO_HERE && activeMsgForMenu?.changedFiles?.length ? (
           <MenuItem onClick={handleRevertToHere}>
             <ListItemIcon><RestoreIcon fontSize="small" /></ListItemIcon>
-            <ListItemText>Revert to here</ListItemText>
+            <ListItemText>{t('chat.actions.revert')}</ListItemText>
           </MenuItem>
         ) : null}
       </Menu>
@@ -1665,10 +1677,10 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
           sx={{ p: 2, mt: 2, bgcolor: 'warning.light', border: '1px solid', borderColor: 'warning.main', borderRadius: 2 }}
         >
           <Typography variant="h6" sx={{ mb: 1, display: 'flex', alignItems: 'center' }}>
-            <HandymanIcon sx={{ mr: 1 }} /> Tool Approval Required
+            <HandymanIcon sx={{ mr: 1 }} /> {t('chat.approval.title')}
           </Typography>
           <Typography variant="body2" sx={{ mb: 2 }}>
-            The agent wants to use the following tool(s). Please approve or reject each request.
+            {t('chat.approval.help')}
           </Typography>
           {pendingToolCalls.map((toolCall, ptcIndex) => { // Added index for key
             const toolName = displayToolName(toolCall.function.name);
@@ -1707,8 +1719,8 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
                   </Box>
                   {/* Issue #247: optional reason carried back to the model on reject. */}
                   <TextField
-                    label="Rejection reason (optional)"
-                    placeholder="e.g. write to dist/ instead"
+                    label={t('chat.approval.reason')}
+                    placeholder={t('chat.approval.reasonPlaceholder')}
                     value={rejectFeedback[toolCall.id] ?? ''}
                     onChange={(e) => setRejectFeedback(prev => ({ ...prev, [toolCall.id]: e.target.value }))}
                     multiline minRows={1} maxRows={4} fullWidth size="small"
@@ -1720,30 +1732,30 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
                       onClick={() => onRejectToolCall && onRejectToolCall(toolCall.id, false, rejectFeedback[toolCall.id]?.trim() || undefined)}
                       disabled={!onRejectToolCall}
                     >
-                      Reject
+                      {t('chat.approval.reject')}
                     </Button>
                     <Button
                       variant="outlined" color="error" size="small"
                       onClick={() => onRejectToolCall && onRejectToolCall(toolCall.id, true)}
                       disabled={!onRejectToolCall}
-                      title="Always deny this tool — saves a rule so future calls are auto-denied"
+                      title={t('chat.approval.denyHelp')}
                     >
-                      Always Deny
+                      {t('chat.approval.alwaysDeny')}
                     </Button>
                     <Button
                       variant="outlined" color="success" size="small" startIcon={<ThumbUpIcon />}
                       onClick={() => onApproveToolCall && onApproveToolCall(toolCall.id, true)}
                       disabled={!onApproveToolCall}
-                      title="Always allow this tool — saves a rule so future calls are auto-approved"
+                      title={t('chat.approval.allowHelp')}
                     >
-                      Always Allow
+                      {t('chat.approval.alwaysAllow')}
                     </Button>
                     <Button
                       variant="contained" color="success" size="small" startIcon={<ThumbUpIcon />}
                       onClick={() => onApproveToolCall && onApproveToolCall(toolCall.id)}
                       disabled={!onApproveToolCall}
                     >
-                      Approve
+                      {t('chat.approval.approve')}
                     </Button>
                   </Box>
                 </AccordionDetails>

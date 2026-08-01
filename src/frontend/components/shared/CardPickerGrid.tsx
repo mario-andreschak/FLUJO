@@ -5,6 +5,7 @@ import { Box, Grid, Typography, CircularProgress, TextField, InputAdornment } fr
 import SearchIcon from '@mui/icons-material/Search';
 import CollapsibleCardSection from './CollapsibleCardSection';
 import { CardGroup } from '@/utils/shared/cardGrouping';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 export interface CardPickerColumns {
   xs?: number;
@@ -82,20 +83,24 @@ const DEFAULT_COLUMNS: CardPickerColumns = { xs: 12, sm: 6, md: 4 };
 const CardPickerGrid: React.FC<CardPickerGridProps> = ({
   isLoading = false,
   error = null,
-  emptyMessage = 'Nothing to choose from.',
-  loadingMessage = 'Loading…',
+  emptyMessage,
+  loadingMessage,
   skeleton,
   skeletonCount = 4,
   columns = DEFAULT_COLUMNS,
   items,
   searchable = false,
-  searchPlaceholder = 'Search…',
+  searchPlaceholder,
   searchTerm,
   onSearchChange,
   groups,
   collapsedKeys,
   onToggleGroup,
 }) => {
+  const { t } = useI18n();
+  const resolvedEmptyMessage = emptyMessage ?? t('cardPicker.empty');
+  const resolvedLoadingMessage = loadingMessage ?? t('common.loading');
+  const resolvedSearchPlaceholder = searchPlaceholder ?? t('common.search');
   const cols = { ...DEFAULT_COLUMNS, ...columns };
 
   // Search state: controlled when `searchTerm` is passed, otherwise internal.
@@ -135,7 +140,7 @@ const CardPickerGrid: React.FC<CardPickerGridProps> = ({
 
   const searchBox = searchable ? (
     <TextField
-      placeholder={searchPlaceholder}
+      placeholder={resolvedSearchPlaceholder}
       variant="outlined"
       size="small"
       fullWidth
@@ -175,7 +180,7 @@ const CardPickerGrid: React.FC<CardPickerGridProps> = ({
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 2 }}>
         <CircularProgress size={20} />
         <Typography variant="body2" color="text.secondary">
-          {loadingMessage}
+          {resolvedLoadingMessage}
         </Typography>
       </Box>,
     );
@@ -197,7 +202,7 @@ const CardPickerGrid: React.FC<CardPickerGridProps> = ({
 
   const empty = (
     <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>
-      {emptyMessage}
+      {resolvedEmptyMessage}
     </Typography>
   );
 

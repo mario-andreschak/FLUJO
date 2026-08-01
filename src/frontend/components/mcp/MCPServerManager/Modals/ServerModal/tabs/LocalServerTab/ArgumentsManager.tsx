@@ -7,6 +7,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
 import ContentPasteIcon from '@mui/icons-material/ContentPaste';
 import { MessageState } from '../../types';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 import {
   Box,
   Button,
@@ -39,11 +40,12 @@ const ArgumentsManager: React.FC<ArgumentsManagerProps> = ({
   isParsingReadme
 }) => {
   const { getThemeColor } = useThemeUtils();
+  const { t } = useI18n();
   
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-        <Typography variant="subtitle2">Arguments</Typography>
+        <Typography variant="subtitle2">{t('mcp.local.arguments')}</Typography>
         <Stack direction="row" spacing={1}>
           <Button
             size="small"
@@ -53,7 +55,7 @@ const ArgumentsManager: React.FC<ArgumentsManagerProps> = ({
             color="inherit"
             sx={{ color: 'text.secondary' }}
           >
-            Parse README
+            {t('mcp.local.parseReadme')}
           </Button>
           <Button
             size="small"
@@ -62,7 +64,7 @@ const ArgumentsManager: React.FC<ArgumentsManagerProps> = ({
             color="inherit"
             sx={{ color: 'text.secondary' }}
           >
-            Parse from Clipboard
+            {t('mcp.local.parseClipboard')}
           </Button>
         </Stack>
       </Box>
@@ -77,7 +79,7 @@ const ArgumentsManager: React.FC<ArgumentsManagerProps> = ({
               onChange={e => onArgChange(index, e.target.value)}
               variant="outlined"
             />
-            <Tooltip title="Select folder">
+            <Tooltip title={t('mcp.local.selectFolder')}>
               <IconButton
                 onClick={() => onFolderSelect(index)}
                 size="small"
@@ -86,7 +88,7 @@ const ArgumentsManager: React.FC<ArgumentsManagerProps> = ({
                 <FolderIcon />
               </IconButton>
             </Tooltip>
-            <Tooltip title="Remove argument">
+            <Tooltip title={t('mcp.local.removeArgument')}>
               <IconButton
                 onClick={() => onRemoveArg(index)}
                 size="small"
@@ -104,7 +106,7 @@ const ArgumentsManager: React.FC<ArgumentsManagerProps> = ({
           color="primary"
           sx={{ alignSelf: 'flex-start', mt: 1 }}
         >
-          Add Argument
+          {t('mcp.local.addArgument')}
         </Button>
       </Stack>
     </Box>

@@ -28,6 +28,7 @@ import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 
 import FeedbackBanner from '@/frontend/components/FeedbackBanner';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import { useTour } from '@/frontend/contexts/TourContext';
 import { flowService } from '@/frontend/services/flow';
@@ -58,6 +59,7 @@ interface WorkspaceStatus {
 
 export default function HomePage() {
   const theme = useTheme();
+  const { t, tp } = useI18n();
   const { settings } = useStorage();
   const { startTour } = useTour();
   const [encryptionKeySet, setEncryptionKeySet] = useState(true);
@@ -145,7 +147,7 @@ export default function HomePage() {
       });
       const data = await response.json();
       if (!response.ok || data.success === false) {
-        setUpdateError(data.error || 'Update failed.');
+        setUpdateError(data.error || t('home.updateFailed'));
         setUpdating(false);
         return;
       }
@@ -170,7 +172,7 @@ export default function HomePage() {
       }
     } catch (error) {
       log.error('Update failed', error);
-      setUpdateError('Update failed.');
+      setUpdateError(t('home.updateFailed'));
       setUpdating(false);
     }
   };
@@ -182,44 +184,44 @@ export default function HomePage() {
     {
       id: 'ai',
       number: 1,
-      title: 'Connect your AI',
-      description: 'Choose the AI provider and model FLUJO will use. Everything else starts here.',
+      title: t('home.connectAi.title'),
+      description: t('home.connectAi.description'),
       icon: MemoryRounded,
       complete: aiReady,
       available: true,
       status: workspaceStatus.loading
-        ? 'Checking…'
+        ? t('home.checking')
         : aiReady
-          ? 'Connected'
+          ? t('home.connected')
           : aiCheckUnavailable
-            ? 'Open to check'
-            : 'Required',
+            ? t('home.openToCheck')
+            : t('home.required'),
       href: aiReady || aiCheckUnavailable ? '/models' : '/models?add=1',
-      action: aiReady ? 'Manage AI setup' : aiCheckUnavailable ? 'Open AI setup' : 'Connect AI',
+      action: aiReady ? t('home.connectAi.manage') : aiCheckUnavailable ? t('home.connectAi.open') : t('home.connectAi.action'),
     },
     {
       id: 'assistant',
       number: 2,
-      title: 'Create an agent',
-      description: 'Name it and add its job one plain-language step at a time in the simple builder.',
+      title: t('home.agent.title'),
+      description: t('home.agent.description'),
       icon: AutoAwesomeRounded,
       complete: assistantReady,
       available: aiReady,
-      status: assistantReady ? `${workspaceStatus.assistants} ready` : aiReady ? 'Next' : 'After AI setup',
+      status: assistantReady ? tp('home.readyCount', workspaceStatus.assistants) : aiReady ? t('home.next') : t('home.afterAi'),
       href: aiReady ? '/flows?create=assistant' : undefined,
-      action: assistantReady ? 'Create another' : aiReady ? 'Open simple builder' : 'Connect AI first',
+      action: assistantReady ? t('home.agent.another') : aiReady ? t('home.agent.openBuilder') : t('home.agent.connectFirst'),
     },
     {
       id: 'talk',
       number: 3,
-      title: 'Talk to your agent',
-      description: 'Use it in a familiar chat. Return to its recipe whenever you want to improve it.',
+      title: t('home.talk.title'),
+      description: t('home.talk.description'),
       icon: ChatBubbleRounded,
       complete: false,
       available: aiReady && assistantReady,
-      status: !aiReady ? 'After AI setup' : assistantReady ? 'Ready' : 'After your first agent',
+      status: !aiReady ? t('home.afterAi') : assistantReady ? t('home.ready') : t('home.afterAgent'),
       href: aiReady && assistantReady ? '/chat' : undefined,
-      action: !aiReady ? 'Finish AI setup first' : assistantReady ? 'Start talking' : 'Create an agent first',
+      action: !aiReady ? t('home.talk.finishAi') : assistantReady ? t('home.talk.start') : t('home.talk.createFirst'),
     },
   ];
 
@@ -238,13 +240,13 @@ export default function HomePage() {
                   disabled={updating}
                   startIcon={updating ? <CircularProgress size={16} color="inherit" /> : undefined}
                 >
-                  {updating ? 'Updating…' : 'Update now'}
+                  {updating ? t('home.updating') : t('home.updateNow')}
                 </Button>
               }
             >
               {updating
-                ? 'Updating FLUJO and restarting — this page will reconnect automatically.'
-                : `A FLUJO update is ready (${updateInfo.behindBy} new commit${updateInfo.behindBy === 1 ? '' : 's'} on ${updateInfo.branch}).`}
+                ? t('home.updateProgress')
+                : tp('home.updateReady', updateInfo.behindBy, { branch: updateInfo.branch })}
             </Alert>
           )}
 
@@ -252,13 +254,13 @@ export default function HomePage() {
 
           {!encryptionKeySet ? (
             <Alert severity="warning" icon={<ShieldRounded />}>
-              Add a private password to protect your connected accounts in{' '}
-              <Link href="/settings" style={{ fontWeight: 700 }}>Settings</Link>.
+              {t('home.passwordRequired')}{' '}
+              <Link href="/settings" style={{ fontWeight: 700 }}>{t('common.settings')}</Link>.
             </Alert>
           ) : !isUserEncryption ? (
             <Alert severity="info" icon={<LockRounded />}>
-              Your information stays on this device. For extra protection, choose a private password in{' '}
-              <Link href="/settings" style={{ fontWeight: 700 }}>Settings</Link>.
+              {t('home.passwordOptional')}{' '}
+              <Link href="/settings" style={{ fontWeight: 700 }}>{t('common.settings')}</Link>.
             </Alert>
           ) : null}
         </Stack>
@@ -271,23 +273,23 @@ export default function HomePage() {
             spacing={2.5}
           >
             <Box sx={{ maxWidth: 760 }}>
-              <Typography className="premium-eyebrow">Your FLUJO setup</Typography>
+              <Typography className="premium-eyebrow">{t('home.eyebrow')}</Typography>
               <Typography variant="h2" sx={{ mt: 1, maxWidth: 720 }}>
-                Set up once. Then just use it.
+                {t('home.heading')}
               </Typography>
               <Typography variant="h6" color="text.secondary" sx={{ mt: 1.5, maxWidth: 700, fontWeight: 450, lineHeight: 1.55 }}>
-                Follow these three steps in order. FLUJO keeps the technical details available without putting them in your way.
+                {t('home.intro')}
               </Typography>
             </Box>
             <Button variant="outlined" onClick={startTour} startIcon={<AutoAwesomeRounded />}>
-              Open setup guide
+              {t('home.openGuide')}
             </Button>
           </Stack>
         </Box>
 
         <Box
           component="section"
-          aria-label="Getting started"
+          aria-label={t('home.gettingStarted')}
           sx={{
             display: 'grid',
             gridTemplateColumns: { xs: '1fr', lg: 'repeat(3, minmax(0, 1fr))' },
@@ -364,7 +366,7 @@ export default function HomePage() {
                 </Stack>
 
                 <Typography variant="overline" color="text.secondary" sx={{ mt: 3 }}>
-                  Step {step.number}
+                  {t('home.step', { number: step.number })}
                 </Typography>
                 <Typography variant="h5" sx={{ mt: 0.3 }}>{step.title}</Typography>
                 <Typography variant="body2" color="text.secondary" sx={{ mt: 1, lineHeight: 1.65 }}>
@@ -422,13 +424,13 @@ export default function HomePage() {
             <HubRounded />
           </Box>
           <Box sx={{ flex: 1 }}>
-            <Typography variant="subtitle1" fontWeight={760}>Connected Apps are optional</Typography>
+            <Typography variant="subtitle1" fontWeight={760}>{t('home.apps.title')}</Typography>
             <Typography variant="body2" color="text.secondary">
-              Add files or services only when an agent needs them. A basic agent works with AI setup alone.
+              {t('home.apps.description')}
             </Typography>
           </Box>
           <Button component={Link} href="/mcp" variant="text" endIcon={<ArrowForwardRounded />}>
-            Connected Apps
+            {t('nav.connectedApps')}
           </Button>
         </Paper>
 
@@ -439,15 +441,15 @@ export default function HomePage() {
         >
           <Stack direction="row" spacing={0.8} alignItems="center">
             <LockRounded sx={{ fontSize: 17, color: 'primary.main' }} />
-            <Typography variant="caption">Private on your device</Typography>
+            <Typography variant="caption">{t('home.trait.private')}</Typography>
           </Stack>
           <Stack direction="row" spacing={0.8} alignItems="center">
             <AccountTreeRounded sx={{ fontSize: 17, color: 'primary.main' }} />
-            <Typography variant="caption">Simple mode by default</Typography>
+            <Typography variant="caption">{t('home.trait.simple')}</Typography>
           </Stack>
           <Stack direction="row" spacing={0.8} alignItems="center">
             <ShieldRounded sx={{ fontSize: 17, color: 'primary.main' }} />
-            <Typography variant="caption">Expert controls when you need them</Typography>
+            <Typography variant="caption">{t('home.trait.expert')}</Typography>
           </Stack>
         </Stack>
 

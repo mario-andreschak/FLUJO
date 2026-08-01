@@ -4,6 +4,7 @@ import React from 'react';
 import BuildTools from '../BuildTools';
 import SectionHeader from './SectionHeader';
 import { MessageState } from '../../../types';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface BuildSectionProps {
   installCommand: string;
@@ -36,6 +37,7 @@ const BuildSection: React.FC<BuildSectionProps> = ({
   isExpanded,
   toggleSection
 }) => {
+  const { t } = useI18n();
   // Determine section status based on build/install state
   const getSectionStatus = () => {
     if (installCompleted && buildCompleted) {
@@ -55,7 +57,7 @@ const BuildSection: React.FC<BuildSectionProps> = ({
         (isInstalling || isBuilding) ? 'border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/20' :
         'border-gray-200 dark:border-gray-700'}`}>
       <SectionHeader
-        title="Second, install and build"
+        title={t('mcp.local.section.build')}
         isExpanded={isExpanded}
         onToggle={toggleSection}
         status={getSectionStatus()}

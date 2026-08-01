@@ -18,6 +18,7 @@ import {
 } from './orthogonalPath';
 import { BASE_ANIMATION_MS, BASE_ANIMATION_BOTH_MS, edgeSpeedFactor } from './edgeSpeed';
 import { EdgeCondition, formatConditionLabel } from '@/utils/shared/edgeConditions';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 // Fired when the user finishes a re-route gesture (bend drag, waypoint move,
 // or waypoint removal). The Canvas listens and commits the change through
@@ -145,6 +146,7 @@ const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
   selected
 }) => {
   const theme = useTheme();
+  const { t } = useI18n();
   const { deleteElements, screenToFlowPosition, getNode } = useReactFlow();
 
   const [hovered, setHovered] = useState(false);
@@ -160,8 +162,14 @@ const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
     | undefined;
   // A conditional (Tier 2b) flow-control edge shows a small badge so branching
   // is legible on the canvas. Only standard edges carry routing conditions.
-  const conditionLabel =
-    variant === 'standard' && edgeData?.condition ? formatConditionLabel(edgeData.condition) : '';
+  const conditionLabel = variant === 'standard' && edgeData?.condition
+    ? formatConditionLabel(edgeData.condition, {
+        contains: t('flows.edge.condition.contains'),
+        regex: t('flows.edge.condition.regex'),
+        equals: t('flows.edge.condition.equals'),
+        always: t('flows.edge.condition.always'),
+      })
+    : '';
   // Resource (data-flow) edges are directional: resource → process means the
   // step CONSUMES the artifact; process → resource means it PRODUCES it. Show
   // that role as a small badge so data-flow direction is legible on the canvas
@@ -390,7 +398,7 @@ const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
               zIndex: 1002,
             }}
             className="nodrag nopan"
-            title={`Routing condition: ${conditionLabel}`}
+            title={t('flows.edge.routingCondition', { condition: conditionLabel })}
           >
             {conditionLabel}
           </div>
@@ -417,10 +425,10 @@ const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
             }}
             className="nodrag nopan"
             title={resourceRole === 'consume'
-              ? 'This step consumes (reads) the resource'
-              : 'This step produces (writes) the resource'}
+              ? t('flows.edge.consumeHelp')
+              : t('flows.edge.produceHelp')}
           >
-            {resourceRole}
+            {resourceRole === 'consume' ? t('flows.edge.consume') : t('flows.edge.produce')}
           </div>
         )}
         {/* Waypoint dots — on the path, drag to move, double-click to remove */}
@@ -442,7 +450,7 @@ const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
               zIndex: 1001,
             }}
             className="nodrag nopan"
-            title="Drag to move; double-click to remove this bend"
+            title={t('flows.edge.bendHelp')}
             onMouseEnter={() => setHovered(true)}
             onMouseLeave={() => setHovered(false)}
             onPointerDown={onDotPointerDown(i)}
@@ -472,7 +480,7 @@ const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
           onMouseLeave={() => setHovered(false)}
         >
           <EdgeButton
-            title="Delete connection (drag to re-route)"
+            title={t('flows.edge.deleteHelp')}
             style={{ touchAction: 'none' }}
             onPointerDown={onPathPointerDown}
             onPointerMove={onDragPointerMove}

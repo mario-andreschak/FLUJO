@@ -5,6 +5,7 @@ import { Box, Collapse, IconButton } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import type { ConversationListItem } from './index';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 /** Hard cap on nesting depth so a pathological/self-referential chain can't
  *  blow the render stack. Mirrors the Waves `SubflowTree` depth discipline. */
@@ -44,6 +45,7 @@ export default function ConversationTree({
   visited,
   maxDepth = MAX_CONVERSATION_TREE_DEPTH,
 }: ConversationTreeProps): React.ReactElement | null {
+  const { t } = useI18n();
   if (!nodes || nodes.length === 0) return null;
   if (depth > maxDepth) return null;
   const seen = visited ?? new Set<string>();
@@ -71,7 +73,7 @@ export default function ConversationTree({
                 <IconButton
                   size="small"
                   onClick={() => onToggle(node.id)}
-                  aria-label={isExpanded ? 'Collapse chain' : 'Expand chain'}
+                  aria-label={isExpanded ? t('chat.chain.collapse') : t('chat.chain.expand')}
                   sx={{ mt: 0.5, flexShrink: 0 }}
                 >
                   {isExpanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}

@@ -30,6 +30,8 @@ import type {
   StepToolSuggestionResult,
 } from '@/shared/types/flow/assistance';
 import { flowService } from '@/frontend/services/flow';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import { localizeFlowIssue } from '@/frontend/i18n/flowValidation';
 
 interface FlowAssistanceDialogProps {
   open: boolean;
@@ -56,6 +58,7 @@ export default function FlowAssistanceDialog({
   onApplyRelatedFlows,
   onClose,
 }: FlowAssistanceDialogProps) {
+  const { t, tp } = useI18n();
   const [stage, setStage] = useState<Stage>('suggesting');
   const [suggestion, setSuggestion] = useState<StepToolSuggestionResult | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -77,7 +80,7 @@ export default function FlowAssistanceDialog({
       setPlausibility(result);
       setStage('plausibility');
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Could not check this flow.');
+      setError(caught instanceof Error ? caught.message : t('flows.assistance.checkFailed'));
       setStage('plausibility');
     }
   };
@@ -116,7 +119,7 @@ export default function FlowAssistanceDialog({
       }
     }).catch((caught) => {
       if (!active) return;
-      setError(caught instanceof Error ? caught.message : 'Could not suggest tools.');
+      setError(caught instanceof Error ? caught.message : t('flows.assistance.suggestFailed'));
       setStage('tools');
     });
     return () => { active = false; };
@@ -152,7 +155,7 @@ export default function FlowAssistanceDialog({
         setStage('tools');
       }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Could not suggest tools.');
+      setError(caught instanceof Error ? caught.message : t('flows.assistance.suggestFailed'));
       setStage('tools');
     }
   };
@@ -172,7 +175,7 @@ export default function FlowAssistanceDialog({
       onApply(updated);
       await check(updated);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Could not connect the approved tools.');
+      setError(caught instanceof Error ? caught.message : t('flows.assistance.connectFailed'));
       setStage('tools');
     }
   };
@@ -182,14 +185,14 @@ export default function FlowAssistanceDialog({
     <Dialog open={open} onClose={busy ? undefined : onClose} fullWidth maxWidth="md">
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <AutoAwesomeRoundedIcon color="primary" />
-        {stage === 'plausibility' || stage === 'checking' ? 'Plausibility review' : 'Connected tool suggestions'}
+        {stage === 'plausibility' || stage === 'checking' ? t('flows.assistance.plausibilityTitle') : t('flows.assistance.toolsTitle')}
       </DialogTitle>
       <DialogContent dividers>
         {busy && (
           <Stack alignItems="center" spacing={1.5} sx={{ py: 5 }}>
             <CircularProgress />
             <Typography color="text.secondary">
-              {stage === 'suggesting' ? 'Finding useful connected tools…' : 'Checking the complete flow and how it is called…'}
+              {stage === 'suggesting' ? t('flows.assistance.finding') : t('flows.assistance.checking')}
             </Typography>
           </Stack>
         )}
@@ -198,15 +201,15 @@ export default function FlowAssistanceDialog({
         {stage === 'tools' && !suggestion && (
           <Stack spacing={2}>
             {models.length === 0 ? (
-              <Alert severity="warning">Connect an AI model before asking for tool suggestions.</Alert>
+              <Alert severity="warning">{t('flows.assistance.needModel')}</Alert>
             ) : (
               <>
-                <Alert severity="info">Choose which connected AI should review this step. FLUJO will not pick one silently.</Alert>
+                <Alert severity="info">{t('flows.assistance.chooseModel')}</Alert>
                 <FormControl fullWidth size="small">
-                  <InputLabel id="assistance-model-label">AI helper</InputLabel>
+                  <InputLabel id="assistance-model-label">{t('flows.assistance.aiHelper')}</InputLabel>
                   <Select
                     labelId="assistance-model-label"
-                    label="AI helper"
+                    label={t('flows.assistance.aiHelper')}
                     value={chosenModelId}
                     onChange={(event) => setChosenModelId(String(event.target.value))}
                   >
@@ -223,10 +226,10 @@ export default function FlowAssistanceDialog({
         {stage === 'tools' && suggestion && (
           <Stack spacing={1.5}>
             <Alert severity="info">
-              Nothing changes until you approve. FLUJO will connect only the checked tools and add their pills to this step&apos;s prompt.
+              {t('flows.assistance.approvalHelp')}
             </Alert>
             {suggestion.suggestions.length === 0 ? (
-              <Alert severity="success">No connected MCP tool is needed for this step.</Alert>
+              <Alert severity="success">{t('flows.assistance.noTool')}</Alert>
             ) : suggestion.suggestions.map((item) => {
               const key = `${item.server}\u0000${item.tool}`;
               return (
@@ -253,7 +256,7 @@ export default function FlowAssistanceDialog({
               );
             })}
             <Box>
-              <Typography variant="subtitle2">Prompt preview</Typography>
+              <Typography variant="subtitle2">{t('flows.assistance.promptPreview')}</Typography>
               <Paper variant="outlined" sx={{ p: 1.25, mt: 0.5, whiteSpace: 'pre-wrap', maxHeight: 220, overflow: 'auto' }}>
                 <Typography variant="body2" component="pre" sx={{ m: 0, fontFamily: 'inherit', whiteSpace: 'pre-wrap' }}>
                   {suggestion.proposedPrompt}
@@ -269,43 +272,43 @@ export default function FlowAssistanceDialog({
               {plausibility.contexts.map((context) => <Chip key={`${context.kind}-${context.sourceId ?? ''}`} label={context.label} />)}
             </Stack>
             {plausibility.issues.length === 0 ? (
-              <Alert severity="success">The flow is plausible in its current invocation context.</Alert>
+              <Alert severity="success">{t('flows.assistance.plausible')}</Alert>
             ) : plausibility.issues.map((issue, index) => {
               const reviewedFlow = plausibility.repairedFlows.find((candidate) => candidate.id === issue.flowId);
               return (
                 <Alert key={`${issue.code}-${issue.flowId ?? ''}-${issue.nodeId ?? ''}-${index}`} severity={issue.severity}>
-                  {reviewedFlow && reviewedFlow.id !== flow.id ? `${reviewedFlow.name}: ` : ''}{issue.message}
+                  {reviewedFlow && reviewedFlow.id !== flow.id ? `${reviewedFlow.name}: ` : ''}{localizeFlowIssue(issue, t)}
                 </Alert>
               );
             })}
             {applicablePatchCount > 0 && (
               <Alert severity="info">
-                {applicablePatchCount} recommended input/output repair{applicablePatchCount === 1 ? '' : 's'} can be applied to this draft.
+                {tp('flows.assistance.patch', applicablePatchCount)}
               </Alert>
             )}
             {plausibility.patches.length > applicablePatchCount && (
               <Alert severity="warning">
-                {plausibility.patches.length - applicablePatchCount} repair{plausibility.patches.length - applicablePatchCount === 1 ? '' : 's'} belong to saved helper flows. Open those helpers separately to apply them.
+                {tp('flows.assistance.savedPatch', plausibility.patches.length - applicablePatchCount)}
               </Alert>
             )}
           </Stack>
         )}
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose} disabled={busy}>Close</Button>
+        <Button onClick={onClose} disabled={busy}>{t('flows.assistance.close')}</Button>
         {stage === 'tools' && !suggestion && models.length > 0 && (
           <Button variant="contained" disabled={!chosenModelId} onClick={() => void suggestWithModel()}>
-            Suggest connected tools
+            {t('flows.assistance.suggest')}
           </Button>
         )}
         {stage === 'tools' && suggestion && suggestion.suggestions.length === 0 && (
-          <Button startIcon={<FactCheckRoundedIcon />} onClick={() => void check(workingFlow)}>Check whole flow</Button>
+          <Button startIcon={<FactCheckRoundedIcon />} onClick={() => void check(workingFlow)}>{t('flows.assistance.checkFlow')}</Button>
         )}
         {stage === 'tools' && suggestion && suggestion.suggestions.length > 0 && (
           <>
-            <Button onClick={() => void check(workingFlow)}>Skip tools</Button>
+            <Button onClick={() => void check(workingFlow)}>{t('flows.assistance.skip')}</Button>
             <Button variant="contained" startIcon={<BuildRoundedIcon />} disabled={chosen.length === 0} onClick={() => void applyTools()}>
-              Connect {chosen.length} and fix prompt
+              {tp('flows.assistance.connect', chosen.length)}
             </Button>
           </>
         )}
@@ -320,7 +323,7 @@ export default function FlowAssistanceDialog({
             );
             onClose();
           }}>
-            Apply recommended settings
+            {t('flows.assistance.apply')}
           </Button>
         ) : null}
       </DialogActions>

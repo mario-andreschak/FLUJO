@@ -1,6 +1,7 @@
 import React from 'react';
 import { TextField, FormControl, InputLabel, Select, MenuItem, FormControlLabel, Switch, Typography, Box } from '@mui/material';
 import { PropertyDefinition } from './types';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface NodePropertiesProps {
   nodeData: {
@@ -11,6 +12,7 @@ interface NodePropertiesProps {
 }
 
 const NodeProperties: React.FC<NodePropertiesProps> = ({ nodeData, handlePropertyChange, properties }) => {
+  const { t } = useI18n();
   const renderField = (property: PropertyDefinition) => {
     if (!nodeData) return null;
 
@@ -95,7 +97,7 @@ const NodeProperties: React.FC<NodePropertiesProps> = ({ nodeData, handlePropert
       {properties.length > 0 && (
         <Box sx={{ mt: 3 }}>
           <Typography variant="subtitle1" gutterBottom>
-            Node Properties
+            {t('flows.nodeProperties.title')}
           </Typography>
           {properties.map(property => renderField(property))}
         </Box>

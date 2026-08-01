@@ -23,6 +23,8 @@ export interface ModelMediaPart {
   transcript?: string;
   /** Durable flujo://run/... identity after persistence. */
   resourceUri?: string;
+  /** Absolute host-local payload path for Flujo-side filesystem tools. */
+  localPath?: string;
 }
 
 export function mediaTypeFromMime(mimeType?: string): ModelMediaType {

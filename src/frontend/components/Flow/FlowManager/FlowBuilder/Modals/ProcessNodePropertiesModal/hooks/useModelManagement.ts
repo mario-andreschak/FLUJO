@@ -3,11 +3,13 @@ import { modelService } from '@/frontend/services/model';
 import { Model } from '@/shared/types/model';
 import { resolveAutoNodeLabel } from '@/shared/utils/nodeLabel';
 import { createLogger } from '@/utils/logger';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 // Create a logger instance for this file
 const log = createLogger('components/flow/FlowBuilder/Modals/ProcessNodePropertiesModal/hooks/useModelManagement.ts');
 
 const useModelManagement = (open: boolean, nodeData: any, setNodeData: (data: any) => void, setPromptTemplate: (template: string) => void, setIsModelBound: (isBound: boolean) => void) => {
+  const { t } = useI18n();
   log.debug('useModelManagement: Entering hook');
   const [models, setModels] = useState<Model[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
@@ -53,7 +55,7 @@ const useModelManagement = (open: boolean, nodeData: any, setNodeData: (data: an
       setModels(modelsList);
     } catch (error) {
       log.warn('loadModels: Failed to load models:', error);
-      setLoadError('Failed to load models');
+      setLoadError(t('flows.process.loadModelsFailed'));
     }
     setIsLoadingModels(false);
   };

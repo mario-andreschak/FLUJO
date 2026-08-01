@@ -21,6 +21,7 @@ import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 import BackToTopButton from '@/frontend/components/shared/BackToTopButton';
 import WaveCanvas from './WaveCanvas';
 import { formatIn } from './waveTimeline';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/Waves');
 
@@ -37,9 +38,9 @@ function rootNamesOf(wave: Wave): string[] {
     .map((n) => n.name);
 }
 
-function titleOf(wave: Wave): string {
+function titleOf(wave: Wave, fallback = 'Wave'): string {
   const names = rootNamesOf(wave);
-  return names.length > 0 ? names.join(', ') : 'Wave';
+  return names.length > 0 ? names.join(', ') : fallback;
 }
 
 /** Whether any root drifts on the time axis (has a cron/poll schedule). */
@@ -68,8 +69,10 @@ interface WaveSummaryCardProps {
 
 /** Compact overview card for a single wave in the dashboard list (#209). */
 function WaveSummaryCard({ wave, selected, now, onSelect }: WaveSummaryCardProps) {
+  const { t, tp } = useI18n();
   const timeBased = isTimeBased(wave);
   const nextRun = timeBased ? nextRunOf(wave) : null;
+  const title = titleOf(wave, t('waves.fallbackName'));
   return (
     <Paper
       variant="outlined"
@@ -84,19 +87,19 @@ function WaveSummaryCard({ wave, selected, now, onSelect }: WaveSummaryCardProps
         '&:hover': { borderColor: 'primary.light' },
       }}
     >
-      <Typography variant="subtitle2" sx={{ fontWeight: 600, lineHeight: 1.25 }} noWrap title={titleOf(wave)}>
-        {titleOf(wave)}
+      <Typography variant="subtitle2" sx={{ fontWeight: 600, lineHeight: 1.25 }} noWrap title={title}>
+        {title}
       </Typography>
       <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mt: 0.75 }}>
-        <Chip label={`${wave.nodes.length} trigger(s)`} size="small" variant="outlined" />
-        {timeBased && <Chip label="time-based" size="small" color="info" variant="outlined" />}
-        {wave.hasCycle && <Chip label="recursive" color="warning" size="small" />}
+        <Chip label={tp('waves.triggerCount', wave.nodes.length)} size="small" variant="outlined" />
+        {timeBased && <Chip label={t('waves.timeBased')} size="small" color="info" variant="outlined" />}
+        {wave.hasCycle && <Chip label={t('waves.recursive')} color="warning" size="small" />}
       </Stack>
       {timeBased && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.75, opacity: 0.75 }}>
           <ScheduleIcon sx={{ fontSize: 14 }} />
           <Typography variant="caption">
-            next run {nextRun ? formatIn(nextRun, now) : 'not scheduled'}
+            {t('waves.nextRun', { time: nextRun ? formatIn(nextRun, now, t) : t('waves.notScheduled') })}
           </Typography>
         </Box>
       )}
@@ -127,6 +130,7 @@ interface WavesManagerProps {
 }
 
 export default function WavesManager({ height = '100%' }: WavesManagerProps) {
+  const { t, tp } = useI18n();
   const [data, setData] = useState<WavesResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [now, setNow] = useState(() => Date.now());
@@ -184,23 +188,18 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
         <WavesIcon color="primary" />
         <Typography variant="h5" sx={{ fontWeight: 600 }}>
-          Waves
+          {t('waves.title')}
         </Typography>
-        <Chip label="experimental" size="small" color="warning" variant="outlined" />
-        {data?.paused && <Chip label="Scheduler paused" color="warning" size="small" />}
+        <Chip label={t('waves.experimental')} size="small" color="warning" variant="outlined" />
+        {data?.paused && <Chip label={t('waves.schedulerPaused')} color="warning" size="small" />}
       </Box>
       <Typography variant="body2" sx={{ opacity: 0.75, mb: 2 }}>
-        A read-only picture of how your Automation triggers chain together via signals and completion
-        events. Pick a wave on the left to open it on the canvas — the clock on the left is “now”, and
-        scheduled runs approach from the right. Hover a card to follow its chain, or click it to pin
-        the chain open (click the background to release); use the window control to zoom the timeline
-        out. Nothing here arms or fires anything.
+        {t('waves.description')}
       </Typography>
 
       {waves.length === 0 && orphans.length === 0 && (
         <Alert severity="info">
-          No triggers to visualize yet. Create some triggers (and link them with flow-event triggers
-          or signal nodes) to see waves here.
+          {t('waves.empty')}
         </Alert>
       )}
 
@@ -227,11 +226,10 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
               <>
                 <Divider sx={{ my: 2 }} />
                 <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5 }}>
-                  Unlinked event triggers
+                  {t('waves.unlinkedTitle')}
                 </Typography>
                 <Typography variant="caption" sx={{ display: 'block', opacity: 0.75, mb: 1 }}>
-                  These flow-event triggers reference a source that matches no known producer, so they
-                  never start from an organic trigger.
+                  {t('waves.unlinkedDescription')}
                 </Typography>
                 <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
                   {orphans.map((o) => (
@@ -252,11 +250,11 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
                 sx={{ p: 1.5, height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}
               >
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                  <Typography variant="subtitle1" sx={{ fontWeight: 600 }} noWrap title={titleOf(selectedWave)}>
-                    {titleOf(selectedWave)}
+                  <Typography variant="subtitle1" sx={{ fontWeight: 600 }} noWrap title={titleOf(selectedWave, t('waves.fallbackName'))}>
+                    {titleOf(selectedWave, t('waves.fallbackName'))}
                   </Typography>
-                  <Chip label={`${selectedWave.nodes.length} trigger(s)`} size="small" variant="outlined" />
-                  {selectedWave.hasCycle && <Chip label="recursive" color="warning" size="small" />}
+                  <Chip label={tp('waves.triggerCount', selectedWave.nodes.length)} size="small" variant="outlined" />
+                  {selectedWave.hasCycle && <Chip label={t('waves.recursive')} color="warning" size="small" />}
                 </Box>
                 <Box sx={{ flex: 1, minHeight: 0 }}>
                   <WaveCanvas key={selectedWave.id} wave={selectedWave} height="100%" />
@@ -272,7 +270,7 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
                   opacity: 0.6,
                 }}
               >
-                <Typography variant="body2">Select a wave to open it.</Typography>
+                <Typography variant="body2">{t('waves.selectPrompt')}</Typography>
               </Box>
             )}
           </Box>

@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { MCPServerConfig, MCPStdioConfig, MCPWebSocketConfig, MCPSSEConfig, MCPStreamableConfig, EnvVarValue } from '@/shared/types/mcp/mcp';
 import { MessageState } from '../../../types';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 // Type guards
 export const isStdioConfig = (config: MCPServerConfig): config is MCPStdioConfig => {
@@ -27,6 +28,7 @@ interface UseLocalServerStateProps {
 }
 
 export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalServerStateProps) => {
+  const { t } = useI18n();
   // Track which sections are expanded
   const [expandedSections, setExpandedSections] = useState({
     define: true,
@@ -68,7 +70,7 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
   const [isConsoleVisible, setIsConsoleVisible] = useState<boolean>(false);
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [runCompleted, setRunCompleted] = useState<boolean>(false);
-  const [consoleTitle, setConsoleTitle] = useState<string>('Command Output');
+  const [consoleTitle, setConsoleTitle] = useState<string>(() => t('mcp.local.console.output'));
 
   // Update expanded sections
   const setExpandedSection = (section: 'define' | 'build' | 'run', isExpanded: boolean) => {
@@ -280,7 +282,7 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
         setIsConsoleVisible(false);
         setIsRunning(false);
         setRunCompleted(false);
-        setConsoleTitle('Command Output');
+        setConsoleTitle(t('mcp.local.console.output'));
         setExpandedSections({
           define: true,
           build: true,
@@ -288,7 +290,7 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
         });
       }
     }
-  }, [isOpen, initialConfig]);
+  }, [isOpen, initialConfig, t]);
 
   return {
     // State

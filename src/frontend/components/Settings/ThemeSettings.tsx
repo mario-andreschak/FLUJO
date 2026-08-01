@@ -9,14 +9,16 @@ import LightModeRoundedIcon from '@mui/icons-material/LightModeRounded';
 import { ThemeMode, useTheme } from '@/frontend/contexts/ThemeContext';
 import { VisualThemeStyle } from '@/frontend/utils/muiTheme';
 import { createLogger } from '@/utils/logger';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { TranslationKey } from '@/frontend/i18n';
 
 const log = createLogger('frontend/components/Settings/ThemeSettings');
 
 interface ThemeChoice {
   mode: ThemeMode;
   style: VisualThemeStyle;
-  label: string;
-  description: string;
+  labelKey: TranslationKey;
+  descriptionKey: TranslationKey;
   base: string;
   surface: string;
   text: string;
@@ -27,8 +29,8 @@ const choices: ThemeChoice[] = [
   {
     mode: 'light',
     style: 'modern',
-    label: 'Modern Light',
-    description: 'Airy surfaces, soft depth and vivid violet accents.',
+    labelKey: 'settings.theme.modernLight',
+    descriptionKey: 'settings.theme.modernLightDescription',
     base: '#F5F7FF',
     surface: '#FFFFFF',
     text: '#171A2B',
@@ -37,8 +39,8 @@ const choices: ThemeChoice[] = [
   {
     mode: 'dark',
     style: 'modern',
-    label: 'Modern Dark',
-    description: 'Deep-space surfaces with luminous interaction color.',
+    labelKey: 'settings.theme.modernDark',
+    descriptionKey: 'settings.theme.modernDarkDescription',
     base: '#070912',
     surface: '#12182C',
     text: '#F4F6FF',
@@ -47,8 +49,8 @@ const choices: ThemeChoice[] = [
   {
     mode: 'light',
     style: 'legacy',
-    label: 'Legacy Light',
-    description: 'The familiar compact FLUJO look with classic blue.',
+    labelKey: 'settings.theme.legacyLight',
+    descriptionKey: 'settings.theme.legacyLightDescription',
     base: '#FFFFFF',
     surface: '#F5F6FA',
     text: '#2C3E50',
@@ -57,8 +59,8 @@ const choices: ThemeChoice[] = [
   {
     mode: 'dark',
     style: 'legacy',
-    label: 'Legacy Dark',
-    description: 'The original slate workspace and compact controls.',
+    labelKey: 'settings.theme.legacyDark',
+    descriptionKey: 'settings.theme.legacyDarkDescription',
     base: '#0F1319',
     surface: '#1A212B',
     text: '#EEF1F5',
@@ -69,18 +71,19 @@ const choices: ThemeChoice[] = [
 export default function ThemeSettings() {
   const { isDarkMode, visualStyle, setThemePreset } = useTheme();
   const theme = useMuiTheme();
+  const { t } = useI18n();
 
   log.debug(`Rendering ThemeSettings with preset: ${visualStyle}/${isDarkMode ? 'dark' : 'light'}`);
 
   return (
     <Box sx={{ maxWidth: 860 }}>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
-        Pick a complete look. The sun and moon button still switches between light and dark within your chosen style.
+        {t('settings.theme.help')}
       </Typography>
 
       <Box
         role="radiogroup"
-        aria-label="Visual theme"
+        aria-label={t('settings.theme.aria')}
         sx={{
           display: 'grid',
           gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' },
@@ -94,10 +97,10 @@ export default function ThemeSettings() {
 
           return (
             <ButtonBase
-              key={option.label}
+              key={`${option.style}-${option.mode}`}
               role="radio"
               aria-checked={selected}
-              aria-label={option.label}
+              aria-label={t(option.labelKey)}
               onClick={() => {
                 if (!selected) setThemePreset({ mode: option.mode, style: option.style });
               }}
@@ -163,13 +166,13 @@ export default function ThemeSettings() {
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                   <Stack direction="row" spacing={0.8} alignItems="center" useFlexGap flexWrap="wrap">
                     <Typography variant="subtitle2" sx={{ fontWeight: visualStyle === 'modern' ? 720 : 600 }}>
-                      {option.label}
+                      {t(option.labelKey)}
                     </Typography>
                     {option.style === 'modern' && (
-                      <Chip label="Modern" size="small" variant="outlined" sx={{ height: 21, fontSize: '0.65rem' }} />
+                      <Chip label={t('settings.theme.modern')} size="small" variant="outlined" sx={{ height: 21, fontSize: '0.65rem' }} />
                     )}
                   </Stack>
-                  <Typography variant="caption" color="text.secondary">{option.description}</Typography>
+                  <Typography variant="caption" color="text.secondary">{t(option.descriptionKey)}</Typography>
                 </Box>
                 {selected && <CheckRoundedIcon color="primary" fontSize="small" aria-hidden="true" />}
               </Stack>

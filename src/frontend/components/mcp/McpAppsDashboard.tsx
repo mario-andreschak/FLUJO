@@ -32,6 +32,7 @@ import {
   isMcpAppMimeType,
   isUiResourceUri,
 } from '@/shared/utils/mcpApps';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface McpAppsDashboardProps {
   open: boolean;
@@ -83,6 +84,7 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
   onClose,
   onOpenToolTester,
 }) => {
+  const { t, tp } = useI18n();
   const [servers, setServers] = useState<ServerDiscovery[]>([]);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -104,7 +106,7 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
         setServers([]);
         setLoadError(readableError(
           (configsResult as { error?: unknown } | null)?.error,
-          'Failed to load MCP server configurations.',
+          t('mcp.apps.configFailed'),
         ));
         return;
       }
@@ -134,7 +136,7 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
           return {
             name: server.name,
             apps: [],
-            error: readableError(resourceResult.error, 'Resource discovery is unavailable.'),
+            error: readableError(resourceResult.error, t('mcp.apps.discoveryUnavailable')),
           };
         }
 
@@ -186,7 +188,7 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
     } catch (error) {
       if (requestId === requestIdRef.current) {
         setServers([]);
-        setLoadError(readableError(error, 'Failed to discover MCP Apps.'));
+        setLoadError(readableError(error, t('mcp.apps.discoveryFailed')));
       }
     } finally {
       if (requestId === requestIdRef.current) {
@@ -194,7 +196,7 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
         setRefreshing(false);
       }
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (!open) {
@@ -240,12 +242,12 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="xl" aria-labelledby="mcp-apps-dashboard-title">
       <DialogTitle id="mcp-apps-dashboard-title" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <AppsIcon color="primary" />
-        MCP Apps Dashboard
+        {t('mcp.apps.title')}
         <Box sx={{ flex: 1 }} />
-        <Tooltip title="Refresh apps">
+        <Tooltip title={t('mcp.apps.refresh')}>
           <span>
             <IconButton
-              aria-label="Refresh apps"
+              aria-label={t('mcp.apps.refresh')}
               onClick={() => void discover(true)}
               disabled={loading || refreshing}
               size="small"
@@ -254,7 +256,7 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
             </IconButton>
           </span>
         </Tooltip>
-        <IconButton aria-label="Close MCP Apps Dashboard" onClick={onClose} size="small">
+        <IconButton aria-label={t('mcp.apps.closeAria')} onClick={onClose} size="small">
           <CloseIcon fontSize="small" />
         </IconButton>
       </DialogTitle>
@@ -264,23 +266,26 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
         {loading ? (
           <Stack alignItems="center" justifyContent="center" spacing={2} sx={{ minHeight: 420 }}>
             <CircularProgress />
-            <Typography color="text.secondary">Discovering MCP Apps…</Typography>
+            <Typography color="text.secondary">{t('mcp.apps.discovering')}</Typography>
           </Stack>
         ) : loadError ? (
           <Alert severity="error" sx={{ m: 3 }}>{loadError}</Alert>
         ) : eligibleServerCount === 0 ? (
           <Stack alignItems="center" justifyContent="center" spacing={1} sx={{ minHeight: 420, p: 3 }}>
             <AppsIcon color="disabled" sx={{ fontSize: 48 }} />
-            <Typography variant="h6">No MCP Apps-capable servers are enabled</Typography>
+            <Typography variant="h6">{t('mcp.apps.noServers')}</Typography>
             <Typography color="text.secondary" textAlign="center">
-              Enable a server and opt in to MCP Apps from its configuration to discover interactive resources.
+              {t('mcp.apps.noServersHelp')}
             </Typography>
           </Stack>
         ) : (
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'minmax(300px, 38%) 1fr' }, minHeight: 620 }}>
             <Box sx={{ borderRight: { md: '1px solid' }, borderColor: { md: 'divider' }, p: 2, overflow: 'auto' }}>
               <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
-                {allApps.length} {allApps.length === 1 ? 'app' : 'apps'} from {eligibleServerCount} {eligibleServerCount === 1 ? 'server' : 'servers'}
+                {t('mcp.apps.summary', {
+                  apps: tp('mcp.apps.app', allApps.length),
+                  servers: tp('mcp.apps.server', eligibleServerCount),
+                })}
               </Typography>
 
               {servers.map((server) => (
@@ -290,12 +295,12 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
                   </Typography>
                   {server.error ? (
                     <Alert severity="warning">
-                      <Typography variant="body2" fontWeight={600}>Unavailable or disconnected</Typography>
+                      <Typography variant="body2" fontWeight={600}>{t('mcp.apps.unavailable')}</Typography>
                       <Typography variant="body2">{server.error}</Typography>
                     </Alert>
                   ) : server.apps.length === 0 ? (
                     <Typography variant="body2" color="text.secondary">
-                      No eligible apps discovered for this server.
+                      {t('mcp.apps.noneForServer')}
                     </Typography>
                   ) : (
                     <Stack spacing={1}>
@@ -313,10 +318,10 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
                                   {app.uri}
                                 </Typography>
                                 {app.toolNames.length > 0 && (
-                                  <Chip icon={<BuildIcon />} label={`${app.toolNames.length} linked tool${app.toolNames.length === 1 ? '' : 's'}`} size="small" sx={{ mt: 1 }} />
+                                  <Chip icon={<BuildIcon />} label={tp('mcp.apps.tools', app.toolNames.length)} size="small" sx={{ mt: 1 }} />
                                 )}
                                 {!app.listedResource && (
-                                  <Chip label="Tool-discovered" size="small" variant="outlined" sx={{ mt: 1, ml: app.toolNames.length > 0 ? 1 : 0 }} />
+                                  <Chip label={t('mcp.apps.toolDiscovered')} size="small" variant="outlined" sx={{ mt: 1, ml: app.toolNames.length > 0 ? 1 : 0 }} />
                                 )}
                               </CardContent>
                             </CardActionArea>
@@ -329,7 +334,7 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
               ))}
 
               {allApps.length === 0 && discoveryErrors.length === 0 && (
-                <Alert severity="info">No eligible MCP App resources were discovered.</Alert>
+                <Alert severity="info">{t('mcp.apps.none')}</Alert>
               )}
             </Box>
 
@@ -337,9 +342,9 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
               {!selectedApp ? (
                 <Stack alignItems="center" justifyContent="center" spacing={1} sx={{ minHeight: 360 }}>
                   <AppsIcon color="disabled" sx={{ fontSize: 44 }} />
-                  <Typography variant="h6">Select an app to preview</Typography>
+                  <Typography variant="h6">{t('mcp.apps.select')}</Typography>
                   <Typography color="text.secondary" textAlign="center">
-                    Apps run through FLUJO&apos;s existing isolated MCP App sandbox.
+                    {t('mcp.apps.sandbox')}
                   </Typography>
                 </Stack>
               ) : (
@@ -356,7 +361,7 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
                   {selectedApp.toolNames.length > 0 && (
                     <Alert severity="info" sx={{ mt: 2 }}>
                       <Typography variant="body2" sx={{ mb: 1 }}>
-                        This app is linked to a tool. Use Tool Tester when it needs invocation arguments or a tool result.
+                        {t('mcp.apps.linkedHelp')}
                       </Typography>
                       <Stack direction="row" gap={1} flexWrap="wrap">
                         {selectedApp.toolNames.map((toolName) => (
@@ -367,7 +372,7 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
                             startIcon={<BuildIcon />}
                             onClick={() => onOpenToolTester(selectedApp.serverName, toolName)}
                           >
-                            Test {toolName}
+                            {t('mcp.apps.test', { tool: toolName })}
                           </Button>
                         ))}
                       </Stack>
@@ -388,7 +393,7 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
 
       <Divider />
       <DialogActions>
-        <Button onClick={onClose}>Close</Button>
+        <Button onClick={onClose}>{t('mcp.apps.close')}</Button>
       </DialogActions>
     </Dialog>
   );

@@ -24,6 +24,7 @@ import {
 } from '@/frontend/services/plannedExecutions';
 import { buildTopicEmitterIndex } from '@/shared/utils/signalTopics';
 import { createLogger } from '@/utils/logger';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 /** One planned execution that already subscribes to a given signal topic. */
 interface TopicSubscriber {
@@ -54,6 +55,7 @@ type SourceKind = 'flow' | 'execution' | 'topic';
  * filter and loop-safety knobs (max chain depth, cooldown) are under Advanced.
  */
 const FlowEventPanel = ({ config, onChange, flows, currentExecutionId }: FlowEventPanelProps) => {
+  const { t, tp } = useI18n();
   const [executions, setExecutions] = useState<PlannedExecutionListEntry[]>([]);
   const [showAdvanced, setShowAdvanced] = useState(
     config.maxChainDepth !== undefined || config.minIntervalMs !== undefined
@@ -112,11 +114,11 @@ const FlowEventPanel = ({ config, onChange, flows, currentExecutionId }: FlowEve
     const names = Array.from(
       new Set(
         emitters.map(
-          (e) => (e.flowName || e.flowId) + (e.viaSubflow ? ' (via subflow)' : ''),
+          (e) => (e.flowName || e.flowId) + (e.viaSubflow ? ` (${t('automations.event.viaSubflow')})` : ''),
         ),
       ),
     );
-    return `Emitted in: ${names.join(', ')}`;
+    return t('automations.event.emittedIn', { names: names.join(', ') });
   };
 
   const describeSubscribers = (topic: string): string | null => {
@@ -125,9 +127,7 @@ const FlowEventPanel = ({ config, onChange, flows, currentExecutionId }: FlowEve
     const startedFlows = Array.from(
       new Set(subs.map((s) => s.flowName || s.flowId)),
     );
-    return `Used by ${subs.length} trigger${subs.length === 1 ? '' : 's'} → starts ${startedFlows.join(
-      ', ',
-    )}`;
+    return tp('automations.event.usedBy', subs.length, { flows: startedFlows.join(', ') });
   };
 
   const currentTopic = (config.source?.topic ?? '').trim();
@@ -166,20 +166,20 @@ const FlowEventPanel = ({ config, onChange, flows, currentExecutionId }: FlowEve
   return (
     <Box sx={{ mt: 1 }}>
       <Typography variant="subtitle2" sx={{ mt: 1 }}>
-        React to
+        {t('automations.event.reactTo')}
       </Typography>
       <Box sx={{ display: 'flex', gap: 2, mt: 1 }}>
         <FormControl sx={{ minWidth: 180 }}>
-          <InputLabel id="flow-event-source-kind">Source</InputLabel>
+          <InputLabel id="flow-event-source-kind">{t('automations.event.source')}</InputLabel>
           <Select
             labelId="flow-event-source-kind"
-            label="Source"
+            label={t('automations.event.source')}
             value={sourceKind}
             onChange={(e) => setSourceKind(e.target.value as SourceKind)}
           >
-            <MenuItem value="flow">A flow (any run)</MenuItem>
-            <MenuItem value="execution">A planned execution</MenuItem>
-            <MenuItem value="topic">A signal topic</MenuItem>
+            <MenuItem value="flow">{t('automations.event.sourceFlow')}</MenuItem>
+            <MenuItem value="execution">{t('automations.event.sourceExecution')}</MenuItem>
+            <MenuItem value="topic">{t('automations.event.sourceTopic')}</MenuItem>
           </Select>
         </FormControl>
 
@@ -215,7 +215,7 @@ const FlowEventPanel = ({ config, onChange, flows, currentExecutionId }: FlowEve
                       )}
                       {!emitters && (
                         <Typography variant="caption" color="warning.main">
-                          No flow currently emits this signal
+                          {t('automations.event.noEmitter')}
                         </Typography>
                       )}
                     </Box>
@@ -225,14 +225,14 @@ const FlowEventPanel = ({ config, onChange, flows, currentExecutionId }: FlowEve
               renderInput={(params) => (
                 <TextField
                   {...params}
-                  label="Signal topic"
-                  placeholder="e.g. review-blocked"
+                  label={t('automations.event.signalTopic')}
+                  placeholder={t('automations.event.topicPlaceholder')}
                   helperText={
                     !currentTopic
-                      ? 'React when a signal node in any flow emits this topic. Suggestions come from your existing flows.'
+                      ? t('automations.event.topicEmptyHelp')
                       : topicHasEmitter
-                      ? describeEmitters(currentTopic) ?? 'React when this signal is emitted.'
-                      : 'No flow currently emits this signal — the trigger will stay idle until one does.'
+                      ? describeEmitters(currentTopic) ?? t('automations.event.topicEmittedHelp')
+                      : t('automations.event.topicIdleHelp')
                   }
                 />
               )}
@@ -240,17 +240,17 @@ const FlowEventPanel = ({ config, onChange, flows, currentExecutionId }: FlowEve
           </FormControl>
         ) : sourceKind === 'flow' ? (
           <FormControl fullWidth>
-            <InputLabel id="flow-event-flow">Flow to watch</InputLabel>
+            <InputLabel id="flow-event-flow">{t('automations.event.flowToWatch')}</InputLabel>
             <Select
               labelId="flow-event-flow"
-              label="Flow to watch"
+              label={t('automations.event.flowToWatch')}
               value={config.source?.flowId ?? ''}
               onChange={(e) => onChange({ ...config, source: { flowId: e.target.value } })}
               displayEmpty
             >
               {flows.length === 0 && (
                 <MenuItem value="" disabled>
-                  No flows available
+                  {t('automations.tool.noFlows')}
                 </MenuItem>
               )}
               {flows.map((f) => (
@@ -262,17 +262,17 @@ const FlowEventPanel = ({ config, onChange, flows, currentExecutionId }: FlowEve
           </FormControl>
         ) : (
           <FormControl fullWidth>
-            <InputLabel id="flow-event-execution">Planned execution to watch</InputLabel>
+            <InputLabel id="flow-event-execution">{t('automations.event.executionToWatch')}</InputLabel>
             <Select
               labelId="flow-event-execution"
-              label="Planned execution to watch"
+              label={t('automations.event.executionToWatch')}
               value={config.source?.executionId ?? ''}
               onChange={(e) => onChange({ ...config, source: { executionId: e.target.value } })}
               displayEmpty
             >
               {executions.filter((e) => e.execution.id !== currentExecutionId).length === 0 && (
                 <MenuItem value="" disabled>
-                  No other planned executions
+                  {t('automations.event.noOtherExecutions')}
                 </MenuItem>
               )}
               {executions
@@ -290,7 +290,7 @@ const FlowEventPanel = ({ config, onChange, flows, currentExecutionId }: FlowEve
       {!isTopic && (
         <>
           <Typography variant="subtitle2" sx={{ mt: 2 }}>
-            When it…
+            {t('automations.event.whenIt')}
           </Typography>
           <FormGroup row>
             <FormControlLabel
@@ -300,7 +300,7 @@ const FlowEventPanel = ({ config, onChange, flows, currentExecutionId }: FlowEve
                   onChange={(e) => toggleOutcome('completed', e.target.checked)}
                 />
               }
-              label="completes"
+              label={t('automations.event.completes')}
             />
             <FormControlLabel
               control={
@@ -309,7 +309,7 @@ const FlowEventPanel = ({ config, onChange, flows, currentExecutionId }: FlowEve
                   onChange={(e) => toggleOutcome('error', e.target.checked)}
                 />
               }
-              label="errors"
+              label={t('automations.event.errors')}
             />
           </FormGroup>
         </>
@@ -317,7 +317,7 @@ const FlowEventPanel = ({ config, onChange, flows, currentExecutionId }: FlowEve
 
       <TextField
         fullWidth
-        label={isTopic ? 'Only when the payload contains (optional)' : 'Only when the output contains (optional)'}
+        label={isTopic ? t('automations.event.payloadContains') : t('automations.event.outputContains')}
         value={config.outputMatch?.contains ?? ''}
         onChange={(e) => {
           const contains = e.target.value;
@@ -327,7 +327,7 @@ const FlowEventPanel = ({ config, onChange, flows, currentExecutionId }: FlowEve
           onChange({ ...config, outputMatch: cleaned });
         }}
         margin="normal"
-        placeholder="e.g. FAILED, or leave empty to react to every matching run"
+        placeholder={t('automations.event.containsPlaceholder')}
       />
 
       <FormControlLabel
@@ -335,12 +335,12 @@ const FlowEventPanel = ({ config, onChange, flows, currentExecutionId }: FlowEve
         control={
           <Checkbox checked={showAdvanced} onChange={(e) => setShowAdvanced(e.target.checked)} />
         }
-        label="Advanced (loop safety)"
+        label={t('automations.event.loopSafety')}
       />
       {showAdvanced && (
         <Box sx={{ display: 'flex', gap: 2, mt: 1 }}>
           <TextField
-            label="Max chain depth"
+            label={t('automations.event.maxDepth')}
             type="number"
             value={config.maxChainDepth ?? ''}
             onChange={(e) =>
@@ -349,11 +349,11 @@ const FlowEventPanel = ({ config, onChange, flows, currentExecutionId }: FlowEve
                 maxChainDepth: e.target.value === '' ? undefined : Number(e.target.value),
               })
             }
-            helperText="Stop after this many hops (default 100)"
+            helperText={t('automations.event.maxDepthHelp')}
             inputProps={{ min: 1 }}
           />
           <TextField
-            label="Cooldown (ms)"
+            label={t('automations.event.cooldown')}
             type="number"
             value={config.minIntervalMs ?? ''}
             onChange={(e) =>
@@ -362,7 +362,7 @@ const FlowEventPanel = ({ config, onChange, flows, currentExecutionId }: FlowEve
                 minIntervalMs: e.target.value === '' ? undefined : Number(e.target.value),
               })
             }
-            helperText="Minimum gap between fires"
+            helperText={t('automations.event.cooldownHelp')}
             inputProps={{ min: 0 }}
           />
         </Box>
@@ -371,8 +371,8 @@ const FlowEventPanel = ({ config, onChange, flows, currentExecutionId }: FlowEve
       <Divider sx={{ mt: 2 }} />
       <Alert severity="info" sx={{ mt: 2 }}>
         {isTopic
-          ? 'The signal’s payload is handed to this flow. Emit a signal from a signal node in any flow to fire this one — fire-and-forget. To avoid runaway loops, a chain of fires stops at the max depth above, and the overlap-skip prevents a single execution from re-triggering itself while it’s still running.'
-          : 'The upstream run’s output is handed to this flow, so it can build on what the other flow produced. To avoid runaway loops, a chain of flow-event fires stops at the max depth above, and the existing overlap-skip prevents a single execution from re-triggering itself while it’s still running.'}
+          ? t('automations.event.topicInfo')
+          : t('automations.event.flowInfo')}
       </Alert>
     </Box>
   );

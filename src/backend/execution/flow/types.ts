@@ -7,6 +7,7 @@ import { PermissionRule, SavedPermissionRule } from '@/shared/types/permissions'
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import OpenAI from 'openai';
 import type { VisualCompactionDiagnostic } from '@/shared/types/visualArchive';
+import type { ModelMediaPart } from '@/shared/types/model/media';
 
 // --- Custom Chat Message Type is now imported from shared/types/chat.ts ---
 
@@ -486,6 +487,8 @@ export interface SubflowLaneResult {
     subflowId: string;
     success: boolean;
     outputText?: string;
+    /** Generated media returned by this lane, in child-message order. */
+    outputMedia?: ModelMediaPart[];
     error?: string;
 }
 
@@ -1205,6 +1208,8 @@ export interface MCPNodeExecResult extends BaseExecResult {
 export interface SubflowNodeExecResult extends BaseExecResult {
     /** Final assistant text produced by the subflow run. */
     outputText?: string;
+    /** Generated media produced by the subflow run. */
+    outputMedia?: ModelMediaPart[];
     error?: string;
     errorDetails?: ErrorDetails;
     /** The subflow run's terminal status (completed/error). */

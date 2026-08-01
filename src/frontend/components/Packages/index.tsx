@@ -16,6 +16,7 @@ import InstallPackageCard from './InstallPackageCard';
 import RegistryAccountSettings from './RegistryAccountSettings';
 import PageHeader from '@/frontend/components/shared/PageHeader';
 import { createLogger } from '@/utils/logger';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/Packages');
 
@@ -26,6 +27,7 @@ const log = createLogger('frontend/components/Packages');
  * shareable package from existing entities and exporting it.
  */
 export default function PackagesManager() {
+  const { t } = useI18n();
   const [wizardOpen, setWizardOpen] = useState(false);
   const [installedRefreshKey, setInstalledRefreshKey] = useState(0);
 
@@ -34,11 +36,11 @@ export default function PackagesManager() {
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <PageHeader
-        eyebrow="Share"
-        title="Packages"
-        description="Bundle complete FLUJO systems into portable, secret-safe manifests."
+        eyebrowKey="packages.page.eyebrow"
+        titleKey="packages.page.title"
+        descriptionKey="packages.page.description"
         icon={Inventory2OutlinedIcon}
-        badge={<Chip label="Experimental" size="small" color="warning" variant="outlined" />}
+        badge={<Chip label={t('packages.page.experimental')} size="small" color="warning" variant="outlined" />}
         actions={(
           <Button
             variant="contained"
@@ -46,7 +48,7 @@ export default function PackagesManager() {
             onClick={() => setWizardOpen(true)}
             data-tour="packages-create"
           >
-            Create package
+            {t('packages.page.create')}
           </Button>
         )}
       />
@@ -66,15 +68,12 @@ export default function PackagesManager() {
           }}
         >
           <Inventory2OutlinedIcon sx={{ fontSize: 48, color: 'text.secondary' }} />
-          <Typography variant="h6">Bundle your FLUJO setup into a shareable package</Typography>
+          <Typography variant="h6">{t('packages.page.hero')}</Typography>
           <Typography variant="body2" color="text.secondary">
-            A package bundles flows, models, MCP servers (by reference) and planned
-            executions into a single manifest you can export and share. Secret values
-            (API keys, tokens) are never included — only declarations of the secrets a
-            recipient must supply at install time.
+            {t('packages.page.heroHelp')}
           </Typography>
           <Button variant="contained" startIcon={<AddIcon />} onClick={() => setWizardOpen(true)}>
-            Create package
+            {t('packages.page.create')}
           </Button>
         </Paper>
 
@@ -88,7 +87,7 @@ export default function PackagesManager() {
           }}
         >
           <Typography variant="h6" gutterBottom>
-            Package registry account
+            {t('packages.page.account')}
           </Typography>
           <RegistryAccountSettings />
         </Paper>

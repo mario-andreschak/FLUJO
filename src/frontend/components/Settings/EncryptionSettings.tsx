@@ -15,9 +15,11 @@ import {
 } from '@mui/material';
 import { Visibility, VisibilityOff, LockOutlined, LockOpenOutlined } from '@mui/icons-material';
 import { useStorage } from '@/frontend/contexts/StorageContext';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 export default function EncryptionSettings() {
   const { setKey, changeKey, verifyKey, isEncryptionInitialized, isUserEncryptionEnabled } = useStorage();
+  const { t } = useI18n();
   
   // State for new key setup
   const [newKey, setNewKey] = useState('');
@@ -67,7 +69,7 @@ export default function EncryptionSettings() {
       if (newKey.length < 12) {
         setMessage({
           type: 'error',
-          text: 'Encryption password must be at least 12 characters long for security',
+          text: t('settings.encryption.minLength'),
         });
         setIsLoading(false);
         return;
@@ -77,7 +79,7 @@ export default function EncryptionSettings() {
       if (newKey !== confirmKey) {
         setMessage({
           type: 'error',
-          text: 'Passwords do not match',
+          text: t('settings.encryption.mismatch'),
         });
         setIsLoading(false);
         return;
@@ -88,7 +90,7 @@ export default function EncryptionSettings() {
       
       setMessage({
         type: 'success',
-        text: 'Encryption password set successfully',
+        text: t('settings.encryption.setSuccess'),
       });
       setNewKey('');
       setConfirmKey('');
@@ -97,7 +99,7 @@ export default function EncryptionSettings() {
     } catch (error) {
       setMessage({
         type: 'error',
-        text: 'Failed to set encryption password',
+        text: t('settings.encryption.setFailed'),
       });
     } finally {
       setIsLoading(false);
@@ -114,7 +116,7 @@ export default function EncryptionSettings() {
       if (changeNewKey.length < 12) {
         setMessage({
           type: 'error',
-          text: 'New password must be at least 12 characters long for security',
+          text: t('settings.encryption.newMinLength'),
         });
         setIsLoading(false);
         return;
@@ -125,7 +127,7 @@ export default function EncryptionSettings() {
       if (!isValid) {
         setMessage({
           type: 'error',
-          text: 'Current password is incorrect',
+          text: t('settings.encryption.currentIncorrect'),
         });
         setIsLoading(false);
         return;
@@ -137,7 +139,7 @@ export default function EncryptionSettings() {
       if (success) {
         setMessage({
           type: 'success',
-          text: 'Encryption password changed successfully',
+          text: t('settings.encryption.changeSuccess'),
         });
         setCurrentKey('');
         setChangeNewKey('');
@@ -145,13 +147,13 @@ export default function EncryptionSettings() {
       } else {
         setMessage({
           type: 'error',
-          text: 'Failed to change encryption password',
+          text: t('settings.encryption.changeFailed'),
         });
       }
     } catch (error) {
       setMessage({
         type: 'error',
-        text: 'An error occurred while changing the password',
+        text: t('settings.encryption.changeError'),
       });
     } finally {
       setIsLoading(false);
@@ -161,12 +163,11 @@ export default function EncryptionSettings() {
   return (
     <Box sx={{ width: '100%' }}>
       <Typography variant="h6" gutterBottom>
-        Encryption Settings
+        {t('settings.encryption.title')}
       </Typography>
       
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-        Set an encryption password to secure sensitive data like API keys and credentials. 
-        This password is used to encrypt your data and is never stored directly.
+        {t('settings.encryption.description')}
       </Typography>
 
       {message && (
@@ -177,26 +178,26 @@ export default function EncryptionSettings() {
 
       {/* Status indicator */}
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
-        <Typography variant="body1" sx={{ mr: 2 }}>Current encryption status:</Typography>
+        <Typography variant="body1" sx={{ mr: 2 }}>{t('settings.encryption.status')}</Typography>
         {isInitialized ? (
           isUserEncryption ? (
             <Chip 
               icon={<LockOutlined />} 
-              label="Custom Password Protection" 
+              label={t('settings.encryption.statusCustom')}
               color="success" 
               variant="outlined" 
             />
           ) : (
             <Chip 
               icon={<LockOpenOutlined />} 
-              label="Default Encryption" 
+              label={t('settings.encryption.statusDefault')}
               color="primary" 
               variant="outlined" 
             />
           )
         ) : (
           <Chip 
-            label="No Encryption" 
+            label={t('settings.encryption.statusNone')}
             color="error" 
             variant="outlined" 
           />
@@ -206,19 +207,17 @@ export default function EncryptionSettings() {
       {!isInitialized || !isUserEncryption ? (
         <Paper elevation={2} sx={{ p: 3, mb: 4 }}>
           <Typography variant="subtitle1" gutterBottom fontWeight="bold">
-            Set Custom Encryption Password
+            {t('settings.encryption.setTitle')}
           </Typography>
           
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            {isInitialized ? 
-              "Your data is currently protected with default encryption. Set a custom password for enhanced security." :
-              "Create a strong password to protect your sensitive data. Make sure to remember this password as it cannot be recovered if lost."}
+            {t(isInitialized ? 'settings.encryption.defaultHelp' : 'settings.encryption.newHelp')}
           </Typography>
           
           <Box component="form" onSubmit={handleInitialize}>
             <TextField
               fullWidth
-              label="New Password"
+              label={t('settings.encryption.newPassword')}
               variant="outlined"
               value={newKey}
               onChange={(e) => setNewKey(e.target.value)}
@@ -227,7 +226,7 @@ export default function EncryptionSettings() {
                 endAdornment: (
                   <InputAdornment position="end">
                     <IconButton
-                      aria-label="toggle password visibility"
+                      aria-label={showNewKey ? t('encryption.unlock.hidePassword') : t('encryption.unlock.showPassword')}
                       onClick={() => setShowNewKey(!showNewKey)}
                       edge="end"
                     >
@@ -241,7 +240,7 @@ export default function EncryptionSettings() {
             
             <TextField
               fullWidth
-              label="Confirm Password"
+              label={t('settings.encryption.confirmPassword')}
               variant="outlined"
               value={confirmKey}
               onChange={(e) => setConfirmKey(e.target.value)}
@@ -255,25 +254,24 @@ export default function EncryptionSettings() {
               color="primary"
               disabled={!newKey || !confirmKey || isLoading}
             >
-              {isInitialized ? "Upgrade to Custom Password" : "Set Encryption Password"}
+              {t(isInitialized ? 'settings.encryption.upgrade' : 'settings.encryption.setAction')}
             </Button>
           </Box>
         </Paper>
       ) : isUserEncryption ? (
         <Paper elevation={2} sx={{ p: 3 }}>
           <Typography variant="subtitle1" gutterBottom fontWeight="bold">
-            Change Encryption Password
+            {t('settings.encryption.changeTitle')}
           </Typography>
           
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            You can change your custom encryption password here. This will re-encrypt your data with the new password.
-            Your data will remain intact.
+            {t('settings.encryption.changeHelp')}
           </Typography>
           
           <Box component="form" onSubmit={handleChangePassword}>
             <TextField
               fullWidth
-              label="Current Password"
+              label={t('settings.encryption.currentPassword')}
               variant="outlined"
               value={currentKey}
               onChange={(e) => setCurrentKey(e.target.value)}
@@ -282,7 +280,7 @@ export default function EncryptionSettings() {
                 endAdornment: (
                   <InputAdornment position="end">
                     <IconButton
-                      aria-label="toggle current password visibility"
+                      aria-label={showCurrentKey ? t('encryption.unlock.hidePassword') : t('encryption.unlock.showPassword')}
                       onClick={() => setShowCurrentKey(!showCurrentKey)}
                       edge="end"
                     >
@@ -296,7 +294,7 @@ export default function EncryptionSettings() {
             
             <TextField
               fullWidth
-              label="New Password"
+              label={t('settings.encryption.newPassword')}
               variant="outlined"
               value={changeNewKey}
               onChange={(e) => setChangeNewKey(e.target.value)}
@@ -305,7 +303,7 @@ export default function EncryptionSettings() {
                 endAdornment: (
                   <InputAdornment position="end">
                     <IconButton
-                      aria-label="toggle new password visibility"
+                      aria-label={showChangeNewKey ? t('encryption.unlock.hidePassword') : t('encryption.unlock.showPassword')}
                       onClick={() => setShowChangeNewKey(!showChangeNewKey)}
                       edge="end"
                     >
@@ -323,7 +321,7 @@ export default function EncryptionSettings() {
               color="primary"
               disabled={!currentKey || !changeNewKey || isLoading}
             >
-              Change Password
+              {t('settings.encryption.changeAction')}
             </Button>
           </Box>
         </Paper>
@@ -333,19 +331,19 @@ export default function EncryptionSettings() {
       <Box sx={{ mt: 4 }}>
         <Alert severity={isUserEncryption ? "warning" : "info"}>
           <Typography variant="subtitle2" fontWeight="bold">
-            {isUserEncryption ? "Important Security Information" : "About Default Encryption"}
+            {t(isUserEncryption ? 'settings.encryption.securityTitle' : 'settings.encryption.defaultTitle')}
           </Typography>
           {isUserEncryption ? (
             <Typography variant="body2">
-              • Your custom encryption password is never stored directly on the server<br />
-              • If you forget your password, you will not be able to access your encrypted data<br />
-              • Consider using a password manager to securely store this password
+              • {t('settings.encryption.security1')}<br />
+              • {t('settings.encryption.security2')}<br />
+              • {t('settings.encryption.security3')}
             </Typography>
           ) : (
             <Typography variant="body2">
-              • Your data is currently encrypted with a built-in default key<br />
-              • This provides basic protection without requiring password setup<br />
-              • For maximum security, set a custom password using the form above
+              • {t('settings.encryption.default1')}<br />
+              • {t('settings.encryption.default2')}<br />
+              • {t('settings.encryption.default3')}
             </Typography>
           )}
         </Alert>

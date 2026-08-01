@@ -3,6 +3,7 @@
 import React from 'react';
 import { RepoInfo } from '../../types';
 import { Box, Button } from '@mui/material';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface GitHubActionsProps {
   showCloneButton: boolean;
@@ -21,6 +22,7 @@ const GitHubActions: React.FC<GitHubActionsProps> = ({
   repoExists,
   onClone
 }) => {
+  const { t } = useI18n();
   if (!showCloneButton) return null;
 
   // Handle regular clone (no force)
@@ -42,7 +44,7 @@ const GitHubActions: React.FC<GitHubActionsProps> = ({
           onClick={handleForceClone}
           disabled={isCloning || !repoInfo}
         >
-          {isCloning ? 'Processing...' : 'Re-clone (Force)'}
+          {isCloning ? t('mcp.github.processing') : t('mcp.github.reclone')}
         </Button>
       )}
       <Button
@@ -51,7 +53,7 @@ const GitHubActions: React.FC<GitHubActionsProps> = ({
         onClick={handleClone}
         disabled={isCloning || !repoInfo}
       >
-        {isCloning ? 'Processing...' : repoExists ? 'Use Existing' : '2) Clone Repository'}
+        {isCloning ? t('mcp.github.processing') : repoExists ? t('mcp.github.useExisting') : t('mcp.github.clone')}
       </Button>
     </Box>
   );

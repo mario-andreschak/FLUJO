@@ -15,6 +15,8 @@ import {
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import CheckIcon from '@mui/icons-material/Check';
 import { WebhookTriggerConfig } from '@/shared/types/plannedExecution';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import Trans from '@/frontend/components/shared/Trans';
 
 interface WebhookPanelProps {
   config: WebhookTriggerConfig;
@@ -31,6 +33,7 @@ interface WebhookPanelProps {
  * regeneration, and the external-callers opt-in.
  */
 const WebhookPanel = ({ config, onChange, executionId, saved }: WebhookPanelProps) => {
+  const { t } = useI18n();
   const [copied, setCopied] = useState<string | null>(null);
 
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
@@ -50,20 +53,19 @@ const WebhookPanel = ({ config, onChange, executionId, saved }: WebhookPanelProp
     <Box sx={{ mt: 1 }}>
       {!saved && (
         <Alert severity="info" sx={{ mb: 2 }}>
-          This URL and token are ready to copy now — they become active when
-          you save.
+          {t('automations.webhook.pending')}
         </Alert>
       )}
 
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <TextField
           fullWidth
-          label="Webhook URL"
+          label={t('automations.webhook.url')}
           value={url}
           InputProps={{ readOnly: true }}
           size="small"
         />
-        <Tooltip title="Copy URL">
+        <Tooltip title={t('automations.webhook.copyUrl')}>
           <IconButton onClick={() => copy('url', url)}>
             {copied === 'url' ? <CheckIcon color="success" /> : <ContentCopyIcon />}
           </IconButton>
@@ -72,13 +74,13 @@ const WebhookPanel = ({ config, onChange, executionId, saved }: WebhookPanelProp
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 2 }}>
         <TextField
           fullWidth
-          label="Secret token"
+          label={t('automations.webhook.secretToken')}
           value={config.token}
           InputProps={{ readOnly: true }}
           size="small"
           type="password"
         />
-        <Tooltip title="Copy token">
+        <Tooltip title={t('automations.webhook.copyToken')}>
           <IconButton onClick={() => copy('token', config.token)} disabled={!config.token}>
             {copied === 'token' ? <CheckIcon color="success" /> : <ContentCopyIcon />}
           </IconButton>
@@ -88,18 +90,19 @@ const WebhookPanel = ({ config, onChange, executionId, saved }: WebhookPanelProp
           onClick={() => onChange({ ...config, token: crypto.randomUUID() })}
           sx={{ whiteSpace: 'nowrap' }}
         >
-          New token
+          {t('automations.webhook.newToken')}
         </Button>
       </Box>
       <Typography variant="caption" color="text.secondary">
         {saved
-          ? 'A new token takes effect when you save — callers using the old one are cut off.'
+          ? t('automations.webhook.rotationHelp')
           : ''}
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>
-        Callers send a POST with the token in the <code>X-Flujo-Token</code>{' '}
-        header (or <code>?token=…</code>). The request body becomes part of
-        the flow&apos;s input — treat it as untrusted data in your prompt.
+        <Trans
+          message="automations.webhook.instructions"
+          values={{ header: <code>X-Flujo-Token</code>, query: <code>?token=…</code> }}
+        />
       </Typography>
 
       <FormControlLabel
@@ -110,13 +113,11 @@ const WebhookPanel = ({ config, onChange, executionId, saved }: WebhookPanelProp
             onChange={(e) => onChange({ ...config, allowExternal: e.target.checked })}
           />
         }
-        label="Allow calls from other machines (default: this computer only)"
+        label={t('automations.webhook.allowExternal')}
       />
       {config.allowExternal && (
         <Alert severity="warning">
-          FLUJO assumes a single user on this machine. If you expose it beyond
-          localhost (port forwarding, tunnels), securing that access is your
-          responsibility — anyone with the URL and token can run this flow.
+          {t('automations.webhook.externalWarning')}
         </Alert>
       )}
     </Box>

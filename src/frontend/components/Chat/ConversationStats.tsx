@@ -16,6 +16,7 @@ import {
 } from '@mui/material';
 import DataUsageIcon from '@mui/icons-material/DataUsage';
 import type { Conversation } from './index';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 /** 12345 → "12.3k", 950 → "950". */
 export const formatTokens = (n: number): string =>
@@ -35,6 +36,7 @@ interface ConversationStatsProps {
  * size of the latest call.
  */
 const ConversationStats: React.FC<ConversationStatsProps> = ({ usage, contextInfo, availableNodes }) => {
+  const { t, formatNumber } = useI18n();
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
 
   if (!usage && !contextInfo) return null;
@@ -64,10 +66,14 @@ const ConversationStats: React.FC<ConversationStatsProps> = ({ usage, contextInf
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexShrink: 0 }}>
       {usage && freshTotal > 0 && (
         <>
-          <Tooltip title={`Tokens this conversation — ${freshPrompt.toLocaleString()} prompt / ${usage.completionTokens.toLocaleString()} completion${cachedReads > 0 ? ` (+${cachedReads.toLocaleString()} cached reads, not counted)` : ''}. Click for the per-node breakdown.`}>
+          <Tooltip title={t('chat.stats.tooltip', {
+            prompt: formatNumber(freshPrompt),
+            completion: formatNumber(usage.completionTokens),
+            cached: cachedReads > 0 ? t('chat.stats.cached', { count: formatNumber(cachedReads) }) : '',
+          })}>
             <Chip
               icon={<DataUsageIcon />}
-              label={`${formatTokens(freshTotal)} tokens`}
+              label={t('chat.stats.tokens', { count: formatTokens(freshTotal) })}
               size="small"
               variant="outlined"
               onClick={(e) => setAnchorEl(e.currentTarget)}
@@ -83,15 +89,15 @@ const ConversationStats: React.FC<ConversationStatsProps> = ({ usage, contextInf
           >
             <Box sx={{ p: 2, maxWidth: 420 }}>
               <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                Token usage by node
+                {t('chat.stats.title')}
               </Typography>
               <Table size="small">
                 <TableHead>
                   <TableRow>
-                    <TableCell>Node</TableCell>
-                    <TableCell align="right">Prompt</TableCell>
-                    <TableCell align="right">Completion</TableCell>
-                    <TableCell align="right">Total</TableCell>
+                    <TableCell>{t('chat.stats.node')}</TableCell>
+                    <TableCell align="right">{t('chat.stats.prompt')}</TableCell>
+                    <TableCell align="right">{t('chat.stats.completion')}</TableCell>
+                    <TableCell align="right">{t('chat.stats.total')}</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -102,24 +108,22 @@ const ConversationStats: React.FC<ConversationStatsProps> = ({ usage, contextInf
                           <span>{nodeLabel(nodeId)}</span>
                         </Tooltip>
                       </TableCell>
-                      <TableCell align="right">{n.promptTokens.toLocaleString()}</TableCell>
-                      <TableCell align="right">{n.completionTokens.toLocaleString()}</TableCell>
-                      <TableCell align="right">{n.totalTokens.toLocaleString()}</TableCell>
+                      <TableCell align="right">{formatNumber(n.promptTokens)}</TableCell>
+                      <TableCell align="right">{formatNumber(n.completionTokens)}</TableCell>
+                      <TableCell align="right">{formatNumber(n.totalTokens)}</TableCell>
                     </TableRow>
                   ))}
                   <TableRow>
-                    <TableCell sx={{ fontWeight: 'bold' }}>Total</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 'bold' }}>{usage.promptTokens.toLocaleString()}</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 'bold' }}>{usage.completionTokens.toLocaleString()}</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 'bold' }}>{usage.totalTokens.toLocaleString()}</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold' }}>{t('chat.stats.total')}</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 'bold' }}>{formatNumber(usage.promptTokens)}</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 'bold' }}>{formatNumber(usage.completionTokens)}</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 'bold' }}>{formatNumber(usage.totalTokens)}</TableCell>
                   </TableRow>
                 </TableBody>
               </Table>
               {cachedReads > 0 && (
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-                  Prompt totals include {cachedReads.toLocaleString()} tokens re-read from the
-                  prompt cache. The header chip shows the fresh figure
-                  ({freshTotal.toLocaleString()}) with those cached reads excluded.
+                  {t('chat.stats.cacheHelp', { cached: formatNumber(cachedReads), fresh: formatNumber(freshTotal) })}
                 </Typography>
               )}
             </Box>
@@ -129,7 +133,11 @@ const ConversationStats: React.FC<ConversationStatsProps> = ({ usage, contextInf
 
       {contextInfo && contextPct !== undefined && (
         <Tooltip
-          title={`Context of the latest call${contextInfo.modelDisplayName ? ` (${contextInfo.modelDisplayName})` : ''}: ${contextInfo.promptTokens.toLocaleString()} of ${contextInfo.contextWindow!.toLocaleString()} tokens`}
+          title={t('chat.stats.context', {
+            model: contextInfo.modelDisplayName ? t('chat.stats.model', { model: contextInfo.modelDisplayName }) : '',
+            used: formatNumber(contextInfo.promptTokens),
+            total: formatNumber(contextInfo.contextWindow!),
+          })}
         >
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 140 }}>
             <LinearProgress
@@ -146,7 +154,9 @@ const ConversationStats: React.FC<ConversationStatsProps> = ({ usage, contextInf
       )}
 
       {contextInfo && contextPct === undefined && (
-        <Tooltip title={`Prompt size of the latest call${contextInfo.modelDisplayName ? ` (${contextInfo.modelDisplayName})` : ''}. Set the model's Context Window in its settings to see a usage meter.`}>
+        <Tooltip title={t('chat.stats.noWindow', {
+          model: contextInfo.modelDisplayName ? t('chat.stats.model', { model: contextInfo.modelDisplayName }) : '',
+        })}>
           <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
             ctx {formatTokens(contextInfo.promptTokens)}
           </Typography>

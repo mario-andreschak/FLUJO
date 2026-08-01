@@ -27,6 +27,7 @@ import {
   Chip,
   Avatar
 } from '@mui/material';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 // Define types for server data
 interface ServerInfo {
@@ -68,6 +69,7 @@ const ReferenceServersTab: React.FC<TabProps> = ({
   onUpdate,
 }) => {
   const theme = useTheme();
+  const { t, tp } = useI18n();
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [isCloning, setIsCloning] = useState<boolean>(false);
@@ -120,7 +122,7 @@ const ReferenceServersTab: React.FC<TabProps> = ({
           } else {
             setMessage({
               type: 'warning',
-              text: 'ModelContextProtocol servers repository not found. Click "Refresh" to clone it.'
+              text: t('mcp.reference.repoMissing')
             });
           }
         }
@@ -128,7 +130,7 @@ const ReferenceServersTab: React.FC<TabProps> = ({
         console.error('Error initializing Reference Servers tab:', error);
         setMessage({
           type: 'error',
-          text: `Failed to initialize: ${error instanceof Error ? error.message : 'Unknown error'}`
+          text: t('mcp.reference.initializeError', { error: error instanceof Error ? error.message : t('mcp.server.unknownError') })
         });
       } finally {
         setIsLoading(false);
@@ -136,14 +138,14 @@ const ReferenceServersTab: React.FC<TabProps> = ({
     };
     
     initializeTab();
-  }, []);
+  }, [t]);
   
   // Function to clone or pull the repository
   const handleRefresh = async () => {
     setIsRefreshing(true);
     clearConsole();
     setIsConsoleVisible(true);
-    updateConsole('Starting repository refresh...\n');
+    updateConsole(`${t('mcp.reference.refreshStart')}\n`);
     
     try {
       const repoUrl = 'https://github.com/modelcontextprotocol/servers.git';
@@ -151,7 +153,7 @@ const ReferenceServersTab: React.FC<TabProps> = ({
       
       if (repoExists) {
         // If repo exists, use 'run' action to run git pull
-        updateConsole('Repository already exists. Pulling latest changes...\n');
+        updateConsole(`${t('mcp.reference.repoPulling')}\n`);
         
         const pullResponse = await fetch('/api/git', {
           method: 'POST',
@@ -168,16 +170,16 @@ const ReferenceServersTab: React.FC<TabProps> = ({
         const pullResult = await pullResponse.json();
         
         if (pullResult.success) {
-          updateConsole(`Pull successful: ${pullResult.output || 'Repository updated'}\n`);
+          updateConsole(`${t('mcp.reference.pullSuccess', { output: pullResult.output || t('mcp.reference.repoUpdated') })}\n`);
         } else {
           // If git pull fails, try to continue anyway
-          updateConsole(`Warning: Failed to pull latest changes: ${pullResult.error}\n`);
-          updateConsole('Continuing with existing repository...\n');
+          updateConsole(`${t('mcp.reference.pullWarning', { error: pullResult.error || t('mcp.server.unknownError') })}\n`);
+          updateConsole(`${t('mcp.reference.continuing')}\n`);
         }
       } else {
         // If repo doesn't exist, clone it using git clone command
         setIsCloning(true);
-        updateConsole(`Cloning repository from ${repoUrl}...\n`);
+        updateConsole(`${t('mcp.reference.cloning', { url: repoUrl })}\n`);
         
         // First ensure the parent directory exists
         const parentDir = savePath.substring(0, savePath.lastIndexOf('/'));
@@ -200,17 +202,17 @@ const ReferenceServersTab: React.FC<TabProps> = ({
         const cloneResult = await cloneResponse.json();
         
         if (cloneResult.success) {
-          updateConsole(`Clone successful: ${cloneResult.output || 'Repository cloned'}\n`);
+          updateConsole(`${t('mcp.reference.cloneSuccess', { output: cloneResult.output || t('mcp.reference.repoCloned') })}\n`);
           setRepoExists(true);
         } else {
-          throw new Error(`Failed to clone repository: ${cloneResult.error}`);
+          throw new Error(t('mcp.reference.cloneFailed', { error: cloneResult.error || t('mcp.server.unknownError') }));
         }
         
         setIsCloning(false);
       }
       
       // Install dependencies and build
-      updateConsole('Installing dependencies... (This can take up to several MINUTES, please be patient, do not close this window.) \n');
+      updateConsole(`${t('mcp.reference.installing')}\n`);
       
       const installResponse = await fetch('/api/git', {
         method: 'POST',
@@ -229,10 +231,10 @@ const ReferenceServersTab: React.FC<TabProps> = ({
       const installResult = await installResponse.json();
       
       if (installResult.success) {
-        updateConsole(`${installResult.output || 'Dependencies installed successfully'}\n`);
+        updateConsole(`${installResult.output || t('mcp.reference.dependenciesInstalled')}\n`);
         
         // Build the servers
-        updateConsole('Building servers...\n');
+        updateConsole(`${t('mcp.reference.building')}\n`);
         
         const buildResponse = await fetch('/api/git', {
           method: 'POST',
@@ -249,12 +251,12 @@ const ReferenceServersTab: React.FC<TabProps> = ({
         const buildResult = await buildResponse.json();
         
         if (buildResult.success) {
-          updateConsole(`${buildResult.output || 'Build completed successfully'}\n`);
+          updateConsole(`${buildResult.output || t('mcp.reference.buildComplete')}\n`);
         } else {
-          updateConsole(`Build warning: ${buildResult.error}\n`);
+          updateConsole(`${t('mcp.reference.buildWarning', { error: buildResult.error || t('mcp.server.unknownError') })}\n`);
         }
       } else {
-        updateConsole(`Install warning: ${installResult.error}\n`);
+        updateConsole(`${t('mcp.reference.installWarning', { error: installResult.error || t('mcp.server.unknownError') })}\n`);
       }
       
       // Fetch server info
@@ -262,14 +264,14 @@ const ReferenceServersTab: React.FC<TabProps> = ({
       
       setMessage({
         type: 'success',
-        text: 'Repository refreshed successfully'
+        text: t('mcp.reference.refreshed')
       });
     } catch (error) {
       console.error('Error refreshing repository:', error);
-      updateConsole(`Error: ${error instanceof Error ? error.message : 'Unknown error'}\n`);
+      updateConsole(`${t('mcp.local.console.details', { details: error instanceof Error ? error.message : t('mcp.server.unknownError') })}\n`);
       setMessage({
         type: 'error',
-        text: `Failed to refresh repository: ${error instanceof Error ? error.message : 'Unknown error'}`
+        text: t('mcp.reference.refreshFailed', { error: error instanceof Error ? error.message : t('mcp.server.unknownError') })
       });
     } finally {
       setIsRefreshing(false);
@@ -278,7 +280,7 @@ const ReferenceServersTab: React.FC<TabProps> = ({
   
   // Function to fetch server information from the repo
   const fetchServerInfo = async (repoPath: string) => {
-    updateConsole('Fetching server information...\n');
+    updateConsole(`${t('mcp.reference.fetching')}\n`);
     
     try {
       // Get list of directories in src using cross-platform listDir action
@@ -299,7 +301,7 @@ const ReferenceServersTab: React.FC<TabProps> = ({
       const listResult = await listResponse.json();
       
       if (!listResult.success) {
-        throw new Error(`Failed to list directories: ${listResult.error}`);
+        throw new Error(t('mcp.reference.listFailed', { error: listResult.error || t('mcp.server.unknownError') }));
       }
       
       // Filter for directories only and exclude hidden ones
@@ -311,7 +313,7 @@ const ReferenceServersTab: React.FC<TabProps> = ({
           type: item.type 
         }));
       
-      updateConsole(`Found ${directories.length} server directories\n`);
+      updateConsole(`${t('mcp.reference.directoriesFound', { count: directories.length })}\n`);
       
       // Process each server directory
       const serverPromises = directories.map(async (dir: { name: string; type: string }) => {
@@ -379,10 +381,10 @@ const ReferenceServersTab: React.FC<TabProps> = ({
       const serverList = await Promise.all(serverPromises);
       setServers(serverList);
       
-      updateConsole(`Found ${serverList.length} servers in the repository\n`);
+      updateConsole(`${t('mcp.reference.serversFound', { count: serverList.length })}\n`);
     } catch (error) {
       console.error('Error fetching server info:', error);
-      updateConsole(`Error fetching server info: ${error instanceof Error ? error.message : 'Unknown error'}\n`);
+      updateConsole(`${t('mcp.reference.fetchError', { error: error instanceof Error ? error.message : t('mcp.server.unknownError') })}\n`);
       throw error;
     }
   };
@@ -560,7 +562,7 @@ const ReferenceServersTab: React.FC<TabProps> = ({
       console.error('Error configuring server:', error);
       setMessage({
         type: 'error',
-        text: `Error configuring server: ${error instanceof Error ? error.message : 'Unknown error'}`
+        text: t('mcp.reference.configureError', { error: error instanceof Error ? error.message : t('mcp.server.unknownError') })
       });
     }
   };
@@ -569,7 +571,7 @@ const ReferenceServersTab: React.FC<TabProps> = ({
     <Box sx={{ width: '100%' }}>
       <Stack spacing={3}>
         <Typography variant="h6" gutterBottom>
-          MCP Reference Servers
+          {t('mcp.reference.title')}
         </Typography>
         
         <Box sx={{ 
@@ -580,8 +582,8 @@ const ReferenceServersTab: React.FC<TabProps> = ({
         }}>
           <Typography variant="body1">
             {repoExists 
-              ? `${servers.length} servers available from the ModelContextProtocol repository` 
-              : 'Repository not yet cloned. Click "Refresh" to get started.'}
+              ? tp('mcp.reference.available', servers.length)
+              : t('mcp.reference.notCloned')}
           </Typography>
           
           <Button
@@ -591,7 +593,7 @@ const ReferenceServersTab: React.FC<TabProps> = ({
             onClick={handleRefresh}
             disabled={isRefreshing}
           >
-            {isRefreshing ? 'Refreshing...' : 'Refresh'}
+            {isRefreshing ? t('mcp.spotlight.refreshing') : t('mcp.spotlight.refresh')}
           </Button>
         </Box>
         
@@ -691,7 +693,7 @@ const ReferenceServersTab: React.FC<TabProps> = ({
                               }}
                             />
                             <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.8)' }}>
-                              Reference Server
+                              {t('mcp.reference.label')}
                             </Typography>
                           </Box>
                         </Box>
@@ -700,7 +702,7 @@ const ReferenceServersTab: React.FC<TabProps> = ({
                       {/* Card content */}
                       <CardContent sx={{ flexGrow: 1, pt: 2 }}>
                         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                          {server.description || `MCP Reference Server for ${server.name.replace(/-/g, ' ')}`}
+                          {server.description || t('mcp.reference.description', { server: server.name.replace(/-/g, ' ') })}
                         </Typography>
                       </CardContent>
                     </CardActionArea>

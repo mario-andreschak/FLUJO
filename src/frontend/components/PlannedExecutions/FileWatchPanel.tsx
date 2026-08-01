@@ -20,20 +20,23 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import FolderIcon from '@mui/icons-material/Folder';
 import { FileWatchEvent, FileWatchTriggerConfig } from '@/shared/types/plannedExecution';
 import FolderPickerDialog from '@/frontend/components/shared/FolderPickerDialog';
+import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { TranslationKey } from '@/frontend/i18n/messages';
 
 interface FileWatchPanelProps {
   config: FileWatchTriggerConfig;
   onChange: (config: FileWatchTriggerConfig) => void;
 }
 
-const EVENT_OPTIONS: Array<{ value: FileWatchEvent; label: string }> = [
-  { value: 'add', label: 'A file appears' },
-  { value: 'change', label: 'A file changes' },
-  { value: 'unlink', label: 'A file is deleted' },
+const EVENT_OPTIONS: Array<{ value: FileWatchEvent; labelKey: TranslationKey }> = [
+  { value: 'add', labelKey: 'automations.file.add' },
+  { value: 'change', labelKey: 'automations.file.change' },
+  { value: 'unlink', labelKey: 'automations.file.unlink' },
 ];
 
 /** File-watch trigger editor: folder, optional pattern, event kinds. */
 const FileWatchPanel = ({ config, onChange }: FileWatchPanelProps) => {
+  const { t } = useI18n();
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const toggleEvent = (event: FileWatchEvent, checked: boolean) => {
@@ -47,15 +50,15 @@ const FileWatchPanel = ({ config, onChange }: FileWatchPanelProps) => {
     <Box sx={{ mt: 1 }}>
       <TextField
         fullWidth
-        label="Folder (or file) to watch"
+        label={t('automations.file.path')}
         value={config.path}
         onChange={(e) => onChange({ ...config, path: e.target.value })}
-        placeholder="e.g. C:\Users\me\Documents\inbox"
+        placeholder={t('automations.file.pathPlaceholder')}
         margin="normal"
         InputProps={{
           endAdornment: (
             <InputAdornment position="end">
-              <Tooltip title="Browse folders (on the FLUJO machine)">
+              <Tooltip title={t('automations.file.browse')}>
                 <IconButton edge="end" onClick={() => setPickerOpen(true)}>
                   <FolderIcon />
                 </IconButton>
@@ -66,7 +69,7 @@ const FileWatchPanel = ({ config, onChange }: FileWatchPanelProps) => {
       />
       <FolderPickerDialog
         open={pickerOpen}
-        title="Choose what to watch"
+        title={t('automations.file.choose')}
         selectFiles
         initialPath={config.path || undefined}
         onClose={() => setPickerOpen(false)}
@@ -74,16 +77,16 @@ const FileWatchPanel = ({ config, onChange }: FileWatchPanelProps) => {
       />
       <TextField
         fullWidth
-        label="Only files matching (optional)"
+        label={t('automations.file.glob')}
         value={config.glob || ''}
         onChange={(e) => onChange({ ...config, glob: e.target.value || undefined })}
-        placeholder="e.g. *.pdf or reports/**/*.csv"
-        helperText="Simple patterns: * matches within a folder, ** across folders, ? one character."
+        placeholder={t('automations.file.globPlaceholder')}
+        helperText={t('automations.file.globHelp')}
         margin="normal"
       />
 
       <Typography variant="subtitle2" sx={{ mt: 1 }}>
-        Run when…
+        {t('automations.file.runWhen')}
       </Typography>
       <FormGroup row>
         {EVENT_OPTIONS.map(option => (
@@ -95,30 +98,28 @@ const FileWatchPanel = ({ config, onChange }: FileWatchPanelProps) => {
                 onChange={(e) => toggleEvent(option.value, e.target.checked)}
               />
             }
-            label={option.label}
+            label={t(option.labelKey)}
           />
         ))}
       </FormGroup>
 
       <Alert severity="info" sx={{ mt: 1 }}>
-        Bursts are batched: many files changing at once produce one run with
-        all changes listed. If this flow writes into the watched folder, it
-        will trigger itself in a loop — point its output somewhere else.
+        {t('automations.file.batchInfo')}
       </Alert>
 
       <Accordion disableGutters elevation={0} sx={{ mt: 1, '&:before': { display: 'none' } }}>
         <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ px: 0 }}>
-          <Typography variant="body2" color="text.secondary">Advanced</Typography>
+          <Typography variant="body2" color="text.secondary">{t('automations.advanced')}</Typography>
         </AccordionSummary>
         <AccordionDetails sx={{ px: 0 }}>
           <TextField
-            label="Quiet window (ms)"
+            label={t('automations.file.quietWindow')}
             type="number"
             value={config.debounceMs ?? 2000}
             onChange={(e) =>
               onChange({ ...config, debounceMs: Math.max(0, Number(e.target.value) || 0) })
             }
-            helperText="How long to wait after the last change before running."
+            helperText={t('automations.file.quietWindowHelp')}
             inputProps={{ min: 0, step: 500 }}
             sx={{ width: 220 }}
           />

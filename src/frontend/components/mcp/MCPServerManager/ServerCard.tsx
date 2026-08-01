@@ -51,6 +51,7 @@ import {
   Checkbox,
   Chip
 } from '@mui/material';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface ServerCardProps {
   name: string;
@@ -130,6 +131,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
   onToggleFavorite,
   serverConfig,
 }) => {
+  const { t } = useI18n();
   const [showErrorModal, setShowErrorModal] = useState(false);
   const [folderAnchorEl, setFolderAnchorEl] = useState<null | HTMLElement>(null);
   const [showUpdateDialog, setShowUpdateDialog] = useState(false);
@@ -162,12 +164,12 @@ const ServerCard: React.FC<ServerCardProps> = ({
     const result = await mcpService.updateServerConfig(name, { exposeAsMcpServer: checked });
     if ('success' in result && result.success) {
       setToastMessage(
-        checked ? 'Server is now exposed to external apps.' : 'Server is no longer exposed.',
+        checked ? t('mcp.card.exposed') : t('mcp.card.notExposed'),
       );
       setToastSeverity('success');
     } else {
       setExposed(!checked); // revert
-      setToastMessage('Failed to update exposure setting.');
+      setToastMessage(t('mcp.card.exposureFailed'));
       setToastSeverity('error');
     }
     setShowToast(true);
@@ -179,13 +181,13 @@ const ServerCard: React.FC<ServerCardProps> = ({
     if ('success' in result && result.success) {
       setToastMessage(
         checked
-          ? 'This server may now render interactive apps in chat (sandboxed).'
-          : 'Interactive apps disabled for this server.',
+          ? t('mcp.card.appsEnabled')
+          : t('mcp.card.appsDisabled'),
       );
       setToastSeverity('success');
     } else {
       setAppsEnabled(!checked); // revert
-      setToastMessage('Failed to update the MCP Apps setting.');
+      setToastMessage(t('mcp.card.appsFailed'));
       setToastSeverity('error');
     }
     setShowToast(true);
@@ -193,7 +195,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
 
   const handleCopyProxyUrl = () => {
     navigator.clipboard.writeText(proxyUrl);
-    setToastMessage('Endpoint URL copied to clipboard.');
+    setToastMessage(t('mcp.card.endpointCopied'));
     setToastSeverity('success');
     setShowToast(true);
   };
@@ -204,7 +206,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
   const handleCopyServerJson = () => {
     const base = typeof window !== 'undefined' ? window.location.origin : '';
     navigator.clipboard.writeText(buildSingleServerJson(name, serverConfig, base));
-    setToastMessage('Server JSON copied to clipboard.');
+    setToastMessage(t('mcp.card.jsonCopied'));
     setToastSeverity('success');
     setShowToast(true);
   };
@@ -294,13 +296,13 @@ const ServerCard: React.FC<ServerCardProps> = ({
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to reset OAuth tokens');
+        throw new Error(errorData.error || t('mcp.card.resetFailed'));
       }
 
       const result = await response.json();
       log.info(`OAuth tokens reset successfully for ${name}`, result);
       
-      setToastMessage('OAuth tokens reset successfully. Server will require re-authentication.');
+      setToastMessage(t('mcp.card.resetSuccess'));
       setToastSeverity('success');
       setShowToast(true);
       
@@ -311,7 +313,9 @@ const ServerCard: React.FC<ServerCardProps> = ({
       
     } catch (error) {
       log.error(`Failed to reset OAuth tokens for ${name}`, error);
-      setToastMessage(`Failed to reset OAuth tokens: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      setToastMessage(t('mcp.card.resetError', {
+        error: error instanceof Error ? error.message : t('mcp.card.unknownError'),
+      }));
       setToastSeverity('error');
       setShowToast(true);
     } finally {
@@ -320,6 +324,16 @@ const ServerCard: React.FC<ServerCardProps> = ({
   };
 
   const { getThemeValue, getThemeColor, colors } = useThemeUtils();
+  const statusLabel = () => {
+    switch (status) {
+      case 'connected': return t('mcp.status.connected');
+      case 'disconnected': return t('mcp.status.disconnected');
+      case 'error': return t('mcp.status.error');
+      case 'connecting': return t('mcp.status.connecting');
+      case 'initialization': return t('mcp.status.initialization');
+      case 'requires_authentication': return t('mcp.card.requiresAuth');
+    }
+  };
   
   // Extract restart logic into a reusable function
   const handleServerRestart = () => {
@@ -364,10 +378,10 @@ const ServerCard: React.FC<ServerCardProps> = ({
     >
       {/* Favorite star (#146): mirrors FlowCard — top-left, warning color when active. */}
       {onToggleFavorite && (
-        <Tooltip title={favorite ? 'Remove from favorites' : 'Add to favorites'} arrow placement="top">
+        <Tooltip title={favorite ? t('mcp.card.favoriteRemove') : t('mcp.card.favoriteAdd')} arrow placement="top">
           <IconButton
             size="small"
-            aria-label={favorite ? 'remove from favorites' : 'add to favorites'}
+            aria-label={favorite ? t('mcp.card.favoriteRemove') : t('mcp.card.favoriteAdd')}
             onClick={(e) => {
               e.stopPropagation();
               onToggleFavorite();
@@ -406,11 +420,14 @@ const ServerCard: React.FC<ServerCardProps> = ({
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
               {updateInfo?.updateAvailable && (
                 <Tooltip
-                  title={`Update available: ${shortSha(updateInfo.localSha)} → ${shortSha(updateInfo.remoteSha)}. Click to update.`}
+                  title={t('mcp.card.updateAvailable', {
+                    local: shortSha(updateInfo.localSha),
+                    remote: shortSha(updateInfo.remoteSha),
+                  })}
                 >
                   <Chip
                     icon={<SystemUpdateAltIcon />}
-                    label="Update"
+                    label={t('mcp.card.update')}
                     color="warning"
                     size="small"
                     onClick={(e) => {
@@ -430,7 +447,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
               {status === 'requires_authentication' && <LockIcon color="warning" sx={{ mr: 0.5 }} fontSize="small" />}
               {(status === 'connecting' || status === 'initialization') && <Spinner size="small" color="primary" sx={{ mr: 0.5 }} />}
               <Typography variant="body2" color={statusColor}>
-                {status === 'requires_authentication' ? 'Requires Authentication' : status}
+                {statusLabel()}
               </Typography>
             </Box>
           </Box>
@@ -467,9 +484,9 @@ const ServerCard: React.FC<ServerCardProps> = ({
               onChange={(e) => handleToggleExpose(e.target.checked)}
               size="small"
             />
-            <Tooltip title="Re-expose this server's tools to external MCP clients (Claude Desktop, Cursor, …) at a local URL.">
+            <Tooltip title={t('mcp.card.exposeHelp')}>
               <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                Expose to external apps
+                {t('mcp.card.expose')}
               </Typography>
             </Tooltip>
           </Box>
@@ -482,12 +499,12 @@ const ServerCard: React.FC<ServerCardProps> = ({
               >
                 {proxyUrl}
               </Typography>
-              <Tooltip title="Copy endpoint URL">
+              <Tooltip title={t('mcp.card.copyEndpoint')}>
                 <IconButton size="small" onClick={handleCopyProxyUrl}>
                   <ContentCopyIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
-              <Tooltip title="Copy MCP server JSON">
+              <Tooltip title={t('mcp.card.copyJson')}>
                 <IconButton size="small" onClick={handleCopyServerJson}>
                   <DataObjectIcon fontSize="small" />
                 </IconButton>
@@ -519,9 +536,9 @@ const ServerCard: React.FC<ServerCardProps> = ({
               onChange={(e) => handleToggleApps(e.target.checked)}
               size="small"
             />
-            <Tooltip title="Allow this server's tools to render isolated interactive apps (MCP Apps / ui:// resources) and broker same-server tool/resource requests. Only enable for servers you trust.">
+            <Tooltip title={t('mcp.card.appsHelp')}>
               <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                Render interactive apps
+                {t('mcp.card.apps')}
               </Typography>
             </Tooltip>
           </Box>
@@ -532,7 +549,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
           <Box sx={{ mt: 1, mb: 1 }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
               <Typography variant="body2" fontWeight="medium" color="error">
-                Error:
+                {t('mcp.card.errorLabel')}
               </Typography>
               <Button 
                 size="small"
@@ -543,7 +560,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
                   setShowErrorModal(true);
                 }}
               >
-                View Full Error
+                {t('mcp.card.viewError')}
               </Button>
             </Box>
             <Box sx={{ 
@@ -559,7 +576,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
               fontWeight: 500,
               whiteSpace: 'pre-wrap'
             }}>
-              {error || 'Unknown error'}
+              {error || t('mcp.card.unknownError')}
             </Box>
           </Box>
         )}
@@ -568,7 +585,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
           <Box sx={{ mt: 1, mb: 1 }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
               <Typography variant="body2" fontWeight="medium" color="warning.main">
-                Authentication Required
+                {t('mcp.card.authRequired')}
               </Typography>
             </Box>
             <Button
@@ -595,7 +612,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
 
                     if (!response.ok) {
                       const errorData = await response.json();
-                      throw new Error(errorData.error || 'Failed to initiate OAuth');
+                      throw new Error(errorData.error || t('mcp.card.oauthInitiateFailed'));
                     }
 
                     const { authorizationUrl, alreadyAuthorized } = await response.json();
@@ -622,14 +639,14 @@ const ServerCard: React.FC<ServerCardProps> = ({
                       },
                       onError: (error) => {
                         log.error(`OAuth authentication failed for ${name}`, error);
-                        setToastMessage('OAuth authentication failed');
+                        setToastMessage(t('mcp.card.oauthFailed'));
                         setToastSeverity('error');
                         setShowToast(true);
                       },
                     });
                   } catch (error) {
                     log.error(`Failed to start OAuth authentication for ${name}`, error);
-                    setToastMessage('Failed to start OAuth authentication');
+                    setToastMessage(t('mcp.card.oauthStartFailed'));
                     setToastSeverity('error');
                     setShowToast(true);
                   }
@@ -637,7 +654,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
               }}
               sx={{ width: '100%' }}
             >
-              Authenticate with {name}
+              {t('mcp.card.authenticate', { server: name })}
             </Button>
           </Box>
         )}
@@ -664,11 +681,11 @@ const ServerCard: React.FC<ServerCardProps> = ({
               color: enabled ? 'primary.main' : 'text.secondary'
             }}
           >
-            {enabled ? 'Enabled' : 'Disabled'}
+            {enabled ? t('mcp.card.enabled') : t('mcp.card.disabled')}
           </Typography>
           
           {enabled && (
-            <Tooltip title="Restart server">
+            <Tooltip title={t('mcp.card.restart')}>
               <IconButton
                 size="small"
                 onClick={(e) => {
@@ -685,7 +702,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
         </Box>
         
         <Box>
-          <Tooltip title="Retry connection">
+          <Tooltip title={t('mcp.card.retry')}>
             <IconButton 
               color="primary" 
               onClick={handleRetryClick}
@@ -698,7 +715,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
           
           {/* Reset OAuth Tokens button - only show for streamable servers with OAuth tokens */}
           {transport === 'streamable' && hasOAuthTokens && (
-            <Tooltip title="Reset OAuth tokens">
+            <Tooltip title={t('mcp.card.resetTokens')}>
               <IconButton 
                 color="warning" 
                 onClick={handleResetOAuthTokens}
@@ -711,7 +728,9 @@ const ServerCard: React.FC<ServerCardProps> = ({
           )}
           
           {onSetFolder && (
-            <Tooltip title={folder ? `Folder: ${folder}` : 'Move to folder'}>
+            <Tooltip title={folder
+              ? t('mcp.card.folder', { folder })
+              : t('mcp.card.moveFolder')}>
               <IconButton
                 color={folder ? 'primary' : 'default'}
                 onClick={(e) => {
@@ -725,7 +744,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
             </Tooltip>
           )}
 
-          <Tooltip title="Edit server">
+          <Tooltip title={t('mcp.card.edit')}>
             <IconButton 
               color="primary" 
               onClick={(e) => {
@@ -738,7 +757,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
             </IconButton>
           </Tooltip>
           
-          <Tooltip title="Delete server">
+          <Tooltip title={t('mcp.card.delete')}>
             <IconButton
               color="error"
               onClick={(e) => {
@@ -777,7 +796,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
         onClick={(e) => e.stopPropagation()}
       >
         <DialogTitle component="div">
-          Error Details for {name}
+          {t('mcp.card.errorTitle', { server: name })}
         </DialogTitle>
         <DialogContent>
           <Box sx={{ 
@@ -795,13 +814,13 @@ const ServerCard: React.FC<ServerCardProps> = ({
             maxHeight: '300px',
             mb: 2
           }}>
-            {error || 'Unknown error'}
+            {error || t('mcp.card.unknownError')}
           </Box>
           
           {stderrOutput && (
             <Box sx={{ mt: 2 }}>
               <Typography variant="h6" gutterBottom>
-                Stderr Output:
+                {t('mcp.card.stderr')}
               </Typography>
               <Box sx={{ 
                 p: 2, 
@@ -821,22 +840,22 @@ const ServerCard: React.FC<ServerCardProps> = ({
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setShowErrorModal(false)}>Close</Button>
+          <Button onClick={() => setShowErrorModal(false)}>{t('mcp.card.close')}</Button>
           <Button 
             onClick={() => {
               const textToCopy = [
-                error || 'Unknown error',
-                stderrOutput ? `\n\nStderr Output:\n${stderrOutput}` : ''
+                error || t('mcp.card.unknownError'),
+                stderrOutput ? `\n\n${t('mcp.card.stderr')}\n${stderrOutput}` : ''
               ].join('');
               navigator.clipboard.writeText(textToCopy);
               log.debug(`Error copied to clipboard for server: ${name}`);
-              setToastMessage('Error message copied to clipboard');
+              setToastMessage(t('mcp.card.errorCopied'));
               setToastSeverity('success');
               setShowToast(true);
             }}
             color="primary"
           >
-            Copy to Clipboard
+            {t('mcp.card.copyClipboard')}
           </Button>
         </DialogActions>
       </Dialog>
@@ -865,7 +884,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       >
         <Alert onClose={() => setShowToast(false)} severity={toastSeverity} sx={{ width: '100%' }}>
-          {toastMessage || 'Error message copied to clipboard'}
+          {toastMessage || t('mcp.card.errorCopied')}
         </Alert>
       </Snackbar>
     </Card>

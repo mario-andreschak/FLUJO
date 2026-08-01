@@ -6,7 +6,7 @@ import { transcribe } from '@/frontend/services/transcription';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 
 const log = createLogger('frontend/components/Chat/ChatInput');
-import { 
+import {
   Box, 
   TextField, 
   IconButton, 
@@ -41,6 +41,7 @@ import {
   createPromptReferenceSuggestion,
   PromptReferenceSuggestion,
 } from '@/utils/shared/promptRefs';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface ChatInputProps {
   onSendMessage: (content: string, attachments: Attachment[]) => void;
@@ -74,7 +75,7 @@ interface ChatInputProps {
 const ChatInput: React.FC<ChatInputProps> = ({
   onSendMessage,
   disabled = false,
-  placeholder = 'Type a message...',
+  placeholder,
   requireApproval = false,
   onRequireApprovalChange,
   executeInDebugger = false, // Default to false
@@ -90,6 +91,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
   onSaveEdit,
   onCancelEdit
 }) => {
+  const { t } = useI18n();
   const theme = useTheme();
   const { settings, globalEnvVars } = useStorage();
   const globalNames = useMemo(
@@ -119,7 +121,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
   const pickerSelectedId = isEditing ? (editing?.nodeId ?? null) : currentNodeId;
   const nodeLabelFor = (id: string | null) =>
     availableNodes.find(n => n.id === id)?.label
-    || (id ? `${id.substring(0, 6)}...` : 'Start');
+    || (id ? `${id.substring(0, 6)}...` : t('chat.input.startNode'));
   const currentNodeLabel = nodeLabelFor(pickerSelectedId);
   const handlePickNode = (nodeId: string | null) => {
     if (isEditing) onEditingNodeChange?.(nodeId);
@@ -335,7 +337,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
           mimeType,
         }]);
       } else {
-        setDialogTitle(`Processing ${file.name}`);
+        setDialogTitle(t('chat.input.processingFile', { file: file.name }));
         setDialogType('document');
         setDialogContent('');
         setIsProcessing(true);
@@ -347,7 +349,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
       }
     } catch (error) {
       log.error('Error reading file:', error);
-      setDialogContent('Error reading file. Please try again.');
+      setDialogContent(t('chat.input.readFailed'));
       setIsProcessing(false);
     }
     
@@ -417,7 +419,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
         const audioBlob = new Blob(audioChunksRef.current, { type: recordedMime });
         
         // Start the dialog with loading state
-        setDialogTitle('Audio Recording');
+        setDialogTitle(t('chat.input.audioRecording'));
         setDialogType('audio');
         setPendingAudioDataUrl(await readFileAsDataUrl(audioBlob));
         setPendingAudioMimeType(recordedMime);
@@ -435,7 +437,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
           
           if (speechSettings.enabled) {
             // Use the new transcription service
-            setTranscriptionStatus('Initializing transcription...');
+            setTranscriptionStatus(t('chat.input.initializingTranscription'));
             setTranscriptionProgress(0);
             
             const result = await transcribe(audioBlob, {
@@ -458,16 +460,16 @@ const ChatInput: React.FC<ChatInputProps> = ({
               });
             } else {
               // Handle error
-              setDialogContent(`Error transcribing audio: ${result.error}.`);
+              setDialogContent(t('chat.input.transcriptionFailed', { error: result.error || t('common.unknownError') }));
               log.error('Transcription failed', { error: result.error });
             }
           } else {
             // Fallback message if speech recognition is disabled
-            setDialogContent('Speech recognition is disabled in settings. Enable it to get automatic transcriptions.');
+            setDialogContent(t('chat.input.speechDisabled'));
           }
         } catch (error) {
           log.error('Error handling audio recording', { error });
-          setDialogContent(`Failed to process audio: ${error}`);
+          setDialogContent(t('chat.input.audioFailed', { error: String(error) }));
         } finally {
           setIsProcessing(false);
           
@@ -489,7 +491,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
       
     } catch (error) {
       log.error('Error starting recording:', error);
-      alert('Could not access microphone. Please check permissions.');
+      alert(t('chat.input.microphoneFailed'));
     }
   };
   
@@ -581,7 +583,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
                   <Box
                     component="img"
                     src={attachment.content}
-                    alt={attachment.originalName || 'pasted image'}
+                    alt={attachment.originalName || t('chat.input.pastedImage')}
                     sx={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 1, mr: 1 }}
                   />
                 ) : attachment.type === 'video' ? (
@@ -596,7 +598,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
                   <MicIcon fontSize="small" sx={{ mr: 1 }} />
                 )}
                 <Typography variant="body2" noWrap sx={{ maxWidth: 150 }}>
-                  {attachment.originalName || `${attachment.type} attachment`}
+                  {attachment.originalName || t('chat.input.attachment', { type: attachment.type })}
                 </Typography>
                 <IconButton 
                   size="small" 
@@ -613,9 +615,9 @@ const ChatInput: React.FC<ChatInputProps> = ({
         {/* Edit banner: shown while editing an existing message in the input. */}
         {isEditing && (
           <Box sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Chip icon={<EditIcon />} label="Editing message" size="small" color="warning" variant="outlined" />
+            <Chip icon={<EditIcon />} label={t('chat.input.editing')} size="small" color="warning" variant="outlined" />
             <Typography variant="caption" color="text.secondary">
-              Enter to save · Esc to cancel
+              {t('chat.input.editKeys')}
             </Typography>
           </Box>
         )}
@@ -631,8 +633,8 @@ const ChatInput: React.FC<ChatInputProps> = ({
             minRows={1}
             maxRows={isEditing ? 12 : 4}
             dataTour="chat-input"
-            ariaLabel={isEditing ? 'Edit message' : 'Message'}
-            placeholder={isEditing ? 'Edit message...' : placeholder}
+            ariaLabel={isEditing ? t('chat.input.editMessage') : t('chat.input.message')}
+            placeholder={isEditing ? t('chat.input.editPlaceholder') : (placeholder || t('chat.input.placeholder'))}
             onKeyDown={handleKeyPress}
             onPaste={handlePaste}
             disabled={isEditing ? false : disabled}
@@ -644,7 +646,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
           {!isEditing && (
             <>
           {/* File attachment button */}
-          <Tooltip title="Attach document">
+          <Tooltip title={t('chat.input.attach')}>
             <IconButton
               color="primary"
               onClick={handleFileSelect}
@@ -664,7 +666,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
           />
 
           {/* Audio recording button */}
-          <Tooltip title={isRecording ? "Stop recording" : "Record audio"}>
+          <Tooltip title={isRecording ? t('chat.input.stopRecording') : t('chat.input.recordAudio')}>
             <IconButton
               color={isRecording ? "error" : "primary"}
               onClick={isRecording ? stopRecording : startRecording}
@@ -692,11 +694,11 @@ const ChatInput: React.FC<ChatInputProps> = ({
           {isEditing ? (
             <>
               {/* Save / cancel the edit */}
-              <Tooltip title="Save edit">
+              <Tooltip title={t('chat.input.saveEdit')}>
                 <span>
                   <IconButton
                     color="primary"
-                    aria-label="Save edit"
+                    aria-label={t('chat.input.saveEdit')}
                     onClick={handleSaveEdit}
                     disabled={!editing?.content.trim()}
                   >
@@ -704,21 +706,21 @@ const ChatInput: React.FC<ChatInputProps> = ({
                   </IconButton>
                 </span>
               </Tooltip>
-              <Tooltip title="Cancel edit">
-                <IconButton color="default" aria-label="Cancel edit" onClick={() => onCancelEdit?.()}>
+              <Tooltip title={t('chat.input.cancelEdit')}>
+                <IconButton color="default" aria-label={t('chat.input.cancelEdit')} onClick={() => onCancelEdit?.()}>
                   <CloseIcon />
                 </IconButton>
               </Tooltip>
             </>
           ) : (
             /* Send button */
-            <Tooltip title="Send message">
+            <Tooltip title={t('chat.input.send')}>
               <span>
                 <IconButton
                   color="primary"
                   onClick={handleSend}
                   disabled={disabled || (!message.trim() && attachments.length === 0)}
-                  aria-label="Send message"
+                  aria-label={t('chat.input.send')}
                   sx={{
                     width: 44,
                     height: 44,
@@ -763,10 +765,10 @@ const ChatInput: React.FC<ChatInputProps> = ({
             {(onSelectNode || isEditing) && availableNodes.length > 0 && (
               <>
                 <Tooltip title={isEditing
-                  ? 'Node this message runs on — click to pick from the agent'
+                  ? t('chat.input.nodeEditing')
                   : (nodeOverrideActive
-                    ? 'Next message will run on this manually picked node — click to change'
-                    : 'Node the next message will run on — click to pick from the agent')}>
+                    ? t('chat.input.nodeOverride')
+                    : t('chat.input.nodeAutomatic'))}>
                   <Chip
                     icon={<AccountTreeIcon />}
                     label={currentNodeLabel}
@@ -797,7 +799,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
                   disabled={disabled}
                 />
               }
-              label={<Typography variant="caption">Require Tool Approvals</Typography>}
+              label={<Typography variant="caption">{t('chat.input.requireApprovals')}</Typography>}
               sx={{ mr: 'auto' }} // Push to the left
             />
             )}
@@ -812,7 +814,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
                     disabled={disabled}
                   />
                 }
-                label={<Typography variant="caption">Execute in Debugger</Typography>}
+                label={<Typography variant="caption">{t('chat.input.debugger')}</Typography>}
                 sx={{ ml: 2 }} // Add some margin to separate from the other checkbox
               />
             )}
@@ -831,7 +833,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
           {dialogTitle}
           {!isProcessing && (
             <IconButton
-              aria-label="close"
+              aria-label={t('common.close')}
               onClick={() => setDialogOpen(false)}
               sx={{
                 position: 'absolute',
@@ -853,7 +855,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
               {dialogType === 'audio' && (
                 <Box sx={{ mt: 2, textAlign: 'center' }}>
                   <Typography variant="body2">
-                    {transcriptionStatus || 'Processing audio...'}
+                    {transcriptionStatus || t('chat.input.processingAudio')}
                   </Typography>
                   {transcriptionProgress > 0 && (
                     <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
@@ -872,7 +874,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
               value={dialogContent}
               onChange={(e) => setDialogContent(e.target.value)}
               variant="outlined"
-              placeholder={dialogType === 'document' ? 'Document content' : 'Audio transcription'}
+              placeholder={dialogType === 'document' ? t('chat.input.documentContent') : t('chat.input.audioTranscription')}
             />
           )}
         </DialogContent>
@@ -881,14 +883,14 @@ const ChatInput: React.FC<ChatInputProps> = ({
             onClick={() => setDialogOpen(false)} 
             disabled={isProcessing}
           >
-            Cancel
+            {t('common.cancel')}
           </Button>
           <Button 
             onClick={handleAddAttachment} 
             variant="contained" 
             disabled={isProcessing || !dialogContent.trim()}
           >
-            Add to Message
+            {t('chat.input.addToMessage')}
           </Button>
         </DialogActions>
       </Dialog>

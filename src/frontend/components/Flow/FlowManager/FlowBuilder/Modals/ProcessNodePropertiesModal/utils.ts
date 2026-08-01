@@ -1,23 +1,26 @@
 import { Edge } from '@xyflow/react';
 import { PropertyDefinition } from './types';
+import type { Translator } from '@/frontend/i18n/core';
 
 // Editable per-node properties surfaced in the Process node modal.
-export const getNodeProperties = (): PropertyDefinition[] => [
+export const getNodeProperties = (t?: Translator): PropertyDefinition[] => [
   {
     key: 'maxTurns',
-    label: 'Max Turns (override)',
+    label: t ? t('flows.nodeProperties.maxTurns') : 'Maximum turns (override)',
     type: 'number',
     min: 1,
-    helperText:
-      'Optional. Overrides the bound model\'s Max Turns for this node. Leave empty to inherit the model setting (default 50).',
+    helperText: t
+      ? t('flows.nodeProperties.maxTurnsHelp')
+      : 'Optional. Replaces the bound model\'s maximum turns for this node. Leave empty to inherit the model setting (default: 50).',
   },
   {
     key: 'maxTokens',
-    label: 'Max Output Tokens (override)',
+    label: t ? t('flows.nodeProperties.maxTokens') : 'Maximum output tokens (override)',
     type: 'number',
     min: 1,
-    helperText:
-      'Optional. Overrides the bound model\'s Max Output Tokens for this node. Leave empty to inherit the model setting (adapter default). Not enforced for the Claude subscription adapter.',
+    helperText: t
+      ? t('flows.nodeProperties.maxTokensHelp')
+      : 'Optional. Replaces the bound model\'s maximum output tokens for this node. Leave empty to inherit the adapter default. The Claude subscription adapter does not enforce this value.',
   },
 ];
 

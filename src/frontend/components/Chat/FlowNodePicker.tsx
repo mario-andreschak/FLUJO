@@ -22,6 +22,7 @@ import {
 import { useTheme } from '@mui/material/styles';
 import { Flow, FlowNode } from '@/shared/types/flow';
 import { nodeTypes, edgeTypes } from '@/frontend/components/Flow/FlowManager/FlowBuilder/Canvas/Canvas';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 // Only these node kinds can host a chat turn — the rest (mcp, finish, resource,
 // signal) are rendered for context but are not clickable, and edges are never
@@ -148,15 +149,15 @@ export const FlowNodePicker: React.FC<FlowNodePickerProps> = ({
   onSelect,
   onClose,
 }) => {
+  const { t } = useI18n();
   const hasFlow = !!(flow && (flow.nodes?.length ?? 0) > 0);
   return (
     <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth>
-      <DialogTitle>Pick a node to run on</DialogTitle>
+      <DialogTitle>{t('chat.nodePicker.title')}</DialogTitle>
       <DialogContent dividers sx={{ p: 0 }}>
         <Box sx={{ px: 2, pt: 1.5 }}>
           <Typography variant="caption" color="text.secondary">
-            Click a <strong>Start</strong>, <strong>Process</strong>, or{' '}
-            <strong>Subflow</strong> node. Other nodes and edges can&apos;t be picked.
+            {t('chat.nodePicker.help')}
           </Typography>
         </Box>
         <Box sx={{ height: '62vh', width: '100%' }}>
@@ -179,7 +180,7 @@ export const FlowNodePicker: React.FC<FlowNodePickerProps> = ({
               }}
             >
               <Typography variant="body2" color="text.secondary">
-                No agent to display.
+                {t('chat.nodePicker.empty')}
               </Typography>
             </Box>
           )}
@@ -194,11 +195,11 @@ export const FlowNodePicker: React.FC<FlowNodePickerProps> = ({
               onClose();
             }}
           >
-            Automatic
+            {t('chat.nodePicker.automatic')}
           </Button>
         )}
         <Box sx={{ flex: 1 }} />
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose}>{t('common.cancel')}</Button>
       </DialogActions>
     </Dialog>
   );

@@ -25,6 +25,7 @@ import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutl
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import HomeIcon from '@mui/icons-material/Home';
 import { createLogger } from '@/utils/logger';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/shared/FolderPickerDialog');
 
@@ -64,12 +65,13 @@ export interface FolderPickerDialogProps {
  */
 const FolderPickerDialog = ({
   open,
-  title = 'Choose a folder',
+  title,
   selectFiles = false,
   initialPath,
   onClose,
   onSelect,
 }: FolderPickerDialogProps) => {
+  const { t } = useI18n();
   const [data, setData] = useState<BrowseResponse | null>(null);
   const [pathInput, setPathInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -90,11 +92,11 @@ const FolderPickerDialog = ({
       setPathInput(body.path);
     } catch (err) {
       log.warn('Browse failed', err);
-      setError('Could not reach the backend to browse folders.');
+      setError(t('folderPicker.backendError'));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (open) {
@@ -112,10 +114,10 @@ const FolderPickerDialog = ({
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>{title}</DialogTitle>
+      <DialogTitle>{title ?? t('folderPicker.title')}</DialogTitle>
       <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Tooltip title="Up one folder">
+          <Tooltip title={t('folderPicker.up')}>
             <span>
               <IconButton
                 size="small"
@@ -126,7 +128,7 @@ const FolderPickerDialog = ({
               </IconButton>
             </span>
           </Tooltip>
-          <Tooltip title="Home folder">
+          <Tooltip title={t('folderPicker.home')}>
             <span>
               <IconButton size="small" disabled={loading} onClick={() => void load()}>
                 <HomeIcon fontSize="small" />
@@ -144,7 +146,7 @@ const FolderPickerDialog = ({
                 void load(pathInput);
               }
             }}
-            placeholder="Type a path and press Enter"
+            placeholder={t('folderPicker.pathPlaceholder')}
           />
         </Box>
 
@@ -172,7 +174,7 @@ const FolderPickerDialog = ({
           )}
           {!loading && data && data.entries.length === 0 && (
             <Typography variant="body2" color="text.secondary" sx={{ p: 2 }}>
-              This folder is empty.
+              {t('folderPicker.empty')}
             </Typography>
           )}
           {!loading && (
@@ -201,13 +203,13 @@ const FolderPickerDialog = ({
         </Box>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose}>{t('common.cancel')}</Button>
         <Button
           variant="contained"
           disabled={!data || loading}
           onClick={() => data && pick(data.path)}
         >
-          Select this folder
+          {t('folderPicker.select')}
         </Button>
       </DialogActions>
     </Dialog>
