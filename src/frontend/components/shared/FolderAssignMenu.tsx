@@ -66,7 +66,14 @@ const FolderAssignMenu = ({
 
   return (
     <>
-      <Menu anchorEl={anchorEl} open={open} onClose={onClose}>
+      <Menu
+        anchorEl={anchorEl}
+        open={open}
+        onClose={onClose}
+        // Menu is portalled, but React events still bubble through the card that
+        // rendered it. Keep folder actions from also activating that card.
+        onClick={(event) => event.stopPropagation()}
+      >
         {folders.length > 0 && folders.map((folder) => (
           <MenuItem key={folder} onClick={() => handleAssign(folder)} selected={folder === currentFolder}>
             <ListItemIcon>
@@ -96,7 +103,15 @@ const FolderAssignMenu = ({
         )}
       </Menu>
 
-      <Dialog open={newFolderOpen} onClose={() => setNewFolderOpen(false)} maxWidth="xs" fullWidth>
+      <Dialog
+        open={newFolderOpen}
+        onClose={() => setNewFolderOpen(false)}
+        maxWidth="xs"
+        fullWidth
+        // The dialog is opened from the portalled menu and remains a descendant
+        // of the owning card in React's event tree.
+        onClick={(event) => event.stopPropagation()}
+      >
         <DialogTitle>New folder</DialogTitle>
         <DialogContent>
           <TextField
