@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 /**
- * Offline process-boundary smoke checks for the artifacts FLUJO actually ships.
+ * Isolated process-boundary smoke checks for the artifacts FLUJO actually ships.
  *
  * The default mode packs the root app and four public MCP workspaces, installs
- * only those local tarballs with npm's offline cache, launches the installed
- * stdio binaries, then starts the installed `flujo` CLI and probes its real
- * Streamable HTTP proxy. `--proxy-only <url>` probes an already-running image.
+ * only those local tarballs, launches the installed stdio binaries with npm in
+ * offline mode, then starts the installed `flujo` CLI and probes its real
+ * Streamable HTTP proxy. The install itself may resolve public transitive
+ * dependencies: a fresh npm cache does not contain registry packuments merely
+ * because `npm ci` previously fetched their lockfile-pinned tarballs.
+ * `--proxy-only <url>` probes an already-running image.
  */
 import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
@@ -186,6 +189,13 @@ async function updateBuiltIn(baseUrl, serverName, patch) {
 export async function probeProxy(baseUrl, expectedRoot) {
   const readiness = await fetch(new URL('/api/cwd', baseUrl));
   if (!readiness.ok) throw new Error(`FLUJO readiness returned ${readiness.status}.`);
+  // Next.js can accept requests before the fire-and-forget backend startup has
+  // provisioned and connected the shipped MCP servers. Join that same memoized
+  // initialization explicitly so the proxy probe tests artifacts, not timing.
+  const initialized = await fetch(new URL('/api/init', baseUrl));
+  if (!initialized.ok) {
+    throw new Error(`FLUJO initialization returned ${initialized.status}: ${await initialized.text()}`);
+  }
 
   const filesystem = await connectProxy(baseUrl, 'filesystem');
   try {
@@ -195,7 +205,17 @@ export async function probeProxy(baseUrl, expectedRoot) {
       throw new Error(`Installed filesystem proxy returned unexpected tools: ${names.join(', ')}`);
     }
     const roots = await filesystem.callTool({ name: 'get_allowed_directories', arguments: {} });
-    if (expectedRoot && !JSON.stringify(roots.structuredContent).includes(path.resolve(expectedRoot))) {
+    const directories = roots.structuredContent?.directories;
+    const resolvedExpectedRoot = expectedRoot ? path.resolve(expectedRoot) : undefined;
+    if (
+      resolvedExpectedRoot && (
+        !Array.isArray(directories) ||
+        !directories.some((directory) =>
+          typeof directory === 'string' &&
+          path.resolve(directory).localeCompare(resolvedExpectedRoot, undefined, { sensitivity: 'accent' }) === 0
+        )
+      )
+    ) {
       throw new Error(`Filesystem proxy did not retain its disposable root: ${JSON.stringify(roots.structuredContent)}`);
     }
   } finally {
@@ -338,13 +358,20 @@ async function smokePackedArtifacts() {
     await fs.writeFile(path.join(installDir, 'package.json'), JSON.stringify({ private: true }), 'utf8');
     await run(npmCommand, [
       'install',
-      '--offline',
+      '--prefer-offline',
       '--ignore-scripts',
       '--no-audit',
       '--no-fund',
       '--package-lock=false',
       ...tarballs,
-    ], { cwd: installDir });
+    ], {
+      cwd: installDir,
+      // `cleanEnv()` deliberately makes every launched artifact offline. The
+      // one realistic exception is installation: npm packages do not bundle
+      // their third-party dependencies, so a clean consumer resolves them from
+      // the registry just like `npm install flujo-ai` does.
+      env: cleanEnv({ npm_config_offline: 'false', npm_config_prefer_offline: 'true' }),
+    });
 
     const installedModules = path.join(installDir, 'node_modules');
     const entries = Object.fromEntries(publicPackages.map((name) => [
@@ -365,7 +392,15 @@ async function smokePackedArtifacts() {
       const names = (await client.listTools()).tools.map((tool) => tool.name);
       if (!names.includes('read_file') || child.pid === process.pid) throw new Error('Packed filesystem did not cross a process boundary.');
       const result = await client.callTool({ name: 'get_allowed_directories', arguments: {} });
-      if (!JSON.stringify(result.structuredContent).includes(path.resolve(rootsDir))) {
+      const directories = result.structuredContent?.directories;
+      const expectedRoot = path.resolve(rootsDir);
+      if (
+        !Array.isArray(directories) ||
+        !directories.some((directory) =>
+          typeof directory === 'string' &&
+          path.resolve(directory).localeCompare(expectedRoot, undefined, { sensitivity: 'accent' }) === 0
+        )
+      ) {
         throw new Error('Packed filesystem did not enforce the disposable root.');
       }
     });
@@ -401,6 +436,8 @@ async function smokePackedArtifacts() {
     const appEntrypoint = path.join(appRoot, 'bin', 'flujo.mjs');
     await fs.access(appEntrypoint);
     const port = await reservePort();
+    let sandboxPort = await reservePort();
+    while (sandboxPort === port) sandboxPort = await reservePort();
     const baseUrl = `http://127.0.0.1:${port}`;
     appChild = spawn(process.execPath, [appEntrypoint, '--no-open', '--port', String(port)], {
       cwd: appRoot,
@@ -409,6 +446,7 @@ async function smokePackedArtifacts() {
         FLUJO_FS_ROOTS: rootsDir,
         FLUJO_BASH_ROOTS: rootsDir,
         FLUJO_PORT: String(port),
+        FLUJO_MCP_APP_SANDBOX_PORT: String(sandboxPort),
       }),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -445,5 +483,5 @@ if (proxyOnlyIndex !== -1) {
   console.log(`Validated the live MCP proxy at ${baseUrl}.`);
 } else {
   await smokePackedArtifacts();
-  console.log('Validated offline packed MCP binaries and the installed FLUJO proxy.');
+  console.log('Validated isolated packed MCP binaries and the installed FLUJO proxy.');
 }

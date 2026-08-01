@@ -12,7 +12,7 @@
 // container image. Once npm succeeds, pushing main rebuilds the image and the
 // version tag builds flujo-setup.exe and creates the GitHub release.
 
-import { execSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
 const run = (command) =>
@@ -30,6 +30,28 @@ const fail = (message) => {
   console.error(`\nRelease aborted: ${message}`);
   process.exit(1);
 };
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const githubRepo = 'mario-andreschak/FLUJO';
+
+async function waitForWorkflow(workflow, sha, label) {
+  console.log(`\nWaiting for ${label} ...`);
+  let runId = '';
+  for (let i = 0; i < 24 && !runId; i += 1) {
+    try {
+      runId = run(
+        `gh run list -R ${githubRepo} --workflow=${workflow} --commit ${sha} --event push --limit 1 --json databaseId --jq ".[0].databaseId"`,
+      );
+    } catch { /* run not visible yet */ }
+    if (!runId) await sleep(5000);
+  }
+  if (!runId) fail(`${label} did not appear; inspect https://github.com/${githubRepo}/actions.`);
+  try {
+    show(`gh run watch ${runId} -R ${githubRepo} --exit-status`);
+  } catch {
+    fail(`${label} failed: https://github.com/${githubRepo}/actions/runs/${runId}`);
+  }
+}
 
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
@@ -53,6 +75,15 @@ if (branch !== 'main') {
 
 if (run('git status --porcelain') !== '') {
   fail('the working tree is not clean; commit or stash all changes first.');
+}
+
+if (spawnSync('gh', ['--version'], { shell: true, stdio: 'ignore' }).status !== 0) {
+  fail('GitHub CLI is required so release cannot report success before the container image exists. Install and authenticate `gh`.');
+}
+try {
+  run('gh auth status');
+} catch {
+  fail('GitHub CLI authentication failed; run `gh auth login`.');
 }
 
 let npmUser;
@@ -94,7 +125,7 @@ show('npm run validate:mcp-release');
 
 if (dryRun) {
   console.log(
-    `\nDry run passed. Would version '${bump}', publish the four MCP packages and flujo-ai, then push main and the new version tag.`,
+    `\nDry run passed. Would version '${bump}', publish the four MCP packages and flujo-ai, push main and the new version tag, then wait for the GHCR image.`,
   );
   process.exit(0);
 }
@@ -124,9 +155,13 @@ try {
   );
 }
 
+const releaseSha = run('git rev-parse HEAD');
+await waitForWorkflow('publish-image.yml', releaseSha, `the FLUJO ${version} container build`);
+
 console.log(`\nReleased FLUJO ${version}:`);
 console.log(`  npm:    https://www.npmjs.com/package/flujo-ai/v/${version}`);
 for (const packageName of publicMcpPackages) {
   console.log(`  npm:    https://www.npmjs.com/package/${packageName}/v/${version}`);
 }
 console.log(`  GitHub: https://github.com/mario-andreschak/FLUJO/releases/tag/${tag}`);
+console.log(`  GHCR:  ghcr.io/mario-andreschak/flujo:${version}`);
