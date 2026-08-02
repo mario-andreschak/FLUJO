@@ -1,6 +1,5 @@
 'use client';
 
-// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { Flow, FlowNode, HistoryEntry } from '@/shared/types/flow';
 import { Edge } from '@xyflow/react';
@@ -86,6 +85,23 @@ class FlowService {
     const data = await response.json().catch(() => null);
     if (!response.ok) throw new Error(data?.error || 'Could not suggest connected tools.');
     return data as StepToolSuggestionResult;
+  }
+
+  async generateNameForFlow(payload: {
+    flow: Flow;
+    modelId: string;
+    existingNames?: string[];
+  }): Promise<{ name: string }> {
+    const response = await fetch('/api/flow/assist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'generate-name', ...payload }),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok || typeof data?.name !== 'string') {
+      throw new Error(data?.error || 'Could not generate a workflow name.');
+    }
+    return { name: data.name };
   }
 
   async applyToolsToStep(payload: {

@@ -26,6 +26,7 @@
     "dev": "node scripts/launch-next.mjs dev -p 4200",
     "turbo": "node scripts/launch-next.mjs dev --turbopack -p 4200",
     "build": "npm run build:mcp && next build",
+    "dockerbuild": "gh workflow run publish-image.yml -R mario-andreschak/FLUJO --ref main",
     "build:mcp": "npm run build -w @flujo-ai/mcp-shared && npm run build -w @mario.andreschak/mcp-filesystem && npm run build -w @mario.andreschak/mcp-bash && npm run build -w @mario.andreschak/mcp-browser && npm run build -w @mario.andreschak/mcp-flujo",
     "typecheck:mcp": "npm run typecheck --workspaces --if-present",
     "test:mcp": "npm run test --workspaces --if-present",

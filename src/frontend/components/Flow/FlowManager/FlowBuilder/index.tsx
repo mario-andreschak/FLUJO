@@ -187,6 +187,12 @@ type SaveStatus = 'saved' | 'unsaved' | 'saving' | 'error';
 type PermissionRuleDraft = PermissionRule & { id: string };
 
 const GUIDED_CONTROL_TYPES = new Set<NodeType>(['start', 'process', 'finish', 'subflow', 'signal']);
+const isPlaceholderGuidedName = (name: string, localizedUntitled?: string) => {
+  const normalized = name.trim();
+  return /^(?:NewFlow\d*|Untitled (?:assistant|agent)(?: \d+)?)$/i.test(normalized)
+    || (!!localizedUntitled
+      && normalized.toLocaleLowerCase() === localizedUntitled.trim().toLocaleLowerCase());
+};
 
 /**
  * Guided mode is intentionally a lossless view over one linear control path.
@@ -254,6 +260,8 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     )
   );
   const [flowName, setFlowName] = useState<string>(initialFlow?.name || t('flows.page.untitled'));
+  const flowNameRef = useRef(flowName);
+  flowNameRef.current = flowName;
   const [flowNameError, setFlowNameError] = useState<string | null>(null);
   // Optional free-text description shown on the Flow Card (#70).
   const [flowDescription, setFlowDescription] = useState<string>(initialFlow?.description || '');
@@ -349,6 +357,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>(isDraft ? 'unsaved' : 'saved');
   const [guidedModels, setGuidedModels] = useState<Model[]>([]);
+  const [guidedModelsLoaded, setGuidedModelsLoaded] = useState(false);
   const [guidedSelectedModelId, setGuidedSelectedModelId] = useState<string | null>(null);
   const [guidedAiAssistance, setGuidedAiAssistance] = useState<'unasked' | 'manual' | 'assisted'>(
     () => isDraft && !(initialFlow?.nodes ?? []).some(node => node.data.type === 'process') ? 'unasked' : 'manual',
@@ -379,6 +388,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     void modelService.loadModels().then((models) => {
       if (!active) return;
       setGuidedModels(models);
+      setGuidedModelsLoaded(true);
       if (models.length === 0) {
         setGuidedAiAssistance(current => current === 'unasked' ? 'manual' : current);
       }
@@ -386,6 +396,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       log.warn('Could not load connected AIs for Guided mode', error);
       if (active) {
         setGuidedModels([]);
+        setGuidedModelsLoaded(true);
         setGuidedAiAssistance(current => current === 'unasked' ? 'manual' : current);
       }
     });
@@ -1251,6 +1262,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       return;
     }
 
+    const isFirstProcessStep = !nodes.some(node => node.data.type === 'process');
     const processNode = flowService.createNode('process', {
       x: source.position.x,
       y: source.position.y + 180,
@@ -1302,17 +1314,56 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       target: finishNode.id,
       targetHandle: defaultTargetHandleFor('finish', 'process-bottom'),
     };
-    setNodes(nextNodes);
-    setEdges([
+    const nextEdges = [
       ...remainingEdges,
       createEdgeFromConnection(intoTask, nextNodes),
       createEdgeFromConnection(intoFinish, nextNodes),
-    ]);
+    ];
+    setNodes(nextNodes);
+    setEdges(nextEdges);
 
-    if (!nodes.some(node => node.data.type === 'process') && !flowDescription.trim()) {
+    if (isFirstProcessStep && !flowDescription.trim()) {
       setFlowDescription(prompt);
     }
     if (guidedAiAssistance === 'assisted' && guidedSelectedModelId) {
+      if (isFirstProcessStep && isPlaceholderGuidedName(flowName, t('flows.page.untitled'))) {
+        const requestedName = flowName;
+        const draftForName: Flow = {
+          ...(initialFlow ?? {
+            id: fallbackFlowId.current,
+            name: requestedName,
+            nodes: [],
+            edges: [],
+          }),
+          id: initialFlow?.id ?? fallbackFlowId.current,
+          name: requestedName,
+          // Naming follows the goal the user just submitted, even when this
+          // draft inherited an older card description.
+          description: prompt,
+          nodes: nextNodes,
+          edges: nextEdges,
+        };
+        void flowService.generateNameForFlow({
+          flow: draftForName,
+          modelId: guidedSelectedModelId,
+          existingNames: allFlows
+            .filter((flow) => flow.id !== draftForName.id)
+            .map((flow) => flow.name),
+        }).then(({ name }) => {
+          if (
+            flowNameRef.current !== requestedName
+            || !isPlaceholderGuidedName(flowNameRef.current, t('flows.page.untitled'))
+          ) return;
+          const error = validateFlowName(name);
+          if (error) return;
+          flowNameRef.current = name;
+          setFlowName(name);
+          setFlowNameError(null);
+          markDirty();
+        }).catch((error) => {
+          log.warn('Could not auto-generate a Guided flow name', error);
+        });
+      }
       setAssistanceNodeId(processNode.id);
       setAssistanceOpen(true);
     } else if (!guidedSelectedModelId) {
@@ -1327,6 +1378,10 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     hasUnsafeGuidedGraph,
     showBuilderNotice,
     flowDescription,
+    flowName,
+    initialFlow,
+    allFlows,
+    markDirty,
     t,
   ]);
 
@@ -1872,6 +1927,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
               flowName={flowName}
               flowNameError={flowNameError}
               onFlowNameChange={(value) => {
+                flowNameRef.current = value;
                 setFlowName(value);
                 setFlowNameError(validateFlowName(value));
                 markDirty();
@@ -1885,6 +1941,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
               needsAIConnection={!guidedModelsReady}
               onSwitchAdvanced={() => setAuthoringMode('advanced')}
               models={guidedModels}
+              modelsLoading={!guidedModelsLoaded}
               aiAssistance={guidedAiAssistance}
               selectedModelId={guidedSelectedModelId}
               onChooseAssistance={(choice) => {
@@ -1939,6 +1996,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
           flowName={flowName}
           flowNameError={flowNameError}
           onFlowNameChange={(value) => {
+            flowNameRef.current = value;
             setFlowName(value);
             setFlowNameError(validateFlowName(value));
             markDirty();
@@ -1965,6 +2023,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
           onConnectMcpServer={handleConnectMcpServer}
           onRemoveMcpServer={handleRemoveMcpServer}
           loadMcpServers={loadInspectorMcpServers}
+          models={guidedModels}
         />
       )}
       

@@ -144,6 +144,7 @@ describe('FlowBuilder InspectorPanel', () => {
     expect(screen.getByLabelText('Step settings')).toBeInTheDocument();
     expect(screen.queryByRole('tab')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Step name')).toHaveValue('Research');
+    expect(screen.queryByLabelText('Short note (optional)')).not.toBeInTheDocument();
     expect(screen.getByLabelText('What should the AI do?')).toHaveValue('Find reliable sources');
     expect(screen.getByRole('button', { name: 'More options' })).toBeInTheDocument();
     expect(screen.queryByText('process-1')).not.toBeInTheDocument();
@@ -186,5 +187,44 @@ describe('FlowBuilder InspectorPanel', () => {
 
     fireEvent.click(screen.getByText('github'));
     expect(onConnectMcpServer).toHaveBeenCalledWith('process-1', 'github');
+  });
+
+  it('binds models through a simple AI picker and an expert model-card picker', async () => {
+    const models: any[] = [{
+      id: 'model-friendly',
+      name: 'friendly-model',
+      displayName: 'Friendly AI',
+      description: 'A helpful model',
+      provider: 'openai',
+      ApiKey: 'encrypted',
+    }];
+    const simpleCommit = jest.fn();
+    const { unmount } = render(
+      <InspectorPanel
+        {...baseProps}
+        beginnerMode
+        selectedNode={processNode}
+        models={models}
+        onCommitNode={simpleCommit}
+      />,
+    );
+
+    expect(screen.getByText('AI for this step')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Choose an AI' }));
+    expect(screen.getByRole('dialog', { name: 'Choose an AI for this step' })).toBeInTheDocument();
+    fireEvent.click(await screen.findByText('Friendly AI'));
+    expect(simpleCommit).toHaveBeenLastCalledWith('process-1', expect.objectContaining({
+      properties: expect.objectContaining({
+        boundModel: 'model-friendly',
+        modelName: 'friendly-model',
+      }),
+    }));
+
+    unmount();
+    render(<InspectorPanel {...baseProps} selectedNode={processNode} models={models} />);
+    expect(screen.getByText('Bound model')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Choose model' }));
+    expect(screen.getByRole('dialog', { name: 'Choose a bound model' })).toBeInTheDocument();
+    expect(screen.getByText('A helpful model')).toBeInTheDocument();
   });
 });

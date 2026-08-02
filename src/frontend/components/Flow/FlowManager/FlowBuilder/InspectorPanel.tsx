@@ -24,6 +24,7 @@ import SettingsSuggestRoundedIcon from '@mui/icons-material/SettingsSuggestRound
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
 import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
 import type { FlowNode } from '@/frontend/types/flow/flow';
+import type { Model } from '@/shared/types';
 import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { Translator } from '@/frontend/i18n/core';
@@ -31,6 +32,7 @@ import InspectorMcpServers, {
   type InspectorMcpConnection,
   type InspectorMcpServerOption,
 } from './InspectorMcpServers';
+import InspectorModelBinding from './InspectorModelBinding';
 
 const InspectorSurface = styled(Paper)(({ theme }) => ({
   width: 320,
@@ -84,6 +86,7 @@ interface InspectorPanelProps {
   onConnectMcpServer?: (processNodeId: string, serverName: string) => void | Promise<void>;
   onRemoveMcpServer?: (processNodeId: string, mcpNodeId: string) => void;
   loadMcpServers?: () => Promise<InspectorMcpServerOption[]>;
+  models?: Model[];
 }
 
 const typeLabel = (node: FlowNode, beginnerMode: boolean, t: Translator) => {
@@ -126,6 +129,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onConnectMcpServer,
   onRemoveMcpServer,
   loadMcpServers,
+  models = [],
 }) => {
   const { t, tp } = useI18n();
   const [tab, setTab] = useState<InspectorTab>(selectedNode ? 'node' : 'flow');
@@ -150,7 +154,13 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     if (!selectedNode) return [];
     const properties = selectedNode.data.properties ?? {};
     const entries: Array<{ label: string; value: string }> = [];
-    if (typeof properties.modelId === 'string' && properties.modelId) {
+    if (typeof properties.boundModel === 'string' && properties.boundModel) {
+      const model = models.find((candidate) => candidate.id === properties.boundModel);
+      entries.push({
+        label: beginnerMode ? t('flows.inspector.summary.ai') : t('flows.inspector.summary.model'),
+        value: model?.displayName || model?.name || properties.boundModel,
+      });
+    } else if (typeof properties.modelId === 'string' && properties.modelId) {
       entries.push({ label: beginnerMode ? t('flows.inspector.summary.ai') : t('flows.inspector.summary.model'), value: properties.modelId });
     } else if (typeof properties.model === 'string' && properties.model) {
       entries.push({ label: beginnerMode ? t('flows.inspector.summary.ai') : t('flows.inspector.summary.model'), value: properties.model });
@@ -165,7 +175,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
       entries.push({ label: beginnerMode ? t('flows.inspector.summary.notification') : t('flows.inspector.summary.signal'), value: properties.signalName });
     }
     return entries;
-  }, [selectedNode, beginnerMode, t]);
+  }, [selectedNode, beginnerMode, models, t]);
 
   const commitNode = (): FlowNode | null => {
     if (!selectedNode) return null;
@@ -183,6 +193,27 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
       onCommitNode(selectedNode.id, nextData);
     }
     return { ...selectedNode, data: nextData };
+  };
+
+  const selectBoundModel = (modelId: string) => {
+    const updatedNode = commitNode();
+    if (!updatedNode) return;
+    const model = models.find((candidate) => candidate.id === modelId);
+    onCommitNode(updatedNode.id, {
+      ...updatedNode.data,
+      properties: {
+        ...(updatedNode.data.properties ?? {}),
+        boundModel: modelId,
+        ...(model ? { modelName: model.name } : {}),
+      },
+    });
+  };
+
+  const removeBoundModel = () => {
+    const updatedNode = commitNode();
+    if (!updatedNode) return;
+    const { boundModel: _boundModel, modelName: _modelName, ...properties } = updatedNode.data.properties ?? {};
+    onCommitNode(updatedNode.id, { ...updatedNode.data, properties });
   };
 
   return (
@@ -255,18 +286,20 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               }}
             />
 
-            <TextField
-              label={beginnerMode ? t('flows.inspector.shortNote') : t('flows.inspector.whatStepDoes')}
-              size="small"
-              fullWidth
-              multiline
-              minRows={2}
-              maxRows={4}
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-              onBlur={commitNode}
-              placeholder={beginnerMode ? t('flows.inspector.notePlaceholder') : t('flows.inspector.optionalNote')}
-            />
+            {!beginnerMode && (
+              <TextField
+                label={t('flows.inspector.whatStepDoes')}
+                size="small"
+                fullWidth
+                multiline
+                minRows={2}
+                maxRows={4}
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
+                onBlur={commitNode}
+                placeholder={t('flows.inspector.optionalNote')}
+              />
+            )}
 
             {(selectedNode.data.type === 'process' || selectedNode.data.type === 'start') && (
               <TextField
@@ -331,6 +364,18 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             >
               {beginnerMode ? t('flows.inspector.moreOptions') : t('flows.inspector.fullSettings')}
             </Button>
+
+            {selectedNode.data.type === 'process' && (
+              <InspectorModelBinding
+                models={models}
+                selectedModelId={typeof selectedNode.data.properties?.boundModel === 'string'
+                  ? selectedNode.data.properties.boundModel
+                  : undefined}
+                beginnerMode={beginnerMode}
+                onSelect={selectBoundModel}
+                onRemove={removeBoundModel}
+              />
+            )}
 
             {selectedNode.data.type === 'process'
               && onConnectMcpServer

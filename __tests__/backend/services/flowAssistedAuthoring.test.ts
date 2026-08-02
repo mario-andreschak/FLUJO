@@ -25,6 +25,7 @@ jest.mock('@/backend/services/flow/generationContext', () => ({
 
 import {
   checkFlowPlausibility,
+  generateFlowName,
   suggestToolsForFlowStep,
 } from '@/backend/services/flow/assistedAuthoring';
 
@@ -72,6 +73,18 @@ beforeEach(() => {
 });
 
 describe('assisted flow authoring service', () => {
+  it('generates a valid, unique name from the first workflow goal', async () => {
+    completionMock.mockResolvedValueOnce({
+      completion: { choices: [{ message: { content: '{"name":"Notes Helper!"}' } }] },
+    });
+
+    await expect(generateFlowName({
+      flow: processFlow('root', 'Summarize my notes in friendly language'),
+      modelId: 'model-1',
+      existingNames: ['Notes Helper'],
+    })).resolves.toEqual({ name: 'Notes Helper 2' });
+  });
+
   it('keeps only exact connected tool suggestions and respects an explicit empty answer', async () => {
     completionMock.mockResolvedValueOnce({
       completion: { choices: [{ message: { content: JSON.stringify({

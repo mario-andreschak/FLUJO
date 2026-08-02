@@ -43,6 +43,7 @@ interface GuidedFlowComposerProps {
   needsAIConnection?: boolean;
   onSwitchAdvanced: () => void;
   models?: Array<{ id: string; name: string; displayName?: string }>;
+  modelsLoading?: boolean;
   aiAssistance?: 'unasked' | 'manual' | 'assisted';
   selectedModelId?: string | null;
   onChooseAssistance?: (choice: 'manual' | 'assisted') => void;
@@ -121,6 +122,7 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
   needsAIConnection = false,
   onSwitchAdvanced,
   models = [],
+  modelsLoading = false,
   aiAssistance = 'manual',
   selectedModelId,
   onChooseAssistance,
@@ -141,14 +143,19 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
     },
     [nodes, orderedStepIds],
   );
+  const isPlaceholderName = /^(?:NewFlow\d*|Untitled (?:assistant|agent)(?: \d+)?)$/i.test(flowName.trim())
+    || flowName.trim().toLocaleLowerCase() === t('flows.page.untitled').trim().toLocaleLowerCase();
   const hasUsefulName = !!flowName.trim()
-    && !/^(?:NewFlow\d*|Untitled (?:assistant|agent)(?: \d+)?)$/i.test(flowName.trim())
+    && !isPlaceholderName
     && !flowNameError;
   const canAdd = !!taskPrompt.trim()
     && !hasAdvancedFeatures
     && aiAssistance !== 'unasked'
     && (aiAssistance !== 'assisted' || !!selectedModelId);
   const canTry = hasUsefulName && steps.length > 0 && readyToTry && !isSaving;
+  const showSetupSteps = aiAssistance !== 'unasked'
+    || (!modelsLoading && models.length === 0)
+    || !onChooseAssistance;
 
   const addTask = () => {
     const prompt = taskPrompt.trim();
@@ -233,41 +240,8 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
             </Paper>
           )}
 
-          <Paper
-            elevation={0}
-            sx={{
-              p: { xs: 2, sm: 2.5 },
-              border: 1,
-              borderColor: hasUsefulName ? 'success.main' : 'divider',
-              borderRadius: 4,
-              bgcolor: 'background.paper',
-            }}
-          >
-            <Stack direction="row" spacing={1.5} alignItems="flex-start">
-              <StepNumber complete={hasUsefulName}>1</StepNumber>
-              <Box sx={{ flex: 1, minWidth: 0 }}>
-                <Typography variant="h6">{t('flows.guided.nameTitle')}</Typography>
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-                  {t('flows.guided.nameHelp')}
-                </Typography>
-                <TextField
-                  fullWidth
-                  size="small"
-                  label={t('flows.guided.name')}
-                  value={flowName}
-                  error={!!flowNameError}
-                  helperText={flowNameError ?? (hasUsefulName ? t('flows.guided.looksGood') : t('flows.guided.nameHint'))}
-                  onChange={(event) => onFlowNameChange(event.target.value)}
-                  onFocus={(event) => {
-                    if (/^(?:NewFlow\d*|Untitled (?:assistant|agent)(?: \d+)?)$/i.test(event.currentTarget.value)) {
-                      event.currentTarget.select();
-                    }
-                  }}
-                />
-              </Box>
-            </Stack>
-          </Paper>
-
+          {showSetupSteps && (
+            <>
           <Paper
             elevation={0}
             sx={{
@@ -279,7 +253,7 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
             }}
           >
             <Stack direction="row" spacing={1.5} alignItems="flex-start">
-              <StepNumber complete={steps.length > 0}>2</StepNumber>
+              <StepNumber complete={steps.length > 0}>1</StepNumber>
               <Box sx={{ flex: 1, minWidth: 0 }}>
                 <Typography variant="h6">{steps.length ? t('flows.guided.addAnother') : t('flows.guided.goalQuestion')}</Typography>
                 <Typography variant="body2" color="text.secondary">
@@ -443,6 +417,43 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
               </Box>
             </Stack>
           </Paper>
+
+          <Paper
+            elevation={0}
+            sx={{
+              p: { xs: 2, sm: 2.5 },
+              border: 1,
+              borderColor: hasUsefulName ? 'success.main' : 'divider',
+              borderRadius: 4,
+              bgcolor: 'background.paper',
+            }}
+          >
+            <Stack direction="row" spacing={1.5} alignItems="flex-start">
+              <StepNumber complete={hasUsefulName}>2</StepNumber>
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography variant="h6">{t('flows.guided.nameTitle')}</Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                  {t('flows.guided.nameHelp')}
+                </Typography>
+                <TextField
+                  fullWidth
+                  size="small"
+                  label={t('flows.guided.name')}
+                  value={flowName}
+                  error={!!flowNameError}
+                  helperText={flowNameError ?? (hasUsefulName ? t('flows.guided.looksGood') : t('flows.guided.nameHint'))}
+                  onChange={(event) => onFlowNameChange(event.target.value)}
+                  onFocus={(event) => {
+                    if (isPlaceholderName) {
+                      event.currentTarget.select();
+                    }
+                  }}
+                />
+              </Box>
+            </Stack>
+          </Paper>
+            </>
+          )}
 
           <Paper
             elevation={0}

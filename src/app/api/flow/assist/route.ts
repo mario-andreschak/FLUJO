@@ -5,6 +5,7 @@ import type { StepToolSuggestion } from '@/shared/types/flow/assistance';
 import {
   applyToolsToFlowStep,
   checkFlowPlausibility,
+  generateFlowName,
   suggestToolsForFlowStep,
 } from '@/backend/services/flow/assistedAuthoring';
 import { json } from '../_helpers';
@@ -22,6 +23,18 @@ export async function POST(request: NextRequest) {
   if (!body || !isFlow(body.flow)) return json({ error: 'A valid flow is required.' }, 400);
   const action = typeof body.action === 'string' ? body.action : '';
   try {
+    if (action === 'generate-name') {
+      if (typeof body.modelId !== 'string') {
+        return json({ error: 'modelId is required.' }, 400);
+      }
+      return json(await generateFlowName({
+        flow: body.flow,
+        modelId: body.modelId,
+        existingNames: Array.isArray(body.existingNames)
+          ? body.existingNames.filter((name): name is string => typeof name === 'string')
+          : undefined,
+      }));
+    }
     if (action === 'suggest-tools') {
       if (typeof body.nodeId !== 'string' || typeof body.modelId !== 'string') {
         return json({ error: 'nodeId and modelId are required.' }, 400);

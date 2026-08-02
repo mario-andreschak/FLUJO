@@ -45,6 +45,28 @@ function extractJsonObject(text: string): Record<string, unknown> | null {
   }
 }
 
+function normalizeGeneratedFlowName(
+  candidate: string,
+  goal: string,
+  existingNames: string[],
+): string {
+  const clean = (value: string) => value
+    .replace(/[^\p{L}\p{N}_ -]+/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 64)
+    .trim();
+  const fallback = clean(goal.split(/\s+/).slice(0, 5).join(' ')) || 'New agent';
+  const base = clean(candidate) || fallback;
+  const taken = new Set(existingNames.map((name) => name.trim().toLocaleLowerCase()));
+  if (!taken.has(base.toLocaleLowerCase())) return base;
+  for (let suffix = 2; ; suffix += 1) {
+    const suffixText = ` ${suffix}`;
+    const uniqueName = `${base.slice(0, 64 - suffixText.length).trim()}${suffixText}`;
+    if (!taken.has(uniqueName.toLocaleLowerCase())) return uniqueName;
+  }
+}
+
 async function authoringCompletion(
   modelId: string,
   messages: OpenAI.ChatCompletionMessageParam[],
@@ -65,6 +87,44 @@ async function authoringCompletion(
   });
   const content = completion.choices?.[0]?.message?.content;
   return typeof content === 'string' ? content : '';
+}
+
+export async function generateFlowName(input: {
+  flow: Flow;
+  modelId: string;
+  existingNames?: string[];
+}): Promise<{ name: string }> {
+  const goal = input.flow.description?.trim()
+    || input.flow.nodes
+      .map((node) => String(node.data.properties?.promptTemplate ?? '').trim())
+      .find(Boolean)
+    || '';
+  let rawName = '';
+  try {
+    const response = await authoringCompletion(input.modelId, [
+      {
+        role: 'system',
+        content:
+          'Create a short, memorable name for this AI agent from its workflow goal. ' +
+          'Use 2 to 5 words, no quotation marks, no sentence-ending punctuation, and no explanation. ' +
+          'Return JSON only: {"name":"..."}.',
+      },
+      {
+        role: 'user',
+        content: JSON.stringify({ goal }),
+      },
+    ]);
+    const parsed = extractJsonObject(response);
+    rawName = typeof parsed?.name === 'string' ? parsed.name : response;
+  } catch (error) {
+    log.warn('AI flow-name generation failed; using a goal-derived fallback', {
+      modelId: input.modelId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return {
+    name: normalizeGeneratedFlowName(rawName, goal, input.existingNames ?? []),
+  };
 }
 
 function compactFlowForModel(flow: Flow): unknown {

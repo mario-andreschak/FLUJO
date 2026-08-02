@@ -2,6 +2,7 @@ import React from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { FlowBuilder } from '@/frontend/components/Flow/FlowManager/FlowBuilder';
 import { modelService } from '@/frontend/services/model';
+import { flowService } from '@/frontend/services/flow';
 
 jest.mock('@xyflow/react', () => ({
   ReactFlowProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -70,6 +71,7 @@ jest.mock('@/frontend/services/flow', () => ({
       position,
       data: { label: 'Process Node', type, properties: { inputMode: 'full-history' } },
     })),
+    generateNameForFlow: jest.fn().mockResolvedValue({ name: 'Notes helper' }),
   },
 }));
 jest.mock('@/frontend/services/mcp', () => ({ mcpService: {} }));
@@ -401,7 +403,8 @@ describe('FlowBuilder toolbar', () => {
     );
 
     const recipe = screen.getByLabelText('Guided agent builder');
-    fireEvent.change(within(recipe).getByLabelText('Workflow goal'), {
+    const goal = await within(recipe).findByLabelText('Workflow goal');
+    fireEvent.change(goal, {
       target: { value: 'Explain the notes.' },
     });
     await waitFor(() => expect(within(recipe).getByRole('button', { name: 'Create goal step' })).toBeEnabled());
@@ -431,8 +434,10 @@ describe('FlowBuilder toolbar', () => {
 
     const recipe = screen.getByLabelText('Guided agent builder');
     expect(within(recipe).getByText('Build it like a simple recipe.')).toBeInTheDocument();
-    expect(within(recipe).getByText('WHEN')).toBeInTheDocument();
-    expect(within(recipe).getByText('THEN')).toBeInTheDocument();
+    expect(within(recipe).queryByText('WHEN')).not.toBeInTheDocument();
+    expect(within(recipe).queryByText('THEN')).not.toBeInTheDocument();
+    expect(within(recipe).queryByLabelText('Workflow goal')).not.toBeInTheDocument();
+    expect(within(recipe).queryByLabelText('Agent name')).not.toBeInTheDocument();
     expect(screen.queryByTestId('canvas')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Add node' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Check Flow' })).not.toBeInTheDocument();
@@ -441,20 +446,27 @@ describe('FlowBuilder toolbar', () => {
 
     await waitFor(() => expect(modelService.loadModels).toHaveBeenCalledTimes(1));
     fireEvent.click(within(recipe).getByRole('button', { name: 'Yes, help me' }));
+    const goalField = within(recipe).getByLabelText('Workflow goal');
+    const nameField = within(recipe).getByLabelText('Agent name');
+    expect(goalField.compareDocumentPosition(nameField) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(recipe).getByText('WHEN')).toBeInTheDocument();
+    expect(within(recipe).getByText('THEN')).toBeInTheDocument();
     fireEvent.mouseDown(within(recipe).getByLabelText('AI helper'));
     fireEvent.click(screen.getByRole('option', { name: 'Friendly AI' }));
 
-    fireEvent.change(within(recipe).getByLabelText('Agent name'), {
-      target: { value: 'Notes helper' },
-    });
-    fireEvent.change(within(recipe).getByLabelText('Workflow goal'), {
+    fireEvent.change(goalField, {
       target: { value: 'Summarize my notes in friendly language.' },
     });
     fireEvent.click(within(recipe).getByRole('button', { name: 'Create goal step' }));
 
     await waitFor(() => {
       expect(within(recipe).getByText('Summarize my notes in friendly language.')).toBeInTheDocument();
+      expect(within(recipe).getByLabelText('Agent name')).toHaveValue('Notes helper');
     });
+    expect(flowService.generateNameForFlow).toHaveBeenCalledWith(expect.objectContaining({
+      modelId: 'model-favorite',
+      flow: expect.objectContaining({ description: 'Summarize my notes in friendly language.' }),
+    }));
     expect(screen.getByTestId('flow-assistance-dialog')).toHaveTextContent('process-new');
     expect(screen.getByLabelText('Step settings')).toBeInTheDocument();
     fireEvent.click(within(recipe).getByRole('button', { name: 'Try my agent' }));
