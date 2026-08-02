@@ -8,7 +8,8 @@
  *     and depth = parent runDepth + 1;
  *   - a successful run appends the subflow output as an assistant message
  *     attributed to this node and hands off to the node's successor edge;
- *   - with no successor it ends the flow (FINAL_RESPONSE_ACTION);
+ *   - with no successor it returns to an inferred Process caller when present,
+ *     otherwise it ends the flow (FINAL_RESPONSE_ACTION);
  *   - a failed subflow surfaces as ERROR_ACTION;
  *   - a missing subflowId fails without ever calling runFlow.
  *
@@ -16,7 +17,11 @@
  * module path as the alias below, so jest.mock intercepts it.
  */
 import type { SharedState } from '@/backend/execution/flow/types';
-import { FINAL_RESPONSE_ACTION, ERROR_ACTION } from '@/backend/execution/flow/types';
+import {
+  FINAL_RESPONSE_ACTION,
+  ERROR_ACTION,
+  IMPLICIT_SUBFLOW_RETURN_ACTION,
+} from '@/backend/execution/flow/types';
 
 jest.mock('@/backend/execution/flow/runFlow', () => ({
   runFlow: jest.fn(async (input: any) => {
@@ -397,9 +402,51 @@ describe('SubflowNode', () => {
     expect(runFlowMock.mock.calls[0][0].mode).toBe('conversation');
   });
 
-  it('ends the flow (FINAL_RESPONSE_ACTION) when there is no successor', async () => {
+  it('returns to its Process caller when a one-way Subflow has no successor', async () => {
+    const node = makeNode({ subflowId: 'inner-flow' }); // no explicit successor edge
+    const state = makeState({
+      pendingSubflowReturn: {
+        subflowNodeId: 'sub-node',
+        callerNodeId: 'calling-process',
+      },
+    });
+
+    const { action } = await node.run(state);
+
+    expect(action).toBe(IMPLICIT_SUBFLOW_RETURN_ACTION);
+  });
+
+  it('prefers an explicit onward successor over an inferred caller return', async () => {
+    const node = makeNode({ subflowId: 'inner-flow' }, 'edge-next');
+    const state = makeState({
+      pendingSubflowReturn: {
+        subflowNodeId: 'sub-node',
+        callerNodeId: 'calling-process',
+      },
+    });
+
+    const { action } = await node.run(state);
+
+    expect(action).toBe('edge-next');
+  });
+
+  it('ends the flow when there is no successor and no inferred Process caller', async () => {
     const node = makeNode({ subflowId: 'inner-flow' }); // no successor edge
     const { action } = await node.run(makeState());
+    expect(action).toBe(FINAL_RESPONSE_ACTION);
+  });
+
+  it('does not use a caller marker addressed to a different Subflow node', async () => {
+    const node = makeNode({ subflowId: 'inner-flow' });
+    const state = makeState({
+      pendingSubflowReturn: {
+        subflowNodeId: 'another-subflow',
+        callerNodeId: 'calling-process',
+      },
+    });
+
+    const { action } = await node.run(state);
+
     expect(action).toBe(FINAL_RESPONSE_ACTION);
   });
 

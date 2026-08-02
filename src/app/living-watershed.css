@@ -1,5 +1,5 @@
 /*
- * Living Watershed — experimental visual layer.
+ * Living Watershed — optional Modern-theme visual layer.
  *
  * RiverWorld adds `living-world-active` only when the Modern theme and the
  * experimental setting are both active. Keeping every rule behind that gate
@@ -321,7 +321,7 @@
   color: color-mix(in srgb, var(--living-world-accent) 78%, var(--foreground));
 }
 
-:root.modern-theme.living-world-active .living-watershed__experimental {
+:root.modern-theme.living-world-active .living-watershed__label {
   padding: 5px 8px;
   border: 1px solid color-mix(in srgb, var(--living-world-accent) 28%, var(--border));
   border-radius: 999px;
@@ -498,7 +498,7 @@ html.modern-theme.living-world-active[data-living-scene='home'] [aria-label='Get
     grid-template-columns: 42px minmax(0, auto);
   }
 
-  :root.modern-theme.living-world-active .living-watershed__experimental {
+  :root.modern-theme.living-world-active .living-watershed__label {
     display: none;
   }
 }

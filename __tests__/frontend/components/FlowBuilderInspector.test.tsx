@@ -2,6 +2,13 @@ import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { InspectorPanel } from '@/frontend/components/Flow/FlowManager/FlowBuilder/InspectorPanel';
 
+jest.mock('@/frontend/components/mcp/MCPServerManager/ServerCard', () => ({
+  __esModule: true,
+  default: ({ name, onClick }: { name: string; onClick?: () => void }) => (
+    <button type="button" onClick={onClick}>{name}</button>
+  ),
+}));
+
 const processNode: any = {
   id: 'process-1',
   type: 'process',
@@ -70,10 +77,61 @@ describe('FlowBuilder InspectorPanel', () => {
     }));
   });
 
+  it('lists connected MCP servers and removes them from the process node', () => {
+    const onRemoveMcpServer = jest.fn();
+    render(
+      <InspectorPanel
+        {...baseProps}
+        selectedNode={processNode}
+        connectedMcpServers={[{ nodeId: 'mcp-1', serverName: 'filesystem' }]}
+        onConnectMcpServer={jest.fn()}
+        onRemoveMcpServer={onRemoveMcpServer}
+        loadMcpServers={jest.fn().mockResolvedValue([])}
+      />,
+    );
+
+    expect(screen.getByText('Connected MCP servers')).toBeInTheDocument();
+    expect(screen.getByText('filesystem')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove filesystem' }));
+    expect(onRemoveMcpServer).toHaveBeenCalledWith('process-1', 'mcp-1');
+  });
+
+  it('opens the heading-free MCP picker and connects the chosen server', async () => {
+    const onConnectMcpServer = jest.fn();
+    const loadMcpServers = jest.fn().mockResolvedValue([
+      {
+        name: 'github',
+        status: 'connected',
+        transport: 'stdio',
+        rootPath: '/servers/github',
+      },
+    ]);
+    render(
+      <InspectorPanel
+        {...baseProps}
+        selectedNode={processNode}
+        connectedMcpServers={[]}
+        onConnectMcpServer={onConnectMcpServer}
+        onRemoveMcpServer={jest.fn()}
+        loadMcpServers={loadMcpServers}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add MCP server' }));
+
+    expect(await screen.findByPlaceholderText('Search servers…')).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Connect an MCP server' })).toBeInTheDocument();
+    expect(screen.queryByText('Connect an MCP server')).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByText('github'));
+
+    expect(onConnectMcpServer).toHaveBeenCalledWith('process-1', 'github');
+  });
+
   it('uses the same rail for flow-level settings when no node is selected', () => {
     render(<InspectorPanel {...baseProps} selectedNode={null} />);
 
-    fireEvent.change(screen.getByLabelText('Flow Name'), { target: { value: 'renamed_flow' } });
+    fireEvent.change(screen.getByLabelText('Flow name'), { target: { value: 'renamed_flow' } });
     fireEvent.click(screen.getByRole('checkbox', { name: 'Guided' }));
 
     expect(baseProps.onFlowNameChange).toHaveBeenCalledWith('renamed_flow');
@@ -91,5 +149,42 @@ describe('FlowBuilder InspectorPanel', () => {
     expect(screen.queryByText('process-1')).not.toBeInTheDocument();
     expect(screen.queryByText('model-1')).not.toBeInTheDocument();
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+  });
+
+  it('shows connected apps with a simple picker in beginner mode', async () => {
+    const onConnectMcpServer = jest.fn();
+    const onRemoveMcpServer = jest.fn();
+    render(
+      <InspectorPanel
+        {...baseProps}
+        beginnerMode
+        selectedNode={processNode}
+        connectedMcpServers={[{ nodeId: 'mcp-1', serverName: 'filesystem' }]}
+        onConnectMcpServer={onConnectMcpServer}
+        onRemoveMcpServer={onRemoveMcpServer}
+        loadMcpServers={jest.fn().mockResolvedValue([{
+          name: 'github',
+          status: 'connected',
+          transport: 'stdio',
+          rootPath: '/servers/github',
+        }])}
+      />,
+    );
+
+    expect(screen.getByText('Apps this step can use')).toBeInTheDocument();
+    expect(screen.queryByText('Connected MCP servers')).not.toBeInTheDocument();
+    expect(screen.getByText('filesystem')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove filesystem' }));
+    expect(onRemoveMcpServer).toHaveBeenCalledWith('process-1', 'mcp-1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add an app' }));
+    expect(await screen.findByPlaceholderText('Search apps…')).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Choose an app' })).toBeInTheDocument();
+    expect(screen.queryByText('/servers/github')).not.toBeInTheDocument();
+    expect(screen.getByText('All tools included')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('github'));
+    expect(onConnectMcpServer).toHaveBeenCalledWith('process-1', 'github');
   });
 });

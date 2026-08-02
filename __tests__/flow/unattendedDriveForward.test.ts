@@ -72,8 +72,9 @@ jest.mock('@/utils/storage/backend', () => ({
 
 // The graph the drive-forward inspects. Process node -> a single forward
 // (standard, non-bidirectional) edge to a follow-up subflow, which then leads
-// to a finish node. Two bidirectional back-edges (to test-runner/explorer
-// nodes) must NOT count as forward successors.
+// to a finish node. An explicit bidirectional worker and a one-way TERMINAL
+// worker are both call/return sub-agents and must NOT count as forward
+// successors.
 const flowGraph = {
   id: FLOW_ID,
   name: 'UnattendedFlow',
@@ -85,12 +86,15 @@ const flowGraph = {
     { id: FOLLOWUP, type: 'subflow' },
     { id: FINISH, type: 'finish' },
     { id: 'runner', type: 'subflow' },
+    { id: 'implicit-runner', type: 'subflow' },
     { id: 'mcp-server', type: 'mcp' },
   ],
   edges: [
     { source: START, target: PROCESS, type: 'custom', data: { edgeType: 'standard' } },
     // bidirectional back-edge — returns to caller, NOT a forward continuation
     { source: PROCESS, target: 'runner', type: 'custom', data: { edgeType: 'standard', bidirectional: true } },
+    // one-way but terminal — also returns implicitly to its Process caller
+    { source: PROCESS, target: 'implicit-runner', type: 'custom', data: { edgeType: 'standard' } },
     // an MCP edge — never a control successor
     { source: PROCESS, target: 'mcp-server', type: 'mcpEdge', data: { edgeType: 'mcp' } },
     // the ONE genuine forward successor
@@ -183,5 +187,29 @@ describe('unattended drive-forward (#218/#339)', () => {
     expect(result.status).toBe('completed');
     expect(result.sharedState.unattended).toBe(true);
     expect(result.sharedState.currentNodeId).toBe(FOLLOWUP);
+  });
+
+  it('does not auto-advance into a terminal one-way Subflow sub-agent', async () => {
+    getFlowMock.mockResolvedValue({
+      ...flowGraph,
+      edges: flowGraph.edges.filter(edge =>
+        edge.target !== FOLLOWUP &&
+        edge.target !== 'runner' &&
+        edge.target !== 'mcp-server'
+      ),
+    } as any);
+
+    const result = await runFlow({
+      flowId: FLOW_ID,
+      prompt: 'scheduled worker delegation',
+      mode: 'ephemeral',
+      source: 'schedule',
+    });
+
+    // Like an explicit bidirectional sub-agent, the terminal worker must be
+    // selected deliberately via its handoff tool; plain text does not enter it.
+    expect(result.status).toBe('completed');
+    expect(result.sharedState.currentNodeId).toBe(PROCESS);
+    expect((FlowExecutor.executeStep as jest.Mock).mock.calls.length).toBe(2);
   });
 });

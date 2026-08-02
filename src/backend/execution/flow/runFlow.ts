@@ -97,9 +97,10 @@ type UnattendedOutcome = 'advanced' | 'nudged' | 'complete';
  *     model to hand off, bounded by UNATTENDED_MAX_NUDGES, then complete;
  *   - ZERO (a genuine leaf, e.g. a simple answer flow)       -> complete as
  *     today.
- * "Forward" excludes bidirectional back-edges (they return to a caller rather
- * than progress toward a finish) and MCP edges. Only Process nodes are driven;
- * a Finish node reaching FINAL_RESPONSE_ACTION completes normally.
+ * "Forward" excludes explicit bidirectional back-edges AND one-way terminal
+ * Subflows (both return to their caller rather than progress toward a finish),
+ * plus MCP/resource attachments. Only Process nodes are driven; a Finish node
+ * reaching FINAL_RESPONSE_ACTION completes normally.
  */
 async function unattendedDriveForward(
   state: SharedState,
@@ -126,20 +127,46 @@ async function unattendedDriveForward(
   // reaching here means the flow genuinely ended — complete normally.
   if (!node || node.type !== 'process') return 'complete';
 
-  const mcpNodeIds = new Set((flow.nodes ?? []).filter(n => n.type === 'mcp').map(n => n.id));
+  const flowNodes = flow.nodes ?? [];
+  const flowEdges = flow.edges ?? [];
+  const mcpNodeIds = new Set(flowNodes.filter(n => n.type === 'mcp').map(n => n.id));
+
+  // Mirror FlowConverter's control-successor rules. A Subflow has an explicit
+  // onward path when it authors a non-attachment outgoing edge, or when a
+  // bidirectional edge pointing at it supplies a reverse successor. Without
+  // either, Process -> Subflow is an implicit call/return and must not be
+  // mistaken for unattended forward progress.
+  const hasRuntimeControlSuccessor = (subflowId: string): boolean =>
+    flowEdges.some((edge) => {
+      const data = edge.data as { edgeType?: string; bidirectional?: boolean } | undefined;
+      const attachment =
+        edge.type === 'mcpEdge' ||
+        data?.edgeType === 'mcp' ||
+        data?.edgeType === 'resource';
+      if (attachment) return false;
+      return edge.source === subflowId || (edge.target === subflowId && data?.bidirectional === true);
+    });
+
+  const isImplicitReturningSubflow = (targetId: string): boolean => {
+    const target = flowNodes.find(candidate => candidate.id === targetId);
+    return target?.type === 'subflow' && !hasRuntimeControlSuccessor(targetId);
+  };
+
   const forwardTargets = Array.from(
     new Set(
-      (flow.edges ?? [])
+      flowEdges
         .filter(e =>
           e.source === nodeId &&
           e.type !== 'mcpEdge' &&
           (e.data as { edgeType?: string; bidirectional?: boolean } | undefined)?.edgeType !== 'mcp' &&
+          (e.data as { edgeType?: string; bidirectional?: boolean } | undefined)?.edgeType !== 'resource' &&
           (e.data as { edgeType?: string; bidirectional?: boolean } | undefined)?.bidirectional !== true &&
-          !mcpNodeIds.has(e.target),
+          !mcpNodeIds.has(e.target) &&
+          !isImplicitReturningSubflow(e.target),
         )
         .map(e => e.target),
     ),
-  ).filter(t => (flow!.nodes ?? []).some(n => n.id === t));
+  ).filter(t => flowNodes.some(n => n.id === t));
 
   if (forwardTargets.length === 1) {
     const nextNodeId = forwardTargets[0];
@@ -1853,6 +1880,10 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
 
             emitNewMessages();
             const fromNodeId = sharedState.currentNodeId;
+            // The engine marks only Process -> one-way TERMINAL Subflow calls.
+            // Sequential Subflows and explicit bidirectional edges omit this,
+            // and every later transition clears any previous marker.
+            sharedState.pendingSubflowReturn = handoff.implicitSubflowReturn;
             sharedState.currentNodeId = nextNodeId;
             sharedState.handoffRequested = undefined;
             emit({

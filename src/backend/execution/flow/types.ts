@@ -734,6 +734,18 @@ export interface SharedState {
         edgeId: string;
         targetNodeId?: string;
     };
+    /**
+     * Runtime-only call/return marker for a Process -> terminal Subflow handoff.
+     * A one-way Subflow with no explicit successor is semantically a sub-agent:
+     * after its child flow completes it returns to the Process node that actually
+     * invoked it. The marker is caller-specific (so several Process nodes may
+     * share one terminal Subflow), survives debug/approval persistence, and is
+     * cleared on the next graph transition. Sequential Subflows never set it.
+     */
+    pendingSubflowReturn?: {
+        subflowNodeId: string;
+        callerNodeId: string;
+    };
     /** Transient, single-shot caller-supplied prompt captured at a handoff
      *  transition (issue #96) when the model passes a `prompt` argument to a
      *  handoff tool targeting an isolated subflow with `allowCallerPrompt`.
@@ -1228,4 +1240,6 @@ export const TOOL_CALL_ACTION = 'TOOL_CALL';
 export const FINAL_RESPONSE_ACTION = 'FINAL_RESPONSE';
 export const ERROR_ACTION = 'ERROR';
 export const STAY_ON_NODE_ACTION = "STAY_ON_NODE";
+/** Internal handoff emitted by a terminal one-way Subflow to resume its caller. */
+export const IMPLICIT_SUBFLOW_RETURN_ACTION = 'IMPLICIT_SUBFLOW_RETURN';
 // Handoff action is the edgeId string itself

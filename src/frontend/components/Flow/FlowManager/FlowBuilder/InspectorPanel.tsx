@@ -27,6 +27,10 @@ import type { FlowNode } from '@/frontend/types/flow/flow';
 import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { Translator } from '@/frontend/i18n/core';
+import InspectorMcpServers, {
+  type InspectorMcpConnection,
+  type InspectorMcpServerOption,
+} from './InspectorMcpServers';
 
 const InspectorSurface = styled(Paper)(({ theme }) => ({
   width: 320,
@@ -76,6 +80,10 @@ interface InspectorPanelProps {
   beginnerMode?: boolean;
   onSuggestTools?: (node: FlowNode) => void;
   onCheckPlausibility?: () => void;
+  connectedMcpServers?: InspectorMcpConnection[];
+  onConnectMcpServer?: (processNodeId: string, serverName: string) => void | Promise<void>;
+  onRemoveMcpServer?: (processNodeId: string, mcpNodeId: string) => void;
+  loadMcpServers?: () => Promise<InspectorMcpServerOption[]>;
 }
 
 const typeLabel = (node: FlowNode, beginnerMode: boolean, t: Translator) => {
@@ -114,6 +122,10 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   beginnerMode = false,
   onSuggestTools,
   onCheckPlausibility,
+  connectedMcpServers = [],
+  onConnectMcpServer,
+  onRemoveMcpServer,
+  loadMcpServers,
 }) => {
   const { t, tp } = useI18n();
   const [tab, setTab] = useState<InspectorTab>(selectedNode ? 'node' : 'flow');
@@ -319,6 +331,21 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             >
               {beginnerMode ? t('flows.inspector.moreOptions') : t('flows.inspector.fullSettings')}
             </Button>
+
+            {selectedNode.data.type === 'process'
+              && onConnectMcpServer
+              && onRemoveMcpServer
+              && loadMcpServers
+              && (
+                <InspectorMcpServers
+                  processNodeId={selectedNode.id}
+                  connections={connectedMcpServers}
+                  beginnerMode={beginnerMode}
+                  onConnect={onConnectMcpServer}
+                  onRemove={onRemoveMcpServer}
+                  loadServers={loadMcpServers}
+                />
+              )}
 
             {selectedNode.data.type === 'process' && onSuggestTools && (
               <Button

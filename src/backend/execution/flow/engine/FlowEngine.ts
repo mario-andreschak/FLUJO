@@ -26,6 +26,15 @@ export interface HandoffResolution {
   targetNodeId: string | null;
   /** The target node's type (e.g. 'finish'), or null if it cannot be determined. */
   targetNodeType?: string | null;
+  /**
+   * Set when a Process enters a one-way Subflow that has no explicit successor.
+   * The orchestration loop stores this caller-aware return marker until the
+   * terminal Subflow completes. Omitted for sequential and bidirectional calls.
+   */
+  implicitSubflowReturn?: {
+    subflowNodeId: string;
+    callerNodeId: string;
+  };
 }
 
 /**

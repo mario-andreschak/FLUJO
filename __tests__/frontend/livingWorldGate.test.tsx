@@ -6,13 +6,10 @@ import '@testing-library/jest-dom';
 import RiverWorld from '@/frontend/components/AmbientWorld/RiverWorld';
 import { flowNodeColors } from '@/frontend/utils/flowPaletteTokens';
 
-const mockStorage = {
-  settings: { experimental: { enabled: false } },
-  settingsHydrated: true,
-};
-
 const mockTheme = {
   isDarkMode: false,
+  livingWorldEnabled: true,
+  themeHydrated: true,
   visualStyle: 'modern' as 'modern' | 'legacy',
 };
 
@@ -20,28 +17,23 @@ jest.mock('next/navigation', () => ({
   usePathname: () => '/models',
 }));
 
-jest.mock('@/frontend/contexts/StorageContext', () => ({
-  useStorage: () => mockStorage,
-}));
-
 jest.mock('@/frontend/contexts/ThemeContext', () => ({
   useTheme: () => mockTheme,
 }));
 
-describe('Living Watershed experimental gate', () => {
+describe('Living Watershed theme preference', () => {
   afterEach(() => {
     cleanup();
-    mockStorage.settings.experimental.enabled = false;
-    mockStorage.settingsHydrated = true;
+    mockTheme.livingWorldEnabled = true;
+    mockTheme.themeHydrated = true;
     mockTheme.visualStyle = 'modern';
     document.documentElement.classList.remove('living-world-active');
     delete document.documentElement.dataset.livingScene;
     document.documentElement.style.removeProperty('--river-scene-accent');
   });
 
-  it('stays out of the UI until settings have hydrated', () => {
-    mockStorage.settings.experimental.enabled = true;
-    mockStorage.settingsHydrated = false;
+  it('stays out of the UI until the theme has hydrated', () => {
+    mockTheme.themeHydrated = false;
 
     const { container } = render(<RiverWorld />);
 
@@ -49,7 +41,9 @@ describe('Living Watershed experimental gate', () => {
     expect(document.documentElement).not.toHaveClass('living-world-active');
   });
 
-  it('stays disabled with the experimental master switch off', () => {
+  it('stays disabled when the landscape preference is off', () => {
+    mockTheme.livingWorldEnabled = false;
+
     const { container } = render(<RiverWorld />);
 
     expect(container.querySelector('[data-living-world]')).toBeNull();
@@ -57,7 +51,6 @@ describe('Living Watershed experimental gate', () => {
   });
 
   it('keeps the legacy compatibility preset free of the new environment', () => {
-    mockStorage.settings.experimental.enabled = true;
     mockTheme.visualStyle = 'legacy';
 
     const { container } = render(<RiverWorld />);
@@ -66,9 +59,7 @@ describe('Living Watershed experimental gate', () => {
     expect(document.documentElement).not.toHaveClass('living-world-active');
   });
 
-  it('mounts and identifies the route scene only for modern experimental UI', () => {
-    mockStorage.settings.experimental.enabled = true;
-
+  it('mounts and identifies the route scene for the default-on Modern theme', () => {
     const { container } = render(<RiverWorld />);
 
     expect(container.querySelector('[data-living-world]')).toBeInTheDocument();

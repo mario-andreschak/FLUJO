@@ -9,6 +9,7 @@ import {
   SubflowLaneResult,
   FINAL_RESPONSE_ACTION,
   ERROR_ACTION,
+  IMPLICIT_SUBFLOW_RETURN_ACTION,
 } from '../types';
 import { FEATURES } from '@/config/features';
 import { FlujoChatMessage } from '@/shared/types/chat';
@@ -1100,7 +1101,10 @@ export class SubflowNode extends BaseNode {
       }
     }
 
-    // Hand off to the single linear successor, else end the flow.
+    // An explicit successor always wins. This is the sequence shape from the
+    // canvas: Process -> Subflow -> next node, or an explicit bidirectional
+    // reverse successor. Only a truly terminal one-way Subflow falls through to
+    // the implicit sub-agent return below.
     const actions = this.successors instanceof Map
       ? Array.from(this.successors.keys())
       : Object.keys(this.successors || {});
@@ -1109,6 +1113,22 @@ export class SubflowNode extends BaseNode {
       log.info(`post() completed, handing off via action: ${action}`);
       return action;
     }
+
+    // A Process -> Subflow edge with no node following the Subflow is a
+    // call-and-return sub-agent even when the canvas edge is one-way. The engine
+    // records the ACTUAL invoking Process at entry, so a terminal Subflow shared
+    // by several callers returns to the right one. Direct Start -> Subflow leaves
+    // have no marker and retain normal final-response behavior.
+    if (
+      node_params?.id &&
+      sharedState.pendingSubflowReturn?.subflowNodeId === node_params.id
+    ) {
+      log.info('post() completed, terminal sub-agent returning to its Process caller', {
+        callerNodeId: sharedState.pendingSubflowReturn.callerNodeId,
+      });
+      return IMPLICIT_SUBFLOW_RETURN_ACTION;
+    }
+
     log.info('post() completed, no successor → FINAL_RESPONSE_ACTION');
     return FINAL_RESPONSE_ACTION;
   }

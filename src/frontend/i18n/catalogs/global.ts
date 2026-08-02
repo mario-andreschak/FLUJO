@@ -48,7 +48,7 @@ export const globalMessageRows = {
   'models.error.title': ['Error loading models', 'Error al cargar los modelos', 'Fehler beim Laden der Modelle', 'Erreur lors du chargement des modèles', 'Errore durante il caricamento dei modelli', 'Erro ao carregar os modelos', '加载模型时出错'],
   'models.error.description': ['Something went wrong while loading the models.', 'Algo salió mal al cargar los modelos.', 'Beim Laden der Modelle ist etwas schiefgelaufen.', 'Un problème est survenu lors du chargement des modèles.', 'Si è verificato un problema durante il caricamento dei modelli.', 'Algo deu errado ao carregar os modelos.', '加载模型时出现问题。'],
   'ambient.following': ['Following the current…', 'Siguiendo la corriente…', 'Der Strömung folgen…', 'Au fil du courant…', 'Seguendo la corrente…', 'Seguindo a corrente…', '正沿着水流前进…'],
-  'ambient.experimental': ['Living Watershed · Experimental', 'Cuenca viva · Experimental', 'Lebendiges Einzugsgebiet · Experimentell', 'Bassin vivant · Expérimental', 'Bacino vivente · Sperimentale', 'Bacia viva · Experimental', '活力流域 · 实验性'],
+  'ambient.landscape': ['Living Watershed', 'Cuenca viva', 'Lebendiges Einzugsgebiet', 'Bassin vivant', 'Bacino vivente', 'Bacia viva', '活力流域'],
   'ambient.scene.home': ['River Overlook', 'Mirador del río', 'Fluss-Aussicht', 'Belvédère de la rivière', 'Belvedere sul fiume', 'Mirante do rio', '河畔观景台'],
   'ambient.scene.models': ['Headwater Springs', 'Manantiales de cabecera', 'Quellgebiet', 'Sources du fleuve', 'Sorgenti del fiume', 'Nascentes do rio', '源头清泉'],
   'ambient.scene.mcp': ['Connector Harbor', 'Puerto de conexiones', 'Verbindungshafen', 'Port des connexions', 'Porto dei collegamenti', 'Porto das conexões', '连接港'],

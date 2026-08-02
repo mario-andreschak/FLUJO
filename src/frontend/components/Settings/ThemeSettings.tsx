@@ -1,7 +1,17 @@
 "use client";
 
 import React from 'react';
-import { Box, ButtonBase, Chip, Stack, Typography, useTheme as useMuiTheme } from '@mui/material';
+import {
+  Box,
+  ButtonBase,
+  Chip,
+  FormControl,
+  FormControlLabel,
+  Stack,
+  Switch,
+  Typography,
+  useTheme as useMuiTheme,
+} from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
 import DarkModeRoundedIcon from '@mui/icons-material/DarkModeRounded';
@@ -69,7 +79,13 @@ const choices: ThemeChoice[] = [
 ];
 
 export default function ThemeSettings() {
-  const { isDarkMode, visualStyle, setThemePreset } = useTheme();
+  const {
+    isDarkMode,
+    livingWorldEnabled,
+    visualStyle,
+    setLivingWorldEnabled,
+    setThemePreset,
+  } = useTheme();
   const theme = useMuiTheme();
   const { t } = useI18n();
 
@@ -180,6 +196,31 @@ export default function ThemeSettings() {
           );
         })}
       </Box>
+
+      <FormControl
+        fullWidth
+        sx={{
+          p: 2,
+          border: '1px solid',
+          borderColor: 'divider',
+          borderRadius: visualStyle === 'legacy' ? 2 : 3,
+          bgcolor: alpha(theme.palette.background.paper, 0.58),
+        }}
+      >
+        <FormControlLabel
+          control={(
+            <Switch
+              checked={livingWorldEnabled}
+              onChange={(event) => setLivingWorldEnabled(event.target.checked)}
+              name="livingWorldEnabled"
+            />
+          )}
+          label={t('settings.theme.animatedLandscape')}
+        />
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+          {t('settings.theme.animatedLandscapeDescription')}
+        </Typography>
+      </FormControl>
     </Box>
   );
 }

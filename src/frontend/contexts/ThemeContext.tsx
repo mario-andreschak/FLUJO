@@ -34,7 +34,10 @@ export interface ThemeContextProps {
   toggleTheme: () => void;
   isDarkMode: boolean;
   visualStyle: VisualThemeStyle;
+  livingWorldEnabled: boolean;
+  themeHydrated: boolean;
   setVisualStyle: (style: VisualThemeStyle) => void;
+  setLivingWorldEnabled: (enabled: boolean) => void;
   setThemePreset: (preset: ThemePreset) => void;
 }
 
@@ -57,14 +60,19 @@ export const ThemeProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   // light/dark selections survive, while new and upgraded installs begin on
   // the redesigned UI.
   const [visualStyle, setVisualStyleState] = useState<VisualThemeStyle>('modern');
+  // The animated landscape belongs to the Modern theme and starts enabled.
+  // Its own preference keeps it independent from the experimental feature set.
+  const [livingWorldEnabled, setLivingWorldEnabledState] = useState(true);
+  const [themeHydrated, setThemeHydrated] = useState(false);
 
   // Only load theme preference after hydration is complete
   useEffect(() => {
     const loadTheme = async () => {
       log.debug('Loading theme preference from storage');
-      const [storedTheme, storedStyle] = await Promise.all([
+      const [storedTheme, storedStyle, storedLivingWorldEnabled] = await Promise.all([
         loadItem<ThemeMode>(StorageKey.THEME, 'light'),
         loadItem<VisualThemeStyle>(StorageKey.THEME_STYLE, 'modern'),
+        loadItem<boolean>(StorageKey.LIVING_WORLD_ENABLED, true),
       ]);
       log.info(`Theme loaded from storage: ${storedTheme}`);
       const resolvedTheme: ThemeMode = storedTheme === 'dark' ? 'dark' : 'light';
@@ -72,7 +80,9 @@ export const ThemeProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const newDarkMode = resolvedTheme === 'dark';
       setIsDarkMode(newDarkMode);
       setVisualStyleState(resolvedStyle);
+      setLivingWorldEnabledState(storedLivingWorldEnabled !== false);
       applyDocumentTheme(resolvedTheme, resolvedStyle);
+      setThemeHydrated(true);
     }
     void loadTheme();
   }, []);
@@ -92,6 +102,11 @@ export const ThemeProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     setVisualStyleState(style);
     applyDocumentTheme(isDarkMode ? 'dark' : 'light', style);
     void saveItem<VisualThemeStyle>(StorageKey.THEME_STYLE, style);
+  };
+
+  const setLivingWorldEnabled = (enabled: boolean) => {
+    setLivingWorldEnabledState(enabled);
+    void saveItem<boolean>(StorageKey.LIVING_WORLD_ENABLED, enabled);
   };
 
   const setThemePreset = ({ mode, style }: ThemePreset) => {
@@ -114,7 +129,18 @@ export const ThemeProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   
   // Provide the theme context
   return (
-    <ThemeContext.Provider value={{ toggleTheme, isDarkMode, visualStyle, setVisualStyle, setThemePreset }}>
+    <ThemeContext.Provider
+      value={{
+        toggleTheme,
+        isDarkMode,
+        visualStyle,
+        livingWorldEnabled,
+        themeHydrated,
+        setVisualStyle,
+        setLivingWorldEnabled,
+        setThemePreset,
+      }}
+    >
       <MuiThemeProvider theme={theme}>
         <CssBaseline />
         {children}

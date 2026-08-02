@@ -2,7 +2,7 @@ import { Flow as PocketFlow, BaseNode } from '../pocketflow';
 import { flowService } from '@/backend/services/flow';
 import { FlowConverter } from '../FlowConverter';
 import { createLogger } from '@/utils/logger';
-import { SharedState } from '../types';
+import { IMPLICIT_SUBFLOW_RETURN_ACTION, SharedState } from '../types';
 import { EmitFn } from '@/shared/types/execution/events';
 import { FlowEngine, ResolvedNode, RunNodeResult, HandoffResolution } from './FlowEngine';
 
@@ -164,6 +164,33 @@ export class PocketflowEngine implements FlowEngine {
     const pocketFlow = await this.resolveFlowDefinition(sharedState);
     const currentNode = await this.findNodeById(pocketFlow, currentNodeId);
 
+    // A one-way Process -> terminal Subflow is an implicit sub-agent call. The
+    // Subflow has no graph successor of its own, so resolve its internal return
+    // action through the caller-aware marker captured when it was entered. This
+    // is deliberately validated against the compiled graph instead of trusting
+    // persisted state: the current node must still be that Subflow and the
+    // caller must still be a Process node in this flow.
+    if (action === IMPLICIT_SUBFLOW_RETURN_ACTION) {
+      const pending = sharedState.pendingSubflowReturn;
+      if (
+        currentNode?.node_params?.type !== 'subflow' ||
+        pending?.subflowNodeId !== currentNodeId
+      ) {
+        return { isSuccessorEdge: false, targetNodeId: null };
+      }
+
+      const callerNode = await this.findNodeById(pocketFlow, pending.callerNodeId);
+      if (callerNode?.node_params?.type !== 'process') {
+        return { isSuccessorEdge: false, targetNodeId: null };
+      }
+
+      return {
+        isSuccessorEdge: true,
+        targetNodeId: pending.callerNodeId,
+        targetNodeType: 'process',
+      };
+    }
+
     if (!currentNode || !currentNode.successors.has(action)) {
       return { isSuccessorEdge: false, targetNodeId: null };
     }
@@ -171,10 +198,20 @@ export class PocketflowEngine implements FlowEngine {
     const nextNode = currentNode.getSuccessor(action);
     const nextNodeId = nextNode?.node_params?.id;
     const nextNodeType = nextNode?.node_params?.type;
+    const implicitSubflowReturn =
+      currentNode.node_params?.type === 'process' &&
+      nextNodeType === 'subflow' &&
+      nextNode?.successors instanceof Map &&
+      nextNode.successors.size === 0 &&
+      typeof nextNodeId === 'string' &&
+      nextNodeId.length > 0
+        ? { subflowNodeId: nextNodeId, callerNodeId: currentNodeId }
+        : undefined;
     return {
       isSuccessorEdge: true,
       targetNodeId: typeof nextNodeId === 'string' && nextNodeId.length > 0 ? nextNodeId : null,
       targetNodeType: typeof nextNodeType === 'string' ? nextNodeType : null,
+      ...(implicitSubflowReturn ? { implicitSubflowReturn } : {}),
     };
   }
 

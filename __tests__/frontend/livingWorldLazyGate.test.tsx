@@ -5,12 +5,9 @@ import '@testing-library/jest-dom';
 
 import LivingWorldGate from '@/frontend/components/AmbientWorld/LivingWorldGate';
 
-const mockStorage = {
-  settings: { experimental: { enabled: false } },
-  settingsHydrated: true,
-};
-
 const mockTheme = {
+  livingWorldEnabled: true,
+  themeHydrated: true,
   visualStyle: 'modern' as 'modern' | 'legacy',
 };
 
@@ -22,10 +19,6 @@ jest.mock('next/dynamic', () => {
     dynamicRiverWorldStub,
   };
 });
-
-jest.mock('@/frontend/contexts/StorageContext', () => ({
-  useStorage: () => mockStorage,
-}));
 
 jest.mock('@/frontend/contexts/ThemeContext', () => ({
   useTheme: () => mockTheme,
@@ -39,14 +32,13 @@ describe('Living Watershed lazy gate', () => {
   afterEach(() => {
     cleanup();
     mockDynamicRiverWorld.mockClear();
-    mockStorage.settings.experimental.enabled = false;
-    mockStorage.settingsHydrated = true;
+    mockTheme.livingWorldEnabled = true;
+    mockTheme.themeHydrated = true;
     mockTheme.visualStyle = 'modern';
   });
 
-  it('does not mount the dynamic renderer before settings hydrate', () => {
-    mockStorage.settings.experimental.enabled = true;
-    mockStorage.settingsHydrated = false;
+  it('does not mount the dynamic renderer before the theme hydrates', () => {
+    mockTheme.themeHydrated = false;
 
     const { container } = render(<LivingWorldGate />);
 
@@ -54,7 +46,9 @@ describe('Living Watershed lazy gate', () => {
     expect(mockDynamicRiverWorld).not.toHaveBeenCalled();
   });
 
-  it('does not mount the dynamic renderer for the default disabled state', () => {
+  it('does not mount the dynamic renderer when the landscape preference is off', () => {
+    mockTheme.livingWorldEnabled = false;
+
     const { container } = render(<LivingWorldGate />);
 
     expect(container).toBeEmptyDOMElement();
@@ -62,7 +56,6 @@ describe('Living Watershed lazy gate', () => {
   });
 
   it('does not mount the dynamic renderer for the legacy visual style', () => {
-    mockStorage.settings.experimental.enabled = true;
     mockTheme.visualStyle = 'legacy';
 
     const { container } = render(<LivingWorldGate />);
@@ -71,9 +64,7 @@ describe('Living Watershed lazy gate', () => {
     expect(mockDynamicRiverWorld).not.toHaveBeenCalled();
   });
 
-  it('mounts the dynamic renderer only for hydrated Modern experiments', () => {
-    mockStorage.settings.experimental.enabled = true;
-
+  it('mounts the dynamic renderer for the default-on hydrated Modern theme', () => {
     const { container } = render(<LivingWorldGate />);
 
     expect(container.querySelector('[data-living-world-stub]')).toBeInTheDocument();

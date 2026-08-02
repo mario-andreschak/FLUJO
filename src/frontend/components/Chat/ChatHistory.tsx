@@ -520,8 +520,13 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
           },
           '&:focus-within .conversation-card-actions': { opacity: 1 },
           '@media (hover: none)': { '& .conversation-card-actions': { opacity: 1 } },
+          // The row button is deliberately raised above the decorative card
+          // layers. Raise MUI's absolutely-positioned secondary-action wrapper
+          // one step further so it remains the pointer target over that button.
+          '& > .MuiListItemSecondaryAction-root': { zIndex: 2 },
         } : {
           opacity: selected ? 1 : 0.7,
+          '& > .MuiListItemSecondaryAction-root': { zIndex: 2 },
         }}
       >
         <ListItemButton

@@ -54,6 +54,7 @@ import { Canvas } from './Canvas/index';
 import { NodePalette } from './NodePalette';
 import { FlowValidationButton } from './FlowValidationButton';
 import InspectorPanel from './InspectorPanel';
+import type { InspectorMcpServerOption } from './InspectorMcpServers';
 import GuidedFlowComposer from './GuidedFlowComposer';
 import FlowAssistanceDialog from './FlowAssistanceDialog';
 import ProcessNodePropertiesModal from './Modals/ProcessNodePropertiesModal';
@@ -90,6 +91,7 @@ import {
   type FlowAuthoringMode,
 } from '@/utils/shared/flowAuthoringProfile';
 import type { Model } from '@/shared/types/model';
+import type { MCPServerConfig } from '@/shared/types/mcp';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { FlowNamesContext } from './CustomNodes/flowNamesContext';
 
@@ -1329,6 +1331,25 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   ]);
 
   const selectedNode = nodes.find(node => node.selected) ?? null;
+  const connectedInspectorMcpServers = useMemo(() => {
+    if (!selectedNode || selectedNode.data.type !== 'process') return [];
+    const connectedNodeIds = new Set(
+      edges
+        .filter(edge =>
+          (edge.data as { edgeType?: string } | undefined)?.edgeType === 'mcp'
+          && (edge.source === selectedNode.id || edge.target === selectedNode.id)
+        )
+        .map(edge => edge.source === selectedNode.id ? edge.target : edge.source),
+    );
+
+    return nodes.flatMap(node => {
+      if (!connectedNodeIds.has(node.id) || node.data.type !== 'mcp') return [];
+      const serverName = node.data.properties?.boundServer;
+      return typeof serverName === 'string' && serverName
+        ? [{ nodeId: node.id, serverName }]
+        : [];
+    });
+  }, [edges, nodes, selectedNode]);
   const hasGuidedTask = nodes.some(node => ['process', 'subflow'].includes(node.data.type));
   const guidedModelsReady = nodes
     .filter(node => node.data.type === 'process')
@@ -1484,6 +1505,39 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setEdges(eds => [...eds, edge]);
     log.info(`Connected MCP server "${serverName}" to process node ${processNodeId}`);
   }, [nodes, edges]);
+
+  const handleRemoveMcpServer = useCallback((processNodeId: string, mcpNodeId: string) => {
+    const isTargetConnection = (edge: Edge) =>
+      (edge.data as { edgeType?: string } | undefined)?.edgeType === 'mcp'
+      && (
+        (edge.source === processNodeId && edge.target === mcpNodeId)
+        || (edge.source === mcpNodeId && edge.target === processNodeId)
+      );
+    if (!edges.some(isTargetConnection)) return;
+
+    const remainingEdges = edges.filter(edge => !isTargetConnection(edge));
+    const mcpNodeIsStillWired = remainingEdges.some(
+      edge => edge.source === mcpNodeId || edge.target === mcpNodeId,
+    );
+    setEdges(remainingEdges);
+    if (!mcpNodeIsStillWired) {
+      setNodes(current => current.filter(node => node.id !== mcpNodeId));
+    }
+    log.info(`Removed MCP node ${mcpNodeId} from process node ${processNodeId}`);
+  }, [edges]);
+
+  const loadInspectorMcpServers = useCallback(async (): Promise<InspectorMcpServerOption[]> => {
+    const result = await mcpService.loadServerConfigs();
+    if (!Array.isArray(result)) {
+      throw new Error(result?.error || t('flows.inspector.mcpLoadError'));
+    }
+
+    return Promise.all((result as MCPServerConfig[]).map(async server => {
+      const statusResult = await mcpService.getServerStatus(server.name);
+      const status = typeof statusResult === 'string' ? statusResult : statusResult.status;
+      return { ...server, status };
+    }));
+  }, [t]);
 
   // Open the appropriate properties modal based on node type
   const openNodeProperties = useCallback((node: FlowNode, mode: 'create' | 'edit' = 'edit') => {
@@ -1907,6 +1961,10 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
             setAssistanceNodeId(null);
             setAssistanceOpen(true);
           }}
+          connectedMcpServers={connectedInspectorMcpServers}
+          onConnectMcpServer={handleConnectMcpServer}
+          onRemoveMcpServer={handleRemoveMcpServer}
+          loadMcpServers={loadInspectorMcpServers}
         />
       )}
       

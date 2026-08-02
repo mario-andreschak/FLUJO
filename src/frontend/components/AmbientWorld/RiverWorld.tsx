@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
 
-import { useStorage } from '@/frontend/contexts/StorageContext';
 import { useTheme } from '@/frontend/contexts/ThemeContext';
 
 import {
@@ -43,8 +42,7 @@ function prefersReducedMotion() {
 export default function RiverWorld() {
   const { t } = useI18n();
   const pathname = usePathname();
-  const { settings, settingsHydrated } = useStorage();
-  const { isDarkMode, visualStyle } = useTheme();
+  const { isDarkMode, livingWorldEnabled, themeHydrated, visualStyle } = useTheme();
   const scene = useMemo(() => resolveRiverScene(pathname), [pathname]);
   const sceneLabel = t(`ambient.scene.${scene.id}` as any);
   const sceneEyebrow = scene.id === 'home'
@@ -69,8 +67,8 @@ export default function RiverWorld() {
                       ? t('ambient.eyebrow.docs')
                       : t('ambient.eyebrow.settings');
   const enabled = (
-    settingsHydrated
-    && settings?.experimental?.enabled === true
+    themeHydrated
+    && livingWorldEnabled
     && visualStyle === 'modern'
   );
 
@@ -307,7 +305,7 @@ export default function RiverWorld() {
           <span>{sceneEyebrow}</span>
           <strong>{travelling ? t('ambient.following') : sceneLabel}</strong>
         </span>
-        <span className="living-watershed__experimental">{t('ambient.experimental')}</span>
+        <span className="living-watershed__label">{t('ambient.landscape')}</span>
       </aside>
     </>
   );

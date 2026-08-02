@@ -9,6 +9,9 @@ export enum StorageKey {
   // Visual generation is stored separately from light/dark for backwards
   // compatibility with every existing theme preference.
   THEME_STYLE = 'theme_style',
+  // The Modern theme's animated landscape is an independent, default-on
+  // appearance preference rather than an experimental feature flag.
+  LIVING_WORLD_ENABLED = 'living_world_enabled',
   ENCRYPTION_KEY = 'encryption_key',
   MCP_SERVERS = 'mcp_servers',
   GLOBAL_ENV_VARS = 'global_env_vars',
@@ -63,6 +66,7 @@ export const StorageKeys = {
   CHAT_HISTORY: StorageKey.CHAT_HISTORY,
   THEME: StorageKey.THEME,
   THEME_STYLE: StorageKey.THEME_STYLE,
+  LIVING_WORLD_ENABLED: StorageKey.LIVING_WORLD_ENABLED,
   ENCRYPTION_KEY: StorageKey.ENCRYPTION_KEY,
   MCP_SERVERS: StorageKey.MCP_SERVERS,
   GLOBAL_ENV_VARS: StorageKey.GLOBAL_ENV_VARS,

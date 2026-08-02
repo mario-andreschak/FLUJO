@@ -18,12 +18,23 @@ const mockedLoadItem = loadItem as jest.MockedFunction<typeof loadItem>;
 const mockedSaveItem = saveItem as jest.MockedFunction<typeof saveItem>;
 
 function ThemeProbe() {
-  const { isDarkMode, visualStyle, toggleTheme, setVisualStyle, setThemePreset } = useTheme();
+  const {
+    isDarkMode,
+    livingWorldEnabled,
+    themeHydrated,
+    visualStyle,
+    toggleTheme,
+    setVisualStyle,
+    setLivingWorldEnabled,
+    setThemePreset,
+  } = useTheme();
   return (
     <div>
       <output>{`${visualStyle}/${isDarkMode ? 'dark' : 'light'}`}</output>
+      <output aria-label="Landscape preference">{`${themeHydrated}/${livingWorldEnabled}`}</output>
       <button onClick={toggleTheme}>Toggle mode</button>
       <button onClick={() => setVisualStyle('modern')}>Use modern</button>
+      <button onClick={() => setLivingWorldEnabled(false)}>Disable landscape</button>
       <button onClick={() => setThemePreset({ mode: 'dark', style: 'modern' })}>Modern dark</button>
     </div>
   );
@@ -91,5 +102,35 @@ describe('ThemeProvider persistence compatibility', () => {
     expect(document.documentElement).toHaveAttribute('data-visual-style', 'modern');
     expect(document.documentElement).toHaveClass('modern-theme', 'dark-theme');
     expect(document.documentElement).not.toHaveClass('legacy-theme');
+  });
+
+  it('defaults the animated landscape on and persists an explicit off choice', async () => {
+    render(
+      <ThemeProvider>
+        <ThemeProbe />
+      </ThemeProvider>,
+    );
+
+    await screen.findByText('true/true');
+    expect(mockedLoadItem).toHaveBeenCalledWith(StorageKey.LIVING_WORLD_ENABLED, true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Disable landscape' }));
+    await screen.findByText('true/false');
+    expect(mockedSaveItem).toHaveBeenCalledWith(StorageKey.LIVING_WORLD_ENABLED, false);
+  });
+
+  it('restores an explicitly disabled animated landscape', async () => {
+    mockedLoadItem.mockImplementation(async (key, defaultValue) => {
+      if (key === StorageKey.LIVING_WORLD_ENABLED) return false as typeof defaultValue;
+      return defaultValue;
+    });
+
+    render(
+      <ThemeProvider>
+        <ThemeProbe />
+      </ThemeProvider>,
+    );
+
+    await screen.findByText('true/false');
   });
 });

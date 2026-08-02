@@ -2,7 +2,6 @@
 
 import dynamic from 'next/dynamic';
 
-import { useStorage } from '@/frontend/contexts/StorageContext';
 import { useTheme } from '@/frontend/contexts/ThemeContext';
 
 const RiverWorld = dynamic(() => import('./RiverWorld'), {
@@ -11,11 +10,10 @@ const RiverWorld = dynamic(() => import('./RiverWorld'), {
 });
 
 export default function LivingWorldGate() {
-  const { settings, settingsHydrated } = useStorage();
-  const { visualStyle } = useTheme();
+  const { livingWorldEnabled, themeHydrated, visualStyle } = useTheme();
   const enabled = (
-    settingsHydrated
-    && settings?.experimental?.enabled === true
+    themeHydrated
+    && livingWorldEnabled
     && visualStyle === 'modern'
   );
 

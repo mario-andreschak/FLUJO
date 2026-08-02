@@ -19,7 +19,10 @@ import { useI18n } from '@/frontend/contexts/I18nContext';
 export interface CardPickerDialogProps extends CardPickerGridProps {
   open: boolean;
   onClose: () => void;
-  title: React.ReactNode;
+  /** Omit to render the picker without a visible heading. */
+  title?: React.ReactNode;
+  /** Accessible name used when the visible title is intentionally omitted. */
+  ariaLabel?: string;
   /** Optional helper text shown above the grid. */
   description?: React.ReactNode;
   maxWidth?: 'xs' | 'sm' | 'md' | 'lg' | 'xl';
@@ -35,22 +38,33 @@ const CardPickerDialog: React.FC<CardPickerDialogProps> = ({
   open,
   onClose,
   title,
+  ariaLabel,
   description,
   maxWidth = 'md',
   ...gridProps
 }) => {
   const { t } = useI18n();
   return (
-    <Dialog open={open} onClose={onClose} maxWidth={maxWidth} fullWidth>
-      <DialogTitle component="div">
-        <Box display="flex" alignItems="center" justifyContent="space-between">
-          <Typography variant="h6">{title}</Typography>
-          <IconButton edge="end" color="inherit" onClick={onClose} aria-label={t('common.close')}>
-            <CloseIcon />
-          </IconButton>
-        </Box>
-      </DialogTitle>
-      <Divider />
+    <Dialog
+      open={open}
+      onClose={onClose}
+      maxWidth={maxWidth}
+      fullWidth
+      PaperProps={ariaLabel ? { 'aria-label': ariaLabel } : undefined}
+    >
+      {title !== undefined && title !== null && (
+        <>
+          <DialogTitle component="div">
+            <Box display="flex" alignItems="center" justifyContent="space-between">
+              <Typography variant="h6">{title}</Typography>
+              <IconButton edge="end" color="inherit" onClick={onClose} aria-label={t('common.close')}>
+                <CloseIcon />
+              </IconButton>
+            </Box>
+          </DialogTitle>
+          <Divider />
+        </>
+      )}
       <DialogContent sx={{ p: 3 }}>
         {description && (
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>

@@ -14,6 +14,7 @@
  * start->process->finish state machine, so there is no network/model call.
  */
 import type { SharedState } from '@/backend/execution/flow/types';
+import { IMPLICIT_SUBFLOW_RETURN_ACTION } from '@/backend/execution/flow/types';
 
 const START = '077cfac0-start';
 const PROCESS = 'ef2a3c01-process';
@@ -132,6 +133,98 @@ describe('runFlow keystone', () => {
     expect(result.messages[0]).toMatchObject({ role: 'user', content: 'hi there' });
     // flowId was used directly (no model-name resolution needed).
     expect(result.sharedState.flowId).toBe(FLOW_ID);
+  });
+
+  it('stores and clears the caller-aware return marker around a terminal one-way Subflow', async () => {
+    const SUBFLOW = 'terminal-worker';
+    const START_TO_PROCESS = `${START}->${PROCESS}`;
+    const PROCESS_TO_SUBFLOW = `${PROCESS}->${SUBFLOW}`;
+    const visited: string[] = [];
+    const markerSeenBySubflow: Array<SharedState['pendingSubflowReturn']> = [];
+
+    (FlowExecutor.executeStep as jest.Mock)
+      .mockImplementationOnce(async (sharedState: SharedState) => {
+        sharedState.currentNodeId = START;
+        visited.push(START);
+        return { sharedState, action: START_TO_PROCESS };
+      })
+      .mockImplementationOnce(async (sharedState: SharedState) => {
+        visited.push(sharedState.currentNodeId!);
+        sharedState.handoffNameMap = { handoff_to_worker: SUBFLOW };
+        sharedState.messages.push({
+          role: 'assistant',
+          content: 'Delegating the test.',
+          id: 'delegate-1',
+          timestamp: 2,
+          processNodeId: PROCESS,
+          tool_calls: [{
+            id: 'handoff-1',
+            type: 'function',
+            function: { name: 'handoff_to_worker', arguments: '{}' },
+          }],
+        } as any);
+        return { sharedState, action: PROCESS_TO_SUBFLOW };
+      })
+      .mockImplementationOnce(async (sharedState: SharedState) => {
+        visited.push(sharedState.currentNodeId!);
+        markerSeenBySubflow.push(sharedState.pendingSubflowReturn);
+        sharedState.messages.push({
+          role: 'assistant',
+          content: 'Returned result from sub-agent: tests passed.',
+          id: 'worker-result-1',
+          timestamp: 3,
+          processNodeId: SUBFLOW,
+        } as any);
+        return { sharedState, action: IMPLICIT_SUBFLOW_RETURN_ACTION };
+      })
+      .mockImplementationOnce(async (sharedState: SharedState) => {
+        visited.push(sharedState.currentNodeId!);
+        sharedState.lastResponse = 'Caller received the report.';
+        sharedState.messages.push({
+          role: 'assistant',
+          content: 'Caller received the report.',
+          id: 'caller-final-1',
+          timestamp: 4,
+          processNodeId: PROCESS,
+        } as any);
+        return { sharedState, action: 'FINAL_RESPONSE' };
+      });
+
+    (FlowExecutor.resolveHandoff as jest.Mock)
+      .mockImplementationOnce(async () => ({
+        isSuccessorEdge: true,
+        targetNodeId: PROCESS,
+        targetNodeType: 'process',
+      }))
+      .mockImplementationOnce(async () => ({
+        isSuccessorEdge: true,
+        targetNodeId: SUBFLOW,
+        targetNodeType: 'subflow',
+        implicitSubflowReturn: {
+          subflowNodeId: SUBFLOW,
+          callerNodeId: PROCESS,
+        },
+      }))
+      .mockImplementationOnce(async () => ({
+        isSuccessorEdge: true,
+        targetNodeId: PROCESS,
+        targetNodeType: 'process',
+      }));
+
+    const result = await runFlow({
+      flowId: FLOW_ID,
+      prompt: 'run tests',
+      mode: 'conversation',
+    });
+
+    expect(visited).toEqual([START, PROCESS, SUBFLOW, PROCESS]);
+    expect(markerSeenBySubflow).toEqual([{
+      subflowNodeId: SUBFLOW,
+      callerNodeId: PROCESS,
+    }]);
+    expect(result.status).toBe('completed');
+    expect(result.outputText).toBe('Caller received the report.');
+    expect(result.sharedState.pendingSubflowReturn).toBeUndefined();
   });
 
   it('resolves a "flow-<name>" model when no flowId is given', async () => {
