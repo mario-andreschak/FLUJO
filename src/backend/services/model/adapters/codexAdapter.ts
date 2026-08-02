@@ -809,7 +809,7 @@ export class CodexAdapter implements CompletionAdapter {
     // Routing tool_calls / final answer — same contract as the Claude adapter:
     // handoff calls surface as tool_calls; a plain answer is only re-emitted
     // when nothing streamed (streamed text would otherwise duplicate in the UI).
-    let finalToolCalls: OpenAI.ChatCompletionMessageToolCall[] | undefined;
+    let finalToolCalls: OpenAI.ChatCompletionMessageFunctionToolCall[] | undefined;
     if (handoffCalls.length > 0) {
       finalToolCalls = handoffCalls.map((h) => ({
         id: `call_${uuidv4()}`,

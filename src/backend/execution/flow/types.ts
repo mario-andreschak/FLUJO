@@ -783,7 +783,7 @@ export interface SharedState {
     // drive the per-node turn counter on the request/response tool loop.
     turnBudgets?: Record<string, number>;
     // Tool calls awaiting user approval
-    pendingToolCalls?: OpenAI.ChatCompletionMessageToolCall[];
+    pendingToolCalls?: OpenAI.ChatCompletionMessageFunctionToolCall[];
     // Flag to indicate if cancellation was requested
     isCancelled?: boolean;
     // --- Added fields for UI listing ---
@@ -837,7 +837,7 @@ export interface SharedState {
      * tool calls); the next step executes them at the top of the loop and pauses
      * *after* the results come back. Unset during normal (non-debug) runs.
      */
-    debugPendingToolCalls?: OpenAI.ChatCompletionMessageToolCall[];
+    debugPendingToolCalls?: OpenAI.ChatCompletionMessageFunctionToolCall[];
 
     /**
      * Maps each model-facing MCP tool name (mcp_<slug>_<hash>, see toolNamespace.ts)

@@ -43,6 +43,7 @@ export interface ChatCompletionMetadata {
 
 import OpenAI from 'openai';
 import type { ModelMediaPart } from './model/media';
+import type { FlujoFunctionToolCall } from './openai';
 
 /** One app's latest `ui/update-model-context` payload. */
 export interface McpAppModelContext {
@@ -58,6 +59,9 @@ export type McpAppModelContextMap = Record<string, McpAppModelContext>;
  * needed for Flujo's chat functionality.
  */
 export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
+  /** FLUJO executes function tools only; SDK custom tools are rejected at ingress. */
+  tool_calls?: FlujoFunctionToolCall[];
+
   /** Unique identifier for the message */
   id: string;
   

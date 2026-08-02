@@ -50,6 +50,7 @@ import type { RunResourceSettings } from '@/shared/types/runResources';
 import type { ModelStreamDelta, ToolResourceMarker } from '@/backend/services/model/adapters/types';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { mediaTypeFromMime } from '@/shared/types/model/media';
+import { requireFunctionToolCalls } from '@/shared/types/openai';
 import {
   extractAssistantMedia,
   parseDataUrl,
@@ -701,7 +702,7 @@ export class ModelHandler {
    * character-based convention as summarizing compaction. */
   private static estimateOutgoingInputTokens(
     messages: OpenAI.ChatCompletionMessageParam[],
-    tools?: OpenAI.ChatCompletionTool[]
+    tools?: OpenAI.ChatCompletionFunctionTool[]
   ): number {
     return Math.ceil(JSON.stringify({ messages, tools: tools ?? [] }).length / 4);
   }
@@ -757,8 +758,8 @@ export class ModelHandler {
    */
   private static ensureReadResourceArmed(
     apiMessages: OpenAI.ChatCompletionMessageParam[],
-    tools: OpenAI.ChatCompletionTool[] | undefined
-  ): OpenAI.ChatCompletionTool[] | undefined {
+    tools: OpenAI.ChatCompletionFunctionTool[] | undefined
+  ): OpenAI.ChatCompletionFunctionTool[] | undefined {
     if (
       !wireHasRunResourceUri(apiMessages) ||
       (tools ?? []).some((t) => t.type === 'function' && t.function.name === READ_RESOURCE_TOOL_NAME)
@@ -766,7 +767,7 @@ export class ModelHandler {
       return tools;
     }
     const def = buildReadResourceTool();
-    const readTool: OpenAI.ChatCompletionTool = {
+    const readTool: OpenAI.ChatCompletionFunctionTool = {
       type: 'function',
       function: {
         name: def.name,
@@ -1011,7 +1012,7 @@ export class ModelHandler {
     const requestToolApproval =
       requireToolApproval && emit && conversationId
         ? async (call: { id: string; name: string; args: Record<string, unknown> }): Promise<{ approved: boolean; feedback?: string }> => {
-            const toolCall: OpenAI.ChatCompletionMessageToolCall = {
+            const toolCall: OpenAI.ChatCompletionMessageFunctionToolCall = {
               id: call.id,
               type: 'function',
               function: { name: call.name, arguments: JSON.stringify(call.args ?? {}) },
@@ -1272,13 +1273,17 @@ export class ModelHandler {
       const projected: NonNullable<FlujoChatMessage['mcpToolCalls']> = {};
       for (const toolCall of toolCalls) {
         if (!toolCall || typeof toolCall !== 'object') continue;
-        const call = toolCall as OpenAI.ChatCompletionMessageToolCall;
+        const call = toolCall as OpenAI.ChatCompletionMessageFunctionToolCall;
         if (call.type !== 'function' || typeof call.id !== 'string') continue;
         const decoded = decodeToolName(call.function?.name, toolNameMap);
         if (decoded) projected[call.id] = { serverName: decoded.server, toolName: decoded.tool };
       }
       return Object.keys(projected).length > 0 ? projected : undefined;
     };
+
+    const completionToolCalls = requireFunctionToolCalls(
+      modelResponse.fullResponse?.choices?.[0]?.message?.tool_calls,
+    );
 
     if (modelResponse.transcript && modelResponse.transcript.length > 0) {
       // Self-orchestrating adapter (Claude subscription): the adapter already ran
@@ -1328,15 +1333,16 @@ export class ModelHandler {
         : prefixedContent;
 
       // Create the assistant message with timestamp and ID
+      const projectedMcpToolCalls = projectMcpToolCalls(completionToolCalls);
       const assistantMessage = {
         id: modelResponse.liveMessageId ?? uuidv4(),
         role: 'assistant',
         content: assistantContent,
         ...(responseMedia.length ? { media: responseMedia } : {}),
         // IMPORTANT: Include tool_calls if they exist in the raw response
-        tool_calls: modelResponse.fullResponse?.choices?.[0]?.message?.tool_calls,
-        ...(projectMcpToolCalls(modelResponse.fullResponse?.choices?.[0]?.message?.tool_calls)
-          ? { mcpToolCalls: projectMcpToolCalls(modelResponse.fullResponse?.choices?.[0]?.message?.tool_calls) }
+        ...(completionToolCalls.length ? { tool_calls: completionToolCalls } : {}),
+        ...(projectedMcpToolCalls
+          ? { mcpToolCalls: projectedMcpToolCalls }
           : {}),
         timestamp: Date.now(), // Add timestamp
         processNodeId: nodeId, // Attach the process node ID
@@ -1347,7 +1353,7 @@ export class ModelHandler {
 
     // Map tool calls for the result structure (if they exist)
     // This provides structured info about requested calls, but doesn't execute them
-    const toolCalls = modelResponse.fullResponse?.choices?.[0]?.message?.tool_calls?.map((tc: OpenAI.ChatCompletionMessageToolCall) => { // Add type annotation for tc
+    const toolCalls = completionToolCalls.length > 0 ? completionToolCalls.map((tc) => {
        try {
          return {
            name: tc.function.name,
@@ -1367,7 +1373,7 @@ export class ModelHandler {
            result: ''
          };
        }
-    }).filter(Boolean) as ToolCallInfo[] | undefined; // Ensure type safety and filter out potential nulls if parse fails badly
+    }).filter(Boolean) as ToolCallInfo[] : undefined;
 
 
     // Return the result of this single step
@@ -1401,7 +1407,7 @@ export class ModelHandler {
     modelId: string,
     prompt: string,
     messages: FlujoChatMessage[], // Expect FlujoChatMessage
-    tools?: OpenAI.ChatCompletionTool[],
+    tools?: OpenAI.ChatCompletionFunctionTool[],
     opts?: {
       toolNameMap?: Record<string, DecodedTool>;
       maxTurns?: number;
@@ -1508,7 +1514,7 @@ export class ModelHandler {
         toApiMessages(messages),
         model.inputModalities,
       );
-      let effectiveTools: OpenAI.ChatCompletionTool[] | undefined = tools;
+      let effectiveTools: OpenAI.ChatCompletionFunctionTool[] | undefined = tools;
 
       // Strip trailing assistant message(s) for providers that require the last
       // message to be user/tool role. This is a wire-only mutation — sharedState is
@@ -1571,7 +1577,7 @@ export class ModelHandler {
       // Sanitize tool schemas for broad provider compatibility (handles string
       // properties with unsupported `format` values, etc.). Done once here so
       // every adapter receives clean tool definitions.
-      let sanitizedTools: OpenAI.ChatCompletionTool[] | undefined;
+      let sanitizedTools: OpenAI.ChatCompletionFunctionTool[] | undefined;
       if (effectiveTools && effectiveTools.length > 0) {
         const { ToolHandler } = await import('./ToolHandler');
         sanitizedTools = effectiveTools.map(tool => {
@@ -1760,7 +1766,7 @@ export class ModelHandler {
       // throws — a thrown SDK error is shaped into an error Result in-place.
       const attempt = async (
         attemptMessages: OpenAI.ChatCompletionMessageParam[],
-        attemptTools: OpenAI.ChatCompletionTool[] | undefined
+        attemptTools: OpenAI.ChatCompletionFunctionTool[] | undefined
       ): Promise<Result<ModelCallResult>> => {
         // Start the cancellation watch just before the (possibly long) provider
         // call. A Stop pressed at any point during the call aborts it within
@@ -2173,7 +2179,7 @@ export class ModelHandler {
       // synthetic tools (handoff / MCP-resource / run-resource) share one cheap
       // unbounded group. Mirrors the dispatch routing inside executeOneToolCall.
       const LOCAL_GROUP = '__local__';
-      const groupKeyForCall = (tc: OpenAI.ChatCompletionMessageToolCall): string => {
+      const groupKeyForCall = (tc: OpenAI.ChatCompletionMessageFunctionToolCall): string => {
         const toolName = tc.function.name;
         if (toolName.startsWith('handoff_to_') || toolName === 'handoff') return LOCAL_GROUP;
         if (isMCPResourceToolName(toolName)) return LOCAL_GROUP;

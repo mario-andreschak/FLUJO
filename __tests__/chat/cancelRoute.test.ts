@@ -75,7 +75,7 @@ const seedState = (overrides: Partial<SharedState> = {}): SharedState => {
   return state;
 };
 
-const toolCall = (id: string): OpenAI.ChatCompletionMessageToolCall => ({
+const toolCall = (id: string): OpenAI.ChatCompletionMessageFunctionToolCall => ({
   id,
   type: 'function',
   function: { name: 'some_tool', arguments: '{}' },

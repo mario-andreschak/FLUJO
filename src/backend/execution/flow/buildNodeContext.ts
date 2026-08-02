@@ -2,11 +2,12 @@ import OpenAI from 'openai';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import type { ModelInputSnapshot, ModelInputProvenanceEntry } from './types';
 import { mediaDataUrl, type ModelMediaPart } from '@/shared/types/model/media';
+import { requireFunctionToolCalls } from '@/shared/types/openai';
 
 /** True when this assistant turn is mid-action (made tool calls). */
 function isToolCallTurn(
   m: FlujoChatMessage
-): m is FlujoChatMessage & { role: 'assistant'; tool_calls: OpenAI.ChatCompletionMessageToolCall[] } {
+): m is FlujoChatMessage & { role: 'assistant'; tool_calls: OpenAI.ChatCompletionMessageFunctionToolCall[] } {
   return m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0;
 }
 
@@ -147,7 +148,7 @@ export function scopeMessagesForInput(
 /** True when this tool-call turn contains a FLUJO handoff call — i.e. it is a
  *  node's TERMINAL routing turn (a plain turn would have ended the loop instead). */
 function hasHandoffCall(
-  m: FlujoChatMessage & { tool_calls: OpenAI.ChatCompletionMessageToolCall[] }
+  m: FlujoChatMessage & { tool_calls: OpenAI.ChatCompletionMessageFunctionToolCall[] }
 ): boolean {
   return m.tool_calls.some((tc) => tc.type === 'function' && isHandoffToolName(tc.function.name));
 }
@@ -332,7 +333,7 @@ export function stripHandoffPlumbing(messages: FlujoChatMessage[]): FlujoChatMes
       Array.isArray(m.tool_calls) &&
       m.tool_calls.some((tc) => tc.type === 'function' && isHandoffToolName(tc.function.name))
     ) {
-      const realToolCalls = m.tool_calls.filter(
+      const realToolCalls = requireFunctionToolCalls(m.tool_calls).filter(
         (tc) => !(tc.type === 'function' && isHandoffToolName(tc.function.name)),
       );
       if (realToolCalls.length > 0) {

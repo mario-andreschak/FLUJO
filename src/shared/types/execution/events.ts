@@ -179,7 +179,7 @@ export interface RunPausedEvent extends ExecutionEventBase {
 }
 export interface RunAwaitingApprovalEvent extends ExecutionEventBase {
   type: 'run:awaiting_approval';
-  pendingToolCalls: OpenAI.ChatCompletionMessageToolCall[];
+  pendingToolCalls: OpenAI.ChatCompletionMessageFunctionToolCall[];
 }
 export interface RunAwaitingElicitationEvent extends ExecutionEventBase {
   type: 'run:awaiting_elicitation';

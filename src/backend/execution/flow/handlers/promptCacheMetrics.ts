@@ -83,7 +83,7 @@ const hashMessage = (m: OpenAI.ChatCompletionMessageParam): string => shortHash(
  */
 export function fingerprintPrefix(
   messages: OpenAI.ChatCompletionMessageParam[],
-  tools: OpenAI.ChatCompletionTool[] | undefined,
+  tools: OpenAI.ChatCompletionFunctionTool[] | undefined,
 ): PrefixFingerprint {
   const toolJson = tools && tools.length > 0 ? JSON.stringify(tools) : '';
   const first = messages[0];

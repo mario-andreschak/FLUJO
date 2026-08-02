@@ -404,7 +404,7 @@ const Chat: React.FC = () => {
   const [isEditingTitle, setIsEditingTitle] = useState<boolean>(false);
   const [titleDraft, setTitleDraft] = useState<string>('');
   const [executeInDebugger, setExecuteInDebugger] = useState<boolean>(false); // State for debugger checkbox
-  const [pendingToolCalls, setPendingToolCalls] = useState<OpenAI.ChatCompletionMessageToolCall[] | null>(null);
+  const [pendingToolCalls, setPendingToolCalls] = useState<OpenAI.ChatCompletionMessageFunctionToolCall[] | null>(null);
   const [pendingElicitation, setPendingElicitation] = useState<PendingElicitation | null>(null);
   const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null);
   // Flow the user asked to switch an already-executed conversation to; a
@@ -2799,7 +2799,7 @@ const Chat: React.FC = () => {
       canvasStateOwnerId !== currentConversationId
     ) return;
 
-    const toolCalls = new Map<string, OpenAI.ChatCompletionMessageToolCall>();
+    const toolCalls = new Map<string, OpenAI.ChatCompletionMessageFunctionToolCall>();
     for (const m of msgs) {
       if (m.role !== 'assistant' || !Array.isArray(m.tool_calls)) continue;
       for (const call of m.tool_calls) {

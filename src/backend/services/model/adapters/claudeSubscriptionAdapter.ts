@@ -1019,7 +1019,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     //   - a plain-text answer ONLY when nothing streamed (e.g. the run produced
     //     no assistant text turns and only the terminal `result` carried text).
     // Re-emitting `finalText` when we already streamed it would duplicate it.
-    let finalToolCalls: OpenAI.ChatCompletionMessageToolCall[] | undefined;
+    let finalToolCalls: OpenAI.ChatCompletionMessageFunctionToolCall[] | undefined;
     if (handoffCalls.length > 0) {
       // ALL handoff calls of the routing turn, in call order (issue #156): the
       // run loop's capture turns repeated spawn calls into parallel lanes and

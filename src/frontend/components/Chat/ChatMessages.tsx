@@ -93,7 +93,7 @@ export interface PendingQuestion {
 
 interface ChatMessagesProps {
   messages: ChatMessage[];
-  pendingToolCalls?: OpenAI.ChatCompletionMessageToolCall[] | null; // Add pending calls prop
+  pendingToolCalls?: OpenAI.ChatCompletionMessageFunctionToolCall[] | null; // Add pending calls prop
   /** Active elicitation request from the server, if any. */
   pendingElicitation?: PendingElicitation | null;
   availableNodes?: { id: string; label: string }[]; // Add available nodes for dropdown
@@ -170,7 +170,7 @@ export interface CanvasLaunchInfo {
 }
 
 // Type guard to check if a message has tool_calls
-function hasToolCalls(message: ChatMessage): message is ChatMessage & { tool_calls: OpenAI.ChatCompletionMessageToolCall[] } {
+function hasToolCalls(message: ChatMessage): message is ChatMessage & { tool_calls: OpenAI.ChatCompletionMessageFunctionToolCall[] } {
   return message.role === 'assistant' && 'tool_calls' in message && Array.isArray(message.tool_calls);
 }
 
@@ -706,7 +706,7 @@ interface MessageBubbleProps {
    * messages in the same assistant run, rendered as slim markers on this anchor
    * bubble (in addition to any handoffs the message owns itself).
    */
-  hoistedHandoffs?: OpenAI.ChatCompletionMessageToolCall[];
+  hoistedHandoffs?: OpenAI.ChatCompletionMessageFunctionToolCall[];
   /** True while THIS message is being edited in the ChatInput (dims the bubble). */
   isBeingEdited?: boolean;
   onMenuOpen: (event: React.MouseEvent<HTMLElement>, messageId: string) => void;
@@ -1403,7 +1403,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   // visible group member to host the timeline so it never silently disappears.
   const { renderPairsById, renderHandoffsById, suppressedIds } = useMemo(() => {
     const renderPairsById = new Map<string, ToolCallPair<ChatMessage>[]>();
-    const renderHandoffsById = new Map<string, OpenAI.ChatCompletionMessageToolCall[]>();
+    const renderHandoffsById = new Map<string, OpenAI.ChatCompletionMessageFunctionToolCall[]>();
     const suppressedIds = new Set<string>();
     for (const group of groups) {
       const pairs = pairsByAnchorId.get(group.anchorId) ?? [];

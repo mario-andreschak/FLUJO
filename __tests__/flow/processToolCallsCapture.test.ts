@@ -33,7 +33,7 @@ import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { DEFAULT_RUN_RESOURCE_SETTINGS } from '@/shared/types/runResources';
 import OpenAI from 'openai';
 
-const toolCall = (id: string, name: string, args: object): OpenAI.ChatCompletionMessageToolCall => ({
+const toolCall = (id: string, name: string, args: object): OpenAI.ChatCompletionMessageFunctionToolCall => ({
   id,
   type: 'function',
   function: { name, arguments: JSON.stringify(args) },
@@ -220,7 +220,17 @@ describe('processToolCalls tool-args capture (#168)', () => {
     }));
 
     // The active call still executes with the FULL args (capture is lineage-only).
-    expect(callToolMock).toHaveBeenCalledWith('srv', 'screenshot', bigArgs, expect.anything(), expect.anything(), undefined, undefined);
+    expect(callToolMock).toHaveBeenCalledWith(
+      'srv',
+      'screenshot',
+      bigArgs,
+      expect.anything(),
+      expect.anything(),
+      undefined,
+      undefined,
+      'model',
+      'conversation:conv-1',
+    );
   });
 
   it('does NOT capture sub-threshold args', async () => {

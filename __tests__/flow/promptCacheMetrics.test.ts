@@ -23,7 +23,7 @@ import {
   forgetConversationPrefix,
 } from '@/backend/execution/flow/handlers/promptCacheMetrics';
 
-const tool = (name: string, description = `Tool: ${name}`): OpenAI.ChatCompletionTool => ({
+const tool = (name: string, description = `Tool: ${name}`): OpenAI.ChatCompletionFunctionTool => ({
   type: 'function',
   function: { name, description, parameters: { type: 'object', properties: {} } },
 });
@@ -42,14 +42,14 @@ const user = (content: string): OpenAI.ChatCompletionMessageParam => ({
 const call = (
   conversationId: string,
   messages: OpenAI.ChatCompletionMessageParam[],
-  tools?: OpenAI.ChatCompletionTool[],
+  tools?: OpenAI.ChatCompletionFunctionTool[],
 ) => classifyDrift(conversationId, fingerprintPrefix(messages, tools)).drift;
 
 /** The full drift report, for the tests that assert on cache reach. */
 const report = (
   conversationId: string,
   messages: OpenAI.ChatCompletionMessageParam[],
-  tools?: OpenAI.ChatCompletionTool[],
+  tools?: OpenAI.ChatCompletionFunctionTool[],
 ) => classifyDrift(conversationId, fingerprintPrefix(messages, tools));
 
 beforeEach(() => {
@@ -235,7 +235,7 @@ describe('fingerprintPrefix', () => {
 describe('derivePromptCacheKey', () => {
   const keyFor = (
     messages: OpenAI.ChatCompletionMessageParam[],
-    tools?: OpenAI.ChatCompletionTool[],
+    tools?: OpenAI.ChatCompletionFunctionTool[],
   ) => derivePromptCacheKey(fingerprintPrefix(messages, tools));
 
   it('is stable across turns while the tool block is unchanged', () => {

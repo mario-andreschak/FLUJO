@@ -71,7 +71,7 @@ const CONVERSATION: OpenAI.ChatCompletionMessageParam[] = [
   { role: 'tool', tool_call_id: 'call_1', content: '{"tempC":18}' },
 ];
 
-const TOOLS: OpenAI.ChatCompletionTool[] = [
+const TOOLS: OpenAI.ChatCompletionFunctionTool[] = [
   {
     type: 'function',
     function: {

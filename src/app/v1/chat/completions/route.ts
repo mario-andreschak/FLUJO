@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { processChatCompletion } from './chatCompletionService';
 import { parseRequestParameters, _logRequestDetails, ChatCompletionRequest } from './requestParser'; // Import ChatCompletionRequest
+import { UnsupportedOpenAIToolTypeError } from '@/shared/types/openai';
 
 const log = createLogger('app/v1/chat/completions/route');
 
@@ -191,6 +192,7 @@ async function handleRequest(request: NextRequest) {
     return responseWithCors;
   } catch (error) {
     const duration = Date.now() - startTime;
+    const unsupportedTool = error instanceof UnsupportedOpenAIToolTypeError;
     log.error('Error handling request', {
       requestId,
       error: error instanceof Error ? {
@@ -206,13 +208,13 @@ async function handleRequest(request: NextRequest) {
       {
         error: {
           message: error instanceof Error ? error.message : 'Failed to process chat completion',
-          type: 'internal_error',
-          code: 'internal_error',
+          type: unsupportedTool ? 'invalid_request_error' : 'internal_error',
+          code: unsupportedTool ? error.code : 'internal_error',
           param: null
         }
       },
       { 
-        status: 500,
+        status: unsupportedTool ? 400 : 500,
         headers: corsHeaders
       }
     );

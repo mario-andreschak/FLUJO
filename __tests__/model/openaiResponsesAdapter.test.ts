@@ -229,7 +229,10 @@ describe('fromResponse', () => {
     expect(message.content).toBe('Checking.');
     // call_id, NOT the output item's own id — the follow-up output must reference it.
     expect(message.tool_calls?.[0].id).toBe('call_abc');
-    expect(message.tool_calls?.[0].function.name).toBe('get_weather');
+    expect(message.tool_calls?.[0]).toMatchObject({
+      type: 'function',
+      function: { name: 'get_weather' },
+    });
     expect(completion.choices[0].finish_reason).toBe('tool_calls');
   });
 

@@ -21,7 +21,7 @@ import { HANDOFF_TOOL_PREFIX } from '@/shared/utils/handoffNaming';
 
 /** A single assistant tool call paired with the tool result that answered it (if any yet). */
 export interface ToolCallPair<TMessage extends FlujoChatMessage = FlujoChatMessage> {
-  toolCall: OpenAI.ChatCompletionMessageToolCall;
+  toolCall: OpenAI.ChatCompletionMessageFunctionToolCall;
   /** The matching `role: 'tool'` message, or undefined while the result is still pending. */
   result?: TMessage;
   /** Resolved MCP Tool Tester destination, present only for persisted MCP calls. */
@@ -170,7 +170,7 @@ export interface AnchoredToolCallGrouping<TMessage extends FlujoChatMessage = Fl
   /** For each anchor message id, its aggregated ordered non-handoff tool-call/result pairs. */
   pairsByAnchorId: Map<string, ToolCallPair<TMessage>[]>;
   /** For each anchor message id, the ordered handoff tool calls hoisted onto it. */
-  handoffsByAnchorId: Map<string, OpenAI.ChatCompletionMessageToolCall[]>;
+  handoffsByAnchorId: Map<string, OpenAI.ChatCompletionMessageFunctionToolCall[]>;
   /** Ids of assistant messages whose bubbles must be suppressed (calls hoisted, no own content). */
   hoistedAssistantIds: Set<string>;
   /** `tool_call_id`s whose standalone `role:'tool'` result bubble must be skipped. */
@@ -222,7 +222,7 @@ export function groupToolCallsByAnchor<TMessage extends FlujoChatMessage>(
   messages: TMessage[]
 ): AnchoredToolCallGrouping<TMessage> {
   const pairsByAnchorId = new Map<string, ToolCallPair<TMessage>[]>();
-  const handoffsByAnchorId = new Map<string, OpenAI.ChatCompletionMessageToolCall[]>();
+  const handoffsByAnchorId = new Map<string, OpenAI.ChatCompletionMessageFunctionToolCall[]>();
   const hoistedAssistantIds = new Set<string>();
   const consumedToolCallIds = new Set<string>();
   const groupByAnchorId = new Map<string, ToolCallGroup>();
@@ -272,7 +272,7 @@ export function groupToolCallsByAnchor<TMessage extends FlujoChatMessage>(
 
     const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
     const pairs: ToolCallPair<TMessage>[] = [];
-    const handoffCalls: OpenAI.ChatCompletionMessageToolCall[] = [];
+    const handoffCalls: OpenAI.ChatCompletionMessageFunctionToolCall[] = [];
     for (const toolCall of toolCalls) {
       if (toolCall.type !== 'function') continue;
       if (isHandoffToolName(toolCall.function?.name)) {

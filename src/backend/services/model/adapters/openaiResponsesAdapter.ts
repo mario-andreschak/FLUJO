@@ -237,7 +237,7 @@ export function toResponsesInput(
 
       case 'assistant': {
         const toolCalls = (message.tool_calls ?? []).filter(
-          (c): c is OpenAI.ChatCompletionMessageToolCall => (c as { type?: string }).type === 'function',
+          (c): c is OpenAI.ChatCompletionMessageFunctionToolCall => (c as { type?: string }).type === 'function',
         );
 
         // Reasoning must precede the function calls of the turn it belongs to.
@@ -291,7 +291,7 @@ export function toResponsesInput(
  * do not satisfy. Sending strict tools would 400 on a large share of real servers.
  */
 export function toResponsesTools(
-  tools: OpenAI.ChatCompletionTool[] | undefined,
+  tools: OpenAI.ChatCompletionFunctionTool[] | undefined,
 ): OpenAI.Responses.Tool[] | undefined {
   if (!tools || tools.length === 0) return undefined;
   return tools
@@ -342,7 +342,7 @@ export function fromResponse(
   media: ModelMediaPart[];
 } {
   const textParts: string[] = [];
-  const toolCalls: OpenAI.ChatCompletionMessageToolCall[] = [];
+  const toolCalls: OpenAI.ChatCompletionMessageFunctionToolCall[] = [];
   const reasoning: ReasoningItem[] = [];
   const media: ModelMediaPart[] = [];
 

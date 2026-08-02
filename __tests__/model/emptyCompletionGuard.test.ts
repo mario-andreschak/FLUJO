@@ -30,7 +30,7 @@ const conversationStates = FlowExecutor.conversationStates as Map<string, Shared
 
 const completion = (
   content: string | null,
-  toolCalls?: OpenAI.ChatCompletionMessageToolCall[],
+  toolCalls?: OpenAI.ChatCompletionMessageFunctionToolCall[],
   images?: Array<{ type: 'image_url'; image_url: { url: string } }>,
 ) => ({
   completion: {

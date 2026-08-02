@@ -25,7 +25,7 @@ jest.mock('@/backend/services/mcp', () => ({
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import OpenAI from 'openai';
 
-const toolCall = (id: string, name: string, args: object): OpenAI.ChatCompletionMessageToolCall => ({
+const toolCall = (id: string, name: string, args: object): OpenAI.ChatCompletionMessageFunctionToolCall => ({
   id,
   type: 'function',
   function: { name, arguments: JSON.stringify(args) },
@@ -195,6 +195,16 @@ describe('ModelHandler.processToolCalls concurrency (issue #252)', () => {
     });
 
     expect(result.success).toBe(true);
-    expect(callToolMock).toHaveBeenCalledWith('A', 'op1', {}, 300, expect.any(Function), undefined, controller.signal);
+    expect(callToolMock).toHaveBeenCalledWith(
+      'A',
+      'op1',
+      {},
+      300,
+      expect.any(Function),
+      undefined,
+      controller.signal,
+      'model',
+      undefined,
+    );
   });
 });

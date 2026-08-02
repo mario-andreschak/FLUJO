@@ -175,7 +175,7 @@ function pruneSchema(node: unknown, propertyKey: string | undefined, opts: TrimO
 }
 
 export interface TrimResult {
-  tools: OpenAI.ChatCompletionTool[];
+  tools: OpenAI.ChatCompletionFunctionTool[];
   /** Serialized length of the block before trimming. */
   beforeChars: number;
   /** Serialized length after trimming. */
@@ -188,7 +188,7 @@ export interface TrimResult {
  * verified rather than assumed.
  */
 export function trimTools(
-  tools: OpenAI.ChatCompletionTool[] | undefined,
+  tools: OpenAI.ChatCompletionFunctionTool[] | undefined,
   opts: TrimOptions = {},
 ): TrimResult {
   if (!tools || tools.length === 0) {
@@ -218,7 +218,7 @@ export function trimTools(
           ? { parameters: pruneSchema(t.function.parameters, undefined, effective) as Record<string, unknown> }
           : {}),
       },
-    } as OpenAI.ChatCompletionTool;
+    } as OpenAI.ChatCompletionFunctionTool;
   });
 
   const afterChars = JSON.stringify(trimmed).length;

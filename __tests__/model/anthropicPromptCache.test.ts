@@ -60,7 +60,7 @@ const MSGS: OpenAI.ChatCompletionMessageParam[] = [
   { role: 'system', content: 'You are helpful.' },
   { role: 'user', content: 'hi' },
 ];
-const TOOLS: OpenAI.ChatCompletionTool[] = [
+const TOOLS: OpenAI.ChatCompletionFunctionTool[] = [
   { type: 'function', function: { name: 'a', parameters: { type: 'object', properties: {} } } },
   { type: 'function', function: { name: 'b', parameters: { type: 'object', properties: {} } } },
 ];

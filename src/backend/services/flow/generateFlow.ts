@@ -197,8 +197,8 @@ function issueLines(issues: Array<{ severity: string; message: string }>): strin
 // Generator tools (marketplace search / install)
 // ---------------------------------------------------------------------------
 
-function generatorTools(allowInstall: boolean): OpenAI.ChatCompletionTool[] {
-  const tools: OpenAI.ChatCompletionTool[] = [
+function generatorTools(allowInstall: boolean): OpenAI.ChatCompletionFunctionTool[] {
+  const tools: OpenAI.ChatCompletionFunctionTool[] = [
     {
       type: 'function',
       function: {
@@ -308,7 +308,7 @@ async function runModelTurn(
   model: Model,
   apiKey: string,
   messages: OpenAI.ChatCompletionMessageParam[],
-  tools: OpenAI.ChatCompletionTool[],
+  tools: OpenAI.ChatCompletionFunctionTool[],
   allowInstall: boolean,
   state: ToolLoopState
 ): Promise<string> {

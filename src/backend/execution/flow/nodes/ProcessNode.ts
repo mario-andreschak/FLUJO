@@ -905,7 +905,7 @@ export class ProcessNode extends BaseNode {
 
     try {
       // Prepare tools if available
-      let tools: OpenAI.ChatCompletionTool[] | undefined = undefined; // Initialize tools
+      let tools: OpenAI.ChatCompletionFunctionTool[] | undefined = undefined; // Initialize tools
 
       if (prepResult.availableTools && prepResult.availableTools.length > 0) {
         const toolsResult = ToolHandler.prepareTools({
@@ -957,7 +957,7 @@ export class ProcessNode extends BaseNode {
       let modelResult;
       let usedToolFreeFallback = false;
       try {
-        const callModelWithTools = (attemptTools: OpenAI.ChatCompletionTool[] | undefined) =>
+        const callModelWithTools = (attemptTools: OpenAI.ChatCompletionFunctionTool[] | undefined) =>
           ModelHandler.callModel({
             modelId: prepResult.boundModel,
             prompt: prepResult.currentPrompt,
@@ -1296,7 +1296,7 @@ export class ProcessNode extends BaseNode {
   private canRunWithoutTools(
     prepResult: ProcessNodePrepResult,
     node_params: ProcessNodeParams | undefined,
-    tools: OpenAI.ChatCompletionTool[] | undefined,
+    tools: OpenAI.ChatCompletionFunctionTool[] | undefined,
   ): boolean {
     if (!tools?.length) return false;
     if ((node_params?.properties?.mcpNodes?.length ?? 0) > 0) return false;
@@ -1349,7 +1349,7 @@ export class ProcessNode extends BaseNode {
   private canRetryWithoutTools(
     prepResult: ProcessNodePrepResult,
     node_params: ProcessNodeParams | undefined,
-    tools: OpenAI.ChatCompletionTool[] | undefined,
+    tools: OpenAI.ChatCompletionFunctionTool[] | undefined,
     error: unknown
   ): boolean {
     return (

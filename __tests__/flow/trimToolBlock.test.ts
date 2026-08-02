@@ -22,14 +22,14 @@ import {
 } from '@/backend/execution/flow/handlers/trimToolBlock';
 
 /** The `properties` map of a trimmed tool's parameter schema. */
-const propsOf = (tool: OpenAI.ChatCompletionTool): Record<string, Record<string, unknown>> =>
+const propsOf = (tool: OpenAI.ChatCompletionFunctionTool): Record<string, Record<string, unknown>> =>
   (tool as unknown as { function: { parameters: { properties: Record<string, Record<string, unknown>> } } })
     .function.parameters.properties;
 
 const toolWith = (
   parameters: Record<string, unknown>,
   description = 'Does a thing.',
-): OpenAI.ChatCompletionTool => ({
+): OpenAI.ChatCompletionFunctionTool => ({
   type: 'function',
   function: { name: 'do_thing', description, parameters },
 });
@@ -170,7 +170,7 @@ describe('Tier A — lossless pruning', () => {
   });
 
   it('leaves non-function tools alone', () => {
-    const custom = { type: 'custom', custom: { name: 'x' } } as unknown as OpenAI.ChatCompletionTool;
+    const custom = { type: 'custom', custom: { name: 'x' } } as unknown as OpenAI.ChatCompletionFunctionTool;
     const { tools } = trimTools([custom]);
     expect(tools[0]).toBe(custom);
   });
@@ -231,7 +231,7 @@ describe('Tier B — opt-in description capping', () => {
 });
 
 describe('prefix-cache invariants', () => {
-  const tools: OpenAI.ChatCompletionTool[] = [
+  const tools: OpenAI.ChatCompletionFunctionTool[] = [
     toolWith({ type: 'object', $schema: 'x', properties: { a: { type: 'string', title: 'A' } } }),
     { type: 'function', function: { name: 'other', description: 'B.', parameters: { type: 'object' } } },
   ];

@@ -24,6 +24,7 @@ import {
 } from '@/backend/execution/flow/types';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import type { ModelMediaPart } from '@/shared/types/model/media';
+import { requireFunctionToolCalls } from '@/shared/types/openai';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { isInternalToolName } from '@/backend/execution/flow/handlers/toolNamespace';
 import { flowService } from '@/backend/services/flow/index';
@@ -359,12 +360,12 @@ export interface FlowRunResult {
   /** Provider-neutral media attached to the final assistant output. */
   outputMedia?: ModelMediaPart[];
   /** Tool calls to surface in a tool-calls response (undefined when XML-wrapped). */
-  toolCalls?: OpenAI.ChatCompletionMessageToolCall[];
+  toolCalls?: OpenAI.ChatCompletionMessageFunctionToolCall[];
   /** Full transcript of THIS run. */
   messages: FlujoChatMessage[];
   /** Aggregated token/cost totals for the run. */
   usage?: UsageTotals;
-  pendingToolCalls?: OpenAI.ChatCompletionMessageToolCall[];
+  pendingToolCalls?: OpenAI.ChatCompletionMessageFunctionToolCall[];
   error?: { message: string; details?: ErrorDetails; statusCode: number };
   /** Set when flow resolution failed (the adapter maps this to a 400). */
   flowNotFound?: { name: string };
@@ -1478,8 +1479,8 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                 // Issue #246: Before pausing, filter tool calls through the permission
                 // rules. Calls with effect 'deny' or 'allow' are handled immediately;
                 // only 'ask' calls are queued for the approval gate.
-                const toolCallsForApproval: OpenAI.ChatCompletionMessageToolCall[] = [];
-                const toolCallsToProcessNow: OpenAI.ChatCompletionMessageToolCall[] = [];
+                const toolCallsForApproval: OpenAI.ChatCompletionMessageFunctionToolCall[] = [];
+                const toolCallsToProcessNow: OpenAI.ChatCompletionMessageFunctionToolCall[] = [];
                 const permRules = sharedState.permissionRules ?? [];
                 const savedRules = sharedState.savedPermissionRules ?? [];
 
@@ -1611,9 +1612,9 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
             } else {
               // --- flujo=false: Handle internal vs external tools ---
               log.info(`[flujo=false] Tool call action received for conv ${effectiveConvId}. Checking tool types.`);
-              const allToolCalls = lastAssistantMsg.tool_calls || [];
-              const internalTools: OpenAI.ChatCompletionMessageToolCall[] = [];
-              const externalTools: OpenAI.ChatCompletionMessageToolCall[] = [];
+              const allToolCalls = requireFunctionToolCalls(lastAssistantMsg.tool_calls);
+              const internalTools: OpenAI.ChatCompletionMessageFunctionToolCall[] = [];
+              const externalTools: OpenAI.ChatCompletionMessageFunctionToolCall[] = [];
 
               allToolCalls.forEach(tc => {
                 if (tc.type === 'function' && isInternalToolName(tc.function.name, sharedState.toolNameMap)) {

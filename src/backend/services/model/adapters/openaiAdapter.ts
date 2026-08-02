@@ -249,7 +249,7 @@ export class OpenAiAdapter implements CompletionAdapter {
       let finishReason: OpenAI.Chat.Completions.ChatCompletion.Choice['finish_reason'] = 'stop';
       let content = '';
       let usage: OpenAI.Completions.CompletionUsage | undefined;
-      const calls: OpenAI.ChatCompletionMessageToolCall[] = [];
+      const calls: OpenAI.ChatCompletionMessageFunctionToolCall[] = [];
       const media: ModelMediaPart[] = [];
       const seenMedia = new Set<string>();
       const streamedAudioChunks: string[] = [];

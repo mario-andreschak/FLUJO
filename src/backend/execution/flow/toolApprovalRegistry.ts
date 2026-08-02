@@ -12,7 +12,7 @@ import type OpenAI from 'openai';
  * ExecutionEventBus (survives Next.js dev hot-reloads via globalThis).
  */
 interface PendingApproval {
-  toolCall: OpenAI.ChatCompletionMessageToolCall;
+  toolCall: OpenAI.ChatCompletionMessageFunctionToolCall;
   resolve: (approved: boolean, feedback?: string) => void;
 }
 
@@ -25,7 +25,7 @@ const registry: Map<string, Map<string, PendingApproval>> =
 /** Register a tool call awaiting approval, keyed by conversation + tool-call id. */
 export function registerPendingApproval(
   conversationId: string,
-  toolCall: OpenAI.ChatCompletionMessageToolCall,
+  toolCall: OpenAI.ChatCompletionMessageFunctionToolCall,
   resolve: (approved: boolean, feedback?: string) => void
 ): void {
   let perConv = registry.get(conversationId);
@@ -59,7 +59,7 @@ export function resolvePendingApproval(
 /** The tool calls currently awaiting approval for a conversation. */
 export function listPendingToolCalls(
   conversationId: string
-): OpenAI.ChatCompletionMessageToolCall[] {
+): OpenAI.ChatCompletionMessageFunctionToolCall[] {
   const perConv = registry.get(conversationId);
   if (!perConv) return [];
   return Array.from(perConv.values(), p => p.toolCall);

@@ -4,6 +4,7 @@ import OpenAI from 'openai';
 import { ChatCompletionMetadata } from '@/shared/types'; // Import the new shared type
 import type { McpAppModelContextMap } from '@/shared/types/chat';
 import { parseMcpAppModelContexts } from '@/backend/mcpApps/modelContext';
+import { requireFunctionToolCalls, requireFunctionTools } from '@/shared/types/openai';
 
 const log = createLogger('app/v1/chat/completions/requestParser');
 
@@ -22,7 +23,7 @@ export interface ChatCompletionRequest {
   // `model-` completions, where they are passed through to the provider and
   // any tool_calls are returned to the CLIENT for execution. The flow path
   // manages its own MCP tools and ignores this field.
-  tools?: Array<OpenAI.ChatCompletionTool>;
+  tools?: Array<OpenAI.ChatCompletionFunctionTool>;
   // Custom extension for conversation state management (DEPRECATED - use metadata)
   conversation_id?: string;
   // Use the strict metadata type
@@ -110,6 +111,16 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
       log.debug('Request content type', { requestId, contentType });
       
       const data: ChatCompletionRequest = await request.json(); // Add type annotation
+
+      // SDK 7 models tools and tool calls as function/custom unions. FLUJO's
+      // execution protocol is function-only, so reject unsupported wire shapes
+      // before they can create an unanswerable assistant/tool transcript.
+      requireFunctionTools(data.tools);
+      for (const message of data.messages ?? []) {
+        if (message.role === 'assistant') {
+          requireFunctionToolCalls(message.tool_calls);
+        }
+      }
 
       // Extract flags from the strictly typed metadata
       const flujo = data.metadata?.flujo === "true";

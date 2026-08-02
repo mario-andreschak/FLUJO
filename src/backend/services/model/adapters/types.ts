@@ -90,7 +90,7 @@ export interface CompletionInput {
   /** Replace or invalidate the durable Codex metadata after an adapter turn. */
   onCodexSessionChange?: (session: CodexSessionMetadata | undefined) => void;
   /** Optional tool definitions in OpenAI format. */
-  tools?: OpenAI.ChatCompletionTool[];
+  tools?: OpenAI.ChatCompletionFunctionTool[];
   /** Sampling temperature. */
   temperature: number;
   /**

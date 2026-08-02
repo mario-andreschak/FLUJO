@@ -26,7 +26,7 @@ jest.mock('@/backend/services/mcp', () => ({
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import OpenAI from 'openai';
 
-const toolCall = (id: string, name: string, args: object): OpenAI.ChatCompletionMessageToolCall => ({
+const toolCall = (id: string, name: string, args: object): OpenAI.ChatCompletionMessageFunctionToolCall => ({
   id,
   type: 'function',
   function: { name, arguments: JSON.stringify(args) },
@@ -59,6 +59,7 @@ describe('processToolCalls staleness guard (#255)', () => {
       undefined,
       undefined,
       'model',
+      undefined,
     );
   });
 

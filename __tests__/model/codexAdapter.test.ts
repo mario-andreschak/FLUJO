@@ -291,7 +291,7 @@ describe('CodexAdapter — transcript & usage', () => {
     const { transcript } = await new CodexAdapter().createCompletion(baseInput());
     const call = transcript!.find(m => (m as { tool_calls?: unknown[] }).tool_calls);
     expect(call).toBeDefined();
-    const tc = (call as { tool_calls: OpenAI.ChatCompletionMessageToolCall[] }).tool_calls[0];
+    const tc = (call as { tool_calls: OpenAI.ChatCompletionMessageFunctionToolCall[] }).tool_calls[0];
     expect(tc.function.name).toBe('shell');
     expect(tc.function.arguments).toContain('ls');
   });
@@ -373,7 +373,7 @@ describe('CodexAdapter — transcript & usage', () => {
   });
 });
 
-const mcpTool: OpenAI.ChatCompletionTool = {
+const mcpTool: OpenAI.ChatCompletionFunctionTool = {
   type: 'function',
   function: {
     name: 'mcp_hashed_name',
@@ -498,7 +498,7 @@ describe('CodexAdapter — tool bridging', () => {
     await toolStarted;
     expect(streamed.map(message => message.role)).toEqual(['assistant']);
     const pendingCall = streamed[0] as FlujoChatMessage & {
-      tool_calls: OpenAI.ChatCompletionMessageToolCall[];
+      tool_calls: OpenAI.ChatCompletionMessageFunctionToolCall[];
     };
     expect(pendingCall.tool_calls[0].function.arguments).toBe('{"payload":"large value"}');
 
@@ -670,7 +670,7 @@ describe('CodexAdapter — tool bridging', () => {
       m => m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0,
     ) as (FlujoChatMessage & {
       role: 'assistant';
-      tool_calls: OpenAI.ChatCompletionMessageToolCall[];
+      tool_calls: OpenAI.ChatCompletionMessageFunctionToolCall[];
     }) | undefined;
     const toolMsg = transcript!.find(m => m.role === 'tool')!;
     expect(callMsg?.tool_calls).toHaveLength(1);
@@ -686,7 +686,7 @@ describe('CodexAdapter — tool bridging', () => {
   });
 
   it('a plain handoff ends the run and surfaces as a routing tool_call', async () => {
-    const handoffTool: OpenAI.ChatCompletionTool = {
+    const handoffTool: OpenAI.ChatCompletionFunctionTool = {
       type: 'function',
       function: { name: 'handoff_to_finish', description: 'Finish', parameters: { type: 'object', properties: {} } },
     };
@@ -701,7 +701,10 @@ describe('CodexAdapter — tool bridging', () => {
 
     const { completion } = await new CodexAdapter().createCompletion(baseInput({ tools: [handoffTool] }));
     expect(completion.choices[0].finish_reason).toBe('tool_calls');
-    expect(completion.choices[0].message.tool_calls?.[0].function.name).toBe('handoff_to_finish');
+    expect(completion.choices[0].message.tool_calls?.[0]).toMatchObject({
+      type: 'function',
+      function: { name: 'handoff_to_finish' },
+    });
     expect(completion.choices[0].message.content).toBeNull();
   });
 });

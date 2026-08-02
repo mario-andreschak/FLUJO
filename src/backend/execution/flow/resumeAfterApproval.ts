@@ -38,7 +38,7 @@ export type ApprovalDecisionOutcome =
 
 async function cancelledUiForToolCall(
   sharedState: SharedState,
-  toolCall: OpenAI.ChatCompletionMessageToolCall,
+  toolCall: OpenAI.ChatCompletionMessageFunctionToolCall,
   reason: string,
 ): Promise<FlujoChatMessage['ui']> {
   const decoded = decodeToolName(toolCall.function.name, sharedState.toolNameMap);
@@ -100,7 +100,7 @@ export async function applyApprovalDecision(
       // rule are auto-resolved (no further user action needed).
       if (sharedState.pendingToolCalls && sharedState.pendingToolCalls.length > 0) {
         const remaining = sharedState.pendingToolCalls.filter(tc => tc.id !== toolCallId);
-        const stillPending: OpenAI.ChatCompletionMessageToolCall[] = [];
+        const stillPending: OpenAI.ChatCompletionMessageFunctionToolCall[] = [];
         for (const tc of remaining) {
           const tcDecoded = decodeToolName(tc.function.name, sharedState.toolNameMap);
           if (!tcDecoded) { stillPending.push(tc); continue; }

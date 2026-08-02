@@ -150,7 +150,7 @@ export class ToolHandler {
       );
 
       // Map tools to OpenAI format with sanitized schemas
-      const tools: OpenAI.ChatCompletionTool[] = orderedTools.map(tool => ({
+      const tools: OpenAI.ChatCompletionFunctionTool[] = orderedTools.map(tool => ({
         type: "function",
         function: {
           name: tool.name,

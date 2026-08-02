@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { mcpService } from '@/frontend/services/mcp';
 import { createLogger } from '@/utils/logger';
-import { sleep } from 'openai/core.mjs';
 
 // Create a logger instance for this file
 const log = createLogger('frontend/hooks/useServerTools');

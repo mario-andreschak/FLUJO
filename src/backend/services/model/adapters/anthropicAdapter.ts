@@ -332,7 +332,7 @@ export function toAnthropicMessages(messages: OpenAI.ChatCompletionMessageParam[
 }
 
 export function toAnthropicTools(
-  tools?: OpenAI.ChatCompletionTool[]
+  tools?: OpenAI.ChatCompletionFunctionTool[]
 ): Anthropic.Tool[] | undefined {
   if (!tools || tools.length === 0) return undefined;
   return tools
@@ -453,7 +453,7 @@ function toChatCompletion(
   resp: Anthropic.Message
 ): { completion: OpenAI.Chat.Completions.ChatCompletion; media: ModelMediaPart[] } {
   let text = '';
-  const toolCalls: OpenAI.ChatCompletionMessageToolCall[] = [];
+  const toolCalls: OpenAI.ChatCompletionMessageFunctionToolCall[] = [];
   const media: ModelMediaPart[] = [];
 
   for (const block of resp.content) {

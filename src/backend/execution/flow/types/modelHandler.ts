@@ -24,7 +24,7 @@ export interface ModelCallInput {
    * returned/persisted transcript. Unset ⇒ the provider sees `messages`.
    */
   wireMessages?: FlujoChatMessage[];
-  tools?: OpenAI.ChatCompletionTool[];
+  tools?: OpenAI.ChatCompletionFunctionTool[];
   iteration: number;
   maxIterations: number;
   /**
@@ -104,7 +104,7 @@ export interface ModelCallResult {
 
 // Tool call processing input
 export interface ToolCallProcessingInput {
-  toolCalls: OpenAI.ChatCompletionMessageToolCall[];
+  toolCalls: OpenAI.ChatCompletionMessageFunctionToolCall[];
   content?: string;
   /**
    * Maps model-facing MCP tool names back to (server, tool). Built from the

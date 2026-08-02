@@ -563,7 +563,7 @@ class ModelService {
      */
     maxTokens?: number;
     /** Client-supplied tool definitions — passed through per standard OpenAI semantics. */
-    tools?: OpenAI.ChatCompletionTool[];
+    tools?: OpenAI.ChatCompletionFunctionTool[];
   }): Promise<DirectCompletionResult> {
     const { modelIdentifier, messages, tools } = params;
     log.debug('generateChatCompletion: Entering method', {

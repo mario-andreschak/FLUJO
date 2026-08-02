@@ -227,7 +227,7 @@ export async function toGeminiContents(
   };
 }
 
-export function toGeminiTools(tools?: OpenAI.ChatCompletionTool[]): FunctionDeclaration[] | undefined {
+export function toGeminiTools(tools?: OpenAI.ChatCompletionFunctionTool[]): FunctionDeclaration[] | undefined {
   if (!tools || tools.length === 0) return undefined;
   return tools
     .filter(t => t.type === 'function')
@@ -258,7 +258,7 @@ function toChatCompletion(
   const parts = candidate?.content?.parts ?? [];
 
   let text = '';
-  const toolCalls: OpenAI.ChatCompletionMessageToolCall[] = [];
+  const toolCalls: OpenAI.ChatCompletionMessageFunctionToolCall[] = [];
   const media: ModelMediaPart[] = [];
   for (const part of parts) {
     if (typeof part.text === 'string') {
@@ -425,7 +425,7 @@ export class GeminiAdapter implements CompletionAdapter {
     let responseId = `gemini_${uuidv4()}`;
     let text = '';
     let usage: GenerateContentResponse['usageMetadata'];
-    const toolCalls: OpenAI.ChatCompletionMessageToolCall[] = [];
+    const toolCalls: OpenAI.ChatCompletionMessageFunctionToolCall[] = [];
     const media: ModelMediaPart[] = [];
     const seenMedia = new Set<string>();
     const toolIndexById = new Map<string, number>();

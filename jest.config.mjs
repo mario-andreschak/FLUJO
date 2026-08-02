@@ -12,6 +12,7 @@ const createJestConfig = nextJest({ dir: './' });
 // Shared across both projects: the "@/" alias.
 const moduleNameMapper = {
   '^@/(.*)$': '<rootDir>/src/$1',
+  '^uuid$': '<rootDir>/__tests__/uuidJestAdapter.ts',
   // Direct backend compatibility tests retain their existing mocked policy
   // modules; subprocess tests still load the compiled standalone package.
   '^@flujo-ai/mcp-shared$': '<rootDir>/__tests__/mcp/mcpSharedJestAdapter.ts',

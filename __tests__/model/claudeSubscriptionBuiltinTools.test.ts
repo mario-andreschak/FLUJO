@@ -271,7 +271,7 @@ describe('ClaudeSubscriptionAdapter — built-in tool suppression (#166)', () =>
 
   it('still disables built-ins when the node HAS bound (handoff) tools', async () => {
     const adapter = new ClaudeSubscriptionAdapter();
-    const tools: OpenAI.ChatCompletionTool[] = [
+    const tools: OpenAI.ChatCompletionFunctionTool[] = [
       {
         type: 'function',
         function: {
@@ -291,7 +291,7 @@ describe('ClaudeSubscriptionAdapter — built-in tool suppression (#166)', () =>
   });
 });
 
-const mcpAppTool: OpenAI.ChatCompletionTool = {
+const mcpAppTool: OpenAI.ChatCompletionFunctionTool = {
   type: 'function',
   function: {
     name: 'mcp_hashed_name',

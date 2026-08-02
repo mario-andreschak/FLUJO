@@ -207,7 +207,7 @@ export async function commitRecoveryCheckpoint(
 
 export function describeToolEffects(
   state: SharedState,
-  toolCalls: OpenAI.ChatCompletionMessageToolCall[],
+  toolCalls: OpenAI.ChatCompletionMessageFunctionToolCall[],
 ): RecoveryToolEffect[] {
   return toolCalls.map((call) => {
     const mapped = state.toolNameMap?.[call.function.name];
@@ -230,7 +230,7 @@ export function describeToolEffects(
 export async function commitToolCheckpoint(
   storageKey: StorageKey,
   state: SharedState,
-  toolCalls: OpenAI.ChatCompletionMessageToolCall[],
+  toolCalls: OpenAI.ChatCompletionMessageFunctionToolCall[],
   phase: 'before' | 'completed' | 'unknown',
   emit?: EmitFn,
 ): Promise<void> {

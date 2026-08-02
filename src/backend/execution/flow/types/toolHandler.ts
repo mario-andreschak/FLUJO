@@ -9,7 +9,7 @@ export interface ToolPreparationInput {
 
 // Result of tool preparation
 export interface ToolPreparationResult {
-  tools: OpenAI.ChatCompletionTool[];
+  tools: OpenAI.ChatCompletionFunctionTool[];
 }
 
 // Input for MCP node processing

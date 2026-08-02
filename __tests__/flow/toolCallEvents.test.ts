@@ -17,7 +17,7 @@ jest.mock('@/backend/services/mcp', () => ({
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import OpenAI from 'openai';
 
-const toolCall = (id: string, name: string, args: object): OpenAI.ChatCompletionMessageToolCall => ({
+const toolCall = (id: string, name: string, args: object): OpenAI.ChatCompletionMessageFunctionToolCall => ({
   id,
   type: 'function',
   function: { name, arguments: JSON.stringify(args) },
@@ -44,7 +44,7 @@ describe('ModelHandler.processToolCalls events', () => {
     expect(result.success).toBe(true);
     // The decoded (server, tool) reached mcpService with the default 5-minute
     // timeout (no toolTimeout configured on the MCP node) and a progress callback.
-    expect(callToolMock).toHaveBeenCalledWith('srv', 'long_op', { a: 1 }, 300, expect.any(Function), undefined, undefined);
+    expect(callToolMock).toHaveBeenCalledWith('srv', 'long_op', { a: 1 }, 300, expect.any(Function), undefined, undefined, 'model', undefined);
 
     const types = emit.mock.calls.map(([e]) => e.type);
     expect(types).toEqual(['tool:call', 'tool:progress', 'tool:result']);
@@ -85,7 +85,7 @@ describe('ModelHandler.processToolCalls events', () => {
     });
 
     expect(result.success).toBe(true);
-    expect(callToolMock).toHaveBeenCalledWith('srv', 'long_op', {}, 42, expect.any(Function), undefined, undefined);
+    expect(callToolMock).toHaveBeenCalledWith('srv', 'long_op', {}, 42, expect.any(Function), undefined, undefined, 'model', undefined);
   });
 
   it('passes -1 (infinite) through unchanged when the node disables the timeout', async () => {
@@ -98,7 +98,7 @@ describe('ModelHandler.processToolCalls events', () => {
 
     expect(result.success).toBe(true);
     // -1 reaches callTool, which maps it to the SDK's setTimeout ceiling ("no timeout").
-    expect(callToolMock).toHaveBeenCalledWith('srv', 'long_op', {}, -1, expect.any(Function), undefined, undefined);
+    expect(callToolMock).toHaveBeenCalledWith('srv', 'long_op', {}, -1, expect.any(Function), undefined, undefined, 'model', undefined);
   });
 
   it('still processes tool calls when no emitter is provided', async () => {

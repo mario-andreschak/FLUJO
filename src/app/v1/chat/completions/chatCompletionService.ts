@@ -12,6 +12,7 @@ import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEven
 import { ExecutionEvent } from '@/shared/types/execution/events';
 import { modelService } from '@/backend/services/model';
 import type { ModelMediaPart } from '@/shared/types/model/media';
+import { requireFunctionToolCalls } from '@/shared/types/openai';
 
 const log = createLogger('app/v1/chat/completions/chatCompletionService');
 
@@ -476,7 +477,7 @@ export function createStreamingResponse(
               send(baseChunk({ media: msg.media }, null));
             }
             const seenToolParts = streamedToolParts.get(msg.id);
-            const missingToolCalls = (msg.tool_calls ?? []).flatMap((toolCall, index) => {
+            const missingToolCalls = requireFunctionToolCalls(msg.tool_calls).flatMap((toolCall, index) => {
               const seen = seenToolParts?.get(index);
               const missingFunction = {
                 ...(!seen?.name ? { name: toolCall.function.name } : {}),
