@@ -1,6 +1,6 @@
 {
   "name": "flujo-ai",
-  "version": "3.40.0",
+  "version": "3.41.0",
   "workspaces": [
     "mcp-servers/bash",
     "mcp-servers/browser",
@@ -46,10 +46,10 @@
     "@anthropic-ai/sdk": "^0.105.0",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.0",
-    "@mario.andreschak/mcp-bash": "3.40.0",
-    "@mario.andreschak/mcp-browser": "3.40.0",
-    "@mario.andreschak/mcp-filesystem": "3.40.0",
-    "@mario.andreschak/mcp-flujo": "3.40.0",
+    "@mario.andreschak/mcp-bash": "3.41.0",
+    "@mario.andreschak/mcp-browser": "3.41.0",
+    "@mario.andreschak/mcp-filesystem": "3.41.0",
+    "@mario.andreschak/mcp-flujo": "3.41.0",
     "@google/genai": "^2.9.0",
     "@isomorphic-git/lightning-fs": "^4.6.0",
     "@modelcontextprotocol/client": "2.0.0-beta.5",
