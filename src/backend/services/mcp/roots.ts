@@ -41,7 +41,6 @@ const log = createLogger('backend/services/mcp/roots');
 // instance/hot-reload reason as __mcp_clients in ./index.ts.
 // ---------------------------------------------------------------------------
 declare global {
-  // eslint-disable-next-line no-var
   var __mcp_node_roots: Map<string, { serverName: string; roots: string[] }> | undefined;
 }
 if (typeof global.__mcp_node_roots === 'undefined') {

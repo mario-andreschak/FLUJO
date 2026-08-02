@@ -28,8 +28,7 @@ Advanced is opt-in and preserves the complete FlowSpec and builder surface:
 - Conditional/bidirectional edges.
 - Variables, subflow resource capture, persistent KV state, and explicit
   Process → Resource artifact production.
-- Subflow fan-out, map-over-list, worker spawning, concurrency, joins, and
-  error strategies.
+- Subflow child-job queues and their maximum simultaneous-child setting.
 - Unattended execution and flow-level permission rules.
 
 The builder preference is stored under `flujo-ui:flow-builder:mode`. When a flow
@@ -73,6 +72,8 @@ resolved by the backend before the model call.
 
 - Switching profiles never removes properties or nodes.
 - Existing advanced FlowSpecs continue to compile.
+- Legacy Subflow fan-out, map-over-list, authored briefs, joins, and error
+  strategies remain readable but are no longer part of normal authoring.
 - Existing saved flows open in Guided mode with an advanced-feature notice.
 - The vendored Flow Generator is seeded only when missing and is never
   overwritten on startup. Restoring its bundled definition is explicit.

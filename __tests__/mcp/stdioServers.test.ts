@@ -87,7 +87,12 @@ describe('standalone stdio MCP packages', () => {
         arguments: { command: 'node --version', cwd: root, timeout: 10 },
       });
       expect(runtime.isError).not.toBe(true);
-      const runtimePayload = JSON.parse((runtime.content[0] as { text: string }).text) as { output?: string };
+      const runtimeContent = (runtime as { content?: Array<{ type?: string; text?: unknown }> }).content;
+      const runtimeText = runtimeContent?.[0]?.text;
+      expect(runtimeContent?.[0]?.type).toBe('text');
+      expect(typeof runtimeText).toBe('string');
+      if (typeof runtimeText !== 'string') throw new Error('Expected the run tool to return text content');
+      const runtimePayload = JSON.parse(runtimeText) as { output?: string };
       expect(runtimePayload.output).toMatch(/^v\d+/);
     } finally {
       await client.close();

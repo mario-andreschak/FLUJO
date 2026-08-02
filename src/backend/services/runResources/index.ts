@@ -113,7 +113,6 @@ export function _clearRunResourceSettingsCache(): void {
 // than once (route bundles, hot reload) and all instances must share the cache.
 // Disk is the cold-start source of truth.
 declare global {
-  // eslint-disable-next-line no-var
   var __flujo_run_resources: Map<string, RunResourceEntry[]> | undefined;
 }
 const indexCache: Map<string, RunResourceEntry[]> =

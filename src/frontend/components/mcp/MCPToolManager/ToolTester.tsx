@@ -470,6 +470,8 @@ const ToolTester: React.FC<ToolTesterProps> = ({
                             return <ReactMarkdown key={index} remarkPlugins={[remarkGfm]}>{item.text}</ReactMarkdown>;
                           } else if (item.type === 'image' && item.data && item.mimeType) {
                             return (
+                              // MCP tool images are data URLs, which the Next image optimizer does not support.
+                              // eslint-disable-next-line @next/next/no-img-element
                               <img
                                 key={index}
                                 src={`data:${item.mimeType};base64,${item.data}`}

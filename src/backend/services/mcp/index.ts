@@ -2,7 +2,6 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs/promises';
 import path from 'path';
@@ -23,7 +22,6 @@ declare global {
   // (e.g. after an OAuth token refresh changed the transport's config key) left every
   // other instance holding the closed client, whose aborted transport made each tool
   // call fail instantly with "This operation was aborted" until FLUJO was restarted.
-  // eslint-disable-next-line no-var
   var __mcp_clients: Map<string, Client> | undefined;
   // Names of servers whose connection attempt is currently in flight (initial
   // startup sweep or a reconnect). Global-backed for the same reason as
@@ -31,10 +29,8 @@ declare global {
   // one that later serves getServerStatus(), and the status route must still be
   // able to see that a startup is in progress so it can report "connecting"
   // instead of a misleading "configured but not connected" error.
-  // eslint-disable-next-line no-var
   var __mcp_connecting: Set<string> | undefined;
   // True from process boot until startEnabledServers() finishes its first sweep.
-  // eslint-disable-next-line no-var
   var __mcp_starting_up: boolean | undefined;
   // The CURRENT transport per server name. onclose/onerror handlers close over the
   // transport they were registered on and fire for ANY instance — including a zombie
@@ -43,7 +39,6 @@ declare global {
   // registered here; FLUJO-initiated closes deregister BEFORE closing, so their close
   // events are ignored. Global-backed for the same cross-module-instance reason as
   // __mcp_clients.
-  // eslint-disable-next-line no-var
   var __mcp_active_transports: Map<string, Transport> | undefined;
   // Issue #255: monotonic per-server "generation" counter, bumped every time a
   // client is (re)registered in __mcp_clients. A tool advertised to the model
@@ -51,12 +46,10 @@ declare global {
   // mismatch means the client was re-created (reconnect / config change) and the
   // call is rejected as stale instead of being run against a different instance.
   // A numeric counter (not the Client reference) survives SharedState persistence.
-  // eslint-disable-next-line no-var
   var __mcp_client_generation: Map<string, number> | undefined;
   // Issue #255: the CURRENT advertised input-schema hash per (server\0tool). Set
   // whenever a tool set is advertised; compared at dispatch time against the hash
   // frozen in the call's toolNameMap entry to detect a schema change.
-  // eslint-disable-next-line no-var
   var __mcp_tool_schema_hash: Map<string, string> | undefined;
 }
 

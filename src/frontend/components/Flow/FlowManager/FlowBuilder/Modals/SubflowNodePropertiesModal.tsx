@@ -13,10 +13,8 @@ import {
   Divider,
   TextField,
   Alert,
-  Checkbox,
   FormControlLabel,
   Switch,
-  MenuItem,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
@@ -62,7 +60,7 @@ export const SubflowNodePropertiesModal = ({
   flowId,
   authoringMode = 'advanced',
 }: SubflowNodePropertiesModalProps) => {
-  const { t, tp, formatList } = useI18n();
+  const { t } = useI18n();
   const [nodeData, setNodeData] = useState<{
     label: string;
     type: string;
@@ -73,10 +71,6 @@ export const SubflowNodePropertiesModal = ({
   const [flows, setFlows] = useState<Flow[]>([]);
   const [loadingFlows, setLoadingFlows] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
-  // Spawn briefs (issue #156) are edited as free multi-line text (one brief per
-  // line) and only parsed back into the string[] property at save time, so
-  // typing/removing blank lines never fights the user mid-edit.
-  const [briefsText, setBriefsText] = useState('');
   // Data-flow capture editors (issue #203, Phase 3 of #186). captureKv is split
   // into scope + key for editing and recombined via buildKvRef on save.
   const [captureVariable, setCaptureVariable] = useState('');
@@ -100,12 +94,6 @@ export const SubflowNodePropertiesModal = ({
         ...node.data,
         properties: { ...existing },
       });
-      setBriefsText(
-        Array.isArray(existing.spawnBriefs)
-          ? existing.spawnBriefs.filter((b: unknown) => typeof b === 'string').join('\n')
-          : ''
-      );
-
       // Data-flow capture (issue #203). parseKvRef('') → { scope:'folder', key:'' }.
       setCaptureVariable(existing.captureVariable || '');
       setCaptureResource(existing.captureResource || '');
@@ -141,9 +129,8 @@ export const SubflowNodePropertiesModal = ({
     });
   };
 
-  // Issue #138 / #204: removing a key (rather than storing false/''/a default)
-  // keeps stored data minimal and byte-compatible with the FlowSpec compiler,
-  // which only emits these fan-out keys when they are explicitly set.
+  // Removing a key (rather than storing an empty/default value) keeps saved
+  // node data minimal and lets the runtime apply its canonical defaults.
   const removeProperty = (key: string) => {
     setNodeData((prev) => {
       if (!prev) return null;
@@ -160,19 +147,7 @@ export const SubflowNodePropertiesModal = ({
         onClose();
         return;
       }
-      // Parse the brief editor back into the stored list. An empty editor
-      // REMOVES the key (issue #138 spirit: never seed values the user didn't
-      // set) rather than persisting an empty array.
-      const briefs = briefsText
-        .split('\n')
-        .map((b) => b.trim())
-        .filter((b) => b !== '');
       const properties = { ...nodeData.properties };
-      if (briefs.length > 0) {
-        properties.spawnBriefs = briefs;
-      } else {
-        delete properties.spawnBriefs;
-      }
 
       // Data-flow capture (issue #203): set the trimmed value or REMOVE the key
       // when empty, so flowToSpec never emits an empty captureX and existing
@@ -206,33 +181,14 @@ export const SubflowNodePropertiesModal = ({
     ? ''
     : flows.find((f) => f.id === selectedSubflowId)?.name || '';
 
-  // API-authored lane configuration (issue #156 defect 3): these fields have no
-  // full editor here (they come from /api/flow/compile), but they must be
-  // VISIBLE — a node fanning out to 5 flows used to render as "Choose a flow…"
-  // as if it were unbound/broken.
-  const parallelIds: string[] = Array.isArray(nodeData.properties?.parallelSubflowIds)
-    ? nodeData.properties.parallelSubflowIds.filter((id: unknown): id is string => typeof id === 'string' && id !== '')
-    : [];
-  const parallelNames = parallelIds.map((id) => flows.find((f) => f.id === id)?.name || id);
-  const parallelVar =
-    typeof nodeData.properties?.parallelSubflowIdsVar === 'string'
-      ? nodeData.properties.parallelSubflowIdsVar.trim()
-      : '';
-  const mapOverList = nodeData.properties?.mapOverList === true;
-  const spawnEnabled = !!nodeData.properties?.allowCallerFanout;
-  const hasBriefs = briefsText.split('\n').some((b) => b.trim() !== '');
-  // The pool/join/error tuning applies to every lane mode; show it as soon as
-  // any lane source is in play so it never seeds values on unrelated saves.
-  const showTuning = spawnEnabled || hasBriefs || parallelIds.length > 0 || !!parallelVar || mapOverList;
-
-  // Dynamic fan-out mode gating (issue #204). Mirror the compiler's mutual
-  // exclusions so the UI can never author a combination the compiler rejects:
-  //  - mapOverList conflicts with static parallel, parallel-var, and spawning.
-  //  - parallelFlowsVariable conflicts with mapOverList and a static list.
-  const staticParallelPresent = parallelIds.length > 0;
-  const spawnMode = spawnEnabled || hasBriefs;
-  const mapAllowed = !staticParallelPresent && !parallelVar && !spawnMode;
-  const varAllowed = !mapOverList && !staticParallelPresent;
+  // Older saved flows may still carry the removed fan-out/map authoring fields.
+  // The runtime keeps reading them for compatibility, but the simplified modal
+  // no longer creates or edits them.
+  const hasLegacyExecution =
+    (Array.isArray(nodeData.properties?.parallelSubflowIds) && nodeData.properties.parallelSubflowIds.length > 0) ||
+    !!nodeData.properties?.parallelSubflowIdsVar ||
+    nodeData.properties?.mapOverList === true ||
+    (Array.isArray(nodeData.properties?.spawnBriefs) && nodeData.properties.spawnBriefs.length > 0);
 
   // Back-compat: a flow saved before the explicit 'isolated' mode existed just
   // has a promptTemplate and no inputMode — surface it as Isolated so the same
@@ -295,12 +251,7 @@ export const SubflowNodePropertiesModal = ({
             sx={{ textTransform: 'none', maxWidth: '100%' }}
           >
             <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {selectedSubflowName ||
-                (parallelIds.length > 0
-                  ? tp('flows.subflow.parallel', parallelIds.length)
-                  : parallelVar
-                    ? t('flows.subflow.targetsVariable', { name: parallelVar })
-                    : t('flows.subflow.choose'))}
+              {selectedSubflowName || t('flows.subflow.choose')}
             </Box>
           </Button>
         </Box>
@@ -311,16 +262,9 @@ export const SubflowNodePropertiesModal = ({
           </Alert>
         )}
 
-        {/* Issue #156 defect 3: the STATIC parallel list is still authored via
-            the flow-compile API — keep it read-only here (issue #204 Open Q1)
-            but VISIBLE so the node doesn't look unbound. The dynamic fan-out
-            modes (parallelFlowsVariable / mapOverList) are now editable below. */}
-        {parallelIds.length > 0 && (
+        {hasLegacyExecution && (
           <Alert severity="info" sx={{ mt: 1 }}>
-            {t('flows.subflow.parallelInfo', {
-              count: parallelIds.length,
-              names: formatList(parallelNames),
-            })}
+            {t('flows.subflow.legacyExecution')}
           </Alert>
         )}
 
@@ -415,217 +359,42 @@ export const SubflowNodePropertiesModal = ({
         </Box>
 
         {inputMode === 'isolated' && (
-          <>
-            <FormControlLabel
-              sx={{ mt: 1, display: 'block' }}
-              control={
-                <Checkbox
-                  checked={nodeData.properties?.allowCallerPrompt !== false}
-                  onChange={(e) => handlePropertyChange('allowCallerPrompt', e.target.checked)}
-                />
-              }
-              label={t('flows.subflow.allowCallerPrompt')}
-            />
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 1, ml: 4, mt: -0.5 }}>
-              {t('flows.subflow.allowCallerPromptHelp')}
-            </Typography>
-            <TextField
-              fullWidth
-              label={nodeData.properties?.allowCallerPrompt !== false ? t('flows.subflow.defaultPrompt') : t('flows.subflow.isolatedPrompt')}
-              value={promptTemplate}
-              onChange={(e) => handlePropertyChange('promptTemplate', e.target.value)}
-              margin="normal"
-              multiline
-              rows={3}
-              helperText={
-                nodeData.properties?.allowCallerPrompt !== false
-                  ? t('flows.subflow.defaultPromptHelp')
-                  : t('flows.subflow.isolatedPromptHelp')
-              }
-            />
-          </>
+          <TextField
+            fullWidth
+            label={t('flows.subflow.defaultPrompt')}
+            value={promptTemplate}
+            onChange={(e) => handlePropertyChange('promptTemplate', e.target.value)}
+            margin="normal"
+            multiline
+            rows={3}
+            helperText={t('flows.subflow.defaultPromptHelp')}
+          />
         )}
 
-        {/* Dynamic subflow fan-out (issue #204, Phase 4 of #186): author
-            parallelFlowsVariable + mapOverList (+ itemSplit, sequential) that
-            were previously read-only alerts. "Never seed defaults" (#138): every
-            off/default/empty state REMOVES its key so UI output stays
-            byte-compatible with the FlowSpec compiler, which only emits these
-            keys when explicitly set. Mode gating mirrors the compiler's mutual
-            exclusions so an invalid combination can't be authored here. */}
-        <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
-          {t('flows.subflow.dynamicTitle')}
-        </Typography>
-        <TextField
-          fullWidth
-          label={t('flows.subflow.parallelVariable')}
-          value={parallelVar}
-          disabled={!varAllowed}
-          onChange={(e) => {
-            const v = e.target.value.trim();
-            if (v) handlePropertyChange('parallelSubflowIdsVar', v);
-            else removeProperty('parallelSubflowIdsVar');
-          }}
-          margin="normal"
-          helperText={
-            !varAllowed
-              ? (mapOverList
-                  ? t('flows.subflow.parallelDisabledMap')
-                  : t('flows.subflow.parallelDisabledStatic'))
-              : t('flows.subflow.parallelVariableHelp')
-          }
-        />
-        <FormControlLabel
-          sx={{ display: 'block', mt: 1 }}
-          control={
-            <Checkbox
-              checked={mapOverList}
-              disabled={!mapAllowed && !mapOverList}
-              onChange={(e) => {
-                if (e.target.checked) {
-                  handlePropertyChange('mapOverList', true);
-                } else {
-                  // Uncheck cascade-removes the map-only modifiers rather than
-                  // writing false (#138: never store defaults/off states).
-                  setNodeData((prev) => {
-                    if (!prev) return null;
-                    const { mapOverList: _m, itemSplit: _i, sequential: _s, ...rest } = prev.properties;
-                    return { ...prev, properties: rest };
-                  });
-                }
-              }}
-            />
-          }
-          label={t('flows.subflow.map')}
-        />
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 1, ml: 4, mt: -0.5 }}>
-          {mapAllowed || mapOverList
-            ? t('flows.subflow.mapHelp')
-            : t('flows.subflow.mapDisabled')}
-        </Typography>
-        {mapOverList && (
-          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center', ml: 4, mt: 1 }}>
-            <TextField
-              label={t('flows.subflow.split')}
-              select
-              size="small"
-              sx={{ width: 240 }}
-              value={nodeData.properties?.itemSplit === 'lines' ? 'lines' : 'json-array'}
-              onChange={(e) => {
-                // json-array is the runtime default → store NOTHING for it so the
-                // common case round-trips byte-identically (#138).
-                if (e.target.value === 'lines') handlePropertyChange('itemSplit', 'lines');
-                else removeProperty('itemSplit');
-              }}
-              helperText={t('flows.subflow.splitHelp')}
-            >
-              <MenuItem value="json-array">{t('flows.subflow.jsonArray')}</MenuItem>
-              <MenuItem value="lines">{t('flows.subflow.lines')}</MenuItem>
-            </TextField>
-            <FormControlLabel
-              control={
-                <Checkbox
-                  checked={nodeData.properties?.sequential === true}
-                  onChange={(e) => {
-                    if (e.target.checked) handlePropertyChange('sequential', true);
-                    else removeProperty('sequential');
-                  }}
-                />
-              }
-              label={t('flows.subflow.sequential')}
-            />
-          </Box>
-        )}
-
-        {/* Spawn-with-brief (issue #156): this node as a spawnable sub-agent —
-            the routing model calls the handoff tool once per parallel worker,
-            each call carrying its own task brief; and/or the author pins a
-            fixed brief list. Both run through the same parallel lane engine. */}
         <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
           {t('flows.subflow.workersTitle')}
         </Typography>
-        <FormControlLabel
-          sx={{ display: 'block' }}
-          control={
-            <Checkbox
-              checked={spawnEnabled}
-              onChange={(e) => handlePropertyChange('allowCallerFanout', e.target.checked)}
-            />
-          }
-          label={t('flows.subflow.allowSpawn')}
-        />
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 1, ml: 4, mt: -0.5 }}>
-          {t('flows.subflow.spawnHelp')}
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+          {t('flows.subflow.queueHelp')}
         </Typography>
         <TextField
-          fullWidth
-          label={t('flows.subflow.briefs')}
-          value={briefsText}
-          onChange={(e) => setBriefsText(e.target.value)}
-          margin="normal"
-          multiline
-          minRows={2}
-          helperText={t('flows.subflow.briefsHelp')}
+          label={t('flows.subflow.maxCopies')}
+          type="number"
+          size="small"
+          sx={{ width: 240 }}
+          inputProps={{ min: 1 }}
+          value={typeof nodeData.properties?.concurrencyLimit === 'number' ? nodeData.properties.concurrencyLimit : ''}
+          onChange={(e) => {
+            const raw = e.target.value;
+            if (raw === '') {
+              removeProperty('concurrencyLimit');
+            } else {
+              const n = Math.max(1, Math.floor(Number(raw)));
+              if (!Number.isNaN(n)) handlePropertyChange('concurrencyLimit', n);
+            }
+          }}
+          helperText={t('flows.subflow.defaultFour')}
         />
-        {showTuning && (
-          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mt: 1 }}>
-            <TextField
-              label={t('flows.subflow.maxCopies')}
-              type="number"
-              size="small"
-              sx={{ width: 160 }}
-              value={typeof nodeData.properties?.concurrencyLimit === 'number' ? nodeData.properties.concurrencyLimit : ''}
-              onChange={(e) => {
-                const raw = e.target.value;
-                if (raw === '') {
-                  // Clearing removes the key (never seed a default — issue #138).
-                  setNodeData((prev) => {
-                    if (!prev) return null;
-                    const { concurrencyLimit: _drop, ...rest } = prev.properties;
-                    return { ...prev, properties: rest };
-                  });
-                } else {
-                  const n = Math.max(1, Math.floor(Number(raw)));
-                  if (!Number.isNaN(n)) handlePropertyChange('concurrencyLimit', n);
-                }
-              }}
-              helperText={t('flows.subflow.defaultFour')}
-            />
-            <TextField
-              label={t('flows.subflow.errorHandling')}
-              select
-              size="small"
-              sx={{ width: 220 }}
-              value={nodeData.properties?.errorStrategy === 'fail-fast' ? 'fail-fast' : 'collect-all'}
-              onChange={(e) => handlePropertyChange('errorStrategy', e.target.value)}
-              helperText={t('flows.subflow.errorHelp')}
-            >
-              <MenuItem value="collect-all">{t('flows.subflow.collect')}</MenuItem>
-              <MenuItem value="fail-fast">{t('flows.subflow.failFast')}</MenuItem>
-            </TextField>
-            <TextField
-              label={t('flows.subflow.separator')}
-              size="small"
-              sx={{ width: 260 }}
-              multiline
-              maxRows={2}
-              value={typeof nodeData.properties?.joinSeparator === 'string' ? nodeData.properties.joinSeparator : ''}
-              onChange={(e) => {
-                const raw = e.target.value;
-                if (raw === '') {
-                  setNodeData((prev) => {
-                    if (!prev) return null;
-                    const { joinSeparator: _drop, ...rest } = prev.properties;
-                    return { ...prev, properties: rest };
-                  });
-                } else {
-                  handlePropertyChange('joinSeparator', raw);
-                }
-              }}
-              helperText={t('flows.subflow.blankLine')}
-            />
-          </Box>
-        )}
 
         <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
           {t('flows.subflow.outputTitle')}
@@ -647,9 +416,8 @@ export const SubflowNodePropertiesModal = ({
           />
         </Box>
 
-        {/* Debugging (issue #125): persist the subflow's OWN conversation into the
-            chat sidebar, mirroring a planned execution's "Save full conversations".
-            Routed through runFlow mode:'conversation' on the single-child path. */}
+        {/* Debugging (issue #125): persist each queued child conversation into
+            the chat sidebar, linked to the parent run. */}
         <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
           {t('flows.subflow.debugging')}
         </Typography>

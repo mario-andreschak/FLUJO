@@ -10,7 +10,6 @@ import { StorageKey } from '@/shared/types/storage';
 import type { Flow } from '@/shared/types/flow';
 import { createLogger } from '@/utils/logger';
 import { getDataDir } from '@/utils/paths';
-// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 
 const log = createLogger('app/api/restore/route');

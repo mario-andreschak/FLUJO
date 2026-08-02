@@ -13,7 +13,12 @@ jest.mock('@xyflow/react', () => ({
 
 jest.mock('@/frontend/components/Flow/FlowManager/FlowBuilder/Canvas', () => ({
   Canvas: ({ nodes, edges }: { nodes: any[]; edges: any[] }) => (
-    <div data-testid="canvas">{nodes.length}:{edges.length}</div>
+    <div
+      data-testid="canvas"
+      data-positions={nodes.map(node => `${node.id}:${node.position.x},${node.position.y}`).join('|')}
+    >
+      {nodes.length}:{edges.length}
+    </div>
   ),
 }));
 jest.mock('@/frontend/components/Flow/FlowManager/FlowBuilder/NodePalette', () => ({
@@ -79,8 +84,8 @@ jest.mock('@/frontend/services/model', () => ({
   modelService: {
     loadModels: jest.fn(() => {
       const models = [
-        { id: 'model-favorite', name: 'Friendly AI', favorite: true },
         { id: 'model-backup', name: 'Backup AI', favorite: false },
+        { id: 'model-favorite', name: 'Friendly AI', favorite: true },
       ];
       return {
         then: (resolve: (value: typeof models) => unknown) => {
@@ -134,7 +139,7 @@ describe('FlowBuilder toolbar', () => {
     expect(screen.getByRole('button', { name: 'Save Flow' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Check Flow' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add node' })).toBeInTheDocument();
-    expect(screen.getByLabelText('Save status: saved')).toBeInTheDocument();
+    expect(screen.getByLabelText('Save status: Saved')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Auto-Align' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Undo' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Redo' })).toBeDisabled();
@@ -345,6 +350,84 @@ describe('FlowBuilder toolbar', () => {
     expect(screen.queryByTestId('process-properties-modal')).not.toBeInTheDocument();
   });
 
+  it('lets Add node choose a type while keeping automatic append behavior', async () => {
+    const selectedStartFlow = {
+      ...initialFlow,
+      nodes: [{ ...initialFlow.nodes[0], selected: true }],
+    };
+    render(
+      <FlowBuilder
+        initialFlow={selectedStartFlow}
+        onSave={() => {}}
+        onDelete={() => {}}
+        allFlows={[selectedStartFlow]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add node' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Send the answer/i }));
+
+    await waitFor(() => expect(screen.getByTestId('canvas')).toHaveTextContent('2:1'));
+  });
+
+  it('auto-aligns an opened flow on a mobile viewport without marking it dirty', async () => {
+    const originalMatchMedia = window.matchMedia;
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: jest.fn().mockImplementation((query: string) => ({
+        matches: query === '(max-width: 899.95px)',
+        media: query,
+        onchange: null,
+        addListener: jest.fn(),
+        removeListener: jest.fn(),
+        addEventListener: jest.fn(),
+        removeEventListener: jest.fn(),
+        dispatchEvent: jest.fn(),
+      })),
+    });
+    const mobileFlow = {
+      ...initialFlow,
+      nodes: [
+        { ...initialFlow.nodes[0], position: { x: 600, y: 600 } },
+        {
+          id: 'process-existing',
+          type: 'process',
+          position: { x: -500, y: -500 },
+          data: { label: 'Existing process', type: 'process', properties: {} },
+        },
+      ],
+      edges: [{
+        id: 'start->process',
+        source: 'start',
+        sourceHandle: 'start-bottom',
+        target: 'process-existing',
+        targetHandle: 'process-top',
+        data: { edgeType: 'standard' },
+      }],
+    };
+
+    render(
+      <FlowBuilder
+        initialFlow={mobileFlow as any}
+        onSave={() => {}}
+        onDelete={() => {}}
+        allFlows={[mobileFlow as any]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('canvas').getAttribute('data-positions'))
+        .toContain('start:0,0|process-existing:0,170');
+    });
+    expect(screen.getByLabelText('Save status: Saved')).toBeInTheDocument();
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: originalMatchMedia,
+    });
+  });
+
   it('does not create an orphan when the selected node is terminal', async () => {
     const terminalFlow = {
       ...initialFlow,
@@ -411,7 +494,7 @@ describe('FlowBuilder toolbar', () => {
     expect(within(recipe).queryByText('May one of your connected AIs help build this?')).not.toBeInTheDocument();
   });
 
-  it('asks permission, binds the explicitly selected model, and saves before Try', async () => {
+  it('asks permission, prefills the favorite model, and saves before Try', async () => {
     window.localStorage.setItem('flujo-ui:flow-builder:mode', JSON.stringify('guided'));
     const onSave = jest.fn().mockResolvedValue(true);
     const onTry = jest.fn();
@@ -436,6 +519,7 @@ describe('FlowBuilder toolbar', () => {
     expect(within(recipe).getByText('Build it like a simple recipe.')).toBeInTheDocument();
     expect(within(recipe).queryByText('WHEN')).not.toBeInTheDocument();
     expect(within(recipe).queryByText('THEN')).not.toBeInTheDocument();
+    expect(within(recipe).queryByText('Try it with a real question')).not.toBeInTheDocument();
     expect(within(recipe).queryByLabelText('Workflow goal')).not.toBeInTheDocument();
     expect(within(recipe).queryByLabelText('Agent name')).not.toBeInTheDocument();
     expect(screen.queryByTestId('canvas')).not.toBeInTheDocument();
@@ -446,13 +530,15 @@ describe('FlowBuilder toolbar', () => {
 
     await waitFor(() => expect(modelService.loadModels).toHaveBeenCalledTimes(1));
     fireEvent.click(within(recipe).getByRole('button', { name: 'Yes, help me' }));
+    expect(within(recipe).getByLabelText('AI helper')).toHaveTextContent('Friendly AI');
     const goalField = within(recipe).getByLabelText('Workflow goal');
     const nameField = within(recipe).getByLabelText('Agent name');
+    expect(within(recipe).queryByText('Try it with a real question')).not.toBeInTheDocument();
     expect(goalField.compareDocumentPosition(nameField) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(within(recipe).getByText('WHEN')).toBeInTheDocument();
-    expect(within(recipe).getByText('THEN')).toBeInTheDocument();
-    fireEvent.mouseDown(within(recipe).getByLabelText('AI helper'));
-    fireEvent.click(screen.getByRole('option', { name: 'Friendly AI' }));
+    const thenLabel = within(recipe).getByText('THEN');
+    expect(thenLabel).toBeInTheDocument();
+    expect(goalField.compareDocumentPosition(thenLabel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
     fireEvent.change(goalField, {
       target: { value: 'Summarize my notes in friendly language.' },
@@ -462,6 +548,7 @@ describe('FlowBuilder toolbar', () => {
     await waitFor(() => {
       expect(within(recipe).getByText('Summarize my notes in friendly language.')).toBeInTheDocument();
       expect(within(recipe).getByLabelText('Agent name')).toHaveValue('Notes helper');
+      expect(within(recipe).getByText('Try it with a real question')).toBeInTheDocument();
     });
     expect(flowService.generateNameForFlow).toHaveBeenCalledWith(expect.objectContaining({
       modelId: 'model-favorite',

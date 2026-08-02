@@ -1,6 +1,5 @@
 /**
- * Tests for the multi-call handoff capture in runFlow (issue #156,
- * spawn-with-brief).
+ * Tests for queued Subflow handoff capture in runFlow.
  *
  * When the routing model calls the SAME handoff tool several times in one
  * assistant turn (each call carrying a `task` brief), the handoff transition
@@ -111,7 +110,7 @@ beforeEach(() => {
   targetType = undefined;
 });
 
-describe('runFlow handoff capture — spawn-with-brief (issue #156)', () => {
+describe('runFlow handoff capture — queued Subflow jobs', () => {
   it('captures one brief per matching call, in call order, and answers every call', async () => {
     assistantToolCalls = [
       spawnCall('c1', 'audit security'),
@@ -234,6 +233,20 @@ describe('runFlow handoff capture — spawn-with-brief (issue #156)', () => {
     expect(JSON.parse(toolResult!.content as string)).toEqual({
       status: 'Handoff processed',
       targetNodeId: WORKER,
+    });
+  });
+
+  it('captures a parameterless Subflow handoff as one default-input job', async () => {
+    targetType = 'subflow';
+    assistantToolCalls = [
+      { id: 'c1', type: 'function', function: { name: 'handoff_to_worker', arguments: '{}' } },
+    ];
+
+    const result = await runFlow({ flowId: 'flow-1', prompt: 'go', mode: 'conversation' });
+
+    expect(result.sharedState.handoffInput).toMatchObject({
+      targetNodeId: WORKER,
+      tasks: [''],
     });
   });
 });

@@ -1541,7 +1541,7 @@ export class ModelHandler {
         config: visualConfig,
       });
       apiMessages = visual.messages;
-      let visualDiagnostic = visual.diagnostic;
+      const visualDiagnostic = visual.diagnostic;
       if (visualDiagnostic.route === 'image') {
         effectiveTools = ModelHandler.ensureReadResourceArmed(apiMessages, effectiveTools);
       }

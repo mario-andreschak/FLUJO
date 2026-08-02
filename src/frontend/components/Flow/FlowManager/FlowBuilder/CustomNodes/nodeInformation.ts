@@ -318,7 +318,17 @@ const addSubflowSummary = (
     value: `${displayMode(properties, 'inputMode', 'full-history')} → ${displayMode(properties, 'outputMode', 'steps')}`,
   });
 
-  const settings: string[] = [];
+  const configuredConcurrency = typeof properties.concurrencyLimit === 'number'
+    ? Math.max(1, Math.floor(properties.concurrencyLimit))
+    : 4;
+  const settings: string[] = [
+    tr(
+      i18n,
+      'flows.nodeInfo.maxChildren',
+      `max ${configuredConcurrency} simultaneous children`,
+      { count: configuredConcurrency },
+    ),
+  ];
   const hasActiveFanout = !subflowId && (parallelIds.length > 0 || Boolean(parallelVariable));
   if (hasActiveFanout) {
     settings.push(properties.sequential === true
@@ -332,9 +342,7 @@ const addSubflowSummary = (
   if (spawnBriefs.length) {
     settings.push(pl(i18n, 'flows.nodeInfo.spawnBrief', spawnBriefs.length, `${spawnBriefs.length} spawn brief${spawnBriefs.length === 1 ? '' : 's'}`));
   }
-  if (settings.length) {
-    summary.push({ key: 'execution', label: tr(i18n, 'flows.nodeInfo.execution', 'Execution'), value: settings.join(' · ') });
-  }
+  summary.push({ key: 'execution', label: tr(i18n, 'flows.nodeInfo.execution', 'Execution'), value: settings.join(' · ') });
 };
 
 const addMcpSummary = (

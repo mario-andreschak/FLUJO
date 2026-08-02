@@ -1,5 +1,5 @@
 /**
- * Live lane-row model for parallel subflow fan-outs (issue #157).
+ * Live child-job rows for the Subflow worker queue (issue #157).
  *
  * Chat's SSE consumer folds lane-stamped execution events (laneIndex/laneCount,
  * issue #102) into this structure; LiveRunIndicator renders it as one progress
@@ -33,9 +33,9 @@ export interface LiveLane {
 }
 
 export interface LiveLanes {
-  /** The parallel SubflowNode these rows belong to. A depth-1 subflow:start
-   *  from a DIFFERENT node means a second fan-out started in the same run —
-   *  all rows are cleared so sequential fan-outs never collide on laneIndex. */
+  /** The SubflowNode queue these rows belong to. A depth-1 subflow:start from a
+   *  different node means another queue started in the same run, so stale rows
+   *  are cleared before lane indices are reused. */
   ownerNodeId?: string;
   byIndex: Record<number, LiveLane>;
 }
@@ -79,7 +79,7 @@ function deriveActivity(event: ExecutionEvent): string | undefined {
  *  all three lane kinds — so the expected pool size is known from the FIRST
  *  lane event. Pre-create missing rows as `pending` ("queued"): the bounded
  *  worker pool (and the sequential-spawn path) starts lanes staggered, and
- *  rows-only-on-start would misrepresent a fan-out whose size is known. */
+ *  rows-only-on-start would misrepresent a queue whose size is known. */
 function ensureRows(byIndex: Record<number, LiveLane>, laneCount: number, now: number): void {
   for (let i = 0; i < laneCount; i++) {
     if (!byIndex[i]) {
@@ -109,8 +109,8 @@ export function applyLaneEvent(prev: LiveLanes, event: ExecutionEvent, now: numb
 
   if (boundaryAtLaneDepth && event.type === 'subflow:start') {
     const ownerNodeId = event.node?.nodeId;
-    // Fan-out-group switch: a depth-1 start from a different parallel node
-    // means the previous fan-out's rows are stale — drop them wholesale.
+    // Queue-group switch: a depth-1 start from a different Subflow node means
+    // the previous queue's rows are stale — drop them wholesale.
     const sameOwner = !prev.ownerNodeId || !ownerNodeId || prev.ownerNodeId === ownerNodeId;
     const byIndex = sameOwner ? { ...prev.byIndex } : {};
     ensureRows(byIndex, count, now);

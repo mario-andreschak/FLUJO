@@ -63,6 +63,31 @@ beforeEach(() => {
 });
 
 describe('lane identity on subflow boundary events (issue #157)', () => {
+  it('emits one start/done pair per queued model task, including sequential queues', async () => {
+    respondingChild();
+
+    const events: Array<Record<string, unknown>> = [];
+    const node = makeNode();
+    const shared = makeShared({
+      emit: (e: Record<string, unknown>) => events.push(e),
+      handoffInput: {
+        targetNodeId: 'sub-1',
+        prompt: '',
+        tasks: ['inspect auth', 'inspect billing', 'inspect notifications'],
+      },
+    });
+    const prep = await node.prep(shared, makeParams({ subflowId: 'agent', concurrencyLimit: 1 }));
+    await node.execCore(prep);
+
+    const starts = events.filter((e) => e.type === 'subflow:start');
+    const dones = events.filter((e) => e.type === 'subflow:done');
+    expect(starts).toHaveLength(3);
+    expect(dones).toHaveLength(3);
+    expect(starts.map((e) => e.laneTitle)).toEqual(['inspect auth', 'inspect billing', 'inspect notifications']);
+    expect(starts.map((e) => e.laneIndex)).toEqual([0, 1, 2]);
+    expect(starts.every((e) => e.laneCount === 3)).toBe(true);
+  });
+
   it('stamps laneTitle (subflow-name fallback) + laneConversationId on start/done, and matches the runFlow input', async () => {
     respondingChild();
 

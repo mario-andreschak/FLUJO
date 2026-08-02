@@ -9,7 +9,6 @@ import { flowService } from '@/backend/services/flow';
 import { StorageKey } from '@/shared/types/';
 import { createLogger } from '@/utils/logger';
 import { getDataDir } from '@/utils/paths';
-// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 
 const log = createLogger('app/api/backup/route');
@@ -153,7 +152,7 @@ export async function POST(request: NextRequest) {
     log.info(`Backup created successfully [${requestId}]`);
     
     // Return the zip file
-    return new NextResponse(zipBuffer, {
+    return new NextResponse(new Uint8Array(zipBuffer), {
       headers: {
         'Content-Type': 'application/zip',
         'Content-Disposition': 'attachment; filename=flujo-backup.zip'

@@ -26,6 +26,8 @@ export interface CardPickerDialogProps extends CardPickerGridProps {
   /** Optional helper text shown above the grid. */
   description?: React.ReactNode;
   maxWidth?: 'xs' | 'sm' | 'md' | 'lg' | 'xl';
+  /** Let compact hosts use the full phone viewport instead of a cramped modal. */
+  fullScreen?: boolean;
 }
 
 /**
@@ -41,6 +43,7 @@ const CardPickerDialog: React.FC<CardPickerDialogProps> = ({
   ariaLabel,
   description,
   maxWidth = 'md',
+  fullScreen = false,
   ...gridProps
 }) => {
   const { t } = useI18n();
@@ -50,6 +53,7 @@ const CardPickerDialog: React.FC<CardPickerDialogProps> = ({
       onClose={onClose}
       maxWidth={maxWidth}
       fullWidth
+      fullScreen={fullScreen}
       PaperProps={ariaLabel ? { 'aria-label': ariaLabel } : undefined}
     >
       {title !== undefined && title !== null && (

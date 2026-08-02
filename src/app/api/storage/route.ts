@@ -3,7 +3,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { saveItem, loadItem, clearItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
-// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 
 const log = createLogger('app/api/storage/route');

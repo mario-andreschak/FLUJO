@@ -37,15 +37,16 @@ Informal words people use map to specific, differently-named settings:
 | (full history in)    | **inputMode** default (both)           | `full-history`                             |
 | (subflow output)     | Subflow Node **outputMode**            | `steps` \| `final-only`                    |
 
-`latest-message` means **"everything from the most recent user message onward"** — it
-is **NOT** "the last user message + the last assistant message".
+`latest-message` means the most recent exchange: the last user message plus the last
+settled assistant response after it. Process nodes also retain their current in-flight
+tool tail so an agentic loop can continue safely.
 
 #### Input mode comparison (what the step receives)
 
 | inputMode        | Process Node                                                                 | Subflow Node                                                                                       |
 |------------------|------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------|
 | `full-history`   | The whole assembled context, unchanged.                                      | The whole parent transcript, **sanitized** (see below).                                             |
-| `latest-message` | System prompt(s) + everything from the most recent user message onward, **including the current turn's in-flight tool calls/results**. | The **sanitized** transcript sliced from the most recent user message onward.                       |
+| `latest-message` | System prompt(s) + the most recent exchange, **including the current turn's in-flight tool calls/results**. | The most recent exchange from the **sanitized** transcript.                                         |
 | `isolated`       | System prompt(s) + `isolatedPrompt` as a single synthetic user message; prior conversation dropped. | The parent conversation is ignored; the child receives `promptTemplate`/`prompt` as its only user message. |
 
 **Key difference — Subflow sanitizing:** in *every* history mode, a Subflow node first
@@ -67,11 +68,26 @@ does **not** do this — it keeps the current turn's tool exchange.
   model request; a Subflow node passes `{ messages }` (history modes) or `{ prompt }`
   (isolated) to the child, and the child's final answer is injected back into the
   parent transcript as an assistant message attributed to the node.
-- **Tool-call parameters (opt-in):** an **isolated** Subflow node with
-  `allowCallerPrompt: true` exposes an optional `prompt` argument on its *handoff tool*,
-  so a routing model passes the child's instruction as a tool-call parameter (Issue #96).
-  Likewise `allowCallerFanout: true` exposes a per-call `task` brief for spawning parallel
-  copies (Issue #156). Every other handoff tool stays parameter-less.
+- **Tool-call parameters:** every Subflow handoff tool accepts a `task` for that child
+  job. A routing model may call the same handoff repeatedly in one response; every call
+  is queued. For an isolated Subflow, the configured prompt is the default when `task`
+  is omitted and `task` overrides it when supplied. Process-to-Process handoffs keep
+  their existing caller-prompt behavior.
+
+#### Subflow execution queue
+
+A Subflow node references exactly one child flow. One visit is always represented as a
+job queue: an ordinary traversal creates one job, while repeated model handoff calls
+create multiple jobs for that same child.
+
+`Maximum simultaneous children` controls active workers, not accepted work. A value of
+`1` runs jobs sequentially; a higher value runs up to that many in parallel. Additional
+jobs wait in the queue, available worker slots are kept full, and all results are folded
+in request order after the queue drains.
+
+Afterward, graph topology controls the handoff. A terminal Subflow returns to the
+Process node that actually invoked it. A Subflow with an explicit outgoing edge follows
+that successor instead.
 
 #### Worked example (Issue #152)
 
@@ -82,9 +98,8 @@ This is expected behavior, not a bug:
 
 1. The tool calls/results were removed by the Subflow **sanitizer**, which runs in every
    history mode independently of the input mode.
-2. With a single user turn, "from the last user message onward" is effectively the entire
-   (sanitized) conversation — so it looked like "the whole conversation" rather than
-   "last user + last assistant".
+2. With a single user turn, the most recent exchange can look like the entire sanitized
+   conversation even though intermediate assistant turns are dropped.
 
 ## Models
 

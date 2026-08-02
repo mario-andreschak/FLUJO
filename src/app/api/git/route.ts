@@ -6,7 +6,6 @@ import path from 'path';
 import fs from 'fs/promises';
 import { execSync, spawn, ExecSyncOptionsWithStringEncoding } from 'child_process';
 import { createLogger } from '@/utils/logger';
-// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { processPathLikeArgument } from '@/utils/mcp'
 import { isSafeRepoUrl, isSafeBranchName, buildRepoCommand } from '@/utils/git/validation';
@@ -373,8 +372,6 @@ function streamCommandInRepo(
     await new Promise<void>((resolve) => {
       let settled = false;
       let buffer = '';
-      let timer: ReturnType<typeof setTimeout> | undefined;
-
       // POSIX: detached so the shell wrapper leads its own process group and
       // killProcessTree can signal the whole group on abort (Windows uses taskkill /T).
       const child = spawn(finalCommand, {
@@ -396,7 +393,7 @@ function streamCommandInRepo(
       const finish = (result: { success: boolean; error?: string }) => {
         if (settled) return;
         settled = true;
-        if (timer) clearTimeout(timer); // stop the ceiling firing on normal completion/abort
+        clearTimeout(timer); // stop the ceiling firing on normal completion/abort
         signal.removeEventListener('abort', onAbort);
         cancelEscalation?.();
         emit({ type: 'result', success: result.success, error: result.error, commandOutput: buffer });
@@ -407,7 +404,7 @@ function streamCommandInRepo(
       // error if the command outlives GIT_STREAM_TIMEOUT_MS. finish() clears this timer
       // on normal completion, client-abort or start-failure so it can't fire late.
       const timeoutMinutes = Math.round(GIT_STREAM_TIMEOUT_MS / 60000);
-      timer = setTimeout(() => {
+      const timer = setTimeout(() => {
         log.warn(`${actionName} exceeded ${GIT_STREAM_TIMEOUT_MS}ms timeout, killing process tree [${requestId}]`);
         const message = `\n${actionName} exceeded ${timeoutMinutes} min timeout; aborting.\n`;
         buffer += message;

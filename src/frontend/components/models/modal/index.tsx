@@ -21,6 +21,8 @@ import {
   InputLabel,
   Select,
   MenuItem,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material';
 import { Link as LinkIcon, Cancel as CancelIcon } from '@mui/icons-material';
 import { useStorage } from '@/frontend/contexts/StorageContext';
@@ -62,6 +64,8 @@ export interface ModelModalProps {
 
 export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) => {
   const { t } = useI18n();
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const router = useRouter();
   const { globalEnvVars, settings } = useStorage();
   const [formState, setFormState] = useState<Partial<Model>>({});
@@ -396,20 +400,33 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
       onClose={onClose} 
       maxWidth="xl" 
       fullWidth
+      fullScreen={isMobile}
       PaperProps={{
         sx: {
-          width: '95vw',
-          height: '90vh',
-          maxWidth: '95vw',
-          maxHeight: '90vh',
+          width: isMobile ? '100%' : '95vw',
+          height: isMobile ? '100dvh' : '90vh',
+          maxWidth: isMobile ? '100%' : '95vw',
+          maxHeight: isMobile ? '100dvh' : '90vh',
         }
       }}
     >
-      <form onSubmit={handleSubmit}>
-        <DialogTitle>
+      <form
+        onSubmit={handleSubmit}
+        style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}
+      >
+        <DialogTitle sx={{ flexShrink: 0 }}>
           {model.name ? t('models.modal.editTitle') : t('models.modal.createTitle')}
         </DialogTitle>
-        <DialogContent sx={{ display: 'flex', flexDirection: 'column', height: 'calc(90vh - 130px)' }}>
+        <DialogContent
+          sx={{
+            display: 'flex',
+            flex: 1,
+            flexDirection: 'column',
+            minHeight: 0,
+            overflowY: { xs: 'auto', md: 'hidden' },
+            px: { xs: 2, sm: 3 },
+          }}
+        >
           {errors.submit && (
             <Alert severity="error" sx={{ mb: 2 }}>
               {errors.submit}
@@ -421,10 +438,18 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
             </Alert>
           )}
           
-          <Grid container spacing={2} sx={{ flexGrow: 1 }}>
+          <Grid container spacing={2} sx={{ flexGrow: 1, minHeight: { md: 0 } }}>
             {/* Left Column - Model Configuration */}
-            <Grid item xs={6} sx={{ height: '100%' }}>
-              <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', pr: 2, overflowY: 'auto' }}>
+            <Grid item xs={12} md={6} sx={{ height: { xs: 'auto', md: '100%' }, minWidth: 0 }}>
+              <Box
+                sx={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  height: { xs: 'auto', md: '100%' },
+                  pr: { xs: 0, md: 2 },
+                  overflowY: { xs: 'visible', md: 'auto' },
+                }}
+              >
                 <Typography variant="h6" gutterBottom>
                   {t('models.modal.connectionDetails')}
                 </Typography>
@@ -795,12 +820,20 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
             </Grid>
             
             {/* Right Column - Prompt Builder */}
-            <Grid item xs={6} sx={{ height: '100%' }}>
-              <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', pl: 2 }}>
+            <Grid item xs={12} md={6} sx={{ height: { xs: 400, md: '100%' }, minWidth: 0 }}>
+              <Box
+                sx={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  height: '100%',
+                  minHeight: 0,
+                  pl: { xs: 0, md: 2 },
+                }}
+              >
                 <Typography variant="h6" gutterBottom>
                   {t('models.modal.promptTemplate')}
                 </Typography>
-                <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', height: 'calc(100% - 32px)' }}>
+                <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
                   <PromptBuilder 
                     ref={promptBuilderRef}
                     value={formState.promptTemplate || ''} 
@@ -821,10 +854,11 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                 top: '50%',
                 left: '50%',
                 transform: 'translate(-50%, -50%)',
-                width: 400,
+                width: { xs: 'calc(100% - 32px)', sm: 400 },
+                maxWidth: 400,
                 bgcolor: 'background.paper',
                 boxShadow: 24,
-                p: 4,
+                p: { xs: 2, sm: 4 },
                 borderRadius: 1,
                 zIndex: 9999,
               }}
@@ -878,7 +912,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
             </Box>
           )}
         </DialogContent>
-        <DialogActions>
+        <DialogActions sx={{ flexShrink: 0 }}>
           <Button onClick={onClose}>{t('common.cancel')}</Button>
           <Button type="submit" variant="contained" color="primary">
             {t('models.modal.save')}

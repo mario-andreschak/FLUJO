@@ -1,12 +1,14 @@
 "use client";
 
 import React, { useEffect, useState } from 'react';
-import { Box, Button, CircularProgress, Typography } from '@mui/material';
+import { Box, Button, CircularProgress, Collapse, IconButton, Tooltip, Typography } from '@mui/material';
 import PauseCircleOutlineIcon from '@mui/icons-material/PauseCircleOutline';
 import BugReportIcon from '@mui/icons-material/BugReport';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { LiveLane, LiveLanes, laneList } from '@/utils/shared/liveLanes';
 import { getWorkingMessage, WORKING_MESSAGE_INTERVAL_MS } from './workingMessages';
 import { useI18n } from '@/frontend/contexts/I18nContext';
@@ -28,8 +30,8 @@ interface LiveRunIndicatorProps {
    *  pause icon, and drop the elapsed/stall caption — but keep Stop reachable,
    *  since the run is still alive and holding the conversation. */
   awaitingApproval?: boolean;
-  /** Per-lane progress rows for a parallel subflow fan-out (issue #157).
-   *  Empty/absent → the exact pre-lane rendering. */
+  /** Per-child progress rows for a Subflow job queue (issue #157).
+   *  Empty/absent → the exact pre-queue rendering. */
   lanes?: LiveLanes;
   /** Open a lane's persisted sidebar conversation (rows are clickable only
    *  when the lane carries a laneConversationId). */
@@ -38,9 +40,11 @@ interface LiveRunIndicatorProps {
    *  execution pauses before the next node and opens the debugger panel. Only
    *  provided for a foreground (tracked) run — absent → no button. */
   onAttachDebugger?: () => void;
+  /** Docked, single-row treatment used above the phone composer. */
+  compact?: boolean;
 }
 
-/** One compact progress row per lane: status icon, brief/label, current
+/** One compact progress row per child job: status icon, brief/label, current
  *  activity — clickable through to the lane's own conversation when it is
  *  persisted. The header above stays the parent's (activeNode is never
  *  touched by lane events), so dispatch, join and the post-join synthesis
@@ -86,8 +90,8 @@ const LaneRow: React.FC<{ lane: LiveLane; onOpenLane?: (conversationId: string) 
   );
 };
 
-/** Summary caption for the lane block; switches to the warning-colored
- *  partial-failure marker once every lane is terminal and some failed. */
+/** Summary caption for the child block; switches to the warning-colored
+ *  partial-failure marker once every job is terminal and some failed. */
 /**
  * The "Running… N tokens · Ns elapsed" indicator with its own 1-second tick.
  *
@@ -97,7 +101,7 @@ const LaneRow: React.FC<{ lane: LiveLane; onOpenLane?: (conversationId: string) 
  * only while the viewed conversation is running, so the interval's lifecycle
  * is simply this component's lifecycle.
  */
-const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, stopDisabled, awaitingApproval, lanes, onOpenLane, onAttachDebugger }) => {
+const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, stopDisabled, awaitingApproval, lanes, onOpenLane, onAttachDebugger, compact = false }) => {
   const { locale, t, tp, formatNumber, formatList } = useI18n();
   const [nowTick, setNowTick] = useState<number>(() => Date.now());
   const [mountedAt] = useState<number>(() => Date.now());
@@ -105,6 +109,7 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
   // (the debugger panel takes over), so the transient "Attaching…" state clears
   // itself. Guards against re-arming with repeated clicks in the meantime.
   const [attaching, setAttaching] = useState(false);
+  const [compactExpanded, setCompactExpanded] = useState(false);
 
   useEffect(() => {
     const timer = setInterval(() => setNowTick(Date.now()), 1000);
@@ -145,6 +150,99 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
       warning: failed > 0,
     };
   })() : null;
+
+  if (compact) {
+    const status = awaitingApproval
+      ? t('chat.live.waitingApproval')
+      : liveStats?.activeNode
+        ? t('chat.live.running', { node: liveStats.activeNode })
+        : t('chat.live.working');
+
+    return (
+      <Box
+        data-testid="compact-live-run"
+        sx={{
+          flexShrink: 0,
+          bgcolor: 'background.paper',
+          borderTop: 1,
+          borderBottom: 1,
+          borderColor: 'divider',
+          boxShadow: '0 -8px 24px rgba(0,0,0,.10)',
+          position: 'relative',
+          zIndex: 3,
+        }}
+      >
+        <Box sx={{ minHeight: 44, px: 1, display: 'flex', alignItems: 'center', gap: 0.75 }}>
+          {awaitingApproval ? (
+            <PauseCircleOutlineIcon fontSize="small" color="warning" />
+          ) : (
+            <CircularProgress size={18} color={stuck ? 'warning' : 'primary'} />
+          )}
+          <Typography variant="body2" noWrap aria-live="polite" sx={{ flex: 1, minWidth: 0 }}>
+            {status}
+          </Typography>
+          {!awaitingApproval && (
+            <Typography variant="caption" color={stuck ? 'warning.main' : 'text.secondary'} sx={{ whiteSpace: 'nowrap' }}>
+              {formatNumber(liveStats?.totalTokens ?? 0)} · {formatNumber(elapsed)}s
+            </Typography>
+          )}
+          {summary && (
+            <Tooltip title={summary.text}>
+              <IconButton
+                size="small"
+                onClick={() => setCompactExpanded(open => !open)}
+                aria-label={summary.text}
+                aria-expanded={compactExpanded}
+              >
+                {compactExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+              </IconButton>
+            </Tooltip>
+          )}
+          {onAttachDebugger && !awaitingApproval && (
+            <Tooltip title={attaching ? t('chat.live.attaching') : t('chat.live.attach')}>
+              <span>
+                <IconButton
+                  size="small"
+                  color="primary"
+                  onClick={() => { setAttaching(true); onAttachDebugger(); }}
+                  disabled={attaching}
+                  aria-label={attaching ? t('chat.live.attaching') : t('chat.live.attach')}
+                >
+                  <BugReportIcon fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+          )}
+          <Button
+            variant="outlined"
+            color="secondary"
+            size="small"
+            onClick={onStop}
+            disabled={stopDisabled}
+            sx={{ minWidth: 'auto', px: 1 }}
+          >
+            {t('chat.live.stop')}
+          </Button>
+        </Box>
+        {summary && (
+          <Collapse in={compactExpanded} unmountOnExit>
+            <Box sx={{ px: 1, pb: 1 }}>
+              <Typography
+                variant="caption"
+                color={summary.warning ? 'warning.main' : 'text.secondary'}
+                sx={{ display: 'block', mb: 0.25 }}
+              >
+                {summary.text}
+              </Typography>
+              {laneRows.map(lane => (
+                <LaneRow key={lane.laneIndex} lane={lane} onOpenLane={onOpenLane} />
+              ))}
+            </Box>
+          </Collapse>
+        )}
+      </Box>
+    );
+  }
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', my: 2, gap: 0.5 }}>

@@ -97,7 +97,6 @@ export function _clearKvStoreSettingsCache(): void {
 // instantiate this module more than once and every instance must share the
 // cache. Disk is the cold-start source of truth.
 declare global {
-  // eslint-disable-next-line no-var
   var __flujo_kv_store: Map<string, KvEntry[]> | undefined;
 }
 const indexCache: Map<string, KvEntry[]> =

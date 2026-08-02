@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, render } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import LiveRunIndicator from '@/frontend/components/Chat/LiveRunIndicator';
 import {
   getWorkingMessage,
@@ -65,5 +65,43 @@ describe('working chat messages', () => {
 
     unmount();
     jest.useRealTimers();
+  });
+
+  it('keeps a spinner on each running Subflow child and shows queued children', () => {
+    const now = Date.now();
+    render(
+      <LiveRunIndicator
+        liveStats={{ totalTokens: 0, activeNode: 'Dispatch', startedAt: now, lastEventAt: now }}
+        onStop={() => undefined}
+        lanes={{
+          ownerNodeId: 'subflow-node',
+          byIndex: {
+            0: { laneIndex: 0, laneCount: 2, label: 'Inspect auth', status: 'running', lastEventAt: now },
+            1: { laneIndex: 1, laneCount: 2, label: 'Inspect billing', status: 'pending', lastEventAt: now },
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText('Inspect auth')).toBeInTheDocument();
+    expect(screen.getByText(/Inspect billing.*queued/i)).toBeInTheDocument();
+    // One parent-run spinner plus one spinner for the active child job.
+    expect(screen.getAllByRole('progressbar')).toHaveLength(2);
+  });
+
+  it('renders a single-row dock for compact phone layouts', () => {
+    const now = Date.now();
+    render(
+      <LiveRunIndicator
+        compact
+        liveStats={{ totalTokens: 42, activeNode: 'Reply', startedAt: now, lastEventAt: now }}
+        onStop={() => undefined}
+      />,
+    );
+
+    expect(screen.getByTestId('compact-live-run')).toBeInTheDocument();
+    expect(screen.getByText(/Reply/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /stop/i })).toBeInTheDocument();
+    expect(screen.getAllByRole('progressbar')).toHaveLength(1);
   });
 });

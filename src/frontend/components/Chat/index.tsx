@@ -16,6 +16,7 @@ import EditIcon from '@mui/icons-material/Edit';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import ScheduleIcon from '@mui/icons-material/Schedule';
+import AddCommentOutlinedIcon from '@mui/icons-material/AddCommentOutlined';
 import { useLocalStorage, StorageKey } from '@/utils/storage';
 import ChatHistory from './ChatHistory';
 import ChatMessages from './ChatMessages';
@@ -305,6 +306,7 @@ const Chat: React.FC = () => {
   const theme = useTheme();
   const { t, tp } = useI18n();
   const isCompactLayout = useMediaQuery(theme.breakpoints.down('lg'), { noSsr: true });
+  const isPhoneLayout = useMediaQuery(theme.breakpoints.down('sm'), { noSsr: true });
   // --- State Management ---
   // List of conversation summaries for the sidebar, fetched from backend
   const [conversationList, setConversationList] = useState<ConversationListItem[]>([]);
@@ -592,7 +594,7 @@ const Chat: React.FC = () => {
   // Ordered, bounded source events for the visual debugger's subflow frame
   // model. The existing SSE consumer remains the only network subscription.
   const [debuggerEvents, setDebuggerEvents] = useState<ExecutionEvent[]>([]);
-  // Per-lane progress rows for parallel subflow fan-outs (issue #157). Pure
+  // Per-child progress rows for Subflow job queues (issue #157). Pure
   // reducer state rebuilt from the SSE replay (from seq 0) on re-attach.
   const [liveLanes, setLiveLanes] = useState<LiveLanes>(EMPTY_LIVE_LANES);
   // Run-scoped `todo` list (issue #259): the full current checklist from the
@@ -883,7 +885,7 @@ const Chat: React.FC = () => {
       if (disposed || document.visibilityState !== 'visible') return;
       // One scheduled refresh represents every lifecycle event in its window.
       // This preserves the old five-second worst-case cadence under a large
-      // subflow fan-out instead of turning each child start/done into a scan.
+      // subflow queue instead of turning each child start/done into a scan.
       if (eventTimer) return;
       const sinceLastRefresh = Date.now() - lastRefreshStartedAt;
       const delay = Math.max(EVENT_DEBOUNCE_MS, MIN_EVENT_REFRESH_MS - sinceLastRefresh);
@@ -1375,7 +1377,7 @@ const Chat: React.FC = () => {
         return pruneLiveActivity(draft, now);
       });
 
-    // Parallel-lane events (issue #157): fold into the per-lane progress rows
+    // Subflow job events (issue #157): fold into the per-child progress rows
     // instead of the single activeNode string — concurrent lanes overwriting
     // activeNode is what made the header flicker between lanes. The lane
     // reducer owns node/tool/subflow activity for these events; everything
@@ -3549,7 +3551,7 @@ const Chat: React.FC = () => {
 
       {/* Collapsed state: a slim always-visible affordance to bring the sidebar
           back (so the conversation list is never permanently lost). */}
-      {effectiveSidebarCollapsed && (
+      {effectiveSidebarCollapsed && !isPhoneLayout && (
         <Box
           sx={{
             width: 40,
@@ -3670,8 +3672,8 @@ const Chat: React.FC = () => {
           {currentConversationId && (
             <Box
               sx={{
-                px: { xs: 2, md: 3 },
-                py: 1.35,
+                px: { xs: 1, sm: 2, md: 3 },
+                py: { xs: 0.65, sm: 1.35 },
                 display: 'flex',
                 alignItems: 'center',
                 gap: 1,
@@ -3682,6 +3684,13 @@ const Chat: React.FC = () => {
                 backdropFilter: 'blur(16px)',
               }}
             >
+              {isPhoneLayout && (
+                <Tooltip title={t('chat.page.showSidebar')}>
+                  <IconButton size="small" onClick={toggleSidebarCollapsed} aria-label={t('chat.page.showSidebar')}>
+                    <ViewSidebarIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              )}
               {isEditingTitle ? (
                 <TextField
                   value={titleDraft}
@@ -3699,7 +3708,7 @@ const Chat: React.FC = () => {
               ) : (
                 <>
                   <Typography
-                    variant="h6"
+                    variant={isPhoneLayout ? 'subtitle1' : 'h6'}
                     noWrap
                     onClick={beginEditTitle}
                     title={detailedConversation?.title || currentConversationSummary?.title || ''}
@@ -3734,8 +3743,8 @@ const Chat: React.FC = () => {
           {currentConversationId && (
             <Box
               sx={{
-                px: { xs: 2, md: 3 },
-                py: 1.25,
+                px: { xs: 1, sm: 2, md: 3 },
+                py: { xs: 0.65, sm: 1.25 },
                 borderBottom: 1,
                 borderColor: 'divider',
                 display: 'flex',
@@ -3758,6 +3767,8 @@ const Chat: React.FC = () => {
                       selectedFlowId={currentConversationSummary?.flowId || detailedConversation?.flowId || null} // Use summary first, fallback to detail
                       onSelectFlow={handleFlowSelect}
                       disabled={isDebugPaused} // Disable flow selection when debugging
+                      hideLabel={isPhoneLayout}
+                      compact={isPhoneLayout}
                     />
                     {/* Keep the FlowBuilder shortcut beside the picker instead
                         of at the far edge of the flexible header row. */}
@@ -3784,6 +3795,7 @@ const Chat: React.FC = () => {
                 usage={detailedConversation?.usage}
                 contextInfo={detailedConversation?.contextInfo}
                 availableNodes={availableNodes}
+                compact={isPhoneLayout}
               />
             </Box>
           )}
@@ -3799,7 +3811,7 @@ const Chat: React.FC = () => {
             flex: 1,
             overflow: 'auto',
             px: { xs: 1.5, sm: 2.5, lg: 4 },
-            py: 2.5,
+            py: { xs: 1.25, sm: 2.5 },
             '& > *': {
               width: '100%',
               maxWidth: { xs: 960, lg: 'none' },
@@ -3976,7 +3988,7 @@ const Chat: React.FC = () => {
                 <TodoDock todos={currentTodos} />
               )}
 
-              {viewedConversationRunning && !isDebugPaused && (
+              {viewedConversationRunning && !isDebugPaused && !isPhoneLayout && (
                 <LiveRunIndicator
                   liveStats={liveStats}
                   lanes={liveLanes}
@@ -3998,7 +4010,7 @@ const Chat: React.FC = () => {
                   for agentic adapters, blocked mid-request), so keep Stop
                   reachable next to the Approve/Reject prompt — spinner-less so
                   it doesn't suggest activity while waiting on the user. */}
-              {!viewedConversationRunning && viewedConversationAwaitingApproval && !isDebugPaused && (
+              {!viewedConversationRunning && viewedConversationAwaitingApproval && !isDebugPaused && !isPhoneLayout && (
                 <LiveRunIndicator
                   liveStats={liveStats}
                   lanes={liveLanes}
@@ -4033,6 +4045,44 @@ const Chat: React.FC = () => {
                 </Alert>
               )}
             </>
+          ) : isPhoneLayout ? (
+            <Box
+              sx={{
+                minHeight: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 1.5,
+                px: 2,
+                textAlign: 'center',
+              }}
+            >
+              <Typography variant="body1" color="text.secondary">
+                {conversationList.length > 0
+                  ? t('chat.page.selectOrCreate')
+                  : t('chat.page.createToStart')}
+              </Typography>
+              <Button
+                variant="contained"
+                size="large"
+                startIcon={<AddCommentOutlinedIcon />}
+                onClick={() => createNewConversation()}
+                disabled={flows.length === 0}
+                sx={{ minHeight: 48, borderRadius: 999, px: 2.5 }}
+              >
+                {t('chat.page.newTitle')}
+              </Button>
+              {conversationList.length > 0 && (
+                <Button
+                  variant="text"
+                  startIcon={<ViewSidebarIcon />}
+                  onClick={toggleSidebarCollapsed}
+                >
+                  {t('chat.page.showSidebar')}
+                </Button>
+              )}
+            </Box>
           ) : (
             // Message when no conversation is selected or loaded
             <Typography variant="body1" color="textSecondary" align="center" sx={{ mt: 4 }}>
@@ -4074,8 +4124,37 @@ const Chat: React.FC = () => {
           onRegisterTeardown={handleRegisterCanvasTeardown}
         />}
 
+        {/* On phones the live run becomes an opaque dock instead of a block in
+            the scrolling transcript, so messages never show through it. */}
+        {isPhoneLayout && viewedConversationRunning && !isDebugPaused && (
+          <LiveRunIndicator
+            compact
+            liveStats={liveStats}
+            lanes={liveLanes}
+            onOpenLane={setCurrentConversationId}
+            onStop={handleCancelRequest}
+            stopDisabled={!currentConversationId}
+            onAttachDebugger={
+              isLoading && loadingConversationId === currentConversationId && !debugSessionActive
+                ? handleAttachDebugger
+                : undefined
+            }
+          />
+        )}
+        {isPhoneLayout && !viewedConversationRunning && viewedConversationAwaitingApproval && !isDebugPaused && (
+          <LiveRunIndicator
+            compact
+            liveStats={liveStats}
+            lanes={liveLanes}
+            onOpenLane={setCurrentConversationId}
+            awaitingApproval
+            onStop={handleCancelRequest}
+            stopDisabled={!currentConversationId}
+          />
+        )}
+
         {/* Chat input */}
-        <Box
+        {(!isPhoneLayout || !!currentConversationId) && <Box
           sx={{
             p: 0,
             borderTop: 1,
@@ -4130,7 +4209,7 @@ const Chat: React.FC = () => {
             onSaveEdit={handleSaveEditingMessage}
             onCancelEdit={handleCancelEditingMessage}
           />
-        </Box>
+        </Box>}
         </Box> {/* End Chat Area */}
 
         {/* Executed-Steps panel (issue #213): a hideable, resizable side panel

@@ -17,7 +17,7 @@ import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
 import { RESOURCE_COLOR, SIGNAL_COLOR, TRIGGER_COLOR, TRIGGER_COLOR_LIGHT } from './CustomNodes';
 import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
 import { useI18n } from '@/frontend/contexts/I18nContext';
-import type { Translator } from '@/frontend/i18n/core';
+import { getNodeTypes } from './nodeTypeCatalog';
 
 // Create a logger instance for this file
 const log = createLogger('components/flow/FlowBuilder/NodePalette.tsx');
@@ -43,10 +43,6 @@ const PaletteContainer = styled(Paper)(({ theme }) => ({
     ? '0 16px 45px rgba(0,0,0,.22)'
     : '0 16px 45px rgba(49,45,99,.09)',
   backdropFilter: 'blur(18px)',
-  [theme.breakpoints.down('md')]: {
-    width: '176px',
-    padding: theme.spacing(1),
-  },
   [theme.breakpoints.down('md')]: {
     width: '100%',
     height: '68px',
@@ -177,57 +173,6 @@ const NodeContent = styled(Box)(({ theme }) => ({
     gap: 2,
   },
 }));
-
-const getNodeTypes = (t: Translator): Array<{
-  type: NodeType;
-  label: string;
-  shortLabel: string;
-  description: string;
-}> => [
-  // Start node is automatically added to new flows and not available in the palette
-  {
-    type: 'process',
-    label: t('flows.palette.process'),
-    shortLabel: t('flows.palette.processShort'),
-    description: t('flows.palette.processHelp'),
-  },
-  {
-    type: 'finish',
-    label: t('flows.palette.finish'),
-    shortLabel: t('flows.palette.finishShort'),
-    description: t('flows.palette.finishHelp'),
-  },
-  {
-    type: 'mcp',
-    label: t('flows.palette.mcp'),
-    shortLabel: t('flows.palette.mcpShort'),
-    description: t('flows.palette.mcpHelp'),
-  },
-  {
-    type: 'subflow',
-    label: t('flows.palette.subflow'),
-    shortLabel: t('flows.palette.subflowShort'),
-    description: t('flows.palette.subflowHelp'),
-  },
-  {
-    type: 'resource',
-    label: t('flows.palette.resource'),
-    shortLabel: t('flows.palette.resourceShort'),
-    description: t('flows.palette.resourceHelp'),
-  },
-  {
-    type: 'signal',
-    label: t('flows.palette.signal'),
-    shortLabel: t('flows.palette.signalShort'),
-    description: t('flows.palette.signalHelp'),
-  },
-  {
-    type: 'trigger',
-    label: t('flows.palette.trigger'),
-    shortLabel: t('flows.palette.triggerShort'),
-    description: t('flows.palette.triggerHelp'),
-  },
-];
 
 // Helper function to get the appropriate icon for each node type
 const getNodeIcon = (type: NodeType) => {
@@ -389,7 +334,17 @@ export const NodePalette: React.FC<{
                 <Typography
                   variant="caption"
                   fontWeight="bold"
-                  sx={{ display: { xs: 'block', md: 'none' }, fontSize: '0.62rem', lineHeight: 1 }}
+                  sx={{
+                    display: { xs: '-webkit-box', md: 'none' },
+                    maxWidth: '100%',
+                    overflow: 'hidden',
+                    WebkitBoxOrient: 'vertical',
+                    WebkitLineClamp: 2,
+                    overflowWrap: 'anywhere',
+                    textAlign: 'center',
+                    fontSize: '0.6rem',
+                    lineHeight: 1,
+                  }}
                 >
                   {node.shortLabel}
                 </Typography>

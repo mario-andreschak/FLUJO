@@ -96,7 +96,6 @@ const log = createLogger('backend/services/mcp/internalTools');
  * recursion instead of letting it run away.
  */
 declare global {
-  // eslint-disable-next-line no-var
   var __flujo_internal_flow_depth: number | undefined;
 }
 const MAX_EXECUTE_FLOW_DEPTH = 4;
@@ -263,7 +262,7 @@ export function internalToolDefinitions(): Tool[] {
     {
       name: 'explain_flow',
       description:
-        'Explain one compiled FLUJO flow in natural language: its ordered steps, control connections and conditions, model/MCP capabilities, subflow invocation and fan-out behavior, signal emissions, and how planned executions connect it to trigger Waves. Read-only and deterministic.',
+        'Explain one compiled FLUJO flow in natural language: its ordered steps, control connections and conditions, model/MCP capabilities, Subflow child-job queues, signal emissions, and how planned executions connect it to trigger Waves. Read-only and deterministic.',
       inputSchema: {
         type: 'object',
         additionalProperties: false,

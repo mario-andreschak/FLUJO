@@ -179,18 +179,14 @@ export class ProcessNode extends BaseNode {
       // isolated message (promptTemplate for a subflow, isolatedPrompt for a
       // process node) is used as the default (see SubflowNode.prep /
       // ProcessNode.prep).
-      const targetProps = flowNode?.data?.properties as { inputMode?: string; allowCallerPrompt?: boolean; allowCallerFanout?: boolean; promptTemplate?: string; isolatedPrompt?: string } | undefined;
-      // Spawn-with-brief (issue #156, supersedes the #130 `parallelFlows` param):
-      // a subflow target that opted into `allowCallerFanout` is a SPAWNABLE
-      // sub-agent. Its handoff tool gains an optional `task` string, and the
-      // description tells the model it may call the tool several times in ONE
-      // turn — each call spawns one parallel, independently-briefed instance of
-      // the target. runFlow captures every matching call's brief single-shot;
-      // SubflowNode.prep turns them into parallel lanes. Every OTHER handoff
-      // tool keeps the byte-identical empty schema (preserving the #89 provider
-      // prefix-cache stability).
-      const acceptsCallerSpawn =
-        target.type === 'subflow' && targetProps?.allowCallerFanout === true;
+      const targetProps = flowNode?.data?.properties as { inputMode?: string; allowCallerPrompt?: boolean; promptTemplate?: string; isolatedPrompt?: string } | undefined;
+      // Every Subflow is a queue-backed sub-agent. The routing model may call the
+      // same handoff tool any number of times in ONE turn; each call contributes
+      // one job for this node's single child flow. `concurrencyLimit` on the
+      // Subflow controls only how many jobs are active at once — it never limits
+      // how many calls are accepted. runFlow captures all matching calls and
+      // SubflowNode.prep turns them into an ordered job queue.
+      const acceptsCallerSpawn = target.type === 'subflow';
       const acceptsCallerPrompt =
         (target.type === 'subflow' || target.type === 'process') &&
         targetProps?.inputMode === 'isolated' &&
@@ -206,9 +202,10 @@ export class ProcessNode extends BaseNode {
       // silently. In that exact configuration we mark `prompt` as JSON-Schema
       // `required`, turning a silent runtime dead-end into a schema-enforced
       // guarantee. Every other configuration keeps `prompt` optional as before.
-      const promptIsMandatory =
-        acceptsCallerPrompt &&
-        targetProps?.allowCallerFanout !== true &&
+      const promptIsMandatory = acceptsCallerPrompt && !acceptsCallerSpawn && !(authoredIsolatedMessage?.trim());
+      const taskIsMandatory =
+        acceptsCallerSpawn &&
+        targetProps?.inputMode === 'isolated' &&
         !(authoredIsolatedMessage?.trim());
 
       const paramProps: Record<string, unknown> = {};
@@ -223,14 +220,17 @@ export class ProcessNode extends BaseNode {
         requiredParams.push('body');
         descExtras.push('You MUST pass a non-empty "body" argument; it becomes the emitted signal payload.');
       } else if (acceptsCallerSpawn) {
-        // `task` subsumes `prompt` for spawnable targets (a single spawn with a
-        // brief behaves like a caller prompt), so only one param is exposed.
+        // `task` subsumes `prompt` for Subflow targets. One call is a normal
+        // handoff; repeated calls form a queue of independently briefed jobs.
         paramProps.task = {
           type: "string",
-          description: "The brief for this spawned instance of the sub-agent: what this one copy should work on. Optional; omit it (and call the tool once) for a plain handoff."
+          description: taskIsMandatory
+            ? "REQUIRED task for this child run. This isolated subflow has no default instruction."
+            : "Task for this child run. Optional; omit it (and call the tool once) to use the subflow's configured input."
         };
+        if (taskIsMandatory) requiredParams.push('task');
         descExtras.push(
-          'PARALLEL SPAWNING: You may call this tool MULTIPLE TIMES in the SAME response — each call spawns one parallel instance of this sub-agent, briefed with that call\'s "task". All instances run concurrently in the background; their results are merged in call order and the flow continues once every instance has finished. To split work, make one call per sub-task, each with a specific, self-contained "task".'
+          'QUEUED SUB-AGENT: You may call this tool MULTIPLE TIMES in the SAME response — each call queues one child run with its own "task". The Subflow runs up to its configured maximum simultaneously, keeps pulling queued jobs until all are finished, and merges results in call order. To split work, make one call per self-contained task.'
         );
       } else if (acceptsCallerPrompt) {
         paramProps.prompt = {

@@ -27,6 +27,8 @@ interface ConversationStatsProps {
   contextInfo: Conversation['contextInfo'];
   /** For resolving node ids in the per-node breakdown to display labels. */
   availableNodes: { id: string; label: string }[];
+  /** Reduce labels and meters to a single phone-friendly header row. */
+  compact?: boolean;
 }
 
 /**
@@ -35,7 +37,7 @@ interface ConversationStatsProps {
  * configured, a context-usage meter based on the provider-reported prompt
  * size of the latest call.
  */
-const ConversationStats: React.FC<ConversationStatsProps> = ({ usage, contextInfo, availableNodes }) => {
+const ConversationStats: React.FC<ConversationStatsProps> = ({ usage, contextInfo, availableNodes, compact = false }) => {
   const { t, formatNumber } = useI18n();
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
 
@@ -63,7 +65,7 @@ const ConversationStats: React.FC<ConversationStatsProps> = ({ usage, contextInf
       : undefined;
 
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexShrink: 0 }}>
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: compact ? 0.5 : 1.5, flexShrink: 0 }}>
       {usage && freshTotal > 0 && (
         <>
           <Tooltip title={t('chat.stats.tooltip', {
@@ -73,7 +75,7 @@ const ConversationStats: React.FC<ConversationStatsProps> = ({ usage, contextInf
           })}>
             <Chip
               icon={<DataUsageIcon />}
-              label={t('chat.stats.tokens', { count: formatTokens(freshTotal) })}
+              label={compact ? formatTokens(freshTotal) : t('chat.stats.tokens', { count: formatTokens(freshTotal) })}
               size="small"
               variant="outlined"
               onClick={(e) => setAnchorEl(e.currentTarget)}
@@ -87,7 +89,7 @@ const ConversationStats: React.FC<ConversationStatsProps> = ({ usage, contextInf
             anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
             transformOrigin={{ vertical: 'top', horizontal: 'right' }}
           >
-            <Box sx={{ p: 2, maxWidth: 420 }}>
+            <Box sx={{ p: 2, maxWidth: 'min(420px, calc(100vw - 24px))', overflowX: 'auto' }}>
               <Typography variant="subtitle2" sx={{ mb: 1 }}>
                 {t('chat.stats.title')}
               </Typography>
@@ -131,7 +133,7 @@ const ConversationStats: React.FC<ConversationStatsProps> = ({ usage, contextInf
         </>
       )}
 
-      {contextInfo && contextPct !== undefined && (
+      {contextInfo && contextPct !== undefined && !compact && (
         <Tooltip
           title={t('chat.stats.context', {
             model: contextInfo.modelDisplayName ? t('chat.stats.model', { model: contextInfo.modelDisplayName }) : '',
@@ -150,6 +152,18 @@ const ConversationStats: React.FC<ConversationStatsProps> = ({ usage, contextInf
               {formatTokens(contextInfo.promptTokens)}/{formatTokens(contextInfo.contextWindow!)} ({contextPct}%)
             </Typography>
           </Box>
+        </Tooltip>
+      )}
+
+      {contextInfo && contextPct !== undefined && compact && (
+        <Tooltip title={t('chat.stats.context', {
+          model: contextInfo.modelDisplayName ? t('chat.stats.model', { model: contextInfo.modelDisplayName }) : '',
+          used: formatNumber(contextInfo.promptTokens),
+          total: formatNumber(contextInfo.contextWindow!),
+        })}>
+          <Typography variant="caption" color={contextPct >= 90 ? 'error.main' : 'text.secondary'} sx={{ whiteSpace: 'nowrap' }}>
+            ctx {contextPct}%
+          </Typography>
         </Tooltip>
       )}
 

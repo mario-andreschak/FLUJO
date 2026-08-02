@@ -84,7 +84,9 @@
     "zod": "^4.4.3"
   },
   "overrides": {
-    "zod": "$zod"
+    "zod": "$zod",
+    "postcss": "$postcss",
+    "sharp": "^0.35.3"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
@@ -109,7 +111,7 @@
     "jest": "^29.7.0",
     "jest-environment-jsdom": "^29.7.0",
     "node-loader": "^2.1.0",
-    "postcss": "^8",
+    "postcss": "^8.5.25",
     "postcss-flexbugs-fixes": "^5.0.2",
     "postcss-preset-env": "^10.1.5",
     "process": "^0.11.10",

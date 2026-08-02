@@ -1,4 +1,3 @@
-// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
 
@@ -19,13 +18,11 @@ declare global {
   // The 2-hour token sessions used by the UI unlock dialog. Global-backed so
   // that Next.js dev-mode HMR (which can duplicate this module) does not create
   // a split-brain where different routes see different session stores.
-  // eslint-disable-next-line no-var
   var __flujo_encryption_sessions: Map<string, EncryptionSession> | undefined;
   // The process-wide server unlock state: the plaintext DEK (hex string) that
   // was recovered when the user authenticated. Non-expiring — cleared only when
   // the process exits. Also global-backed to survive HMR module duplication so
   // routes never see a locked/unlocked split-brain.
-  // eslint-disable-next-line no-var
   var __flujo_server_dek: string | null | undefined;
 }
 

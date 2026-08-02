@@ -210,13 +210,8 @@ function splitItems(text: string, mode: 'json-array' | 'lines'): string[] {
   return parsed.map((el) => (typeof el === 'string' ? el : JSON.stringify(el)));
 }
 
-/**
- * Hard cap on dynamically-resolved fan-out lanes (issue #130). A model-chosen
- * fan-out set must never be unbounded, so the resolved id list is truncated to
- * this many lanes regardless of what the upstream variable contained. The
- * bounded worker pool (`concurrencyLimit`) still limits how many run AT ONCE;
- * this bounds how many run AT ALL.
- */
+/** Compatibility ceiling for the deprecated variable-driven target selector.
+ * Model-authored task queues are intentionally NOT capped by this value. */
 export const MAX_DYNAMIC_FANOUT_LANES = 32;
 
 /**
@@ -425,27 +420,17 @@ export class SubflowNode extends BaseNode {
     if (typeof handoffForThisNode?.concurrencyLimit === 'number' && handoffForThisNode.concurrencyLimit >= 1) {
       callerConcurrency = Math.floor(handoffForThisNode.concurrencyLimit);
     }
-    // Spawn-with-brief (issue #156): the briefs this visit spawns the sub-agent
-    // with — one parallel lane per brief, resolved AFTER the shared input below
-    // so each lane composes brief + inputMode context. Caller-supplied `task`
-    // briefs (one handoff tool call each, gated on `allowCallerFanout`) win over
-    // the author-defined `spawnBriefs` list; both are capped like every
-    // model/runtime-chosen fan-out.
+    // Every matching model handoff call contributes one queued task. This is no
+    // longer gated by `allowCallerFanout`: queueing is the canonical Subflow
+    // execution model. Author briefs remain compatibility-only for saved flows.
     const callerTasks =
-      allowCallerFanout && handoffForThisNode?.tasks && handoffForThisNode.tasks.length > 0
+      handoffForThisNode?.tasks && handoffForThisNode.tasks.length > 0
         ? handoffForThisNode.tasks
         : undefined;
     const authorBriefs = (node_params?.properties?.spawnBriefs ?? [])
       .map((b) => (typeof b === 'string' ? b.trim() : ''))
       .filter((b) => b !== '');
     let spawnTasks = callerTasks ?? (authorBriefs.length > 0 ? authorBriefs : undefined);
-    if (spawnTasks && spawnTasks.length > MAX_DYNAMIC_FANOUT_LANES) {
-      log.warn('Spawn briefs exceed the fan-out lane cap; truncating', {
-        requested: spawnTasks.length,
-        cap: MAX_DYNAMIC_FANOUT_LANES,
-      });
-      spawnTasks = spawnTasks.slice(0, MAX_DYNAMIC_FANOUT_LANES);
-    }
     const promptTemplate = node_params?.properties?.promptTemplate?.trim();
     // Back-compat: a promptTemplate saved before the explicit 'isolated' mode
     // existed used to override the history unconditionally. Preserve that by
@@ -574,25 +559,38 @@ export class SubflowNode extends BaseNode {
       const resolvedBriefs = await Promise.all(
         spawnTasks.map((brief) => resolveSubflowTemplate(brief, sharedState, node_params?.id)),
       );
-      prepResult.lanes = resolvedBriefs.map((brief, i) => ({
-        subflowId,
-        subflowName,
-        input:
-          prepResult.messages !== undefined
+      prepResult.lanes = resolvedBriefs.map((brief, i) => {
+        const hasBrief = brief.trim().length > 0;
+        return {
+          subflowId,
+          subflowName,
+          // A handoff call without a task is still a job; leaving input absent
+          // makes it inherit the node's configured prompt/history.
+          ...(hasBrief
             ? {
-                messages: [
-                  ...prepResult.messages,
-                  { role: 'user' as const, content: brief, id: crypto.randomUUID(), timestamp: Date.now() },
-                ],
+                input:
+                  prepResult.messages !== undefined
+                    ? {
+                        messages: [
+                          ...prepResult.messages,
+                          { role: 'user' as const, content: brief, id: crypto.randomUUID(), timestamp: Date.now() },
+                        ],
+                      }
+                    : { prompt: brief },
               }
-            : { prompt: brief },
-        itemIndex: i,
-        itemCount: resolvedBriefs.length,
-        laneTitle: buildConversationTitle(brief),
-      }));
+            : {}),
+          itemIndex: i,
+          itemCount: resolvedBriefs.length,
+          laneTitle: hasBrief ? buildConversationTitle(brief) : subflowName,
+        };
+      });
       prepResult.concurrencyLimit = Math.max(1, callerConcurrency ?? node_params?.properties?.concurrencyLimit ?? 4);
-      prepResult.joinSeparator = node_params?.properties?.joinSeparator ?? '\n\n';
-      prepResult.errorStrategy = node_params?.properties?.errorStrategy ?? 'collect-all';
+      // Model-created queues always drain completely. Legacy author-defined
+      // briefs keep their saved join/error settings for backwards compatibility.
+      prepResult.joinSeparator = callerTasks ? '\n\n' : node_params?.properties?.joinSeparator ?? '\n\n';
+      prepResult.errorStrategy = callerTasks
+        ? 'collect-all'
+        : node_params?.properties?.errorStrategy ?? 'collect-all';
       log.info('Spawn-with-brief lanes resolved', {
         nodeId: node_params?.id,
         laneCount: resolvedBriefs.length,
@@ -676,13 +674,22 @@ export class SubflowNode extends BaseNode {
       prepResult.joinSeparator = node_params?.properties?.joinSeparator ?? '\n\n';
       prepResult.errorStrategy = node_params?.properties?.errorStrategy ?? 'collect-all';
     } else if (subflowId) {
+      let subflowName: string | undefined;
       try {
         const { flowService } = await import('@/backend/services/flow/index');
         const flow = await flowService.getFlow(subflowId);
-        if (flow?.name) prepResult.subflowName = flow.name;
+        if (flow?.name) subflowName = flow.name;
       } catch {
         /* attribution only — never block the run on a name lookup */
       }
+      prepResult.subflowName = subflowName;
+      // A normal execution is a one-item queue. Direct traversal contributes
+      // this default job; repeated handoff calls take the task branch above and
+      // contribute one job per call.
+      prepResult.lanes = [{ subflowId, subflowName, itemIndex: 0, itemCount: 1, laneTitle: subflowName }];
+      prepResult.concurrencyLimit = Math.max(1, node_params?.properties?.concurrencyLimit ?? 4);
+      prepResult.joinSeparator = '\n\n';
+      prepResult.errorStrategy = 'collect-all';
     }
 
     log.info('prep() completed', {
@@ -706,8 +713,8 @@ export class SubflowNode extends BaseNode {
       nodeName: prepResult.nodeName,
       nodeType: 'subflow',
     };
-    // prep sets exactly one of messages / inputText; the same input is fed to the
-    // single child or fanned out to every parallel lane.
+    // prep sets exactly one of messages / inputText; jobs without their own brief
+    // receive this shared input.
     const runInput: SubflowRunInput = prepResult.messages
       ? { messages: prepResult.messages }
       : { prompt: prepResult.inputText ?? '' };
@@ -718,11 +725,11 @@ export class SubflowNode extends BaseNode {
       return { success: false, error: prepResult.laneResolutionError };
     }
 
-    // Lane execution: spawn-with-brief (issue #156), fan-out/join (issue #102)
-    // or map-over-list (Tier 2a). All resolve a lane plan in prep and run
-    // through the same bounded pool below.
+    // All current Subflow executions resolve a job list, including the ordinary
+    // one-child case. Deprecated fan-out/map settings also normalize here for
+    // compatibility with saved flows.
     if (prepResult.lanes && prepResult.lanes.length > 0) {
-      return this.execParallel(prepResult, runFlow, nodeRef, runInput);
+      return this.execJobs(prepResult, runFlow, nodeRef, runInput);
     }
 
     // Map-over-list that resolved ZERO items: nothing to map. Fold a clean empty
@@ -792,17 +799,12 @@ export class SubflowNode extends BaseNode {
     };
   }
 
-  /**
-   * Fan-out/join (issue #102): run each lane's child flow through a BOUNDED
-   * worker pool (`concurrencyLimit`), each with a lane-scoped emit so interleaved
-   * events stay separable, then collect results INDEXED BY CHILD ORDER (never
-   * completion order) for a deterministic join. Siblings all run at the same
-   * depth (`prepResult.depth`), so concurrency does not deepen the call tree and
-   * grandchildren still hit runFlow's MAX_SUBFLOW_DEPTH guard normally. Error
-   * handling follows `errorStrategy`; on success/partial the joined text is
-   * returned so post() folds it and hands off exactly like the single-child path.
-   */
-  private async execParallel(
+  /** Run every queued child job through a bounded worker pool. A lane-scoped
+   * emit keeps interleaved live events separable, while result slots preserve
+   * request order rather than completion order. Siblings run at the same depth,
+   * so concurrency does not deepen the call tree. Current model-created queues
+   * always drain; legacy saved configurations may still supply errorStrategy. */
+  private async execJobs(
     prepResult: SubflowNodePrepResult,
     runFlow: RunFlowModule['runFlow'],
     nodeRef: NodeRef,
@@ -814,7 +816,7 @@ export class SubflowNode extends BaseNode {
     const joinSeparator = prepResult.joinSeparator ?? '\n\n';
     const errorStrategy = prepResult.errorStrategy ?? 'collect-all';
 
-    log.info('execCore() running parallel subflows', {
+    log.info('execCore() running queued subflow jobs', {
       laneCount,
       concurrencyLimit,
       errorStrategy,
@@ -831,12 +833,12 @@ export class SubflowNode extends BaseNode {
       // into the lane's sidebar conversation (issue #157). Safe: runFlow treats
       // a fresh caller-supplied id as memory-miss → storage-miss → create-new.
       const laneConversationId = prepResult.persistConversation ? crypto.randomUUID() : undefined;
-      // Static fan-out lanes have no brief; fall back to the subflow name so
-      // live-view row labels and sidebar titles agree (and are non-empty).
+      // Jobs without a brief fall back to the child-flow name so live-view row
+      // labels and sidebar titles agree (and are non-empty).
       const laneTitle = lane.laneTitle ?? lane.subflowName;
-      // Map-over-list lanes carry an explicit item index/count; fan-out lanes use
-      // the plain lane position. Either way the live view separates concurrent
-      // runs by laneIndex/laneCount, so per-item runs are separable like fan-out.
+      // Legacy map jobs carry an explicit item index/count; ordinary queue jobs
+      // use their queue position. The live view separates both through the same
+      // laneIndex/laneCount wire fields.
       const emit = buildChildEmit(
         prepResult.emit,
         prepResult.showSteps,
@@ -851,9 +853,8 @@ export class SubflowNode extends BaseNode {
         },
       );
       try {
-        // Spawn/map-over-list lanes carry their OWN input (one per brief/item);
-        // fan-out lanes have none, so they fall back to the shared runInput —
-        // keeping the fan-out path byte-for-byte identical to before.
+        // Briefed jobs carry their own input. Unbriefed jobs fall back to the
+        // Subflow node's configured shared input.
         // saveConversation is honored PER LANE (issue #156 defect 1): each lane
         // persists as its own sidebar conversation via the sanctioned runFlow
         // mode, titled by its brief/item and linked through parentRunId — lanes
@@ -948,14 +949,19 @@ export class SubflowNode extends BaseNode {
     }
 
     if (succeeded.length === 0) {
-      return { success: false, error: 'All parallel subflows failed', subStatus: 'error', lanes: ordered };
+      return {
+        success: false,
+        error: ordered.length === 1 ? ordered[0]?.error || 'Subflow execution failed' : 'All queued subflow jobs failed',
+        subStatus: 'error',
+        lanes: ordered,
+      };
     }
 
     let outputText = succeeded.map((r) => r.outputText ?? '').join(joinSeparator);
     const outputMedia = succeeded.flatMap((r) => r.outputMedia ?? []);
     if (anyFailed) {
       const summary = failedLanes.map((r) => `- ${r.subflowId}: ${r.error ?? 'unknown error'}`).join('\n');
-      outputText += `${joinSeparator}[${failedLanes.length} parallel subflow(s) failed:\n${summary}]`;
+      outputText += `${joinSeparator}[${failedLanes.length} queued subflow job(s) failed:\n${summary}]`;
     }
 
     return {

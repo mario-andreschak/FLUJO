@@ -36,7 +36,6 @@ type ArmedBinding = { serverName: string; nodeId?: string };
 function armedBindings(node: ResolvedNode): ArmedBinding[] {
   const bindings: ArmedBinding[] = [];
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const mcpNodes = (node as any)?.handle?.node_params?.properties?.mcpNodes;
     if (!Array.isArray(mcpNodes)) return bindings;
     for (const m of mcpNodes) {

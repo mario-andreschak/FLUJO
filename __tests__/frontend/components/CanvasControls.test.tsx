@@ -27,4 +27,12 @@ describe('CanvasControls', () => {
     expect(screen.getByTestId('canvas-background')).toBeInTheDocument();
     expect(screen.getByTestId('canvas-minimap')).toBeInTheDocument();
   });
+
+  it('can hide the minimap for compact mobile canvases', () => {
+    render(<CanvasControls showMiniMap={false} />);
+
+    expect(screen.getByTestId('react-flow-controls')).toBeInTheDocument();
+    expect(screen.getByTestId('canvas-background')).toBeInTheDocument();
+    expect(screen.queryByTestId('canvas-minimap')).not.toBeInTheDocument();
+  });
 });

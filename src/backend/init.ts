@@ -15,7 +15,6 @@ declare global {
   // The in-flight (or settled) initialization promise. Global-backed so the
   // startup hook (instrumentation) and the /api/init route share the SAME run
   // instead of each kicking off their own server-startup sweep and racing.
-  // eslint-disable-next-line no-var
   var __flujo_init_promise: Promise<void> | undefined;
   // The in-flight (or settled) secret-dependent startup promise (MCP sweep +
   // scheduler arm). Global-backed and memoized so that both the boot path
@@ -23,12 +22,10 @@ declare global {
   // once per process — neither double-starts servers nor double-arms triggers.
   // Deliberately NOT captured by __flujo_init_promise: while USER encryption is
   // locked this work is skipped at boot and only runs later, at unlock.
-  // eslint-disable-next-line no-var
   var __flujo_secret_services_promise: Promise<void> | undefined;
   // The hourly run-resource retention sweep cron (issue #251). Global-guarded so
   // Next.js hot-reload / duplicate module instantiation can't arm it twice
   // (mirrors __flujo_run_resources / the scheduler singletons).
-  // eslint-disable-next-line no-var
   var __flujo_retention_cron: Cron | undefined;
 }
 

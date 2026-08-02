@@ -43,7 +43,7 @@ describe('buildNodeInformation', () => {
       .toMatchObject({ state: 'default', value: '[default: full-history]' });
   });
 
-  it('uses subflow target precedence and describes fan-out, map, and spawn settings', () => {
+  it('uses subflow target precedence, shows queue concurrency, and describes legacy settings', () => {
     const single = buildNodeInformation({
       properties: {
         subflowId: 'primary-flow',
@@ -52,6 +52,8 @@ describe('buildNodeInformation', () => {
       },
     }, 'subflow');
     expect(single.summary.find((entry) => entry.key === 'target')?.value).toBe('primary-flow');
+    expect(single.summary.find((entry) => entry.key === 'execution')?.value)
+      .toBe('max 4 simultaneous children');
 
     const fanout = buildNodeInformation({
       properties: {
@@ -64,7 +66,7 @@ describe('buildNodeInformation', () => {
     }, 'subflow');
     expect(fanout.summary.find((entry) => entry.key === 'target')?.value).toBe('2 parallel flows');
     expect(fanout.summary.find((entry) => entry.key === 'execution')?.value)
-      .toBe('sequential fan-out · map list (json-array (default)) · 2 spawn briefs');
+      .toBe('max 4 simultaneous children · sequential fan-out · map list (json-array (default)) · 2 spawn briefs');
   });
 
   it('shows a subflow target name while retaining the stable id in technical details', () => {

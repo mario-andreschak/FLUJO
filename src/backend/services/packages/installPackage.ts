@@ -31,7 +31,6 @@
  * written to the summary, the ledger, or any log.
  */
 import { createHash } from 'crypto';
-// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
 import { loadItem, saveItem } from '@/utils/storage/backend';

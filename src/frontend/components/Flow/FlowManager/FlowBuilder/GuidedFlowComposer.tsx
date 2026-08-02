@@ -23,13 +23,19 @@ import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
 import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
 import PlayArrowRoundedIcon from '@mui/icons-material/PlayArrowRounded';
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
-import type { FlowNode, NodeType } from '@/frontend/types/flow/flow';
+import type { Flow, FlowNode, NodeType } from '@/frontend/types/flow/flow';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { Translator } from '@/frontend/i18n/core';
+import InspectorMcpServers, {
+  type InspectorMcpConnection,
+  type InspectorMcpServerOption,
+} from './InspectorMcpServers';
+import GuidedAgentConnections, { type GuidedAgentConnection } from './GuidedAgentConnections';
 
 interface GuidedFlowComposerProps {
   nodes: FlowNode[];
   orderedStepIds?: string[];
+  subagentNodeIds?: ReadonlySet<string>;
   selectedNodeId?: string;
   flowName: string;
   flowNameError: string | null;
@@ -49,6 +55,15 @@ interface GuidedFlowComposerProps {
   onChooseAssistance?: (choice: 'manual' | 'assisted') => void;
   onModelChange?: (modelId: string) => void;
   onCheckPlausibility?: () => void;
+  currentFlowId?: string;
+  availableAgents?: Flow[];
+  mcpConnectionsByNode?: ReadonlyMap<string, InspectorMcpConnection[]>;
+  agentConnectionsByNode?: ReadonlyMap<string, GuidedAgentConnection[]>;
+  onConnectMcpServer?: (processNodeId: string, serverName: string) => void | Promise<void>;
+  onRemoveMcpServer?: (processNodeId: string, mcpNodeId: string) => void;
+  loadMcpServers?: () => Promise<InspectorMcpServerOption[]>;
+  onConnectAgent?: (processNodeId: string, flowId: string) => void;
+  onRemoveAgent?: (processNodeId: string, subflowNodeId: string) => void;
 }
 
 const technicalDefaultLabels = new Set([
@@ -109,6 +124,7 @@ const StepNumber = ({ children, complete = false }: { children: React.ReactNode;
 export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
   nodes,
   orderedStepIds = [],
+  subagentNodeIds,
   selectedNodeId,
   flowName,
   flowNameError,
@@ -128,6 +144,15 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
   onChooseAssistance,
   onModelChange,
   onCheckPlausibility,
+  currentFlowId,
+  availableAgents = [],
+  mcpConnectionsByNode,
+  agentConnectionsByNode,
+  onConnectMcpServer,
+  onRemoveMcpServer,
+  loadMcpServers,
+  onConnectAgent,
+  onRemoveAgent,
 }) => {
   const { t } = useI18n();
   const [taskPrompt, setTaskPrompt] = useState('');
@@ -135,13 +160,16 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
     () => {
       const order = new Map(orderedStepIds.map((nodeId, index) => [nodeId, index]));
       return nodes
-        .filter((node) => ['process', 'subflow', 'signal'].includes(node.data.type))
+        .filter((node) =>
+          ['process', 'subflow', 'signal'].includes(node.data.type)
+          && !subagentNodeIds?.has(node.id)
+        )
         .sort((a, b) =>
           (order.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.id) ?? Number.MAX_SAFE_INTEGER)
           || (a.position?.y ?? 0) - (b.position?.y ?? 0)
         );
     },
-    [nodes, orderedStepIds],
+    [nodes, orderedStepIds, subagentNodeIds],
   );
   const isPlaceholderName = /^(?:NewFlow\d*|Untitled (?:assistant|agent)(?: \d+)?)$/i.test(flowName.trim())
     || flowName.trim().toLocaleLowerCase() === t('flows.page.untitled').trim().toLocaleLowerCase();
@@ -300,25 +328,25 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
                         aria-hidden="true"
                         sx={{ alignSelf: 'center', color: 'text.disabled', fontSize: 20 }}
                       />
-                      <ButtonBase
-                        onClick={() => onSelectNode(node.id)}
-                        sx={{ display: 'block', width: '100%', borderRadius: 3, textAlign: 'left' }}
+                      <Paper
+                        elevation={0}
+                        sx={{
+                          width: '100%',
+                          border: 1,
+                          borderColor: selectedNodeId === node.id ? 'primary.main' : 'divider',
+                          borderRadius: 3,
+                          overflow: 'hidden',
+                          bgcolor: selectedNodeId === node.id
+                            ? (theme) => alpha(theme.palette.primary.main, 0.1)
+                            : 'background.default',
+                          boxShadow: selectedNodeId === node.id
+                            ? (theme) => `0 0 0 3px ${alpha(theme.palette.primary.main, 0.12)}`
+                            : 'none',
+                        }}
                       >
-                        <Paper
-                          elevation={0}
-                          sx={{
-                            width: '100%',
-                            p: 1.5,
-                            border: 1,
-                            borderColor: selectedNodeId === node.id ? 'primary.main' : 'divider',
-                            borderRadius: 3,
-                            bgcolor: selectedNodeId === node.id
-                              ? (theme) => alpha(theme.palette.primary.main, 0.1)
-                              : 'background.default',
-                            boxShadow: selectedNodeId === node.id
-                              ? (theme) => `0 0 0 3px ${alpha(theme.palette.primary.main, 0.12)}`
-                              : 'none',
-                          }}
+                        <ButtonBase
+                          onClick={() => onSelectNode(node.id)}
+                          sx={{ display: 'block', width: '100%', p: 1.5, textAlign: 'left' }}
                         >
                           <Stack direction="row" spacing={1.25} alignItems="flex-start">
                             <Box
@@ -359,10 +387,65 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
                             </Box>
                             <TuneRoundedIcon color="action" fontSize="small" />
                           </Stack>
-                        </Paper>
-                      </ButtonBase>
+                        </ButtonBase>
+
+                        {node.data.type === 'process' && (
+                          <Stack spacing={1} sx={{ px: 1.5, pb: 1.5 }}>
+                            {onConnectMcpServer && onRemoveMcpServer && loadMcpServers && (
+                              <InspectorMcpServers
+                                processNodeId={node.id}
+                                connections={mcpConnectionsByNode?.get(node.id) ?? []}
+                                beginnerMode
+                                heading={t('flows.guided.usesApps')}
+                                onConnect={onConnectMcpServer}
+                                onRemove={onRemoveMcpServer}
+                                loadServers={loadMcpServers}
+                              />
+                            )}
+                            {currentFlowId && onConnectAgent && onRemoveAgent && (
+                              <GuidedAgentConnections
+                                processNodeId={node.id}
+                                currentFlowId={currentFlowId}
+                                flows={availableAgents}
+                                connections={agentConnectionsByNode?.get(node.id) ?? []}
+                                onConnect={onConnectAgent}
+                                onRemove={onRemoveAgent}
+                              />
+                            )}
+                          </Stack>
+                        )}
+                      </Paper>
                     </React.Fragment>
                   ))}
+
+                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="stretch">
+                    <TextField
+                      fullWidth
+                      multiline
+                      minRows={2}
+                      maxRows={5}
+                      label={steps.length ? t('flows.guided.nextLabel') : t('flows.guided.goalLabel')}
+                      placeholder={t('flows.guided.goalPlaceholder')}
+                      value={taskPrompt}
+                      disabled={hasAdvancedFeatures}
+                      onChange={(event) => setTaskPrompt(event.target.value)}
+                      onKeyDown={(event) => {
+                        if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && canAdd) {
+                          event.preventDefault();
+                          addTask();
+                        }
+                      }}
+                    />
+                    <Button
+                      variant="contained"
+                      startIcon={<AddRoundedIcon />}
+                      disabled={!canAdd}
+                      onClick={addTask}
+                      sx={{ minWidth: { sm: 150 } }}
+                    >
+                      {steps.length ? t('flows.guided.addStep') : t('flows.guided.createGoal')}
+                    </Button>
+                  </Stack>
 
                   <ArrowDownwardRoundedIcon
                     aria-hidden="true"
@@ -384,35 +467,6 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
                     </Typography>
                     <Typography variant="body2" fontWeight={700}>{t('flows.guided.sendAnswer')}</Typography>
                   </Box>
-                </Stack>
-
-                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="stretch" sx={{ mt: 2 }}>
-                  <TextField
-                    fullWidth
-                    multiline
-                    minRows={2}
-                    maxRows={5}
-                    label={steps.length ? t('flows.guided.nextLabel') : t('flows.guided.goalLabel')}
-                    placeholder={t('flows.guided.goalPlaceholder')}
-                    value={taskPrompt}
-                    disabled={hasAdvancedFeatures}
-                    onChange={(event) => setTaskPrompt(event.target.value)}
-                    onKeyDown={(event) => {
-                      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && canAdd) {
-                        event.preventDefault();
-                        addTask();
-                      }
-                    }}
-                  />
-                  <Button
-                    variant="contained"
-                    startIcon={<AddRoundedIcon />}
-                    disabled={!canAdd}
-                    onClick={addTask}
-                    sx={{ minWidth: { sm: 150 } }}
-                  >
-                    {steps.length ? t('flows.guided.addStep') : t('flows.guided.createGoal')}
-                  </Button>
                 </Stack>
               </Box>
             </Stack>
@@ -455,49 +509,51 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
             </>
           )}
 
-          <Paper
-            elevation={0}
-            sx={{
-              p: { xs: 2, sm: 2.5 },
-              border: 1,
-              borderColor: canTry ? 'primary.main' : 'divider',
-              borderRadius: 4,
-              bgcolor: (theme) => alpha(theme.palette.primary.main, canTry ? 0.075 : 0.025),
-            }}
-          >
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ sm: 'center' }}>
-              <StepNumber>3</StepNumber>
-              <Box sx={{ flex: 1 }}>
-                <Typography variant="h6">{t('flows.guided.tryTitle')}</Typography>
-                <Typography variant="body2" color="text.secondary">
-                  {t('flows.guided.tryHelp')}
-                </Typography>
-                {needsAIConnection && steps.some(node => node.data.type === 'process') && (
-                  <Alert severity="warning" sx={{ mt: 1 }}>
-                    {t('flows.guided.needsAi')}
-                  </Alert>
-                )}
-              </Box>
-              {onTry && (
-                <Stack spacing={1}>
-                  {onCheckPlausibility && aiAssistance === 'assisted' && (
-                    <Button variant="outlined" startIcon={<AutoAwesomeRoundedIcon />} disabled={steps.length === 0} onClick={onCheckPlausibility}>
-                      {t('flows.guided.checkAi')}
-                    </Button>
+          {steps.length > 0 && (
+            <Paper
+              elevation={0}
+              sx={{
+                p: { xs: 2, sm: 2.5 },
+                border: 1,
+                borderColor: canTry ? 'primary.main' : 'divider',
+                borderRadius: 4,
+                bgcolor: (theme) => alpha(theme.palette.primary.main, canTry ? 0.075 : 0.025),
+              }}
+            >
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ sm: 'center' }}>
+                <StepNumber>3</StepNumber>
+                <Box sx={{ flex: 1 }}>
+                  <Typography variant="h6">{t('flows.guided.tryTitle')}</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {t('flows.guided.tryHelp')}
+                  </Typography>
+                  {needsAIConnection && steps.some(node => node.data.type === 'process') && (
+                    <Alert severity="warning" sx={{ mt: 1 }}>
+                      {t('flows.guided.needsAi')}
+                    </Alert>
                   )}
-                  <Button
-                    size="large"
-                    variant="contained"
-                    startIcon={<PlayArrowRoundedIcon />}
-                    disabled={!canTry}
-                    onClick={onTry}
-                  >
-                    {isSaving ? t('flows.guided.saving') : t('flows.guided.tryAgent')}
-                  </Button>
-                </Stack>
-              )}
-            </Stack>
-          </Paper>
+                </Box>
+                {onTry && (
+                  <Stack spacing={1}>
+                    {onCheckPlausibility && aiAssistance === 'assisted' && (
+                      <Button variant="outlined" startIcon={<AutoAwesomeRoundedIcon />} disabled={steps.length === 0} onClick={onCheckPlausibility}>
+                        {t('flows.guided.checkAi')}
+                      </Button>
+                    )}
+                    <Button
+                      size="large"
+                      variant="contained"
+                      startIcon={<PlayArrowRoundedIcon />}
+                      disabled={!canTry}
+                      onClick={onTry}
+                    >
+                      {isSaving ? t('flows.guided.saving') : t('flows.guided.tryAgent')}
+                    </Button>
+                  </Stack>
+                )}
+              </Stack>
+            </Paper>
+          )}
         </Stack>
       </Box>
     </Box>

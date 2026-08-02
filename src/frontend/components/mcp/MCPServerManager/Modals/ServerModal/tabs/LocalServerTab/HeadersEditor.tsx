@@ -93,7 +93,7 @@ const HeadersEditor: React.FC<HeadersEditorProps> = ({ headers, onChange }) => {
       setRows(toRows(headers));
       lastSyncedRef.current = headersKey;
     }
-  }, [headersKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [headersKey]);
 
   const commit = (next: HeaderRow[]) => {
     setRows(next);

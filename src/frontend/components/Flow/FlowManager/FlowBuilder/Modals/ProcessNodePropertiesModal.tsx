@@ -12,7 +12,9 @@ import {
     Tabs,
     Tab,
     FormControlLabel,
-    Switch
+    Switch,
+    useMediaQuery,
+    useTheme
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import { FlowNode } from '@/frontend/types/flow/flow';
@@ -54,6 +56,34 @@ const log = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modal
 type SectionKey = 'basic' | 'model' | 'io' | 'task' | 'advanced';
 const SECTIONS: SectionKey[] = ['basic', 'model', 'io', 'task', 'advanced'];
 
+const TASK_TOOLS_WIDTH_STORAGE_KEY = 'flujo.processNode.taskToolsPaneWidth';
+const DEFAULT_TASK_TOOLS_WIDTH = 340;
+const MIN_TASK_TOOLS_WIDTH = 260;
+const MAX_TASK_TOOLS_WIDTH = 640;
+const MIN_TASK_EDITOR_WIDTH = 360;
+const TASK_DIVIDER_WIDTH = 12;
+const TASK_RESIZE_STEP = 24;
+
+const clampTaskToolsWidth = (width: number, containerWidth = 0): number => {
+  const viewportMaximum = containerWidth > 0
+    ? Math.max(MIN_TASK_TOOLS_WIDTH, containerWidth - MIN_TASK_EDITOR_WIDTH - TASK_DIVIDER_WIDTH)
+    : MAX_TASK_TOOLS_WIDTH;
+  const maximum = Math.min(MAX_TASK_TOOLS_WIDTH, viewportMaximum);
+  return Math.min(Math.max(width, MIN_TASK_TOOLS_WIDTH), maximum);
+};
+
+const readStoredTaskToolsWidth = (): number => {
+  if (typeof window === 'undefined') return DEFAULT_TASK_TOOLS_WIDTH;
+  try {
+    const stored = Number(window.localStorage.getItem(TASK_TOOLS_WIDTH_STORAGE_KEY));
+    return Number.isFinite(stored) && stored > 0
+      ? clampTaskToolsWidth(stored)
+      : DEFAULT_TASK_TOOLS_WIDTH;
+  } catch {
+    return DEFAULT_TASK_TOOLS_WIDTH;
+  }
+};
+
 export function getInitialProcessSection(
   authoringMode: FlowAuthoringMode,
   promptTemplate: unknown,
@@ -79,6 +109,8 @@ export const ProcessNodePropertiesModal = ({
 }: ProcessNodePropertiesModalProps) => {
   log.debug('ProcessNodePropertiesModal rendered with:', { node: node, flowId: flowId });
   const { t } = useI18n();
+  const theme = useTheme();
+  const isCompactTaskLayout = useMediaQuery(theme.breakpoints.down('md'), { noSsr: true });
   const sectionLabels: Record<SectionKey, string> = {
     basic: t('flows.process.basic'),
     model: t('flows.process.model'),
@@ -110,6 +142,8 @@ export const ProcessNodePropertiesModal = ({
   const [activeTab, setActiveTab] = useState<string>('server');
   // Issue #300: the currently active top-level section tab.
   const [activeSection, setActiveSection] = useState<SectionKey>('basic');
+  const [taskToolsWidth, setTaskToolsWidth] = useState(readStoredTaskToolsWidth);
+  const [isResizingTaskPanes, setIsResizingTaskPanes] = useState(false);
   const visibleSections = authoringMode === 'advanced'
     ? SECTIONS
     : SECTIONS.filter((section) => ['basic', 'model', 'task'].includes(section));
@@ -122,6 +156,9 @@ export const ProcessNodePropertiesModal = ({
   const ioRef = useRef<HTMLDivElement>(null);
   const taskRef = useRef<HTMLDivElement>(null);
   const advancedRef = useRef<HTMLDivElement>(null);
+  const taskSplitContainerRef = useRef<HTMLDivElement>(null);
+  const taskToolsWidthRef = useRef(taskToolsWidth);
+  const taskResizeStartRef = useRef({ pointerX: 0, width: taskToolsWidth });
   const sectionRefs: Record<SectionKey, React.RefObject<HTMLDivElement | null>> = {
     basic: basicRef,
     model: modelRef,
@@ -139,6 +176,55 @@ export const ProcessNodePropertiesModal = ({
     }
     if (authoringMode === 'guided' && activeTab !== 'server') setActiveTab('server');
   }, [activeSection, activeTab, authoringMode]);
+
+  useEffect(() => {
+    taskToolsWidthRef.current = taskToolsWidth;
+    try {
+      window.localStorage.setItem(TASK_TOOLS_WIDTH_STORAGE_KEY, String(taskToolsWidth));
+    } catch {
+      // localStorage can be unavailable in privacy-restricted browser contexts.
+    }
+  }, [taskToolsWidth]);
+
+  useEffect(() => {
+    const clampToContainer = () => {
+      const containerWidth = taskSplitContainerRef.current?.getBoundingClientRect().width ?? 0;
+      // The tools width is only applied to the desktop row layout. On mobile,
+      // both panes occupy the full available width.
+      if (containerWidth >= MIN_TASK_TOOLS_WIDTH + MIN_TASK_EDITOR_WIDTH + TASK_DIVIDER_WIDTH) {
+        setTaskToolsWidth((current) => clampTaskToolsWidth(current, containerWidth));
+      }
+    };
+    clampToContainer();
+    window.addEventListener('resize', clampToContainer);
+    return () => window.removeEventListener('resize', clampToContainer);
+  }, [open]);
+
+  useEffect(() => {
+    if (!isResizingTaskPanes) return;
+
+    const handlePointerMove = (event: PointerEvent) => {
+      if (!Number.isFinite(event.clientX)) return;
+      const containerWidth = taskSplitContainerRef.current?.getBoundingClientRect().width ?? 0;
+      const nextWidth = taskResizeStartRef.current.width
+        + event.clientX - taskResizeStartRef.current.pointerX;
+      setTaskToolsWidth(clampTaskToolsWidth(nextWidth, containerWidth));
+    };
+    const finishResize = () => setIsResizingTaskPanes(false);
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', finishResize);
+    window.addEventListener('pointercancel', finishResize);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', finishResize);
+      window.removeEventListener('pointercancel', finishResize);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isResizingTaskPanes]);
 
   const { models, isLoadingModels, loadError, handleModelSelect, handleUnbindModel } = useModelManagement(
     open,
@@ -328,8 +414,6 @@ export const ProcessNodePropertiesModal = ({
       window.cancelAnimationFrame(frame);
       isProgrammaticScroll.current = false;
     };
-    // sectionRefs is stable for the lifetime of this modal.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [node, open, mode, authoringMode]);
 
   // Issue #300: keep the active tab in sync with the section scrolled into view.
@@ -350,7 +434,6 @@ export const ProcessNodePropertiesModal = ({
     );
     Object.values(sectionRefs).forEach((r) => { if (r.current) observer.observe(r.current); });
     return () => observer.disconnect();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, node]);
 
   const handleSectionClick = (key: SectionKey) => {
@@ -364,6 +447,28 @@ export const ProcessNodePropertiesModal = ({
     }
     // Re-enable observer once the smooth scroll has settled.
     window.setTimeout(() => { isProgrammaticScroll.current = false; }, 700);
+  };
+
+  const handleTaskDividerPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!Number.isFinite(event.clientX)) return;
+    event.preventDefault();
+    taskResizeStartRef.current = {
+      pointerX: event.clientX,
+      width: taskToolsWidthRef.current,
+    };
+    setIsResizingTaskPanes(true);
+  };
+
+  const handleTaskDividerKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const containerWidth = taskSplitContainerRef.current?.getBoundingClientRect().width ?? 0;
+    let nextWidth: number | null = null;
+    if (event.key === 'ArrowLeft') nextWidth = taskToolsWidthRef.current - TASK_RESIZE_STEP;
+    if (event.key === 'ArrowRight') nextWidth = taskToolsWidthRef.current + TASK_RESIZE_STEP;
+    if (event.key === 'Home') nextWidth = MIN_TASK_TOOLS_WIDTH;
+    if (event.key === 'End') nextWidth = MAX_TASK_TOOLS_WIDTH;
+    if (nextWidth === null) return;
+    event.preventDefault();
+    setTaskToolsWidth(clampTaskToolsWidth(nextWidth, containerWidth));
   };
 
   const handleDialogEntered = () => {
@@ -506,6 +611,9 @@ export const ProcessNodePropertiesModal = ({
   // scroll internally; only their top is a snap point.
   const sectionSx = {
     minHeight: '100%',
+    minWidth: 0,
+    width: '100%',
+    boxSizing: 'border-box' as const,
     scrollSnapAlign: 'start' as const,
     scrollSnapStop: 'always' as const,
     display: 'flex',
@@ -599,16 +707,17 @@ export const ProcessNodePropertiesModal = ({
         sx: {
           borderTop: 5,
           borderColor: 'secondary.main',
-          width: '95vw',
-          height: '90vh',
-          maxWidth: '95vw',
-          maxHeight: '90vh',
+          m: { xs: 1, sm: 4 },
+          width: { xs: 'calc(100% - 16px)', sm: '95vw' },
+          height: { xs: 'calc(100dvh - 16px)', sm: '90vh' },
+          maxWidth: { xs: 'calc(100% - 16px)', sm: '95vw' },
+          maxHeight: { xs: 'calc(100dvh - 16px)', sm: '90vh' },
         }
       }}
     >
-      <DialogTitle component="div">
+      <DialogTitle component="div" sx={{ px: { xs: 2, sm: 3 }, py: { xs: 1.5, sm: 2 } }}>
         <Box display="flex" alignItems="center" justifyContent="space-between">
-          <Typography variant="h6">
+          <Typography variant="h6" sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>
             {t('flows.modal.properties', { name: nodeData.label || t('flows.process.title') })}
           </Typography>
           <IconButton edge="end" color="inherit" onClick={onClose} aria-label={t('flows.modal.close')}>
@@ -619,9 +728,9 @@ export const ProcessNodePropertiesModal = ({
 
       <Divider />
 
-      <DialogContent sx={{ display: 'flex', flexDirection: 'column', p: 0, overflow: 'hidden', height: 'calc(90vh - 130px)' }}>
+      <DialogContent sx={{ display: 'flex', flexDirection: 'column', p: 0, overflow: 'hidden', flexGrow: 1, minHeight: 0, minWidth: 0 }}>
         {/* Section tab bar — click to scroll a section into view (issue #300). */}
-        <Box sx={{ borderBottom: 1, borderColor: 'divider', px: 2, flexShrink: 0 }}>
+        <Box sx={{ borderBottom: 1, borderColor: 'divider', px: { xs: 0, sm: 2 }, flexShrink: 0, minWidth: 0 }}>
           <Tabs
             value={activeSection}
             onChange={(_, newValue: SectionKey) => handleSectionClick(newValue)}
@@ -636,7 +745,18 @@ export const ProcessNodePropertiesModal = ({
 
         {/* Single scroll surface: all five sections stacked, with per-page
             scroll-snap so scrolling moves whole sections (issue #300). */}
-        <Box ref={scrollContainerRef} sx={{ flexGrow: 1, overflow: 'auto', p: 3, scrollSnapType: 'y mandatory', scrollPaddingTop: '24px' }}>
+        <Box
+          ref={scrollContainerRef}
+          sx={{
+            flexGrow: 1,
+            minWidth: 0,
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            p: { xs: 2, sm: 3 },
+            scrollSnapType: 'y mandatory',
+            scrollPaddingTop: { xs: '16px', sm: '24px' },
+          }}
+        >
           {/* Basic */}
           <Box ref={basicRef} data-section="basic" sx={sectionSx}>
             <Typography variant="h6" sx={{ mb: 2 }}>{t('flows.process.basic')}</Typography>
@@ -692,15 +812,81 @@ export const ProcessNodePropertiesModal = ({
             />
           </Box>}
 
-          {/* Task — tool panels on the LEFT, editor on the RIGHT (as big as
-              possible), single mounted editor (issue #300 feedback). */}
+          {/* Task — stacked at full width on phones; independently scrollable,
+              resizable tools/editor panes on larger screens. */}
           <Box ref={taskRef} data-section="task" sx={sectionSx}>
             <Typography variant="h6" sx={{ mb: 2 }}>{t('flows.process.task')}</Typography>
-            <Box sx={{ display: 'flex', gap: 2, flexGrow: 1, minHeight: 480 }}>
-              <Box sx={{ flex: '0 0 340px', minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            <Box
+              ref={taskSplitContainerRef}
+              data-testid="process-task-split-container"
+              sx={{
+                display: 'flex',
+                flexDirection: isCompactTaskLayout ? 'column' : 'row',
+                flexGrow: 1,
+                minWidth: 0,
+                minHeight: 480,
+                height: isCompactTaskLayout ? 'auto' : 'clamp(480px, 62vh, 680px)',
+                overflow: isCompactTaskLayout ? 'visible' : 'hidden',
+              }}
+            >
+              <Box
+                data-testid="process-task-tools-pane"
+                sx={{
+                  order: isCompactTaskLayout ? 2 : 0,
+                  flex: isCompactTaskLayout ? '0 0 auto' : `0 0 ${taskToolsWidth}px`,
+                  width: isCompactTaskLayout ? '100%' : `${taskToolsWidth}px`,
+                  minWidth: 0,
+                  minHeight: isCompactTaskLayout ? 360 : 0,
+                  height: isCompactTaskLayout ? 420 : 'auto',
+                  mt: isCompactTaskLayout ? 2 : 0,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  overflow: 'hidden',
+                }}
+              >
                 {toolPanels}
               </Box>
-              <Box sx={{ flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+              <Box
+                role="separator"
+                aria-label="Resize Task tools and prompt editor panes"
+                aria-orientation="vertical"
+                aria-valuemin={MIN_TASK_TOOLS_WIDTH}
+                aria-valuemax={MAX_TASK_TOOLS_WIDTH}
+                aria-valuenow={Math.round(taskToolsWidth)}
+                tabIndex={0}
+                onPointerDown={handleTaskDividerPointerDown}
+                onKeyDown={handleTaskDividerKeyDown}
+                sx={{
+                  display: isCompactTaskLayout ? 'none' : 'flex',
+                  flex: `0 0 ${TASK_DIVIDER_WIDTH}px`,
+                  cursor: 'col-resize',
+                  alignItems: 'stretch',
+                  justifyContent: 'center',
+                  touchAction: 'none',
+                  bgcolor: isResizingTaskPanes ? 'action.selected' : 'transparent',
+                  '&::after': {
+                    content: '""',
+                    width: 2,
+                    borderRadius: 1,
+                    bgcolor: 'divider',
+                  },
+                  '&:hover, &:focus-visible': { bgcolor: 'action.hover', outline: 'none' },
+                }}
+              />
+              <Box
+                data-testid="process-task-editor-scroll"
+                sx={{
+                  order: isCompactTaskLayout ? 1 : 0,
+                  flex: '1 1 auto',
+                  width: isCompactTaskLayout ? '100%' : 'auto',
+                  minWidth: 0,
+                  minHeight: isCompactTaskLayout ? 360 : 0,
+                  height: isCompactTaskLayout ? 420 : 'auto',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  overflow: 'auto',
+                }}
+              >
                 <PromptTemplateEditor
                   ref={promptBuilderRef}
                   promptTemplate={promptTemplate}
@@ -738,7 +924,7 @@ export const ProcessNodePropertiesModal = ({
         </Box>
       </DialogContent>
 
-      <DialogActions>
+      <DialogActions sx={{ px: { xs: 1.5, sm: 3 }, py: { xs: 1, sm: 1.5 }, flexShrink: 0 }}>
         <Button onClick={onClose}>{t('flows.modal.cancel')}</Button>
         <Button onClick={handleSave} variant="contained" color="primary">
           {t('flows.modal.saveChanges')}

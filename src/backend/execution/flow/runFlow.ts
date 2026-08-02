@@ -1756,6 +1756,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
               let signalBody = '';
               let callerFlows: string[] | undefined;
               let callerConcurrency: number | undefined;
+              const isSubflowHandoff = sharedState.handoffTargetTypes?.[nextNodeId] === 'subflow';
               callsToAnswer.forEach((call, laneIdx) => {
                 if (call.type === 'function') {
                   try {
@@ -1768,7 +1769,10 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                     // turn clearly means per-instance instructions too. On a
                     // single-call turn `prompt` keeps its issue-#96 meaning.
                     const brief = task || (callsToAnswer.length > 1 ? prompt : '');
-                    if (brief) briefs.push(brief);
+                    // Every Subflow handoff call is one queued job, even when it
+                    // omits `task` and therefore uses the node's configured input.
+                    // Other target types retain the old non-empty-only behavior.
+                    if (isSubflowHandoff || brief) briefs.push(brief);
                     if (!callerPrompt && prompt) callerPrompt = prompt;
                     if (!callerFlows && Array.isArray(parsedArgs?.parallelFlows)) {
                       const flows = parsedArgs.parallelFlows.filter(

@@ -200,6 +200,41 @@ describe('ProcessNodePropertiesModal issue #320 interactions', () => {
     await waitFor(() => expect(window.localStorage.getItem('flujo.processNode.taskToolsPaneWidth')).toBe('420'));
   });
 
+  it('stacks full-width editor and tools panes on mobile, with the editor first', () => {
+    const previousMatchMedia = window.matchMedia;
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: jest.fn().mockImplementation((query: string) => ({
+        matches: query.includes('max-width:899.95px'),
+        media: query,
+        onchange: null,
+        addEventListener: jest.fn(),
+        removeEventListener: jest.fn(),
+        addListener: jest.fn(),
+        removeListener: jest.fn(),
+        dispatchEvent: jest.fn(),
+      })),
+    });
+    try {
+      renderModal({ mode: 'edit' });
+
+      expect(screen.getByTestId('process-task-split-container')).toHaveStyle({
+        flexDirection: 'column',
+        overflow: 'visible',
+      });
+      expect(screen.getByTestId('process-task-editor-scroll')).toHaveStyle({
+        order: '1',
+        width: '100%',
+      });
+      expect(screen.getByTestId('process-task-tools-pane')).toHaveStyle({
+        order: '2',
+        width: '100%',
+      });
+    } finally {
+      Object.defineProperty(window, 'matchMedia', { configurable: true, value: previousMatchMedia });
+    }
+  });
+
   it('shows compact MCP cards with tooltip and expandable details', async () => {
     renderModal({ mode: 'edit' });
 

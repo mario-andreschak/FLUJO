@@ -356,23 +356,9 @@ export interface SubflowNodeProperties {
      *  handoff tool. Groundwork for running subflows as independent, callable
      *  workers. */
     allowCallerPrompt?: boolean;
-    /** Spawn-with-brief (issue #156; supersedes the issue #130 Phase 4
-     *  "parallelFlows" semantics this flag used to carry): opt-in. When true,
-     *  the handoff tool that targets THIS subflow node exposes an optional
-     *  `task` string parameter and tells the routing model it may call the tool
-     *  SEVERAL TIMES IN ONE TURN — each call spawns one parallel instance of
-     *  this node's sub-agent (`subflowId`) briefed with that call's `task`. The
-     *  briefs are captured single-shot & node-id-scoped (via
-     *  SharedState.handoffInput.tasks), each becomes one lane through the
-     *  existing bounded pool / ordered join, and the joined output folds into
-     *  the parent conversation exactly like every other lane mode. A caller who
-     *  routes here with NO task performs a plain single-child handoff (graceful
-     *  degradation — never the old silent zero-lane run). Caller-spawned briefs
-     *  OVERRIDE `spawnBriefs`, `parallelSubflowIdsVar` and `parallelSubflowIds`.
-     *  The single-outgoing-edge rule is unchanged (one handoff target, multiple
-     *  CHILDREN). Existing flows that opted in under the old semantics get the
-     *  new behavior automatically; a legacy caller-sent `parallelFlows` arg is
-     *  still honored (see SharedState.handoffInput). Defaults false. */
+    /** @deprecated Queueing no longer requires opt-in. Every Subflow handoff
+     *  exposes a `task` and repeated calls create queued jobs automatically.
+     *  Kept only so older saved flows and FlowSpecs continue to deserialize. */
     allowCallerFanout?: boolean;
     /** Author-defined spawn briefs (issue #156): when this list is non-empty,
      *  every visit to this node spawns ONE PARALLEL INSTANCE of the sub-agent
@@ -405,7 +391,9 @@ export interface SubflowNodeProperties {
      *  mapOverList. The single-outgoing-edge rule is unchanged (this is about
      *  multiple CHILDREN, not successors). */
     parallelSubflowIdsVar?: string;
-    /** Max child flows run at once in parallel mode (bounded worker pool). Default 4. */
+    /** Maximum child jobs active simultaneously. Additional jobs stay queued;
+     *  this never limits the total job count. Set 1 for sequential execution.
+     *  Default 4. */
     concurrencyLimit?: number;
     /** String placed between joined lane outputs (child order) in parallel mode.
      *  Default "\n\n". */
@@ -464,8 +452,8 @@ export interface SubflowNodeProperties {
     saveConversation?: boolean;
 }
 
-/** One resolved lane in a SubflowNode plan: a fan-out child (issue #102) or a
- *  map-over-list per-item run (Tier 2a). */
+/** One resolved job in a SubflowNode queue. Legacy code and event payloads still
+ *  use the word "lane" for wire compatibility. */
 export interface SubflowLanePlan {
     subflowId: string;
     subflowName?: string;
@@ -482,7 +470,7 @@ export interface SubflowLanePlan {
     laneTitle?: string;
 }
 
-/** The outcome of one fan-out lane (issue #102), kept in child order. */
+/** The outcome of one queued child job, kept in request order. */
 export interface SubflowLaneResult {
     subflowId: string;
     success: boolean;
@@ -760,11 +748,10 @@ export interface SharedState {
          *  legacy/parameterless calls without affecting direct traversal. */
         signalBody?: string;
         fromHandoffTool?: boolean;
-        /** Spawn-with-brief (issue #156): one entry per handoff tool call the
-         *  routing model made to this target in the SAME assistant turn, each the
-         *  call's `task` brief. N entries => the target subflow runs N PARALLEL
-         *  lanes, one per brief, through the existing bounded pool. Single-shot &
-         *  node-id-scoped like `prompt`; consumed in SubflowNode.prep. */
+        /** One entry per handoff tool call the routing model made to this target
+         *  in the same assistant turn. Each task becomes one queued execution of
+         *  the node's `subflowId`; concurrencyLimit controls only active workers.
+         *  Single-shot and node-id-scoped like `prompt`. */
         tasks?: string[];
         /** Legacy Phase 4 (issue #130): caller-chosen fan-out target flow ids.
          *  No handoff tool exposes this parameter anymore (superseded by the
@@ -1143,10 +1130,9 @@ export interface SubflowNodePrepResult extends BasePrepResult {
     subflowName?: string;
     /** Display name of this node (for subflow event attribution). */
     nodeName?: string;
-    /** Resolved lane plan. Present in spawn-with-brief mode (issue #156, one
-     *  lane per brief), parallel fan-out mode (issue #102, parallelSubflowIds
-     *  non-empty) or map-over-list mode (Tier 2a); each entry is one child run.
-     *  Fed to the same bounded worker pool either way. */
+    /** Resolved child-job queue. Present for ordinary one-child execution and
+     *  repeated model handoffs alike. Deprecated fan-out/map configurations are
+     *  normalized here for saved-flow compatibility. */
     lanes?: SubflowLanePlan[];
     /** True when prep resolved this node in map-over-list mode (Tier 2a). Lets
      *  execCore treat an EMPTY `lanes` as a clean "nothing to map" result rather
@@ -1163,7 +1149,7 @@ export interface SubflowNodePrepResult extends BasePrepResult {
      *  nonexistent flows). execCore returns this as a real error — never the
      *  old silent zero-lane success. */
     laneResolutionError?: string;
-    /** Bounded worker-pool size for parallel mode (default 4). */
+    /** Maximum simultaneous workers; never a total-job limit (default 4). */
     concurrencyLimit?: number;
     /** Separator used to join lane outputs in child order (default "\n\n"). */
     joinSeparator?: string;

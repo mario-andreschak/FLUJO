@@ -22,9 +22,7 @@ const log = createLogger('backend/execution/flow/FlowExecutor');
 // a stale compiled flow until a process restart. Same cross-instance-coherence
 // reasoning as the global-backed scheduler and MCP recovery maps.
 declare global {
-  // eslint-disable-next-line no-var
   var __flujo_flow_engine: FlowEngine | undefined;
-  // eslint-disable-next-line no-var
   var __flujo_conversation_states: Map<string, SharedState> | undefined;
 }
 

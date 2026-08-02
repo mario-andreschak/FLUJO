@@ -165,11 +165,11 @@ describe('validateFlow — subflow single outgoing path', () => {
     expect(r.isRunnable).toBe(false);
   });
 
-  it('warns on a concurrencyLimit below 1 in parallel mode', () => {
+  it('warns on a concurrencyLimit below 1 for an ordinary one-child Subflow', () => {
     const gate: VNode = {
       id: 'gate',
       type: 'subflow',
-      data: { label: 'gate', type: 'subflow', properties: { parallelSubflowIds: ['a'], concurrencyLimit: 0 } },
+      data: { label: 'gate', type: 'subflow', properties: { subflowId: 'a', concurrencyLimit: 0 } },
     };
     const flow: VFlow = {
       nodes: [...base, gate],

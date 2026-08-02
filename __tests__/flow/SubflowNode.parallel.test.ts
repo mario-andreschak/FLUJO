@@ -162,7 +162,7 @@ describe('SubflowNode fan-out (issue #102)', () => {
     const prep = await node.prep(makeShared(), params);
     const exec = await node.execCore(prep);
     expect(exec.success).toBe(false);
-    expect(exec.error).toContain('All parallel subflows failed');
+    expect(exec.error).toContain('All queued subflow jobs failed');
   });
 
   it('runs every lane at the same depth (concurrency does not deepen the call tree)', async () => {
@@ -206,8 +206,8 @@ describe('SubflowNode fan-out (issue #102)', () => {
   });
 });
 
-describe('SubflowNode single-child path (regression, unchanged)', () => {
-  it('runs one child, folds output, hands off; folded events carry no lane fields', async () => {
+describe('SubflowNode one-item queue', () => {
+  it('runs one child, folds output, hands off, and emits one worker row', async () => {
     runFlowMock.mockImplementation(
       async ({ emit }: { emit?: (e: Record<string, unknown>) => void }) => {
         emit?.({ type: 'run:start', flowId: 'solo' });
@@ -226,15 +226,14 @@ describe('SubflowNode single-child path (regression, unchanged)', () => {
     expect(runFlowMock).toHaveBeenCalledTimes(1);
     expect(exec.success).toBe(true);
     expect(exec.outputText).toBe('SOLO_OUT');
-    expect(exec.lanes).toBeUndefined();
+    expect(exec.lanes).toHaveLength(1);
 
     const action = await node.post(prep, exec, shared, params);
     expect(action).toBe('NEXT');
     expect(shared.lastResponse).toBe('SOLO_OUT');
 
-    // Single-lane events must be byte-for-byte as before: no laneIndex/laneCount.
-    expect(events.every((e) => e.laneIndex === undefined && e.laneCount === undefined)).toBe(true);
-    expect(events.some((e) => e.type === 'subflow:start')).toBe(true);
+    const start = events.find((e) => e.type === 'subflow:start');
+    expect(start).toMatchObject({ laneIndex: 0, laneCount: 1 });
     expect(events.some((e) => e.type === 'run:done')).toBe(false);
   });
 

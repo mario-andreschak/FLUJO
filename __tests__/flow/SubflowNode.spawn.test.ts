@@ -1,22 +1,20 @@
 /**
- * Tests for spawn-with-brief (issue #156).
+ * Tests for the Subflow child-job queue (plus legacy authored briefs).
  *
- * A subflow node is a sub-agent; spawning runs N parallel instances of it, each
- * with its own brief. Briefs come from the ROUTING MODEL (one handoff tool call
- * per brief, captured into SharedState.handoffInput.tasks, gated on
- * `allowCallerFanout`) or from the AUTHOR (`spawnBriefs`). Both feed the same
- * lane engine as fan-out/map-over-list. What's pinned here:
+ * A Subflow node references one child. Every routing-model handoff call creates
+ * one queued child job, optionally with its own brief. Legacy author-provided
+ * `spawnBriefs` still feed the same engine for saved-flow compatibility.
+ * What's pinned here:
  *   - caller tasks -> one lane per brief, all running THIS node's subflowId,
  *   - per-lane input composition (isolated: brief IS the prompt; history modes:
  *     shared transcript + brief appended as the closing user message),
  *   - author briefs run without any caller; caller tasks override them,
  *   - ${var:NAME} resolution inside briefs,
- *   - the MAX_DYNAMIC_FANOUT_LANES cap,
+ *   - caller jobs are not truncated by the legacy dynamic-fanout cap,
  *   - saveConversation honored PER LANE (defect 1) with brief-derived titles,
  *   - a caller-requested legacy parallelFlows set naming only unknown flows is
  *     a REAL error, not a silent empty success (defect 2),
- *   - graceful degradation: spawn-enabled node routed to with no tasks runs the
- *     plain single-child path.
+ *   - a visit with no caller tasks is represented as a one-item queue.
  */
 
 const runFlowMock = jest.fn();
@@ -130,7 +128,7 @@ describe('SubflowNode spawn-with-brief — caller tasks (issue #156)', () => {
     }
   });
 
-  it('ignores caller tasks when the node did not opt into allowCallerFanout', async () => {
+  it('accepts every caller task without an allowCallerFanout opt-in', async () => {
     const node = makeNode();
     const params = makeParams({ subflowId: 'solo' });
     const shared = makeShared({
@@ -139,25 +137,39 @@ describe('SubflowNode spawn-with-brief — caller tasks (issue #156)', () => {
     const prep = await node.prep(shared, params);
     await node.execCore(prep);
 
-    expect(prep.lanes).toBeUndefined();
-    expect(runFlowMock).toHaveBeenCalledTimes(1);
-    expect(runFlowMock.mock.calls[0][0].flowId).toBe('solo');
+    expect(prep.lanes).toHaveLength(2);
+    expect(runFlowMock).toHaveBeenCalledTimes(2);
+    expect(runFlowMock.mock.calls.map((call) => call[0].flowId)).toEqual(['solo', 'solo']);
   });
 
-  it('degrades to a plain single-child handoff when spawn is enabled but no tasks arrive', async () => {
+  it('normalizes a handoff with no tasks to a one-item queue', async () => {
     const node = makeNode();
     const params = makeParams({ subflowId: 'agent', allowCallerFanout: true });
     const shared = makeShared();
     const prep = await node.prep(shared, params);
     const exec = await node.execCore(prep);
 
-    expect(prep.lanes).toBeUndefined();
+    expect(prep.lanes).toHaveLength(1);
     expect(runFlowMock).toHaveBeenCalledTimes(1);
     expect(runFlowMock.mock.calls[0][0].flowId).toBe('agent');
     expect(exec.success).toBe(true);
   });
 
-  it('caps caller tasks at MAX_DYNAMIC_FANOUT_LANES', async () => {
+  it('keeps one queued job per handoff call when some calls omit task', async () => {
+    const node = makeNode();
+    const params = makeParams({ subflowId: 'agent', inputMode: 'isolated', promptTemplate: 'DEFAULT' });
+    const prep = await node.prep(
+      makeShared({ handoffInput: { targetNodeId: 'sub-1', prompt: '', tasks: ['', 'specific task'] } }),
+      params,
+    );
+    await node.execCore(prep);
+
+    expect(prep.lanes).toHaveLength(2);
+    expect(prep.lanes?.[0].input).toBeUndefined();
+    expect(runFlowMock.mock.calls.map((call) => call[0].prompt)).toEqual(['DEFAULT', 'specific task']);
+  });
+
+  it('does not cap the total caller task queue at MAX_DYNAMIC_FANOUT_LANES', async () => {
     const node = makeNode();
     const params = makeParams({ subflowId: 'agent', allowCallerFanout: true, promptTemplate: 'D' });
     const shared = makeShared({
@@ -169,7 +181,7 @@ describe('SubflowNode spawn-with-brief — caller tasks (issue #156)', () => {
     });
     const prep = await node.prep(shared, params);
 
-    expect(prep.lanes).toHaveLength(MAX_DYNAMIC_FANOUT_LANES);
+    expect(prep.lanes).toHaveLength(MAX_DYNAMIC_FANOUT_LANES + 8);
   });
 
   it('honors a caller-supplied concurrencyLimit for spawn lanes', async () => {
@@ -181,6 +193,30 @@ describe('SubflowNode spawn-with-brief — caller tasks (issue #156)', () => {
     const prep = await node.prep(shared, params);
 
     expect(prep.concurrencyLimit).toBe(1);
+  });
+
+  it.each([1, 3])('keeps the queue full with at most %i simultaneous child run(s)', async (limit) => {
+    let active = 0;
+    let maxActive = 0;
+    runFlowMock.mockImplementation(async ({ prompt }: { prompt?: string }) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      return { status: 'completed', outputText: `OUT_${prompt}` };
+    });
+
+    const node = makeNode();
+    const params = makeParams({ subflowId: 'agent', promptTemplate: 'D', concurrencyLimit: limit });
+    const tasks = Array.from({ length: 8 }, (_, i) => `task-${i}`);
+    const prep = await node.prep(
+      makeShared({ handoffInput: { targetNodeId: 'sub-1', prompt: '', tasks } }),
+      params,
+    );
+    await node.execCore(prep);
+
+    expect(runFlowMock).toHaveBeenCalledTimes(tasks.length); // concurrency never truncates the queue
+    expect(maxActive).toBe(limit);
   });
 
   it('drops tasks (with a plain run) when the node has no subflowId', async () => {

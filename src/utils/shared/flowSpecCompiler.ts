@@ -124,49 +124,33 @@ export interface FlowSpecNode {
   /** subflow only: target flow name OR id of an EXISTING flow — resolved against the context. */
   flow?: string;
   /**
-   * subflow only (issue #102): fan out to SEVERAL existing child flows CONCURRENTLY (by
-   * name or id). The same resolved input (per `inputMode`) is fanned to every lane and the
-   * outputs are joined. Mutually exclusive with the single-child sources; precedence is
-   * flow > subflowSpec > parallelFlows > parallelSubflowSpecs > generateSubflow. This is
-   * about multiple CHILDREN, not multiple successors — a subflow node still has ONE
-   * outgoing edge.
+   * @deprecated Saved-spec compatibility only. New Subflow nodes reference one
+   * child with `flow`/`subflowSpec`; repeated handoff calls create the job queue.
    */
   parallelFlows?: string[];
   /**
-   * subflow only (issue #102): fan out to several INLINE child FlowSpecs concurrently. Each
-   * is compiled into its own flow (honouring the depth/flow caps, like `subflowSpec`) and
-   * its id is added to the lane list. Prefer `parallelFlows` for large fan-outs to avoid the
-   * MAX_GENERATED_FLOWS / MAX_SUBFLOW_DEPTH caps.
+   * @deprecated Saved-spec compatibility only. New Subflow nodes reference one
+   * inline child with `subflowSpec`.
    */
   parallelSubflowSpecs?: FlowSpec[];
   /**
-   * subflow only (issue #130): DYNAMIC fan-out. The NAME of a run-scoped variable
-   * (captured upstream via `captureVariable`, referenced elsewhere as ${var:NAME})
-   * whose value — a JSON array of flow ids/names, or a newline list — selects the
-   * fan-out target flows AT RUNTIME. Lets a running step decide WHICH (and how
-   * many) flows fan out. May stand ALONE as the sole target source, or decorate a
-   * static `parallelFlows` base that it overrides when it resolves non-empty.
-   * Mutually exclusive with `mapOverList`. Compiles to `properties.parallelSubflowIdsVar`.
+   * @deprecated Saved-spec compatibility only. Dynamic work is expressed by
+   * repeated handoff calls to the node's one child flow.
    */
   parallelFlowsVariable?: string;
-  /** subflow parallel: max lanes run at once (bounded pool). Clamped ≥1. Default runtime 4. */
+  /** Subflow: maximum active child jobs. Clamped ≥1; default 4. Does not cap queued jobs. */
   concurrencyLimit?: number;
-  /** subflow parallel: string placed between joined lane outputs (child order). Default "\n\n". */
+  /** @deprecated Saved-spec compatibility only; new queues use the standard result fold. */
   joinSeparator?: string;
-  /** subflow parallel: 'collect-all' (default; every lane runs, partials surfaced) | 'fail-fast'. */
+  /** @deprecated Saved-spec compatibility only; new queues always drain. */
   errorStrategy?: 'fail-fast' | 'collect-all';
   /**
-   * subflow only (Tier 2a): run the SINGLE child flow (`flow` / `subflowSpec`) ONCE PER ITEM
-   * parsed from the resolved input, instead of once. Mutually exclusive with the parallel
-   * fan-out sources (`parallelFlows`/`parallelSubflowSpecs`). The per-item runs reuse the same
-   * bounded pool and joining, so `concurrencyLimit`/`joinSeparator`/`errorStrategy` apply.
+   * @deprecated Saved-spec compatibility only. Queue work with repeated handoff calls.
    */
   mapOverList?: boolean;
-  /** subflow map-over-list: how to split the input into items — 'json-array' (default; parse a
-   *  JSON array, each element one item) or 'lines' (split on newlines, blank lines dropped). */
+  /** @deprecated Saved-spec compatibility only. */
   itemSplit?: 'json-array' | 'lines';
-  /** subflow map-over-list: run items one at a time in order (pool size 1) instead of
-   *  concurrently. Default false. */
+  /** @deprecated Saved-spec compatibility only; use `concurrencyLimit: 1`. */
   sequential?: boolean;
   /**
    * subflow only (issue #94): an INLINE child FlowSpec. The compiler compiles it into its
@@ -191,25 +175,11 @@ export interface FlowSpecNode {
    *  subflow, `isolatedPrompt` for a process node). Defaults to true; set false
    *  to forbid it. */
   allowCallerPrompt?: boolean;
-  /** subflow only (issue #156 spawn-with-brief; supersedes the #130 Phase 4
-   *  `parallelFlows` handoff argument): when true, this node is a SPAWNABLE
-   *  sub-agent — a step that hands off to it may call the handoff tool SEVERAL
-   *  TIMES in one turn, each call carrying a `task` brief, and each call runs
-   *  one parallel instance of the child flow briefed with that task. Results
-   *  join in call order and the flow continues after all instances finish.
-   *  Caller briefs override `spawnBriefs` / `parallelFlows` /
-   *  `parallelFlowsVariable`. Compiles to `properties.allowCallerFanout`.
-   *  Defaults false. */
+  /** @deprecated No-op compatibility field. Every Subflow handoff is queue-backed. */
   allowCallerFanout?: boolean;
   /**
-   * subflow only (issue #156): AUTHOR-DEFINED spawn briefs. When non-empty, every
-   * visit runs the SINGLE child flow (`flow` / `subflowSpec`) once per brief, in
-   * parallel through the bounded pool (`concurrencyLimit` / `joinSeparator` /
-   * `errorStrategy` apply). Each brief supports `${var:}` / `${res:}` / `${kv:}`.
-   * In isolated inputMode a brief is the lane's whole prompt; in history modes it
-   * is appended to the shared conversation as that lane's closing instruction.
-   * Requires a single child; mutually exclusive with `parallelFlows` /
-   * `parallelSubflowSpecs` / `mapOverList`. Compiles to `properties.spawnBriefs`.
+   * @deprecated Saved-spec compatibility only. A model creates jobs with repeated
+   * handoff calls and supplies each job's brief through `task`.
    */
   spawnBriefs?: string[];
   /**

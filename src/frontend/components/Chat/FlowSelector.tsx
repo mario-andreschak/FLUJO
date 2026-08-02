@@ -23,13 +23,16 @@ interface FlowSelectorProps {
   disabled?: boolean; // Add disabled prop
   /** Hide the internal "Select Agent" subtitle when the host already renders a heading. */
   hideLabel?: boolean;
+  /** Single-row phone treatment; the picker itself becomes full-screen. */
+  compact?: boolean;
 }
 
 const FlowSelector: React.FC<FlowSelectorProps> = ({
   selectedFlowId,
   onSelectFlow,
   disabled = false, // Default to false
-  hideLabel = false
+  hideLabel = false,
+  compact = false,
 }) => {
   const { t } = useI18n();
   const [flows, setFlows] = useState<Flow[]>([]);
@@ -108,8 +111,8 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
   const selectedFlowName = getSelectedFlowName();
 
   return (
-    <Box>
-      {!hideLabel && (
+    <Box sx={{ minWidth: 0 }}>
+      {!hideLabel && !compact && (
         <Typography variant="subtitle1" gutterBottom>
           {t('chat.selector.title')}
         </Typography>
@@ -136,24 +139,33 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
               choosing a flow here looks exactly like the Flows page. */}
           <Button
             variant="outlined"
+            size={compact ? 'small' : 'medium'}
             startIcon={<AccountTreeOutlinedIcon />}
             onClick={() => setPickerOpen(true)}
             disabled={disabled}
-            sx={{ textTransform: 'none', maxWidth: '100%' }}
+            sx={{
+              textTransform: 'none',
+              maxWidth: '100%',
+              minWidth: 0,
+              ...(compact && { minHeight: 36, px: 1.25 }),
+            }}
           >
             <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {selectedFlowId ? (selectedFlowName || t('chat.selector.title')) : t('chat.selector.title')}
             </Box>
           </Button>
-          <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
-            {selectedFlowId
-              ? t('chat.selector.using', { agent: selectedFlowName })
-              : t('chat.selector.help')}
-          </Typography>
+          {!compact && (
+            <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
+              {selectedFlowId
+                ? t('chat.selector.using', { agent: selectedFlowName })
+                : t('chat.selector.help')}
+            </Typography>
+          )}
 
           <CardPickerDialog
             open={pickerOpen}
             onClose={() => setPickerOpen(false)}
+            fullScreen={compact}
             title={t('chat.selector.title')}
             description={t('chat.selector.dialogHelp')}
             skeleton={<FlowCardSkeleton />}

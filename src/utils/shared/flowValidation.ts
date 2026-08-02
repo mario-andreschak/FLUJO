@@ -708,16 +708,15 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
         node
       );
     }
-    if (parallelIds.length > 0 || spawnBriefs.length > 0) {
-      const limit = props.concurrencyLimit;
-      if (typeof limit === 'number' && limit < 1) {
-        add(
-          'warning',
-          'subflow-concurrency-limit',
-          `Subflow node "${getNodeLabel(node)}" has a concurrencyLimit of ${limit}; it must be at least 1 (the runtime default will be used).`,
-          node
-        );
-      }
+    // Every Subflow uses the bounded queue, even when it runs one child once.
+    const limit = props.concurrencyLimit;
+    if (typeof limit === 'number' && limit < 1) {
+      add(
+        'warning',
+        'subflow-concurrency-limit',
+        `Subflow node "${getNodeLabel(node)}" has a concurrencyLimit of ${limit}; it must be at least 1 (the runtime default will be used).`,
+        node
+      );
     }
   }
 

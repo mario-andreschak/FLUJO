@@ -1,9 +1,10 @@
-import React, { memo, useContext, useState } from 'react';
+import React, { memo, useContext, useEffect, useRef, useState } from 'react';
 import { 
   Handle, 
   Position, 
   NodeProps,
-  Connection
+  Connection,
+  NodeToolbar,
 } from '@xyflow/react';
 import { alpha, styled, useTheme } from '@mui/material/styles';
 import {
@@ -13,6 +14,7 @@ import {
   Paper,
   Typography,
   Box,
+  IconButton,
 } from '@mui/material';
 import ChatIcon from '@mui/icons-material/Chat';
 import SettingsIcon from '@mui/icons-material/Settings';
@@ -22,6 +24,7 @@ import DescriptionIcon from '@mui/icons-material/Description';
 import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
 import BoltIcon from '@mui/icons-material/Bolt';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import PlayArrowRoundedIcon from '@mui/icons-material/PlayArrowRounded';
 import type { NodeType } from '@/frontend/types/flow/flow';
 import { flowNodeColors, flowNodeLightColors } from '@/frontend/utils/flowPaletteTokens';
 import { buildNodeInformation } from './nodeInformation';
@@ -66,6 +69,8 @@ const NodeContainer = styled(Paper, {
   // grid snapping, node centers line up vertically, so top/bottom handles align
   // and edges run straight instead of jogging "around the corner".
   width: '210px',
+  position: 'relative',
+  overflow: 'visible',
   borderRadius: '16px',
   backgroundColor: theme.palette.background.paper,
   backgroundImage: `linear-gradient(145deg, ${alpha(nodeMainColor(nodeType, theme), 0.08)}, transparent 42%)`,
@@ -79,7 +84,20 @@ const NodeContainer = styled(Paper, {
     borderColor: alpha(nodeMainColor(nodeType, theme), 0.58),
     boxShadow: `0 0 0 1px ${alpha(nodeMainColor(nodeType, theme), 0.35)}, 0 18px 45px ${alpha(nodeMainColor(nodeType, theme), 0.16)}`,
     transform: 'translateY(-2px)',
-  }
+  },
+  // Keep the visible connector compact while giving fingers and slightly
+  // imprecise mouse drops a much larger interactive target.
+  '& .react-flow__handle::after': {
+    content: '""',
+    position: 'absolute',
+    inset: -8,
+    borderRadius: '50%',
+  },
+  '@media (pointer: coarse)': {
+    '& .react-flow__handle::after': {
+      inset: -14,
+    },
+  },
 }));
 
 const NodeHeader = styled(Box, {
@@ -107,6 +125,55 @@ const NodeDetails = styled(Box)(({ theme }) => ({
 interface CustomNodeProps extends NodeProps {
   nodeType: NodeType;
 }
+
+export const FLOW_QUICK_CONNECT_EVENT = 'flowQuickConnect';
+export type QuickConnectSide = 'top' | 'right' | 'bottom' | 'left';
+export interface FlowQuickConnectEventDetail {
+  nodeId: string;
+  handleId: string;
+  side: QuickConnectSide;
+  clientX: number;
+  clientY: number;
+}
+
+interface QuickConnectHandle {
+  handleId: string;
+  side: QuickConnectSide;
+  /** Separates multiple semantic handles that share the same node side. */
+  align?: 'start' | 'center' | 'end';
+}
+
+// Only handles that can create a valid new neighbor get a quick-connect arrow.
+// Target-only flow handles stay drag targets; MCP handles are intentionally
+// included because MCP wiring is non-directional in the connection rules.
+const QUICK_CONNECT_HANDLES: Record<NodeType, QuickConnectHandle[]> = {
+  start: [{ handleId: 'start-bottom', side: 'bottom' }],
+  process: [
+    { handleId: 'process-bottom', side: 'bottom' },
+    { handleId: 'process-left-mcp', side: 'left', align: 'start' },
+    { handleId: 'process-right-mcp', side: 'right', align: 'start' },
+    { handleId: 'process-left-resource', side: 'left', align: 'end' },
+    { handleId: 'process-right-resource', side: 'right', align: 'end' },
+  ],
+  finish: [],
+  mcp: [
+    { handleId: 'mcp-top', side: 'top' },
+    { handleId: 'mcp-right', side: 'right' },
+    { handleId: 'mcp-bottom', side: 'bottom' },
+    { handleId: 'mcp-left', side: 'left' },
+  ],
+  subflow: [{ handleId: 'subflow-bottom', side: 'bottom' }],
+  resource: [{ handleId: 'resource-out', side: 'right' }],
+  signal: [{ handleId: 'signal-bottom', side: 'bottom' }],
+  trigger: [{ handleId: 'trigger-bottom', side: 'bottom' }],
+};
+
+const quickConnectRotation: Record<QuickConnectSide, number> = {
+  top: -90,
+  right: 0,
+  bottom: 90,
+  left: 180,
+};
 
 const getNodeIcon = (type: NodeType) => {
   switch (type) {
@@ -176,7 +243,54 @@ const CustomNode = ({ id, data, nodeType, selected }: CustomNodeProps & { select
   const { t, tp, formatList } = useI18n();
   const flowNames = useContext(FlowNamesContext);
   const [expanded, setExpanded] = useState(false);
+  const [hoverReady, setHoverReady] = useState(false);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const information = buildNodeInformation(data, nodeType, { t, tp, formatList }, flowNames);
+
+  useEffect(() => () => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+  }, []);
+
+  const startHoverReveal = () => {
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    hideTimerRef.current = null;
+    if (selected || hoverReady || hoverTimerRef.current) return;
+    hoverTimerRef.current = setTimeout(() => {
+      setHoverReady(true);
+      hoverTimerRef.current = null;
+    }, 450);
+  };
+
+  const stopHoverReveal = () => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = null;
+    if (selected) return;
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    hideTimerRef.current = setTimeout(() => {
+      setHoverReady(false);
+      hideTimerRef.current = null;
+    }, 180);
+  };
+
+  const requestQuickConnect = (
+    event: React.MouseEvent<HTMLButtonElement>,
+    quickConnect: QuickConnectHandle,
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = event.currentTarget.getBoundingClientRect();
+    document.dispatchEvent(new CustomEvent<FlowQuickConnectEventDetail>(FLOW_QUICK_CONNECT_EVENT, {
+      detail: {
+        nodeId: id,
+        handleId: quickConnect.handleId,
+        side: quickConnect.side,
+        clientX: rect.left + rect.width / 2,
+        clientY: rect.top + rect.height / 2,
+      },
+    }));
+  };
 
   const stopNodeInteraction = (event: React.SyntheticEvent) => {
     event.stopPropagation();
@@ -380,8 +494,60 @@ const CustomNode = ({ id, data, nodeType, selected }: CustomNodeProps & { select
   
   return (
     <>
-      <NodeContainer elevation={2} nodeType={nodeType} selected={selected}>
+      <NodeContainer
+        elevation={2}
+        nodeType={nodeType}
+        selected={selected}
+        onMouseEnter={startHoverReveal}
+        onMouseLeave={stopHoverReveal}
+      >
         {renderHandles()}
+        {QUICK_CONNECT_HANDLES[nodeType].map((quickConnect) => {
+          const label = t('flows.canvas.quickConnect', {
+            node: information.label,
+            side: t(`flows.canvas.side.${quickConnect.side}`),
+          });
+          return (
+            <NodeToolbar
+              key={quickConnect.handleId}
+              nodeId={id}
+              isVisible={!!selected || hoverReady}
+              position={Position[quickConnect.side.charAt(0).toUpperCase() + quickConnect.side.slice(1) as keyof typeof Position]}
+              align={quickConnect.align ?? 'center'}
+              offset={10}
+              onMouseEnter={startHoverReveal}
+              onMouseLeave={stopHoverReveal}
+            >
+              <IconButton
+                className="nodrag nopan"
+                size="small"
+                aria-label={label}
+                title={label}
+                onPointerDown={stopNodeInteraction}
+                onClick={(event) => requestQuickConnect(event, quickConnect)}
+                sx={{
+                  width: 32,
+                  height: 32,
+                  p: 0,
+                  color: 'primary.contrastText',
+                  bgcolor: 'primary.main',
+                  border: '2px solid',
+                  borderColor: 'background.paper',
+                  boxShadow: 3,
+                  transition: 'transform 140ms ease, background-color 140ms ease',
+                  '&:hover, &:focus-visible': {
+                    bgcolor: 'primary.dark',
+                    transform: 'scale(1.08)',
+                  },
+                }}
+              >
+                <PlayArrowRoundedIcon
+                  sx={{ fontSize: 19, transform: `rotate(${quickConnectRotation[quickConnect.side]}deg)` }}
+                />
+              </IconButton>
+            </NodeToolbar>
+          );
+        })}
         
         <NodeHeader nodeType={nodeType}>
           <NodeContent>

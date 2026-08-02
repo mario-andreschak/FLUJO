@@ -32,7 +32,21 @@ import { v4 as uuidv4 } from 'uuid';
 import { FlowNode, NodeType } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
 import { plannedExecutionsService } from '@/frontend/services/plannedExecutions';
-import { StartNode, ProcessNode, FinishNode, MCPNode, SubflowNode, ResourceNode, SignalNode, TriggerNode, RESOURCE_COLOR, SIGNAL_COLOR, TRIGGER_COLOR } from '../CustomNodes';
+import {
+  StartNode,
+  ProcessNode,
+  FinishNode,
+  MCPNode,
+  SubflowNode,
+  ResourceNode,
+  SignalNode,
+  TriggerNode,
+  RESOURCE_COLOR,
+  SIGNAL_COLOR,
+  TRIGGER_COLOR,
+  FLOW_QUICK_CONNECT_EVENT,
+  type FlowQuickConnectEventDetail,
+} from '../CustomNodes';
 import ContextMenu from '../ContextMenu';
 import { CustomEdge, MCPEdge, ResourceEdge } from '../CustomEdges';
 import { EDGE_WAYPOINT_EVENT, EdgeWaypointEventDetail } from '../CustomEdges/FlowEdgeBase';
@@ -446,6 +460,55 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
     document.addEventListener('selectNode', handleSelectNodeEvent);
     return () => document.removeEventListener('selectNode', handleSelectNodeEvent);
   }, [nodes, onNodesChange, onSelectNode]);
+
+  // Selected (or deliberately hovered) nodes expose small directional arrows.
+  // Clicking one opens the exact same add-and-connect picker as releasing a
+  // connection drag on the pane, with a sensible drop position synthesized
+  // from that side of the node.
+  useEffect(() => {
+    const handleQuickConnect = (event: Event) => {
+      const detail = (event as CustomEvent<FlowQuickConnectEventDetail>).detail;
+      if (!detail?.nodeId || !detail.handleId) return;
+      const sourceNode = findNodeById(detail.nodeId, nodes);
+      if (!sourceNode) return;
+
+      const sourceType = (sourceNode.type ?? sourceNode.data.type) as NodeType;
+      const subflowHasOutgoing = sourceType === 'subflow' && edges.some(edge => {
+        const data = edge.data as { edgeType?: string; bidirectional?: boolean } | undefined;
+        if (data?.edgeType === 'mcp' || data?.edgeType === 'resource') return false;
+        return edge.source === sourceNode.id
+          || (edge.target === sourceNode.id && !!data?.bidirectional);
+      });
+      if (subflowHasOutgoing) return;
+
+      const measured = (sourceNode as { measured?: { width?: number; height?: number } }).measured;
+      const width = measured?.width ?? 210;
+      const height = measured?.height ?? 90;
+      const gap = 120;
+      const nextNodeWidth = 210;
+      const nextNodeHeight = 90;
+      let position = { x: sourceNode.position.x, y: sourceNode.position.y + height + gap };
+      if (detail.side === 'top') {
+        position = { x: sourceNode.position.x, y: sourceNode.position.y - nextNodeHeight - gap };
+      } else if (detail.side === 'right') {
+        position = { x: sourceNode.position.x + width + gap, y: sourceNode.position.y };
+      } else if (detail.side === 'left') {
+        position = { x: sourceNode.position.x - nextNodeWidth - gap, y: sourceNode.position.y };
+      }
+
+      setNodeSelectionModal({
+        open: true,
+        position,
+        screenPosition: { x: detail.clientX, y: detail.clientY },
+        sourceNodeId: sourceNode.id,
+        sourceNodeType: sourceType,
+        sourceHandleId: detail.handleId,
+      });
+    };
+
+    document.addEventListener(FLOW_QUICK_CONNECT_EVENT, handleQuickConnect);
+    return () => document.removeEventListener(FLOW_QUICK_CONNECT_EVENT, handleQuickConnect);
+  }, [edges, nodes]);
 
   // Enhanced onConnect handler with edge type determination and validation.
   // A new edge replaces any edge it logically duplicates (one MCP connection
@@ -1059,6 +1122,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         // re-imposed by isValidConnection, which defers to the shared
         // connection rules.
         connectionMode={ConnectionMode.Loose}
+        connectionRadius={isCompactCanvas ? 44 : 30}
         isValidConnection={isValidConnection}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
@@ -1089,7 +1153,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         // overlaps the handles at the endpoints, making stray clicks easy.
         connectOnClick={false}
       >
-        <CanvasControls />
+        <CanvasControls showMiniMap={!isCompactCanvas} />
       </ReactFlow>
 
       <ContextMenu

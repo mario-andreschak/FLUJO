@@ -65,7 +65,7 @@ function orderedExecutionNodes(flow: Flow): FlowNode[] {
 
 function describeInputMode(mode: unknown): string {
   if (mode === 'isolated') return 'runs with an isolated authored/caller-supplied prompt, without parent history';
-  if (mode === 'latest-message') return 'receives only the latest user message';
+  if (mode === 'latest-message') return 'receives the latest user/assistant exchange';
   return 'receives the full conversation history';
 }
 
@@ -81,9 +81,13 @@ function describeSubflow(node: FlowNode, flowsById: Map<string, Flow>): string[]
   if (names.length > 0) lines.push(`Invokes ${names.join(', ')}; it ${describeInputMode(props.inputMode)}.`);
   else lines.push('Its target is selected dynamically at runtime or is currently unresolved.');
 
-  if (props.allowCallerFanout) {
-    lines.push('An upstream routing model may call this handoff several times with different task briefs, spawning parallel child runs.');
-  } else if (Array.isArray(props.spawnBriefs) && props.spawnBriefs.length > 0) {
+  const concurrency = typeof props.concurrencyLimit === 'number'
+    ? Math.max(1, Math.floor(props.concurrencyLimit))
+    : 4;
+  lines.push(`Each visit is an ordered child-job queue with at most ${concurrency} active ${concurrency === 1 ? 'child' : 'children'}; additional jobs wait until a worker is available.`);
+  lines.push('An upstream routing model may call this Subflow handoff any number of times, adding one optionally briefed job per call.');
+
+  if (Array.isArray(props.spawnBriefs) && props.spawnBriefs.length > 0) {
     lines.push(`It starts ${props.spawnBriefs.length} parallel child run(s), one per authored brief.`);
   } else if (text(props.parallelSubflowIdsVar)) {
     lines.push(`The child-flow list may be chosen dynamically from run variable \`${text(props.parallelSubflowIdsVar)}\`; those children run in parallel.`);
@@ -92,7 +96,7 @@ function describeSubflow(node: FlowNode, flowsById: Map<string, Flow>): string[]
   } else if (props.mapOverList) {
     lines.push(`It invokes the child once per ${props.itemSplit === 'lines' ? 'non-empty input line' : 'item in a JSON array'}, ${props.sequential ? 'sequentially' : `with bounded concurrency${props.concurrencyLimit ? ` (${props.concurrencyLimit})` : ''}`}, then joins the outputs.`);
   } else {
-    lines.push('The referenced flow runs as a child and its result is folded back into the parent run.');
+    lines.push('The referenced flow runs once for each queued job and the ordered results are folded back into the parent run.');
   }
   if (props.outputMode === 'final-only') lines.push('Only the child’s final output is shown in the parent; intermediate child steps are hidden.');
   if (props.saveConversation === false) lines.push('Child runs are ephemeral and do not create separate saved conversations.');

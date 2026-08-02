@@ -1,4 +1,3 @@
-// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { Flow, FlowNode, HistoryEntry } from '@/shared/types/flow';
 import { 
@@ -58,11 +57,9 @@ function stripNonPersistedProperties(flow: Flow): void {
 // worked. Same reasoning as SchedulerService's `global.__flujo_scheduler` and the
 // MCP service's global recovery maps.
 declare global {
-  // eslint-disable-next-line no-var
   var __flujo_flowsCache: Flow[] | null | undefined;
   // One-shot promise guarding the legacy-file -> per-flow-file migration so it
   // runs at most once per process (idempotent even if it somehow ran twice).
-  // eslint-disable-next-line no-var
   var __flujo_flowsMigration: Promise<void> | undefined;
 }
 

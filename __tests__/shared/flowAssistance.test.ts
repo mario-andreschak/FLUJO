@@ -84,7 +84,7 @@ describe('flow assistance', () => {
     expect(result.patches).toHaveLength(1);
   });
 
-  it('classifies a bidirectional Process/Subflow connection as a prompt-driven parallel sub-agent', () => {
+  it('classifies a bidirectional Process/Subflow connection as a queue-backed sub-agent', () => {
     const flow = processFlow();
     flow.nodes.splice(2, 0, {
       id: 'child',
@@ -102,9 +102,9 @@ describe('flow assistance', () => {
     expect(props).toEqual(expect.objectContaining({
       inputMode: 'isolated',
       outputMode: 'final-only',
-      allowCallerPrompt: true,
-      allowCallerFanout: true,
     }));
+    expect(props).not.toHaveProperty('allowCallerPrompt');
+    expect(props).not.toHaveProperty('allowCallerFanout');
     expect(props?.promptTemplate).toBeUndefined();
   });
 

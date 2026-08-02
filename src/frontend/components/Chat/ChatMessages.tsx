@@ -394,6 +394,8 @@ const ToolResultView: React.FC<{ content: unknown; showRaw: boolean }> = ({ cont
                     return <ReactMarkdown key={index} remarkPlugins={[remarkGfm]}>{item.text}</ReactMarkdown>;
                   } else if (item.type === 'image' && item.data && item.mimeType) {
                     return (
+                      // MCP tool images are data URLs, which the Next image optimizer does not support.
+                      // eslint-disable-next-line @next/next/no-img-element
                       <img
                         key={index}
                         src={`data:${item.mimeType};base64,${item.data}`}
@@ -884,6 +886,8 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
                   }
                   if (part?.type === 'image_url' && part.image_url?.url) {
                     return (
+                      // Provider image URLs may be data URLs and cannot be statically optimized.
+                      // eslint-disable-next-line @next/next/no-img-element
                       <img
                         key={partIndex}
                         src={part.image_url.url}
@@ -1021,6 +1025,8 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
             {message.attachments.map((attachment) => (
               attachment.type === 'image' ? (
                 <Box key={attachment.id} sx={{ mb: 0.5 }}>
+                  {/* Attachments use local data URLs, which the Next image optimizer does not support. */}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={attachment.content}
                     alt={attachment.originalName || t('chat.messages.imageAttachment')}

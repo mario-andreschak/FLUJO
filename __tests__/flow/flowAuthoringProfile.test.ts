@@ -37,6 +37,43 @@ describe('flowUsesAdvancedFeatures', () => {
     } as never)).toBe(false);
   });
 
+  it('keeps canonical Process/Subflow subagent connections in Guided mode', () => {
+    expect(flowUsesAdvancedFeatures({
+      nodes: [
+        node('process', { inputMode: 'full-history', outputMode: 'latest-message' }),
+        {
+          ...node('subflow', {
+            subflowId: 'helper-flow',
+            inputMode: 'isolated',
+            outputMode: 'final-only',
+          }),
+          id: 'helper-node',
+        },
+      ] as never,
+      edges: [{
+        id: 'call-helper',
+        source: 'process',
+        target: 'helper-node',
+        data: { edgeType: 'standard', bidirectional: true },
+      }] as never,
+    })).toBe(false);
+  });
+
+  it('still treats non-canonical bidirectional subflows as advanced', () => {
+    expect(flowUsesAdvancedFeatures({
+      nodes: [
+        node('process'),
+        { ...node('subflow', { subflowId: 'helper-flow' }), id: 'helper-node' },
+      ] as never,
+      edges: [{
+        id: 'call-helper',
+        source: 'process',
+        target: 'helper-node',
+        data: { edgeType: 'standard', bidirectional: true },
+      }] as never,
+    })).toBe(true);
+  });
+
   it.each([
     ['resource node', { nodes: [node('resource')], edges: [] }],
     ['process capture', { nodes: [node('process', { captureVariable: 'result' })], edges: [] }],

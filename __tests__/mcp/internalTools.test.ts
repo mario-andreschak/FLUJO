@@ -723,6 +723,8 @@ describe('explain_flow', () => {
     expect(explanation).toContain('# Parent Pipeline');
     expect(explanation).toContain('**Research workers** (`subflow`)');
     expect(explanation).toContain('"Research Child" (child)');
+    expect(explanation).toContain('ordered child-job queue with at most 4 active children');
+    expect(explanation).toContain('call this Subflow handoff any number of times');
     expect(explanation).toContain('2 parallel child run(s)');
     expect(explanation).toContain('Only the child’s final output');
     expect(explanation).toContain('signal topic `brief-ready`');

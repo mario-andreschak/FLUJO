@@ -1,4 +1,3 @@
-// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 import { saveItem, loadItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
@@ -673,7 +672,6 @@ export class SchedulerService {
         }
         if (trigger.outputMatch?.regex) {
           try {
-            // eslint-disable-next-line no-new
             new RegExp(trigger.outputMatch.regex);
           } catch (error) {
             return `Invalid output-match regex: ${error instanceof Error ? error.message : String(error)}`;
@@ -1649,7 +1647,6 @@ export class SchedulerService {
 // must exist exactly once per process, regardless of which module instance
 // (startup hook vs API routes, dev hot reloads) asks for the service.
 declare global {
-  // eslint-disable-next-line no-var
   var __flujo_scheduler: SchedulerService | undefined;
 }
 

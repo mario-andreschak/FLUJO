@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { styled } from '@mui/material/styles';
+import { styled, useTheme } from '@mui/material/styles';
 import {
   Box,
   Button,
@@ -17,6 +17,7 @@ import {
   CircularProgress,
   FormControlLabel,
   Switch,
+  useMediaQuery,
 } from '@mui/material';
 import { createLogger } from '@/utils/logger';
 // Create a logger instance for this file
@@ -52,10 +53,12 @@ import { computeAutoLayout } from './Canvas/utils/autoLayout';
 import { migrateHandoffPills } from './utils/handoffPillMigration';
 import { Canvas } from './Canvas/index';
 import { NodePalette } from './NodePalette';
+import { getNodeTypes } from './nodeTypeCatalog';
 import { FlowValidationButton } from './FlowValidationButton';
 import InspectorPanel from './InspectorPanel';
 import type { InspectorMcpServerOption } from './InspectorMcpServers';
 import GuidedFlowComposer from './GuidedFlowComposer';
+import type { GuidedAgentConnection } from './GuidedAgentConnections';
 import FlowAssistanceDialog from './FlowAssistanceDialog';
 import ProcessNodePropertiesModal from './Modals/ProcessNodePropertiesModal';
 import MCPNodePropertiesModal from './Modals/MCPNodePropertiesModal';
@@ -94,6 +97,11 @@ import type { Model } from '@/shared/types/model';
 import type { MCPServerConfig } from '@/shared/types/mcp';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { FlowNamesContext } from './CustomNodes/flowNamesContext';
+import {
+  configureGuidedSubagentEdge,
+  configureGuidedSubagentNode,
+  getGuidedSubagentLinks,
+} from '@/utils/shared/guidedSubagents';
 
 const FlowBuilderContainer = styled(Box)(({ theme }) => ({
   display: 'flex',
@@ -194,13 +202,22 @@ const isPlaceholderGuidedName = (name: string, localizedUntitled?: string) => {
       && normalized.toLocaleLowerCase() === localizedUntitled.trim().toLocaleLowerCase());
 };
 
+const getPreferredGuidedModelId = (models: Model[]): string | null =>
+  (models.find(model => model.favorite) ?? models[0])?.id ?? null;
+
 /**
  * Guided mode is intentionally a lossless view over one linear control path.
  * Attachment edges are ignored, while branches, cycles, duplicate endpoints,
  * and disconnected control steps are handed off to the expert editor.
  */
 const analyzeGuidedGraph = (nodes: FlowNode[], edges: Edge[]) => {
-  const controlNodes = nodes.filter(node => GUIDED_CONTROL_TYPES.has(node.data.type as NodeType));
+  const subagentNodeIds = new Set(
+    getGuidedSubagentLinks(nodes, edges).map(link => link.subflowNodeId),
+  );
+  const controlNodes = nodes.filter(node =>
+    GUIDED_CONTROL_TYPES.has(node.data.type as NodeType)
+    && !subagentNodeIds.has(node.id)
+  );
   const controlNodeIds = new Set(controlNodes.map(node => node.id));
   const controlEdges = edges.filter(edge =>
     controlNodeIds.has(edge.source)
@@ -243,12 +260,14 @@ const analyzeGuidedGraph = (nodes: FlowNode[], edges: Edge[]) => {
   }
 
   unsafe ||= controlNodes.length === 0 || visited.size !== controlNodes.length;
-  return { unsafe, orderedNodeIds };
+  return { unsafe, orderedNodeIds, subagentNodeIds };
 };
 
 export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>(({ initialFlow, onSave, onDelete, onConversionCommitted, allFlows, relatedDraftFlows = [], onRelatedDraftFlowsChange, isDraft = false, onTry, onNavigateToFlow }, ref) => {
   log.debug('FlowBuilder rendered with initialFlow:', initialFlow);
   const { t, tp, formatList } = useI18n();
+  const theme = useTheme();
+  const isMobileBuilder = useMediaQuery(theme.breakpoints.down('md'), { noSsr: true });
 
   const [nodes, setNodes] = useState<FlowNode[]>(initialFlow?.nodes || []);
   // Initialize with the *filtered* edges (same rule the init effect applies)
@@ -344,6 +363,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   >(null);
   // Secondary toolbar actions are grouped into accessible overflow menus.
   // AI repair still reuses the Improve dialog with a pre-filled instruction.
+  const [addNodeMenuAnchor, setAddNodeMenuAnchor] = useState<null | HTMLElement>(null);
   const [moreActionsMenuAnchor, setMoreActionsMenuAnchor] = useState<null | HTMLElement>(null);
   const [improveInitialDescription, setImproveInitialDescription] = useState('');
 
@@ -389,6 +409,11 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       if (!active) return;
       setGuidedModels(models);
       setGuidedModelsLoaded(true);
+      setGuidedSelectedModelId(current =>
+        current && models.some(model => model.id === current)
+          ? current
+          : getPreferredGuidedModelId(models)
+      );
       if (models.length === 0) {
         setGuidedAiAssistance(current => current === 'unasked' ? 'manual' : current);
       }
@@ -440,13 +465,28 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setSaveStatus(isDraft ? 'unsaved' : 'saved');
     if (initialFlow) {
       const rawNodes = initialFlow.nodes || [];
-      const seededNodes = isDraft
-        ? rawNodes.map(node => ({ ...node, selected: false }))
+      // Filter out invalid edges before layout so the mobile arrangement only
+      // follows connections that can actually render.
+      const validEdges = filterInvalidEdges(initialFlow.edges || []);
+      const shouldAutoAlignForMobile = typeof window !== 'undefined'
+        && typeof window.matchMedia === 'function'
+        && window.matchMedia('(max-width: 899.95px)').matches;
+      // A phone-sized canvas is especially hard to recover when saved nodes
+      // are far apart. Treat this layout as the in-memory opening baseline so
+      // it neither creates an Undo step nor marks the untouched flow dirty.
+      const openingNodes = shouldAutoAlignForMobile
+        ? computeAutoLayout(rawNodes, validEdges, {
+            rankSep: 90,
+            nodeSep: 48,
+            mcpOffsetX: 270,
+            mcpStackY: 100,
+          })
         : rawNodes;
+      const seededNodes = isDraft
+        ? openingNodes.map(node => ({ ...node, selected: false }))
+        : openingNodes;
       setNodes(seededNodes);
       
-      // Filter out invalid edges before setting them
-      const validEdges = filterInvalidEdges(initialFlow.edges || []);
       if (validEdges.length !== initialFlow.edges.length) {
         console.warn(`Filtered out ${initialFlow.edges.length - validEdges.length} invalid edges`);
       }
@@ -1386,25 +1426,47 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   ]);
 
   const selectedNode = nodes.find(node => node.selected) ?? null;
-  const connectedInspectorMcpServers = useMemo(() => {
-    if (!selectedNode || selectedNode.data.type !== 'process') return [];
-    const connectedNodeIds = new Set(
-      edges
-        .filter(edge =>
-          (edge.data as { edgeType?: string } | undefined)?.edgeType === 'mcp'
-          && (edge.source === selectedNode.id || edge.target === selectedNode.id)
-        )
-        .map(edge => edge.source === selectedNode.id ? edge.target : edge.source),
-    );
-
-    return nodes.flatMap(node => {
-      if (!connectedNodeIds.has(node.id) || node.data.type !== 'mcp') return [];
-      const serverName = node.data.properties?.boundServer;
-      return typeof serverName === 'string' && serverName
-        ? [{ nodeId: node.id, serverName }]
-        : [];
+  const addableNodeTypes = useMemo(() => getNodeTypes(t), [t]);
+  const mcpConnectionsByProcess = useMemo(() => {
+    const result = new Map<string, Array<{ nodeId: string; serverName: string }>>();
+    const nodeById = new Map(nodes.map(node => [node.id, node]));
+    edges.forEach((edge) => {
+      if ((edge.data as { edgeType?: string } | undefined)?.edgeType !== 'mcp') return;
+      const source = nodeById.get(edge.source);
+      const target = nodeById.get(edge.target);
+      const process = source?.data.type === 'process' ? source : target?.data.type === 'process' ? target : null;
+      const mcp = source?.data.type === 'mcp' ? source : target?.data.type === 'mcp' ? target : null;
+      const serverName = mcp?.data.properties?.boundServer;
+      if (!process || !mcp || typeof serverName !== 'string' || !serverName) return;
+      result.set(process.id, [
+        ...(result.get(process.id) ?? []),
+        { nodeId: mcp.id, serverName },
+      ]);
     });
-  }, [edges, nodes, selectedNode]);
+    return result;
+  }, [edges, nodes]);
+  const connectedInspectorMcpServers = selectedNode?.data.type === 'process'
+    ? mcpConnectionsByProcess.get(selectedNode.id) ?? []
+    : [];
+  const agentConnectionsByProcess = useMemo(() => {
+    const result = new Map<string, GuidedAgentConnection[]>();
+    const nodeById = new Map(nodes.map(node => [node.id, node]));
+    const flowNameById = new Map(allFlows.map(flow => [flow.id, flow.name]));
+    getGuidedSubagentLinks(nodes, edges).forEach((link) => {
+      const subflowNode = nodeById.get(link.subflowNodeId);
+      const flowId = subflowNode?.data.properties?.subflowId;
+      if (typeof flowId !== 'string' || !flowId) return;
+      result.set(link.processNodeId, [
+        ...(result.get(link.processNodeId) ?? []),
+        {
+          nodeId: link.subflowNodeId,
+          flowId,
+          flowName: flowNameById.get(flowId) ?? subflowNode?.data.label ?? flowId,
+        },
+      ]);
+    });
+    return result;
+  }, [allFlows, edges, nodes]);
   const hasGuidedTask = nodes.some(node => ['process', 'subflow'].includes(node.data.type));
   const guidedModelsReady = nodes
     .filter(node => node.data.type === 'process')
@@ -1581,6 +1643,66 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     log.info(`Removed MCP node ${mcpNodeId} from process node ${processNodeId}`);
   }, [edges]);
 
+  const handleConnectGuidedAgent = useCallback((processNodeId: string, childFlowId: string) => {
+    const processNode = nodes.find(node => node.id === processNodeId && node.data.type === 'process');
+    const childFlow = allFlows.find(flow => flow.id === childFlowId);
+    const currentFlowId = initialFlow?.id ?? fallbackFlowId.current;
+    if (!processNode || !childFlow || childFlow.id === currentFlowId) return;
+
+    const nodeById = new Map(nodes.map(node => [node.id, node]));
+    const links = getGuidedSubagentLinks(nodes, edges);
+    const duplicate = links.some(link =>
+      link.processNodeId === processNodeId
+      && nodeById.get(link.subflowNodeId)?.data.properties?.subflowId === childFlowId
+    );
+    if (duplicate) return;
+
+    const connectionCount = links.filter(link => link.processNodeId === processNodeId).length;
+    const preparedNode = flowService.createNode('subflow', {
+      // Apps already occupy the right attachment lane in Expert view. Keep
+      // callable agents on the left so switching editors never reveals a stack
+      // of overlapping hidden nodes.
+      x: processNode.position.x - 350,
+      y: processNode.position.y + connectionCount * 150,
+    });
+    const subagentNode = configureGuidedSubagentNode(preparedNode, childFlow);
+    const connection = {
+      source: processNodeId,
+      sourceHandle: 'process-bottom',
+      target: subagentNode.id,
+      targetHandle: defaultTargetHandleFor('subflow', 'process-bottom'),
+    };
+    if (!validateConnection(connection, [...nodes, subagentNode], edges)) return;
+    const edge = configureGuidedSubagentEdge(
+      createEdgeFromConnection(connection, [...nodes, subagentNode]),
+    );
+
+    setNodes(current => [...current, subagentNode]);
+    setEdges(current => [...current, edge]);
+    log.info(`Connected agent "${childFlow.name}" to process node ${processNodeId}`);
+  }, [allFlows, edges, initialFlow?.id, nodes]);
+
+  const handleRemoveGuidedAgent = useCallback((processNodeId: string, subflowNodeId: string) => {
+    const isTargetConnection = (edge: Edge) => {
+      const bidirectional = (edge.data as { bidirectional?: boolean } | undefined)?.bidirectional === true;
+      return bidirectional && (
+        (edge.source === processNodeId && edge.target === subflowNodeId)
+        || (edge.source === subflowNodeId && edge.target === processNodeId)
+      );
+    };
+    if (!edges.some(isTargetConnection)) return;
+
+    const remainingEdges = edges.filter(edge => !isTargetConnection(edge));
+    const subflowIsStillWired = remainingEdges.some(
+      edge => edge.source === subflowNodeId || edge.target === subflowNodeId,
+    );
+    setEdges(remainingEdges);
+    if (!subflowIsStillWired) {
+      setNodes(current => current.filter(node => node.id !== subflowNodeId));
+    }
+    log.info(`Removed agent node ${subflowNodeId} from process node ${processNodeId}`);
+  }, [edges]);
+
   const loadInspectorMcpServers = useCallback(async (): Promise<InspectorMcpServerOption[]> => {
     const result = await mcpService.loadServerConfigs();
     if (!Array.isArray(result)) {
@@ -1665,14 +1787,16 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
 
   return (
     <FlowBuilderContainer>
-      {authoringMode === 'advanced' && (
-        <NodePalette authoringMode={authoringMode} onAddNode={handleQuickAddNode} />
+      {authoringMode === 'advanced' && !isMobileBuilder && (
+        <Box sx={{ flex: '0 0 auto', height: '100%', minHeight: 0 }}>
+          <NodePalette authoringMode={authoringMode} onAddNode={handleQuickAddNode} />
+        </Box>
       )}
       <FlowNamesContext.Provider value={flowNames}>
         <ReactFlowProvider>
         <MainContent>
           <ToolbarContainer elevation={1}>
-            <Box sx={{ minWidth: 0, flex: '1 1 180px' }}>
+            <Box sx={{ minWidth: 0, flex: '1 1 180px', display: { xs: 'none', md: 'block' } }}>
               <Typography variant="subtitle2" fontWeight={850} noWrap>{flowName}</Typography>
               <Typography variant="caption" color="text.secondary">
                 {authoringMode === 'guided'
@@ -1733,12 +1857,37 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
                   variant="outlined"
                   size="small"
                   startIcon={<AddIcon />}
-                  onClick={() => handleQuickAddNode('process')}
+                  onClick={(event) => setAddNodeMenuAnchor(event.currentTarget)}
                   aria-label={t('flows.builder.addNode')}
+                  aria-controls={addNodeMenuAnchor ? 'add-node-menu' : undefined}
+                  aria-haspopup="menu"
+                  aria-expanded={addNodeMenuAnchor ? 'true' : undefined}
                   title={t('flows.builder.addNodeHelp')}
                 >
                   {t('flows.builder.addNode')}
                 </Button>
+                <Menu
+                  id="add-node-menu"
+                  anchorEl={addNodeMenuAnchor}
+                  open={!!addNodeMenuAnchor}
+                  onClose={() => setAddNodeMenuAnchor(null)}
+                  MenuListProps={{ 'aria-label': t('flows.builder.addNode') }}
+                >
+                  {addableNodeTypes.map((nodeType) => (
+                    <MenuItem
+                      key={nodeType.type}
+                      onClick={() => {
+                        setAddNodeMenuAnchor(null);
+                        handleQuickAddNode(nodeType.type);
+                      }}
+                    >
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography variant="subtitle2" fontWeight={750}>{nodeType.label}</Typography>
+                        <Typography variant="caption" color="text.secondary">{nodeType.description}</Typography>
+                      </Box>
+                    </MenuItem>
+                  ))}
+                </Menu>
 
                 <FlowValidationButton nodes={nodes} edges={edges} />
 
@@ -1923,6 +2072,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
             <GuidedFlowComposer
               nodes={nodes}
               orderedStepIds={guidedGraph.orderedNodeIds}
+              subagentNodeIds={guidedGraph.subagentNodeIds}
               selectedNodeId={selectedNode?.id}
               flowName={flowName}
               flowNameError={flowNameError}
@@ -1946,13 +2096,24 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
               selectedModelId={guidedSelectedModelId}
               onChooseAssistance={(choice) => {
                 setGuidedAiAssistance(choice);
-                if (choice === 'manual') setGuidedSelectedModelId(null);
+                setGuidedSelectedModelId(current => choice === 'manual'
+                  ? null
+                  : current ?? getPreferredGuidedModelId(guidedModels));
               }}
               onModelChange={setGuidedSelectedModelId}
               onCheckPlausibility={() => {
                 setAssistanceNodeId(null);
                 setAssistanceOpen(true);
               }}
+              currentFlowId={initialFlow?.id ?? fallbackFlowId.current}
+              availableAgents={allFlows}
+              mcpConnectionsByNode={mcpConnectionsByProcess}
+              agentConnectionsByNode={agentConnectionsByProcess}
+              onConnectMcpServer={handleConnectMcpServer}
+              onRemoveMcpServer={handleRemoveMcpServer}
+              loadMcpServers={loadInspectorMcpServers}
+              onConnectAgent={handleConnectGuidedAgent}
+              onRemoveAgent={handleRemoveGuidedAgent}
             />
           ) : (
             <Box
@@ -1966,6 +2127,11 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
                 flexDirection: 'column',
               }}
             >
+              {isMobileBuilder && (
+                <Box sx={{ mb: 1 }}>
+                  <NodePalette authoringMode={authoringMode} onAddNode={handleQuickAddNode} />
+                </Box>
+              )}
               <Canvas
                 ref={reactFlowWrapper}
                 nodes={nodes}

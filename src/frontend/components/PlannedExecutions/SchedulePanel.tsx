@@ -86,7 +86,7 @@ const SchedulePanel = ({
 }: SchedulePanelProps) => {
   const { t, formatDate } = useI18n();
   const resolvedVerb = verb ?? t('automations.schedule.runsVerb');
-  const initial = useMemo(() => presetFromCron(cronProp), []); // eslint-disable-line react-hooks/exhaustive-deps
+  const initial = useMemo(() => presetFromCron(cronProp), []);
   const [mode, setMode] = useState<PresetMode>(initial.mode);
   const [n, setN] = useState<number>(initial.n);
   const [time, setTime] = useState<string>(initial.time);
@@ -100,7 +100,6 @@ const SchedulePanel = ({
     if (cron !== cronProp) {
       onChange({ cron, timezone });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cron]);
 
   // Debounced live preview of the next fire times.

@@ -990,7 +990,6 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       const requestedDisplayMode = displayModeRef.current;
       const initialDisplayMode: McpUiDisplayMode = 'inline';
       displayModeRef.current = initialDisplayMode;
-      let bridge!: AppBridge;
       const revokeAccess = (message: string) => {
         if (
           mountGenerationRef.current !== generation
@@ -1000,7 +999,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
         setLoading(false);
         void teardown();
       };
-      bridge = new AppBridge(
+      const bridge = new AppBridge(
         makeClientShim(serverName, ownerScope, revokeAccess),
         HOST_INFO,
         {

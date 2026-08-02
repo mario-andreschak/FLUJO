@@ -38,6 +38,7 @@ jest.mock('@/frontend/components/shared/CardPickerDialog', () => ({
     emptyMessage,
     searchPlaceholder,
     items,
+    fullScreen,
   }: {
     open: boolean;
     title: string;
@@ -45,8 +46,9 @@ jest.mock('@/frontend/components/shared/CardPickerDialog', () => ({
     emptyMessage: string;
     searchPlaceholder: string;
     items: Array<{ key: string; content: ReactNode }>;
+    fullScreen?: boolean;
   }) => open ? (
-    <div role="dialog" aria-label={title}>
+    <div role="dialog" aria-label={title} data-full-screen={String(!!fullScreen)}>
       <h2>{title}</h2>
       <p>{description}</p>
       <input aria-label="Agent search" placeholder={searchPlaceholder} />
@@ -72,7 +74,7 @@ describe('Talk agent picker terminology', () => {
 
     render(<FlowSelector selectedFlowId={null} onSelectFlow={() => undefined} />);
 
-    expect(screen.getByText('Loading agents...')).toBeInTheDocument();
+    expect(screen.getByText('Loading agents…')).toBeInTheDocument();
     expect(screen.queryByText(/Loading flows/i)).not.toBeInTheDocument();
   });
 
@@ -81,7 +83,7 @@ describe('Talk agent picker terminology', () => {
 
     render(<FlowSelector selectedFlowId={null} onSelectFlow={() => undefined} />);
 
-    expect(screen.getByText('Select Agent')).toBeInTheDocument();
+    expect(screen.getByText('Select an agent')).toBeInTheDocument();
     expect(await screen.findByText('No agents available. Create an agent first.')).toBeInTheDocument();
     expect(screen.queryByText(/\bflows?\b/i)).not.toBeInTheDocument();
   });
@@ -92,11 +94,11 @@ describe('Talk agent picker terminology', () => {
     render(<FlowSelector selectedFlowId="flow-research" onSelectFlow={() => undefined} />);
 
     const openPicker = await screen.findByRole('button', { name: 'Research Agent' });
-    expect(screen.getByText('Using "Research Agent" agent for this conversation')).toBeInTheDocument();
+    expect(screen.getByText('Using “Research Agent” for this conversation')).toBeInTheDocument();
 
     fireEvent.click(openPicker);
     const dialog = screen.getByRole('dialog', { name: 'Select an agent' });
-    expect(within(dialog).getByText('Pick the agent for this conversation.')).toBeInTheDocument();
+    expect(within(dialog).getByText('Choose the agent for this conversation.')).toBeInTheDocument();
     expect(within(dialog).getByPlaceholderText('Search agents…')).toBeInTheDocument();
     expect(within(dialog).queryByText(/\bflows?\b/i)).not.toBeInTheDocument();
   });
@@ -108,5 +110,23 @@ describe('Talk agent picker terminology', () => {
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Select an agent' })).toBeInTheDocument());
     expect(screen.getByText('Select an agent for this conversation')).toBeInTheDocument();
+  });
+
+  it('uses a one-line selector and full-screen picker in compact mode', async () => {
+    mockLoadFlows.mockResolvedValue(agents);
+
+    render(
+      <FlowSelector
+        compact
+        selectedFlowId="flow-research"
+        onSelectFlow={() => undefined}
+      />,
+    );
+
+    const openPicker = await screen.findByRole('button', { name: 'Research Agent' });
+    expect(screen.queryByText('Using “Research Agent” for this conversation')).not.toBeInTheDocument();
+
+    fireEvent.click(openPicker);
+    expect(screen.getByRole('dialog', { name: 'Select an agent' })).toHaveAttribute('data-full-screen', 'true');
   });
 });

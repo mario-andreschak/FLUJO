@@ -1,6 +1,5 @@
 import { execSync, ExecSyncOptionsWithStringEncoding } from 'child_process';
 import { createLogger } from '@/utils/logger';
-// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 
 const log = createLogger('utils/mcp/directExecution');

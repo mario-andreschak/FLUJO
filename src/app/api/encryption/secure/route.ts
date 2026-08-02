@@ -15,7 +15,6 @@ import {
 import { onUnlocked } from '@/backend/init';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { createLogger } from '@/utils/logger';
-// eslint-disable-next-line import/named
 import { v4 as uuidv4 } from 'uuid';
 
 const log = createLogger('app/api/encryption/secure/route');

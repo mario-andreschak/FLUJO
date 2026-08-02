@@ -30,7 +30,6 @@ declare global {
   // Deduplicates concurrent refreshes (startup + a manual refresh click).
   // Global-backed for the same reason as __flujo_init_promise: in dev, route
   // bundles can instantiate this module more than once.
-  // eslint-disable-next-line no-var
   var __flujo_spotlight_refresh: Promise<SpotlightCache> | undefined;
 }
 

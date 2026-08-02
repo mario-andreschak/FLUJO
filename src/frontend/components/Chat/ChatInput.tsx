@@ -22,8 +22,10 @@ import {
   FormControlLabel, // Added for checkbox
   Checkbox, // Added for checkbox
   Chip,
+  Drawer,
   alpha,
   useTheme,
+  useMediaQuery,
 } from '@mui/material';
 import SendIcon from '@mui/icons-material/Send';
 import AttachFileIcon from '@mui/icons-material/AttachFile';
@@ -32,6 +34,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import CheckIcon from '@mui/icons-material/Check';
 import EditIcon from '@mui/icons-material/Edit';
+import TuneIcon from '@mui/icons-material/Tune';
 import FlowNodePicker from './FlowNodePicker';
 import { v4 as uuidv4 } from 'uuid';
 import { Attachment } from './index';
@@ -93,6 +96,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
 }) => {
   const { t } = useI18n();
   const theme = useTheme();
+  const isPhoneLayout = useMediaQuery(theme.breakpoints.down('sm'), { noSsr: true });
   const { settings, globalEnvVars } = useStorage();
   const globalNames = useMemo(
     () => Object.entries(globalEnvVars)
@@ -114,6 +118,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
   
   // Visual node picker (modal) open state.
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [mobileOptionsOpen, setMobileOptionsOpen] = useState(false);
 
   // Editing an existing message vs. composing a new one. In edit mode the text
   // and picked node come from the parent; otherwise from local state.
@@ -123,6 +128,8 @@ const ChatInput: React.FC<ChatInputProps> = ({
     availableNodes.find(n => n.id === id)?.label
     || (id ? `${id.substring(0, 6)}...` : t('chat.input.startNode'));
   const currentNodeLabel = nodeLabelFor(pickerSelectedId);
+  const hasRunOptions = !!onRequireApprovalChange || ((!!onSelectNode || isEditing) && availableNodes.length > 0);
+  const hasActiveRunOption = requireApproval || executeInDebugger || nodeOverrideActive;
   const handlePickNode = (nodeId: string | null) => {
     if (isEditing) onEditingNodeChange?.(nodeId);
     else onSelectNode?.(nodeId);
@@ -555,6 +562,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
           maxWidth: 'none',
           mx: 0,
           p: { xs: 1, sm: 1.25 },
+          pb: { xs: 'max(8px, env(safe-area-inset-bottom))', sm: 1.25 },
           display: 'flex', 
           flexDirection: 'column',
           border: `1px solid ${alpha(theme.palette.primary.main, 0.24)}`,
@@ -688,6 +696,18 @@ const ChatInput: React.FC<ChatInputProps> = ({
               )}
             </IconButton>
           </Tooltip>
+          {isPhoneLayout && hasRunOptions && (
+            <Tooltip title={t('chat.input.runOptions')}>
+              <IconButton
+                color={hasActiveRunOption ? 'primary' : 'default'}
+                onClick={() => setMobileOptionsOpen(true)}
+                aria-label={t('chat.input.runOptions')}
+                aria-haspopup="dialog"
+              >
+                <TuneIcon />
+              </IconButton>
+            </Tooltip>
+          )}
             </>
           )}
 
@@ -746,7 +766,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
         </Box> {/* End of Input area Box */}
 
         {/* Run options: current-node pill + tool approval + execute-in-debugger */}
-        {(onRequireApprovalChange || ((onSelectNode || isEditing) && availableNodes.length > 0)) && (
+        {!isPhoneLayout && hasRunOptions && (
           <Box
             sx={{
               mt: 1,
@@ -821,6 +841,80 @@ const ChatInput: React.FC<ChatInputProps> = ({
           </Box>
         )} {/* End of Checkboxes Box */}
       </Paper> {/* End of main Paper component */}
+
+      {/* Phone-only run settings: keep the composer to one row while preserving
+          every desktop option in a reachable, touch-friendly bottom sheet. */}
+      <Drawer
+        anchor="bottom"
+        open={isPhoneLayout && mobileOptionsOpen}
+        onClose={() => setMobileOptionsOpen(false)}
+        PaperProps={{
+          role: 'dialog',
+          'aria-label': t('chat.input.runOptions'),
+          sx: {
+            borderRadius: '18px 18px 0 0',
+            px: 2,
+            pt: 1.5,
+            pb: 'max(16px, env(safe-area-inset-bottom))',
+          },
+        }}
+      >
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+          <TuneIcon color="primary" />
+          <Typography variant="h6" sx={{ flex: 1 }}>{t('chat.input.runOptions')}</Typography>
+          <IconButton onClick={() => setMobileOptionsOpen(false)} aria-label={t('common.close')}>
+            <CloseIcon />
+          </IconButton>
+        </Box>
+
+        {(onSelectNode || isEditing) && availableNodes.length > 0 && (
+          <>
+            <Typography variant="overline" color="text.secondary">{t('chat.nodePicker.title')}</Typography>
+            <Chip
+              icon={<AccountTreeIcon />}
+              label={currentNodeLabel}
+              color={(isEditing || nodeOverrideActive) ? 'primary' : 'default'}
+              variant={(isEditing || nodeOverrideActive) ? 'filled' : 'outlined'}
+              onClick={() => setPickerOpen(true)}
+              disabled={isEditing ? false : disabled}
+              sx={{ alignSelf: 'flex-start', mb: 1 }}
+            />
+            <FlowNodePicker
+              open={pickerOpen}
+              flow={flow}
+              selectedNodeId={pickerSelectedId}
+              allowAutomatic={!isEditing}
+              onSelect={handlePickNode}
+              onClose={() => setPickerOpen(false)}
+            />
+          </>
+        )}
+
+        {onRequireApprovalChange && (
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={requireApproval}
+                onChange={(e) => onRequireApprovalChange(e.target.checked)}
+                disabled={disabled}
+              />
+            }
+            label={t('chat.input.requireApprovals')}
+          />
+        )}
+        {onExecuteInDebuggerChange && (
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={executeInDebugger}
+                onChange={(e) => onExecuteInDebuggerChange(e.target.checked)}
+                disabled={disabled}
+              />
+            }
+            label={t('chat.input.debugger')}
+          />
+        )}
+      </Drawer>
 
       {/* Dialog for attachment preview/editing */}
       <Dialog

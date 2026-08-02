@@ -6,7 +6,6 @@ import { StorageKey } from '@/shared/types/storage';
 import { encryptWithPassword, decryptWithPassword } from '@/utils/encryption/secure';
 import { isSecretEnvVar } from '@/utils/shared';
 import { createLogger } from '@/utils/logger';
-// eslint-disable-next-line import/named
 import { v4 } from 'uuid';
 const uuidv4 = v4;
 

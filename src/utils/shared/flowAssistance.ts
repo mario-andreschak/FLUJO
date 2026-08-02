@@ -288,9 +288,9 @@ export function analyzeFlowPlausibility(
       patchNode(
         repairedFlow,
         node,
-        { inputMode: 'isolated', outputMode: 'final-only', allowCallerPrompt: true, allowCallerFanout: true },
+        { inputMode: 'isolated', outputMode: 'final-only' },
         ['promptTemplate', 'isolatedPrompt', 'spawnBriefs'],
-        `Sub-agent "${node.data.label}" should receive only caller-provided briefs, allow parallel calls, and return only its final message.`,
+        `Sub-agent "${node.data.label}" should receive queued caller tasks and return only its final message.`,
         issues,
         patches,
       );

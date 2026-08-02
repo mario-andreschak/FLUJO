@@ -139,7 +139,6 @@ export class FlowRunEventBus {
 }
 
 declare global {
-  // eslint-disable-next-line no-var
   var __flujo_flow_run_event_bus: FlowRunEventBus | undefined;
 }
 

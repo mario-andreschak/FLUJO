@@ -313,7 +313,6 @@ const LocalServerTab: React.FC<TabProps> = ({
     setInstallCompleted(true);
     setBuildCompleted(true);
     onRun();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoTestRun, initialConfig, localConfig.name]);
 
   // Handle accordion expansion

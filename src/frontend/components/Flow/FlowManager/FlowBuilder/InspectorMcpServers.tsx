@@ -40,6 +40,7 @@ interface InspectorMcpServersProps {
   processNodeId: string;
   connections: InspectorMcpConnection[];
   beginnerMode?: boolean;
+  heading?: React.ReactNode;
   onConnect: (processNodeId: string, serverName: string) => void | Promise<void>;
   onRemove: (processNodeId: string, mcpNodeId: string) => void;
   loadServers: () => Promise<InspectorMcpServerOption[]>;
@@ -63,6 +64,7 @@ const InspectorMcpServers: React.FC<InspectorMcpServersProps> = ({
   processNodeId,
   connections,
   beginnerMode = false,
+  heading: headingOverride,
   onConnect,
   onRemove,
   loadServers,
@@ -148,9 +150,9 @@ const InspectorMcpServers: React.FC<InspectorMcpServersProps> = ({
   const pickerGroups: CardGroup<CardPickerItem>[] | null = serverPicker.groups
     ? serverPicker.groups.map(group => ({ ...group, items: group.items.map(toServerCell) }))
     : null;
-  const heading = beginnerMode
+  const heading = headingOverride ?? (beginnerMode
     ? t('flows.inspector.stepApps')
-    : t('flows.inspector.connectedMcpServers');
+    : t('flows.inspector.connectedMcpServers'));
   const addLabel = beginnerMode
     ? t('flows.inspector.addApp')
     : t('flows.inspector.addMcpServer');

@@ -322,7 +322,7 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
 }, ref) => {
   const { t } = useI18n();
   const editor = useMemo(() => withHistory(withReferencePills(withReact(createEditor()))), []);
-  const initialValue = useMemo(() => deserializeReferenceValue(value || ''), []); // eslint-disable-line react-hooks/exhaustive-deps
+  const initialValue = useMemo(() => deserializeReferenceValue(value || ''), []);
   const [activeCompletion, setActiveCompletion] = useState<ActiveCompletion | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
   const [revision, setRevision] = useState(0);
