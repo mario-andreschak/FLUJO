@@ -2,11 +2,8 @@
 
 import type { NextRequest } from 'next/server';
 
-import {
-  AI_CLI_PACKAGES,
-  buildWingetArgs,
-  POST,
-} from '@/app/api/setup/ai-cli/route';
+import { POST } from '@/app/api/setup/ai-cli/route';
+import { AI_CLI_PACKAGES, buildWingetArgs } from '@/app/api/setup/ai-cli/winget';
 
 describe('AI CLI setup route', () => {
   it('builds a non-shell WinGet invocation from an allow-listed package', () => {

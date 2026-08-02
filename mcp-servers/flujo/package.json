@@ -20,10 +20,10 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0"
+    "@modelcontextprotocol/sdk": "^1.30.0"
   },
   "devDependencies": {
-    "@types/node": "^20.17.30",
-    "typescript": "5.8.3"
+    "@types/node": "^22.20.1",
+    "typescript": "^6.0.3"
   }
 }

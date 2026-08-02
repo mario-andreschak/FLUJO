@@ -48,14 +48,6 @@ const nextConfig = {
       },
     ];
   },
-  typescript: {
-    // Ignore all TypeScript errors during build
-    ignoreBuildErrors: true,
-  },
-  eslint: {
-    // Ignore all ESLint errors during build
-    ignoreDuringBuilds: true,
-  },
   transpilePackages: [
     '@mui/material',
     '@mui/icons-material',

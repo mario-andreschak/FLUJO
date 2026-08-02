@@ -1,79 +1,70 @@
-import { dirname } from "path";
-import { fileURLToPath } from "url";
-import { FlatCompat } from "@eslint/eslintrc";
-import importPlugin from "eslint-plugin-import";
-// eslint-import-resolver-typescript doesn't have a default export
+import { defineConfig, globalIgnores } from 'eslint/config';
+import nextVitals from 'eslint-config-next/core-web-vitals';
+import nextTypescript from 'eslint-config-next/typescript';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-const compat = new FlatCompat({
-  baseDirectory: __dirname,
-});
-
-const eslintConfig = [
-  { ignores: ['mcp-servers/**/*'] },
-  // Import plugin configuration
+export default defineConfig([
+  ...nextVitals,
+  ...nextTypescript,
+  globalIgnores([
+    'mcp-servers/**/*',
+    '.next/**/*',
+    'output/**/*',
+    'userdata/**/*',
+  ]),
   {
-    plugins: {
-      import: importPlugin
-    },
-    rules: {
-      // Enable import checking rules
-      // The MCP SDK's v1 export map uses a wildcard target without a file
-      // extension. TypeScript's bundler resolver and Node resolve it correctly,
-      // but eslint-import-resolver-typescript v3 reports every supported SDK
-      // subpath as unresolved. Keep checking all other imports while TypeScript
-      // remains the source of truth for these package-export subpaths.
-      "import/no-unresolved": ["error", {
-        ignore: ["^@modelcontextprotocol/sdk/"]
-      }],
-      "import/named": "error",
-      "import/default": "error",
-      "import/namespace": "error",
-      "import/export": "error"
+    files: ['**/*.{js,jsx,ts,tsx}'],
+    languageOptions: {
+      parserOptions: {
+        ecmaVersion: 2022,
+        sourceType: 'module',
+        ecmaFeatures: { jsx: true },
+      },
     },
     settings: {
-      "import/parsers": {
-        "@typescript-eslint/parser": [".ts", ".tsx"]
+      'import/parsers': {
+        '@typescript-eslint/parser': ['.ts', '.tsx'],
       },
-      "import/resolver": {
+      'import/resolver': {
         typescript: {
           alwaysTryTypes: true,
-          project: "./tsconfig.json"
+          project: './tsconfig.json',
         },
         node: {
-          extensions: [".js", ".jsx", ".ts", ".tsx"]
-        }
-      }
-    }
-  },
-  ...compat.config({
-    extends: ['next/core-web-vitals', 'next/typescript'],
-    parser: '@typescript-eslint/parser',
-    parserOptions: {
-      project: './tsconfig.json',
-      tsconfigRootDir: __dirname,
-      ecmaVersion: 2022,
-      sourceType: 'module',
-      ecmaFeatures: {
-        jsx: true
-      }
+          extensions: ['.js', '.jsx', '.ts', '.tsx'],
+        },
+      },
     },
     rules: {
-      // Disable TypeScript-specific rules that are causing many errors
-      "@typescript-eslint/no-unused-vars": "off",
-      "@typescript-eslint/no-explicit-any": "off", // Changed from error to warning
-      "@typescript-eslint/ban-ts-comment": "off", // Changed from error to warning
-      
-      // React hooks rules that are causing warnings
-      "react-hooks/exhaustive-deps": "off",
-      
-      // Other rules
-      "react/no-unescaped-entities": "off",
-      "prefer-const": "warn"
-    }
-  })
-];
-
-export default eslintConfig;
+      // TypeScript is the source of truth for the MCP SDK's wildcard exports.
+      'import/no-unresolved': ['error', { ignore: ['^@modelcontextprotocol/sdk/'] }],
+      // TypeScript validates named type/value exports more accurately than
+      // eslint-plugin-import across modern conditional package exports.
+      'import/named': 'off',
+      'import/default': 'error',
+      'import/namespace': 'error',
+      'import/export': 'error',
+      '@typescript-eslint/no-unused-vars': 'off',
+      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/ban-ts-comment': 'off',
+      'react-hooks/exhaustive-deps': 'off',
+      // These rules target React Compiler adoption. FLUJO does not enable the
+      // compiler yet, so treat that migration separately from the Next 16 bump.
+      'react-hooks/static-components': 'off',
+      'react-hooks/use-memo': 'off',
+      'react-hooks/preserve-manual-memoization': 'off',
+      'react-hooks/incompatible-library': 'off',
+      'react-hooks/immutability': 'off',
+      'react-hooks/globals': 'off',
+      'react-hooks/refs': 'off',
+      'react-hooks/set-state-in-effect': 'off',
+      'react-hooks/error-boundaries': 'off',
+      'react-hooks/purity': 'off',
+      'react-hooks/set-state-in-render': 'off',
+      'react-hooks/unsupported-syntax': 'off',
+      'react-hooks/config': 'off',
+      'react-hooks/gating': 'off',
+      'react/no-unescaped-entities': 'off',
+      'prefer-const': 'warn',
+    },
+  },
+]);

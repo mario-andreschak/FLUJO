@@ -12,7 +12,7 @@
  */
 
 import { NextRequest } from 'next/server';
-import { middleware, config } from '@/middleware';
+import { proxy as middleware, config } from '@/proxy';
 
 /** Build a NextRequest with the given host/origin/method headers. */
 const makeRequest = (

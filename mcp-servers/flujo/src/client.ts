@@ -84,7 +84,6 @@ async function requestJson<T>(
   try {
     const response = await fetch(`${flujoBaseUrl()}${path}`, {
       ...init,
-      cache: 'no-store',
       signal: controller.signal,
       headers: {
         accept: 'application/json',

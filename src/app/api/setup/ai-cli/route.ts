@@ -3,30 +3,11 @@ import { NextRequest } from 'next/server';
 
 import { createNdjsonStreamResponse } from '@/backend/utils/ndjsonStream';
 import { createLogger } from '@/utils/logger';
+import { AI_CLI_PACKAGES, buildWingetArgs, type AiCliTool } from './winget';
 
 const log = createLogger('app/api/setup/ai-cli/route');
 
 export const runtime = 'nodejs';
-
-export const AI_CLI_PACKAGES = {
-  claude: { id: 'Anthropic.ClaudeCode', label: 'Claude Code' },
-  codex: { id: 'OpenAI.Codex', label: 'Codex CLI' },
-  ollama: { id: 'Ollama.Ollama', label: 'Ollama' },
-} as const;
-
-type AiCliTool = keyof typeof AI_CLI_PACKAGES;
-
-export function buildWingetArgs(tool: AiCliTool): string[] {
-  return [
-    'install',
-    '--id', AI_CLI_PACKAGES[tool].id,
-    '-e',
-    '--source', 'winget',
-    '--accept-source-agreements',
-    '--accept-package-agreements',
-    '--silent',
-  ];
-}
 
 /**
  * Installs one of three explicitly allow-listed AI runtimes. The request never

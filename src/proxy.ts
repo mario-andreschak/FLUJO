@@ -14,7 +14,7 @@ import { isPublicApiPath, isPublicOpenAiPath } from '@/utils/http/publicApiAllow
  * and still left routes unguarded (`/api/encryption/secure`,
  * `/api/local-models/*`).
  *
- * This middleware makes the guard SECURE-BY-DEFAULT: it runs the same pure
+ * This proxy makes the guard SECURE-BY-DEFAULT: it runs the same pure
  * `isLocalRequest(host, origin)` check against EVERY `/api/:path*` and
  * `/v1/:path*` request and returns 403 unless the request is local. The only
  * exceptions are the small, explicit, reviewed sets of intentionally-public
@@ -27,16 +27,15 @@ import { isPublicApiPath, isPublicOpenAiPath } from '@/utils/http/publicApiAllow
  * breakpoints) is now guarded centrally (#143). The highest-risk handlers
  * additionally keep their in-handler `assertLocalRequest` as defense-in-depth.
  *
- * Runtime: middleware runs on the Edge runtime. It only reads the Host/Origin
- * headers and calls the pure `isLocalRequest` (no Node-only APIs), so it is
- * Edge-safe. `NextResponse` is Edge-compatible.
+ * It only reads the Host/Origin headers and calls the pure `isLocalRequest`
+ * helper, so it is safe in Next's proxy runtime.
  *
  * OPTIONS/preflight: CORS preflight requests carry no credentials or body and
  * cannot themselves reach a sink, so we let `OPTIONS` pass through to avoid
  * confusing browser errors; the actual (non-OPTIONS) method is still blocked for
  * non-local callers, and CORS headers are tightened in `next.config.mjs`.
  */
-export function middleware(request: NextRequest): NextResponse {
+export function proxy(request: NextRequest): NextResponse {
   // Let CORS preflight through; the real request is still guarded below.
   if (request.method === 'OPTIONS') {
     return NextResponse.next();
@@ -65,7 +64,7 @@ export function middleware(request: NextRequest): NextResponse {
   return NextResponse.next();
 }
 
-/** Scope the middleware to the `/api` and `/v1` surfaces (see matcher-scope note
+/** Scope the proxy to the `/api` and `/v1` surfaces (see matcher-scope note
  * in `publicApiAllowlist.ts`). `/v1/:path*` is guarded too (#143), with only the
  * public OpenAI endpoints allow-listed via `isPublicOpenAiPath`. `/mcp-proxy/*`
  * and `/mcp-flows` are intentionally NOT matched here (they keep their inline

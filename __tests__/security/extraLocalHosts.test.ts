@@ -13,7 +13,7 @@
 
 import { NextRequest } from 'next/server';
 import { isLocalRequest } from '@/utils/http/localRequest';
-import { middleware } from '@/middleware';
+import { proxy as middleware } from '@/proxy';
 
 const ENV = 'FLUJO_EXTRA_LOCAL_HOSTS';
 const savedEnv = process.env[ENV];
