@@ -224,6 +224,25 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
             {t('chat.live.stop')}
           </Button>
         </Box>
+        {!awaitingApproval && (
+          <Typography
+            data-testid="compact-working-message"
+            variant="body2"
+            color="text.primary"
+            aria-live="polite"
+            sx={{
+              px: 1.5,
+              pb: 0.75,
+              fontSize: '0.8125rem',
+              fontWeight: 500,
+              lineHeight: 1.35,
+              textAlign: 'center',
+              overflowWrap: 'anywhere',
+            }}
+          >
+            {workingMessage}
+          </Typography>
+        )}
         {summary && (
           <Collapse in={compactExpanded} unmountOnExit>
             <Box sx={{ px: 1, pb: 1 }}>
@@ -281,9 +300,20 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
       </Box>
       {!awaitingApproval && (
         <Typography
-          variant="caption"
-          color="text.disabled"
-          sx={{ fontStyle: 'italic' }}
+          variant="body2"
+          color="text.primary"
+          sx={{
+            maxWidth: 680,
+            px: 2,
+            py: 0.5,
+            borderRadius: 1,
+            bgcolor: 'action.hover',
+            fontSize: '0.875rem',
+            fontWeight: 500,
+            lineHeight: 1.45,
+            textAlign: 'center',
+            overflowWrap: 'anywhere',
+          }}
           aria-live="polite"
         >
           {workingMessage}

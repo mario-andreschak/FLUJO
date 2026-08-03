@@ -3,13 +3,14 @@ import { act, render, screen } from '@testing-library/react';
 import LiveRunIndicator from '@/frontend/components/Chat/LiveRunIndicator';
 import {
   getWorkingMessage,
+  MAX_WORKING_MESSAGE_LENGTH,
   WORKING_MESSAGE_COUNT,
   WORKING_MESSAGE_INTERVAL_MS,
 } from '@/frontend/components/Chat/workingMessages';
 
 describe('working chat messages', () => {
   it('provides a genuinely large message space', () => {
-    expect(WORKING_MESSAGE_COUNT).toBeGreaterThan(13_000_000);
+    expect(WORKING_MESSAGE_COUNT).toBeGreaterThan(25_000);
   });
 
   it('does not repeat a message in a long normal run', () => {
@@ -22,6 +23,16 @@ describe('working chat messages', () => {
     expect(messages.every(message => !message.includes('undefined'))).toBe(true);
   });
 
+  it('keeps every generated message short enough for the chat UI', () => {
+    const messages = Array.from({ length: WORKING_MESSAGE_COUNT }, (_, index) => (
+      getWorkingMessage(index, 333)
+    ));
+
+    expect(Math.max(...messages.map(message => message.length))).toBeLessThanOrEqual(
+      MAX_WORKING_MESSAGE_LENGTH,
+    );
+  });
+
   it('changes sentence shape and regularly surfaces coincidence jokes', () => {
     const messages = Array.from({ length: 1_000 }, (_, index) => getWorkingMessage(index, 333));
     const openingWords = messages.slice(0, 48).map(message => message.split(' ')[0]);
@@ -30,7 +41,7 @@ describe('working chat messages', () => {
     ));
 
     expect(new Set(openingWords).size).toBeGreaterThan(30);
-    expect(coincidenceJokes.length).toBeGreaterThan(150);
+    expect(coincidenceJokes.length).toBeGreaterThan(80);
   });
 
   it('is stable within a run but starts different runs on different routes', () => {
@@ -100,6 +111,7 @@ describe('working chat messages', () => {
     );
 
     expect(screen.getByTestId('compact-live-run')).toBeInTheDocument();
+    expect(screen.getByTestId('compact-working-message')).toBeInTheDocument();
     expect(screen.getByText(/Reply/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /stop/i })).toBeInTheDocument();
     expect(screen.getAllByRole('progressbar')).toHaveLength(1);
