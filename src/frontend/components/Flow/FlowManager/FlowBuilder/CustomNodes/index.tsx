@@ -146,9 +146,9 @@ interface QuickConnectHandle {
   anchor?: string;
 }
 
-// Only handles that can create a valid new neighbor get a quick-connect arrow.
-// Target-only flow handles stay drag targets; MCP handles are intentionally
-// included because MCP wiring is non-directional in the connection rules.
+// Only handles that can create a valid new neighbor get a quick-connect control.
+// Target-only flow handles stay drag targets, and MCP nodes themselves never
+// offer add-and-connect controls.
 const QUICK_CONNECT_HANDLES: Record<NodeType, QuickConnectHandle[]> = {
   start: [{ handleId: 'start-bottom', side: 'bottom' }],
   process: [
