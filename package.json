@@ -73,7 +73,7 @@
     "jszip": "^3.10.1",
     "lodash": "^4.18.1",
     "mcp-remote": "^0.1.38",
-    "mcp-stdio-oauth": "https://github.com/flujo-app/mcp-stdio-oauth/releases/download/v0.1.0/mcp-stdio-oauth-0.1.0.tgz",
+    "mcp-stdio-oauth": "^0.1.0",
     "next": "^16.2.12",
     "node-fetch": "^3.3.2",
     "openai": "^7.3.0",
