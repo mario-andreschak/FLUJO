@@ -46,7 +46,11 @@ writeJson(lockPath, lock);
 const targets = [
   {
     file: 'src/backend/services/mcp/connection.ts',
-    pattern: /(version: ')\d+\.\d+\.\d+(')/,
+    pattern: /(version:\s*["'])\d+\.\d+\.\d+(["'])/,
+  },
+  {
+    file: 'src/backend/services/mcp/betaClient.ts',
+    pattern: /(version:\s*["'])\d+\.\d+\.\d+(["'])/,
   },
   {
     file: 'src/app/mcp-proxy/[server]/route.ts',
