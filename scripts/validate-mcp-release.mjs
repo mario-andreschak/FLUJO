@@ -82,6 +82,12 @@ for (const entry of packages) {
 }
 
 const rootFiles = packedFiles('.');
+for (const forbiddenPrefix of ['.next/cache/', '.next/dev/']) {
+  const forbidden = [...rootFiles].find((file) => file.startsWith(forbiddenPrefix));
+  if (forbidden) {
+    fail(`flujo-ai tarball includes development artifact ${forbidden}`);
+  }
+}
 for (const required of [
   'package.json',
   'bin/flujo.mjs',
