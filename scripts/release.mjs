@@ -9,8 +9,9 @@
 // Publishing comes before pushing. The standalone MCP packages are
 // published first at the exact flujo-ai version, then the application package.
 // A failed npm publish cannot create a GitHub release or advance the official
-// container image. Once npm succeeds, pushing main rebuilds the image and the
-// version tag builds flujo-setup.exe and creates the GitHub release.
+// container image. Once npm succeeds, the release explicitly dispatches the
+// image build; the version tag builds flujo-setup.exe and creates the GitHub
+// release.
 
 import { execSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -40,7 +41,7 @@ async function waitForWorkflow(workflow, sha, label) {
   for (let i = 0; i < 24 && !runId; i += 1) {
     try {
       runId = run(
-        `gh run list -R ${githubRepo} --workflow=${workflow} --commit ${sha} --event push --limit 1 --json databaseId --jq ".[0].databaseId"`,
+        `gh run list -R ${githubRepo} --workflow=${workflow} --commit ${sha} --event workflow_dispatch --limit 1 --json databaseId --jq ".[0].databaseId"`,
       );
     } catch { /* run not visible yet */ }
     if (!runId) await sleep(5000);
@@ -156,6 +157,13 @@ try {
 }
 
 const releaseSha = run('git rev-parse HEAD');
+try {
+  show('npm run dockerbuild');
+} catch {
+  fail(
+    `npm package ${version} and its Git refs were published, but the container build could not be dispatched. Run "npm run dockerbuild" to retry.`,
+  );
+}
 await waitForWorkflow('publish-image.yml', releaseSha, `the FLUJO ${version} container build`);
 
 console.log(`\nReleased FLUJO ${version}:`);

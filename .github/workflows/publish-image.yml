@@ -2,16 +2,15 @@ name: Publish Docker Image
 
 # Builds the official FLUJO image and pushes it to GHCR as
 # ghcr.io/mario-andreschak/flujo (issue #57). Consumers like the brain stack
-# reference :latest; every push to main also gets the package.json version and
-# a commit-sha tag for pinning.
+# reference :latest. The workflow is dispatched explicitly by `npm run release`
+# or `npm run dockerbuild`; builds from main also get the package.json version
+# and a commit-sha tag for pinning.
 #
 # NOTE: the first published package is PRIVATE by default. Make it public once
 # under https://github.com/users/mario-andreschak/packages/container/flujo/settings
 # or anonymous `docker pull` keeps failing with "denied".
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 concurrency:
