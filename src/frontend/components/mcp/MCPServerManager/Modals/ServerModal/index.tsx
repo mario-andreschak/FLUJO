@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { ServerModalProps } from './types';
+import { ServerModalProps, type ServerSetupTab } from './types';
 import { MCPServerConfig } from '@/utils/mcp/';
 import GitHubTab from './tabs/GitHubTab';
 import LocalServerTab from './tabs/LocalServerTab';
@@ -30,12 +30,13 @@ const ServerModal: React.FC<ServerModalProps> = ({
   onClose,
   onAdd,
   initialConfig,
+  initialTab = 'spotlight',
   onUpdate,
   onRestartAfterUpdate,
   onSaveAndAuthenticate
 }) => {
   const { t } = useI18n();
-  const [activeTab, setActiveTab] = useState<'spotlight' | 'marketplace' | 'github' | 'local' | 'reference' | 'remote'>('spotlight');
+  const [activeTab, setActiveTab] = useState<ServerSetupTab>(initialTab);
   
   // Store parsed configuration from GitHub tab
   const [parsedConfig, setParsedConfig] = useState<MCPServerConfig | null>(null);
@@ -70,9 +71,15 @@ const ServerModal: React.FC<ServerModalProps> = ({
     }
   }, [activeTab, initialConfig, initializedTabs]);
 
+  // Each wizard route opens the existing setup experience at the relevant
+  // destination. Re-apply it on open so a previous visit never leaks through.
+  useEffect(() => {
+    if (isOpen && !initialConfig) setActiveTab(initialTab);
+  }, [initialConfig, initialTab, isOpen]);
+
   const { getThemeValue } = useThemeUtils();
   
-  const handleTabChange = (event: React.SyntheticEvent, newValue: 'spotlight' | 'marketplace' | 'github' | 'local' | 'reference' | 'remote') => {
+  const handleTabChange = (event: React.SyntheticEvent, newValue: ServerSetupTab) => {
     // A manual tab change is not a marketplace handoff — don't re-trigger the auto run
     // or keep a stale GitHub-URL prefill around
     setAutoTestRun(false);

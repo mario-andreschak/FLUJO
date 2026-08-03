@@ -102,6 +102,7 @@ export async function GET(request: NextRequest) {
   const url = new URL(request.url);
   const rawSearch = (url.searchParams.get('search') ?? '').trim();
   const dimension = url.searchParams.get('dimension') ?? 'title';
+  const presenceOnly = url.searchParams.get('presence') === '1';
   if (rawSearch.length > MAX_SEARCH_TERM_LEN) {
     return NextResponse.json(
       { error: `search term too long (max ${MAX_SEARCH_TERM_LEN} chars)` },
@@ -119,6 +120,12 @@ export async function GET(request: NextRequest) {
 
     const jsonFiles = files.filter(file => file.endsWith('.json'));
     log.debug(`Found ${jsonFiles.length} JSON files`, { requestId });
+
+    // The dashboard only needs to know whether saved chats exist. Avoid reading
+    // and projecting every conversation file for that lightweight status check.
+    if (presenceOnly) {
+      return NextResponse.json({ count: jsonFiles.length });
+    }
 
     const conversationPromises = jsonFiles.map(async (file): Promise<ConversationListItem | null> => {
       const filePath = path.join(conversationsDir, file);

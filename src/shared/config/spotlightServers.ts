@@ -37,7 +37,22 @@ export const SPOTLIGHT_SERVERS: (string | SpotlightSource)[] = [
     // download; Edge ships with Windows, so default to it for a
     // friction-free one-click install. Editable after install.
     env: { PLAYWRIGHT_MCP_BROWSER: 'msedge' }
-  }
+  },
+  
+  {
+    url: 'https://registry.modelcontextprotocol.io/v0.1/servers/io.github.dosev-ai%2Fmcp-office-word/versions/',
+    env: { WORD_ALLOWLIST_ROOTS: '.', WORD_ENABLE_WRITE: 'true' }
+  },
+  {
+    url: 'https://registry.modelcontextprotocol.io/v0.1/servers/io.github.dosev-ai%2Fmcp-office-excel/versions/',
+    env: { EXCEL_ALLOWLIST_ROOTS: '.', EXCEL_ENABLE_WRITE: 'true' }
+  },
+  {
+    url: 'https://registry.modelcontextprotocol.io/v0.1/servers/io.github.dosev-ai%2Fmcp-office-powerpoint/versions/',
+    env: { PPT_ALLOWLIST_ROOTS: '.', PPT_ENABLE_WRITE: 'true' }
+  },
+  
+  
   // Up-to-date library docs for any prompt
   // 'https://registry.modelcontextprotocol.io/?q=io.github.upstash%2Fcontext7',
   // Exa web search & crawling

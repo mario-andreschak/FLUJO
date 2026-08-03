@@ -57,6 +57,15 @@ afterEach(async () => {
 });
 
 describe('GET /v1/chat/conversations content search (issue #182)', () => {
+  it('returns a lightweight presence count without parsing conversation bodies', async () => {
+    await fs.writeFile(path.join(convDir, 'one.json'), '{not valid json', 'utf-8');
+    await fs.writeFile(path.join(convDir, 'ignore.txt'), 'not a conversation', 'utf-8');
+
+    const { status, body } = await getJson('?presence=1');
+    expect(status).toBe(200);
+    expect(body).toEqual({ count: 1 });
+  });
+
   it('matches against message content and returns only matching ids', async () => {
     await writeConv('hit', { title: 'Alpha', messages: [{ role: 'user', content: 'a needle in the haystack' }] });
     await writeConv('miss', { title: 'Beta', messages: [{ role: 'user', content: 'nothing relevant here' }] });

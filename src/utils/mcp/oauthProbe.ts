@@ -9,6 +9,12 @@ export interface OAuthCapabilityProbeResult {
   resourceMetadataUrl?: string;
   /** Authorization server issuer URLs from the resource metadata, when present. */
   authorizationServers?: string[];
+  /** True only when RFC 8414/OIDC metadata advertises a registration endpoint. */
+  dynamicClientRegistration?: boolean;
+  /** The advertised RFC 7591 registration endpoint, when present. */
+  registrationEndpoint?: string;
+  /** Whether the initialize probe reached an HTTP endpoint at all. */
+  reachable?: boolean;
 }
 
 const PROBE_TIMEOUT_MS = 5000;
@@ -23,7 +29,7 @@ const PROBE_TIMEOUT_MS = 5000;
  * reliably elicits the same auth challenge the real transport would hit - unlike a bare
  * GET, which many streamable endpoints answer with 405/406 and no challenge.
  */
-async function readAuthChallenge(serverUrl: string): Promise<{ bearer: boolean; resourceMetadataUrl?: string }> {
+async function readAuthChallenge(serverUrl: string): Promise<{ bearer: boolean; reachable: true; resourceMetadataUrl?: string }> {
   const res = await fetch(serverUrl, {
     method: 'POST',
     headers: {
@@ -37,7 +43,7 @@ async function readAuthChallenge(serverUrl: string): Promise<{ bearer: boolean; 
   const header = res.headers.get('www-authenticate') || '';
   const bearer = /\bbearer\b/i.test(header);
   const match = header.match(/resource_metadata\s*=\s*"([^"]+)"/i);
-  return { bearer, resourceMetadataUrl: match?.[1] };
+  return { bearer, reachable: true, resourceMetadataUrl: match?.[1] };
 }
 
 /**
@@ -64,6 +70,39 @@ async function fetchResourceMetadata(metadataUrl: string): Promise<{ authorizati
   };
 }
 
+function authorizationMetadataUrls(issuer: string): string[] {
+  try {
+    const url = new URL(issuer);
+    const issuerPath = url.pathname.replace(/\/$/, '');
+    return Array.from(new Set([
+      new URL(`/.well-known/oauth-authorization-server${issuerPath}`, url.origin).toString(),
+      new URL(`${issuerPath}/.well-known/oauth-authorization-server`, url.origin).toString(),
+      new URL(`${issuerPath}/.well-known/openid-configuration`, url.origin).toString(),
+    ]));
+  } catch {
+    return [];
+  }
+}
+
+async function findRegistrationEndpoint(issuers: string[]): Promise<string | undefined> {
+  for (const issuer of issuers) {
+    for (const metadataUrl of authorizationMetadataUrls(issuer)) {
+      try {
+        const res = await fetch(metadataUrl, {
+          headers: { accept: 'application/json' },
+          signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+        });
+        if (!res.ok) continue;
+        const data = await res.json() as { registration_endpoint?: unknown };
+        if (typeof data.registration_endpoint === 'string') return data.registration_endpoint;
+      } catch {
+        // Discovery is best effort; continue through the issuer's other standard URLs.
+      }
+    }
+  }
+  return undefined;
+}
+
 /**
  * Best-effort probe: does this remote MCP endpoint use OAuth?
  *
@@ -82,7 +121,7 @@ export async function probeOAuthSupport(serverUrl: string): Promise<OAuthCapabil
 
     const challenge = await readAuthChallenge(serverUrl).catch((err) => {
       log.debug(`readAuthChallenge failed for ${serverUrl}: ${err instanceof Error ? err.message : String(err)}`);
-      return { bearer: false, resourceMetadataUrl: undefined as string | undefined };
+      return { bearer: false, reachable: undefined as true | undefined, resourceMetadataUrl: undefined as string | undefined };
     });
 
     // Try the metadata URL the challenge advertised first, then the RFC 9728 default
@@ -94,11 +133,17 @@ export async function probeOAuthSupport(serverUrl: string): Promise<OAuthCapabil
     for (const metadataUrl of candidates) {
       const meta = await fetchResourceMetadata(metadataUrl).catch(() => undefined);
       if (meta) {
+        const authorizationServers = meta.authorizationServers ?? [origin];
+        const registrationEndpoint = await findRegistrationEndpoint(authorizationServers);
         log.info(`OAuth capability confirmed for ${serverUrl} via ${metadataUrl}`);
         return {
           oauthCapable: true,
           resourceMetadataUrl: metadataUrl,
           authorizationServers: meta.authorizationServers,
+          reachable: challenge.reachable,
+          ...(registrationEndpoint
+            ? { dynamicClientRegistration: true, registrationEndpoint }
+            : { dynamicClientRegistration: false }),
         };
       }
     }
@@ -107,11 +152,11 @@ export async function probeOAuthSupport(serverUrl: string): Promise<OAuthCapabil
     // (the SDK's auth() can still discover via RFC 8414 from the origin).
     if (challenge.bearer) {
       log.info(`OAuth capability inferred for ${serverUrl} from a Bearer challenge (no resource metadata)`);
-      return { oauthCapable: true, resourceMetadataUrl: challenge.resourceMetadataUrl };
+      return { oauthCapable: true, resourceMetadataUrl: challenge.resourceMetadataUrl, reachable: true };
     }
 
     log.debug(`No OAuth capability detected for ${serverUrl}`);
-    return { oauthCapable: false };
+    return { oauthCapable: false, ...(challenge.reachable ? { reachable: true } : {}) };
   } catch (err) {
     log.debug(`probeOAuthSupport failed for ${serverUrl}: ${err instanceof Error ? err.message : String(err)}`);
     return { oauthCapable: false };

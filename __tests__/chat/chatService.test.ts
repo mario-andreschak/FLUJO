@@ -29,6 +29,15 @@ beforeEach(() => {
 });
 
 describe('chatService REST methods', () => {
+  it('countConversations: uses the lightweight presence endpoint', async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse(200, { count: 3 }));
+
+    const result = await chatService.countConversations();
+
+    expect(fetchMock).toHaveBeenCalledWith('/v1/chat/conversations?presence=1');
+    expect(result).toBe(3);
+  });
+
   it('listConversations: GET /v1/chat/conversations', async () => {
     const list = [{ id: 'a', title: 'A', flowId: 'f', createdAt: 1, updatedAt: 2 }];
     fetchMock.mockResolvedValueOnce(makeResponse(200, list));

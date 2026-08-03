@@ -280,7 +280,7 @@ function applyArgTemplates(
  * Returns the full result (not just `.server`) so the caller can read the
  * `_meta … status` verification field.
  */
-async function resolveEntry(registryName: string): Promise<RegistryServerResult | null> {
+export async function resolveRegistryEntry(registryName: string): Promise<RegistryServerResult | null> {
   const url = new URL(REGISTRY_ORIGIN + REGISTRY_LIST_PATH);
   url.searchParams.set('version', 'latest');
   url.searchParams.set('limit', '10');
@@ -307,7 +307,7 @@ export async function installRegistryServer(
 
   let result: RegistryServerResult | null;
   try {
-    result = await resolveEntry(registryName);
+    result = await resolveRegistryEntry(registryName);
   } catch (err) {
     return { installed: false, error: `Registry lookup failed: ${err instanceof Error ? err.message : String(err)}` };
   }

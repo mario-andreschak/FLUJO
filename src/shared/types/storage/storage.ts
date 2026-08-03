@@ -115,6 +115,8 @@ export interface UpdateSettings {
 export interface OnboardingSettings {
   /** True once the user has finished or skipped the first-run guided tour. */
   completed: boolean;
+  /** Hide the completed three-card setup journey on the dashboard. */
+  dashboardCardsHidden?: boolean;
 }
 
 /**

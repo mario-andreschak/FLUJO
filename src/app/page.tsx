@@ -23,6 +23,8 @@ import {
   LockRounded,
   MemoryRounded,
   ShieldRounded,
+  VisibilityOffRounded,
+  VisibilityRounded,
 } from '@mui/icons-material';
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
@@ -31,6 +33,7 @@ import FeedbackBanner from '@/frontend/components/FeedbackBanner';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import { useTour } from '@/frontend/contexts/TourContext';
+import { chatService } from '@/frontend/services/chat';
 import { flowService } from '@/frontend/services/flow';
 import { modelService } from '@/frontend/services/model';
 import { createLogger } from '@/utils/logger';
@@ -54,13 +57,15 @@ interface WorkspaceStatus {
   /** null means the encrypted/local model store could not be checked. */
   models: number | null;
   assistants: number;
+  conversations: number;
   loading: boolean;
+  conversationsLoading: boolean;
 }
 
 export default function HomePage() {
   const theme = useTheme();
   const { t, tp } = useI18n();
-  const { settings } = useStorage();
+  const { settings, updateSettings } = useStorage();
   const { startTour } = useTour();
   const [encryptionKeySet, setEncryptionKeySet] = useState(true);
   const [isUserEncryption, setIsUserEncryption] = useState(false);
@@ -70,7 +75,9 @@ export default function HomePage() {
   const [workspaceStatus, setWorkspaceStatus] = useState<WorkspaceStatus>({
     models: null,
     assistants: 0,
+    conversations: 0,
     loading: true,
+    conversationsLoading: true,
   });
   const updateChecked = useRef(false);
 
@@ -78,12 +85,27 @@ export default function HomePage() {
     let active = true;
     void Promise.allSettled([modelService.tryLoadModels(), flowService.loadFlows()]).then(([models, flows]) => {
       if (!active) return;
-      setWorkspaceStatus({
+      setWorkspaceStatus((current) => ({
+        ...current,
         models: models.status === 'fulfilled' && models.value !== null ? models.value.length : null,
         assistants: flows.status === 'fulfilled' ? flows.value.length : 0,
         loading: false,
-      });
+      }));
     });
+    void chatService.countConversations()
+      .then((count) => {
+        if (!active) return;
+        setWorkspaceStatus((current) => ({
+          ...current,
+          conversations: count,
+          conversationsLoading: false,
+        }));
+      })
+      .catch((error) => {
+        log.warn('Conversation presence check failed', error);
+        if (!active) return;
+        setWorkspaceStatus((current) => ({ ...current, conversationsLoading: false }));
+      });
     return () => {
       active = false;
     };
@@ -180,6 +202,7 @@ export default function HomePage() {
   const aiReady = workspaceStatus.models !== null && workspaceStatus.models > 0;
   const aiCheckUnavailable = !workspaceStatus.loading && workspaceStatus.models === null;
   const assistantReady = workspaceStatus.assistants > 0;
+  const talkReady = workspaceStatus.conversations > 0;
   const setupSteps: SetupStep[] = [
     {
       id: 'ai',
@@ -217,13 +240,42 @@ export default function HomePage() {
       title: t('home.talk.title'),
       description: t('home.talk.description'),
       icon: ChatBubbleRounded,
-      complete: false,
+      complete: talkReady,
       available: aiReady && assistantReady,
-      status: !aiReady ? t('home.afterAi') : assistantReady ? t('home.ready') : t('home.afterAgent'),
+      status: workspaceStatus.conversationsLoading
+        ? t('home.checking')
+        : talkReady
+        ? t('home.completed')
+        : !aiReady
+          ? t('home.afterAi')
+          : assistantReady
+            ? t('home.ready')
+            : t('home.afterAgent'),
       href: aiReady && assistantReady ? '/chat' : undefined,
       action: !aiReady ? t('home.talk.finishAi') : assistantReady ? t('home.talk.start') : t('home.talk.createFirst'),
     },
   ];
+  const setupComplete = setupSteps.every((step) => step.complete);
+  const setupCardsHidden = settings.onboarding?.dashboardCardsHidden === true;
+  const showSetupCards = !setupCardsHidden || !setupComplete;
+
+  const setSetupCardsHidden = (hidden: boolean) => {
+    void updateSettings({
+      ...settings,
+      onboarding: {
+        ...(settings.onboarding ?? {}),
+        completed: settings.onboarding?.completed ?? false,
+        dashboardCardsHidden: hidden,
+      },
+    });
+  };
+
+  const handleStartTour = () => {
+    if (!showSetupCards) {
+      setSetupCardsHidden(false);
+    }
+    startTour();
+  };
 
   return (
     <Container maxWidth={false} disableGutters>
@@ -281,17 +333,42 @@ export default function HomePage() {
                 {t('home.intro')}
               </Typography>
             </Box>
-            <Button variant="outlined" onClick={startTour} startIcon={<AutoAwesomeRounded />}>
-              {t('home.openGuide')}
-            </Button>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="stretch">
+              {!showSetupCards && (
+                <Button
+                  variant="text"
+                  onClick={() => setSetupCardsHidden(false)}
+                  startIcon={<VisibilityRounded />}
+                >
+                  {t('home.showSetupSteps')}
+                </Button>
+              )}
+              <Button variant="outlined" onClick={handleStartTour} startIcon={<AutoAwesomeRounded />}>
+                {t('home.openGuide')}
+              </Button>
+            </Stack>
           </Stack>
         </Box>
+
+        {setupComplete && showSetupCards && (
+          <Stack direction="row" justifyContent="flex-end" sx={{ mb: 1.5 }}>
+            <Button
+              size="small"
+              color="inherit"
+              onClick={() => setSetupCardsHidden(true)}
+              startIcon={<VisibilityOffRounded />}
+              sx={{ color: 'text.secondary' }}
+            >
+              {t('home.hideSetupSteps')}
+            </Button>
+          </Stack>
+        )}
 
         <Box
           component="section"
           aria-label={t('home.gettingStarted')}
           sx={{
-            display: 'grid',
+            display: showSetupCards ? 'grid' : 'none',
             gridTemplateColumns: { xs: '1fr', lg: 'repeat(3, minmax(0, 1fr))' },
             gap: 2,
           }}
@@ -378,6 +455,11 @@ export default function HomePage() {
                     <Button
                       component={Link}
                       href={step.href}
+                      data-tour={step.id === 'ai'
+                        ? 'manage-ai-setup'
+                        : step.id === 'assistant'
+                          ? 'dashboard-create-flow'
+                          : undefined}
                       variant={highlighted ? 'contained' : 'outlined'}
                       endIcon={<ArrowForwardRounded />}
                       fullWidth
@@ -385,7 +467,14 @@ export default function HomePage() {
                       {step.action}
                     </Button>
                   ) : (
-                    <Button variant="outlined" disabled fullWidth>{step.action}</Button>
+                    <Button
+                      variant="outlined"
+                      disabled
+                      fullWidth
+                      data-tour={step.id === 'assistant' ? 'dashboard-create-flow' : undefined}
+                    >
+                      {step.action}
+                    </Button>
                   )}
                 </Box>
               </Paper>

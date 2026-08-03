@@ -89,6 +89,16 @@ async function parse<T>(response: Response): Promise<T> {
  * issues HTTP calls inline.
  */
 class ChatService {
+  /** Cheap dashboard check that counts persisted conversation files only. */
+  async countConversations(): Promise<number> {
+    log.debug('countConversations: Entering method');
+    const response = await fetch(`${BASE}?presence=1`);
+    const result = await parse<{ count?: number }>(response);
+    return typeof result?.count === 'number' && Number.isFinite(result.count)
+      ? Math.max(0, result.count)
+      : 0;
+  }
+
   /** GET /v1/chat/conversations — list summaries (unsorted; caller sorts). */
   async listConversations(): Promise<ConversationListItem[]> {
     log.debug('listConversations: Entering method');

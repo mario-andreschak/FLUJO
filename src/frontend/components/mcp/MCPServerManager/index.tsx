@@ -3,7 +3,8 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import ServerList from './ServerList';
 import ServerModal from './Modals/ServerModal/index';
-import { SaveAndAuthenticateResult } from './Modals/ServerModal/types';
+import { SaveAndAuthenticateResult, type ServerSetupTab } from './Modals/ServerModal/types';
+import McpConnectionWizard from './McpConnectionWizard';
 import ServerDetailsModal from './ServerDetailsModal';
 import McpAppsDashboard from '../McpAppsDashboard';
 import type { ToolTesterPrefill } from '../MCPToolManager/ToolTester';
@@ -65,6 +66,7 @@ import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 import { useScrollRestoration } from '@/frontend/hooks/useScrollRestoration';
 import BackToTopButton from '@/frontend/components/shared/BackToTopButton';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useTheme as useAppTheme } from '@/frontend/contexts/ThemeContext';
 
 const log = createLogger('frontend/components/mcp/MCPServerManager');
 
@@ -95,6 +97,8 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   } = useServerStatus();
 
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showConnectionWizard, setShowConnectionWizard] = useState(false);
+  const [initialSetupTab, setInitialSetupTab] = useState<ServerSetupTab>('spotlight');
   const [editingServer, setEditingServer] = useState<MCPServerConfig | null>(null);
   // Import/export dialog + format-dropdown state.
   const [showImportModal, setShowImportModal] = useState(false);
@@ -217,6 +221,25 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   const [bulkActionDialog, setBulkActionDialog] = useState<{open: boolean; action: 'enable' | 'disable' | null}>({open: false, action: null});
   
   const theme = useTheme();
+  const { visualStyle } = useAppTheme();
+  const modern = visualStyle === 'modern';
+
+  const openServerSetup = (tab: ServerSetupTab = 'spotlight') => {
+    setShowConnectionWizard(false);
+    setEditingServer(null);
+    setInitialSetupTab(tab);
+    setShowAddModal(true);
+    onServerModalToggle?.(true);
+  };
+
+  const handleConnectApp = () => {
+    setEditingServer(null);
+    if (modern) {
+      setShowConnectionWizard(true);
+      return;
+    }
+    openServerSetup();
+  };
 
   const handleServerToggle = async (serverName: string, enabled: boolean) => {
     log.debug(`Toggling server ${serverName} to ${enabled ? 'enabled' : 'disabled'}`);
@@ -498,6 +521,33 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     }
   };
 
+  // The AI installer persists an exact, approved Registry plan on the backend. For
+  // OAuth recommendations, finish the same initiate → popup flow without saving a
+  // duplicate config from the wizard.
+  const handleAiAuthenticate = async (serverName: string): Promise<void> => {
+    const response = await fetch('/api/oauth/initiate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ serverName }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || (data.needsClientCredentials
+        ? t('mcp.ai.clientCredentialsRequired')
+        : t('mcp.server.oauthFailed')));
+    }
+    if (!data.alreadyAuthorized && data.authorizationUrl) {
+      const { openOAuthPopup } = await import('@/frontend/utils/oauth');
+      await openOAuthPopup({ url: data.authorizationUrl, windowName: `oauth_${serverName}` });
+    }
+    await retryServer(serverName);
+  };
+
+  const handleAiInstalled = async (serverName: string): Promise<void> => {
+    await retryServer(serverName);
+    setShowConnectionWizard(false);
+  };
+
   const serverGroups = useMemo<CardGroup<any>[]>(() => {
     if (groupMode === 'folder') return groupByFolder(
       filteredAndSortedServers,
@@ -670,12 +720,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
             variant="contained"
             color="primary"
             data-tour="add-mcp-server"
-            onClick={() => {
-              // Ensure editing server is null when adding a new server
-              setEditingServer(null);
-              setShowAddModal(true);
-              onServerModalToggle?.(true);
-            }}
+            onClick={handleConnectApp}
             startIcon={<AddIcon />}
             sx={{
               textTransform: 'none',
@@ -683,7 +728,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
               boxShadow: 1,
             }}
           >
-            {t('mcp.server.add')}
+            {modern ? t('mcp.server.connectApp') : t('mcp.server.add')}
           </Button>
           </>
         )}
@@ -1031,10 +1076,22 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
           onServerModalToggle?.(false);
         }}
         initialConfig={editingServer}
+        initialTab={initialSetupTab}
         onUpdate={handleUpdateServer}
         onRestartAfterUpdate={handleServerRetry}
         onSaveAndAuthenticate={handleSaveAndAuthenticate}
       />
+
+      {modern ? (
+        <McpConnectionWizard
+          open={showConnectionWizard}
+          onClose={() => setShowConnectionWizard(false)}
+          onChooseSetup={openServerSetup}
+          onManualCreation={() => openServerSetup('spotlight')}
+          onInstalled={handleAiInstalled}
+          onAuthenticate={handleAiAuthenticate}
+        />
+      ) : null}
 
       <ServerDetailsModal
         server={detailsServer ? { name: detailsServer.name, status: detailsServer.status, env: detailsServer.env } : null}

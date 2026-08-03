@@ -757,7 +757,10 @@ export default function ModelConnectionWizard({
 
   return (
     <Dialog open={open} onClose={busy || ollamaPulling || installTool ? undefined : onClose} fullWidth maxWidth="md" aria-label={t('models.wizard.aria')}>
-      <DialogContent sx={{ position: 'relative', minHeight: { xs: 560, sm: 590 }, p: { xs: 2.2, sm: 4 }, overflowX: 'hidden', overflowY: 'auto' }}>
+      <DialogContent
+        data-tour="ai-setup-wizard"
+        sx={{ position: 'relative', minHeight: { xs: 560, sm: 590 }, p: { xs: 2.2, sm: 4 }, overflowX: 'hidden', overflowY: 'auto' }}
+      >
         <Box aria-hidden sx={{ position: 'absolute', width: 220, height: 220, borderRadius: '50%', top: -120, right: -70, bgcolor: alpha(theme.palette.secondary.main, 0.12), filter: 'blur(1px)', animation: `${drift} 6s ease-in-out infinite` }} />
         <Box aria-hidden sx={{ position: 'absolute', width: 150, height: 150, borderRadius: 5, bottom: -100, left: -70, bgcolor: alpha(theme.palette.primary.main, 0.1), transform: 'rotate(24deg)', animation: `${drift} 7s ease-in-out -2s infinite` }} />
 

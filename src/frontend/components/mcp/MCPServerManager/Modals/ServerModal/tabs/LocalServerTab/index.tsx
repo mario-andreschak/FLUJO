@@ -39,6 +39,8 @@ import {
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { McpTroubleshootPatch } from '@/shared/types/mcp/assistant';
+import McpInstallTroubleshooter from './McpInstallTroubleshooter';
 
 const LocalServerTab: React.FC<TabProps> = ({
   initialConfig,
@@ -374,6 +376,35 @@ const LocalServerTab: React.FC<TabProps> = ({
     }
     return 'default';
   };
+
+  const applyTroubleshootPatch = (patch: McpTroubleshootPatch) => {
+    setLocalConfig((current) => {
+      const env = { ...(current.env || {}) };
+      for (const name of patch.addEnvNames ?? []) {
+        if (!(name in env)) env[name] = '';
+      }
+      const next = { ...current, env, ...(patch.rootPath ? { rootPath: patch.rootPath } : {}) } as MCPServerConfig;
+      if (current.transport === 'stdio') {
+        return {
+          ...next,
+          ...(patch.command ? { command: patch.command } : {}),
+          ...(patch.args ? { args: patch.args } : {}),
+        } as MCPStdioConfig;
+      }
+      if (current.transport === 'sse' || current.transport === 'streamable') {
+        const headers = { ...((current as MCPSSEConfig | MCPStreamableConfig).headers || {}) };
+        for (const name of patch.addHeaderNames ?? []) {
+          if (!(name in headers)) headers[name] = '';
+        }
+        return { ...next, headers } as MCPSSEConfig | MCPStreamableConfig;
+      }
+      return next;
+    });
+    if (patch.serverUrl) setServerUrl(patch.serverUrl);
+    if (patch.installCommand !== undefined) setInstallCommand(patch.installCommand);
+    if (patch.buildCommand !== undefined) setBuildCommand(patch.buildCommand);
+    setMessage({ type: 'warning', text: t('mcp.troubleshoot.reviewApplied') });
+  };
   
   return (
     <Box component="form" onSubmit={onSubmit} sx={{ width: '100%' }}>
@@ -659,6 +690,28 @@ const LocalServerTab: React.FC<TabProps> = ({
           </Alert>
         </Box>
       )}
+
+      <McpInstallTroubleshooter
+        context={{
+          config: {
+            name: localConfig.name,
+            transport: localConfig.transport,
+            ...(localConfig.transport === 'stdio'
+              ? { command: localConfig.command, args: localConfig.args }
+              : {}),
+            ...(localConfig.transport === 'sse' || localConfig.transport === 'streamable'
+              ? { serverUrl, headerNames: Object.keys((localConfig as MCPSSEConfig | MCPStreamableConfig).headers || {}) }
+              : {}),
+            rootPath: localConfig.rootPath,
+            envNames: Object.keys(localConfig.env || {}),
+            installCommand,
+            buildCommand,
+          },
+          error: [buildMessage?.text, message?.text].filter(Boolean).join('\n'),
+          consoleOutput,
+        }}
+        onApplyPatch={applyTroubleshootPatch}
+      />
 
       <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, mt: 3 }}>
         <Button

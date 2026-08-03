@@ -23,28 +23,66 @@ describe('onboarding tour steps (#4)', () => {
     }
   });
 
-  it('follows the dependency chain: AI setup, simple builder, then Talk', () => {
-    expect(TOUR_STEPS.map(({ id, path, target }) => ({ id, path, target }))).toEqual([
+  it('takes a paced path through AI setup before the simple builder and Talk', () => {
+    expect(TOUR_STEPS.map(({ id, path, route, target }) => ({ id, path, route, target }))).toEqual([
+      {
+        id: 'manage-ai-setup',
+        path: '/',
+        route: undefined,
+        target: '[data-tour="manage-ai-setup"]',
+      },
+      {
+        id: 'nav-models',
+        path: '/',
+        route: undefined,
+        target: '[data-tour="nav-models"]',
+      },
+      {
+        id: 'models-overview',
+        path: '/models',
+        route: undefined,
+        target: '[data-tour="models-overview"]',
+      },
       {
         id: 'add-model',
         path: '/models',
+        route: undefined,
         target: '[data-tour="add-model"]',
+      },
+      {
+        id: 'ai-setup-wizard',
+        path: '/models',
+        route: '/models?add=1',
+        target: '[data-tour="ai-setup-wizard"]',
+      },
+      {
+        id: 'dashboard-create-flow',
+        path: '/',
+        route: undefined,
+        target: '[data-tour="dashboard-create-flow"]',
       },
       {
         id: 'new-flow',
         path: '/flows',
+        route: undefined,
         target: '[data-tour="new-flow"]',
       },
       {
         id: 'chat-input',
         path: '/chat',
+        route: undefined,
         target: '[data-tour="chat-input"]',
       },
     ]);
     expect(TOUR_STEPS.map((step) => step.title)).toEqual([
-      '1. Start by connecting your AI',
-      '2. Create your first agent',
-      '3. Talk to your agent',
+      'tour.manageAi.title',
+      'tour.aiNav.title',
+      'tour.aiOverview.title',
+      'tour.connectAi.title',
+      'tour.aiWizard.title',
+      'tour.backDashboard.title',
+      'tour.createAgent.title',
+      'tour.talk.title',
     ]);
   });
 });

@@ -66,6 +66,7 @@ import {
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCardSection';
 import PageHeader from '@/frontend/components/shared/PageHeader';
+import { useThemeUtils } from '@/frontend/utils/theme';
 import ExecutionCard from './ExecutionCard';
 import ExecutionModal from './ExecutionModal';
 import { useI18n } from '@/frontend/contexts/I18nContext';
@@ -80,6 +81,8 @@ type GroupMode = 'none' | 'folder' | 'trigger' | 'status';
 const PlannedExecutionsManager = () => {
   const theme = useTheme();
   const { t, tp, formatNumber } = useI18n();
+  const { visualStyle } = useThemeUtils();
+  const modern = visualStyle === 'modern';
   const [entries, setEntries] = useState<PlannedExecutionListEntry[]>([]);
   const [paused, setPaused] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -251,7 +254,16 @@ const PlannedExecutionsManager = () => {
     searchTerm.trim() !== '' || statusFilter !== 'all' || triggerFilter !== 'all';
 
   const renderEntries = (items: PlannedExecutionListEntry[]) => (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+    <Box
+      sx={modern
+        ? {
+            display: 'grid',
+            gridTemplateColumns: { xs: '1fr', lg: 'repeat(2, minmax(0, 1fr))' },
+            gap: 2,
+            alignItems: 'start',
+          }
+        : { display: 'flex', flexDirection: 'column', gap: 2 }}
+    >
       {items.map(entry => (
         <ExecutionCard
           key={entry.execution.id}

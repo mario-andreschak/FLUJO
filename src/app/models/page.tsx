@@ -27,7 +27,10 @@ async function ModelsPage() {
     log.debug('Models loaded successfully', { count: models.length });
     
     return (
-      <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <Box
+        data-tour="models-overview"
+        sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}
+      >
         <PageHeader
           eyebrowKey="models.header.eyebrow"
           titleKey="models.header.title"

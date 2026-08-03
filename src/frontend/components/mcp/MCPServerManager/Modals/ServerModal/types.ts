@@ -1,5 +1,7 @@
 import { MCPServerConfig } from '@/utils/mcp';
 
+export type ServerSetupTab = 'spotlight' | 'marketplace' | 'github' | 'local' | 'reference' | 'remote';
+
 /** Outcome of persisting a server and kicking off its OAuth flow from the modal. */
 export type SaveAndAuthenticateResult =
   | { status: 'authorized' }
@@ -11,6 +13,8 @@ export interface ServerModalProps {
   onClose: () => void;
   onAdd: (config: MCPServerConfig) => void;
   initialConfig?: MCPServerConfig | null;
+  /** Add-mode tab selected by the guided connection wizard. */
+  initialTab?: ServerSetupTab;
   onUpdate?: (config: MCPServerConfig) => void;
   onRestartAfterUpdate?: (serverName: string) => void;
   /** Persist the (streamable) server and start its OAuth flow without closing the modal
@@ -40,7 +44,7 @@ export interface TabProps {
   onRestartAfterUpdate?: (serverName: string) => void;
   /** Persist the (streamable) server and start its OAuth flow. See ServerModalProps. */
   onSaveAndAuthenticate?: (config: MCPServerConfig) => Promise<SaveAndAuthenticateResult>;
-  setActiveTab?: (tab: 'spotlight' | 'marketplace' | 'github' | 'local' | 'reference' | 'remote') => void;
+  setActiveTab?: (tab: ServerSetupTab) => void;
   /** When true (marketplace handoff), collapse define/build as done and auto-start a test run */
   autoTestRun?: boolean;
   /** GitHub tab: prefill for the repository URL field (marketplace → manual install handoff) */
