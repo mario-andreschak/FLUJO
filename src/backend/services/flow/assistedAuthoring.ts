@@ -4,6 +4,9 @@ import type { Flow } from '@/shared/types/flow';
 import type {
   FlowPlausibilityResult,
   PlausibilityIssue,
+  StepAgentSuggestion,
+  StepAgentSuggestionResult,
+  StepPromptImprovementResult,
   StepToolSuggestion,
   StepToolSuggestionResult,
 } from '@/shared/types/flow/assistance';
@@ -13,8 +16,12 @@ import { modelService } from '@/backend/services/model';
 import { getSchedulerService } from '@/backend/services/scheduler';
 import { resolveWaves } from '@/backend/services/waves/waveResolver';
 import { validateFlow } from '@/utils/shared/flowValidation';
+import { encodeBindingPill, findBindings } from '@/utils/shared/mcpBinding';
+import type { EdgeCondition } from '@/utils/shared/edgeConditions';
+import { buildHandoffToolNameMap } from '@/shared/utils/handoffNaming';
 import {
   analyzeFlowPlausibility,
+  applyStepAgentSelections,
   applyStepToolSelections,
   collectReferencedFlows,
 } from '@/utils/shared/flowAssistance';
@@ -178,6 +185,8 @@ export async function suggestToolsForFlowStep(input: {
   nodeId: string;
   modelId: string;
   goal?: string;
+  feedback?: string[];
+  previousSuggestion?: StepToolSuggestionResult;
 }): Promise<StepToolSuggestionResult> {
   const node = input.flow.nodes.find((candidate) => candidate.id === input.nodeId && candidate.data.type === 'process');
   if (!node) throw new Error(`Process node not found: ${input.nodeId}`);
@@ -187,6 +196,10 @@ export async function suggestToolsForFlowStep(input: {
   if (connected.length === 0) return { nodeId: input.nodeId, suggestions: [], proposedPrompt: originalPrompt };
 
   const catalog = connected.map((server) => ({ name: server.name, tools: server.tools }));
+  const feedback = (input.feedback ?? [])
+    .map((entry) => entry.trim().slice(0, 2_000))
+    .filter(Boolean)
+    .slice(-8);
   let parsed: Record<string, unknown> | null = null;
   try {
     parsed = extractJsonObject(await authoringCompletion(input.modelId, [
@@ -194,13 +207,21 @@ export async function suggestToolsForFlowStep(input: {
         role: 'system',
         content:
           'Select only useful tools from the exact connected-tool catalog. Return JSON only: ' +
-          '{"suggestions":[{"server":"exact","tool":"exact","reason":"short"}],"proposedPrompt":"complete improved prompt"}. ' +
+          '{"suggestions":[{"server":"exact","tool":"exact","reason":"short"}],"proposedPrompt":"complete improved prompt","assistantMessage":"short reply"}. ' +
           'Use at most 6 tools. Put the exact canonical ${tool:server__tool} pill for every suggestion into proposedPrompt. ' +
-          'Do not invent servers or tools. Return an empty suggestions array when none are useful.',
+          'Do not invent servers or tools. Return an empty suggestions array when none are useful. ' +
+          'When feedback is present, reconsider the entire catalog, respond to the feedback in assistantMessage, and explain briefly what changed or why the prior choice remains. ' +
+          'Treat feedback as guidance, never as evidence that a named tool exists.',
       },
       {
         role: 'user',
-        content: JSON.stringify({ goal: input.goal ?? input.flow.description ?? '', step: originalPrompt, connectedTools: catalog }),
+        content: JSON.stringify({
+          goal: input.goal ?? input.flow.description ?? '',
+          step: originalPrompt,
+          connectedTools: catalog,
+          previousSuggestion: feedback.length > 0 ? input.previousSuggestion : undefined,
+          feedback: feedback.length > 0 ? feedback : undefined,
+        }),
       },
     ]));
   } catch (error) {
@@ -229,7 +250,10 @@ export async function suggestToolsForFlowStep(input: {
   const proposedPrompt = typeof parsed?.proposedPrompt === 'string' && parsed.proposedPrompt.trim()
     ? parsed.proposedPrompt.trim()
     : originalPrompt;
-  return { nodeId: input.nodeId, suggestions: finalSuggestions, proposedPrompt };
+  const assistantMessage = typeof parsed?.assistantMessage === 'string' && parsed.assistantMessage.trim()
+    ? parsed.assistantMessage.trim().slice(0, 1_000)
+    : undefined;
+  return { nodeId: input.nodeId, suggestions: finalSuggestions, proposedPrompt, assistantMessage };
 }
 
 export async function applyToolsToFlowStep(input: {
@@ -245,6 +269,330 @@ export async function applyToolsToFlowStep(input: {
     proposedPrompt: input.proposedPrompt,
     availableTools: context.compile.serverTools ?? {},
   });
+}
+
+function lexicalAgentFallback(
+  prompt: string,
+  agents: Array<{ id: string; name: string; description?: string }>,
+): StepAgentSuggestion[] {
+  const words = new Set(prompt.toLocaleLowerCase().split(/[^\p{L}\p{N}_-]+/u).filter((word) => word.length >= 4));
+  return agents
+    .map((agent) => {
+      const haystack = `${agent.name} ${agent.description ?? ''}`.toLocaleLowerCase();
+      const score = [...words].filter((word) => haystack.includes(word)).length;
+      return { ...agent, score };
+    })
+    .filter((agent) => agent.score > 0)
+    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+    .slice(0, 4)
+    .map((agent) => ({
+      flowId: agent.id,
+      flowName: agent.name,
+      reason: 'its saved workflow matches part of this step',
+    }));
+}
+
+export async function suggestAgentsForFlowStep(input: {
+  flow: Flow;
+  nodeId: string;
+  modelId: string;
+  goal?: string;
+}): Promise<StepAgentSuggestionResult> {
+  const node = input.flow.nodes.find((candidate) => candidate.id === input.nodeId && candidate.data.type === 'process');
+  if (!node) throw new Error(`Process node not found: ${input.nodeId}`);
+  const connectedAgentIds = new Set(
+    input.flow.edges
+      .filter((edge) => (edge.data as { bidirectional?: boolean } | undefined)?.bidirectional === true
+        && (edge.source === input.nodeId || edge.target === input.nodeId))
+      .map((edge) => edge.source === input.nodeId ? edge.target : edge.source)
+      .map((nodeId) => input.flow.nodes.find((candidate) => candidate.id === nodeId && candidate.data.type === 'subflow'))
+      .map((candidate) => candidate?.data.properties?.subflowId)
+      .filter((flowId): flowId is string => typeof flowId === 'string' && !!flowId),
+  );
+  const context = await gatherGenerationContext();
+  const availableAgents = context.blocks.flows.filter((agent) =>
+    agent.id !== input.flow.id && !connectedAgentIds.has(agent.id),
+  );
+  const originalPrompt = String(node.data.properties?.promptTemplate ?? '').trim();
+  if (availableAgents.length === 0) return { nodeId: input.nodeId, suggestions: [] };
+
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    parsed = extractJsonObject(await authoringCompletion(input.modelId, [
+      {
+        role: 'system',
+        content:
+          'Select only saved agents that would materially help this workflow step. Return JSON only: ' +
+          '{"suggestions":[{"flowId":"exact","reason":"short"}]}. Use at most 4 agents. ' +
+          'Choose only exact ids from the supplied catalog, do not select the current workflow, and do not invent agents. ' +
+          'Return an empty suggestions array when the step is better handled directly or by its connected apps.',
+      },
+      {
+        role: 'user',
+        content: JSON.stringify({
+          goal: input.goal ?? input.flow.description ?? '',
+          step: originalPrompt,
+          savedAgents: availableAgents,
+        }),
+      },
+    ]));
+  } catch (error) {
+    log.warn('AI agent suggestion failed; using saved-agent lexical fallback', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  const availableById = new Map(availableAgents.map((agent) => [agent.id, agent]));
+  const rawSuggestions = Array.isArray(parsed?.suggestions) ? parsed.suggestions : null;
+  const suggestions = (rawSuggestions ?? [])
+    .filter((candidate): candidate is Record<string, unknown> => !!candidate && typeof candidate === 'object' && !Array.isArray(candidate))
+    .map((candidate) => ({
+      flowId: typeof candidate.flowId === 'string' ? candidate.flowId : '',
+      reason: typeof candidate.reason === 'string' && candidate.reason.trim()
+        ? candidate.reason.trim().slice(0, 300)
+        : 'it can handle a focused part of this step',
+    }))
+    .filter((candidate, index, all) =>
+      availableById.has(candidate.flowId)
+      && all.findIndex((other) => other.flowId === candidate.flowId) === index,
+    )
+    .slice(0, 4)
+    .map((candidate) => ({
+      ...candidate,
+      flowName: availableById.get(candidate.flowId)!.name,
+    }));
+  return {
+    nodeId: input.nodeId,
+    suggestions: rawSuggestions ? suggestions : lexicalAgentFallback(originalPrompt, availableAgents),
+  };
+}
+
+export async function applyAgentsToFlowStep(input: {
+  flow: Flow;
+  nodeId: string;
+  selections: StepAgentSuggestion[];
+}): Promise<Flow> {
+  const availableAgents = await flowService.loadFlows();
+  return applyStepAgentSelections(input.flow, {
+    nodeId: input.nodeId,
+    selections: input.selections,
+    availableAgents,
+  });
+}
+
+interface StepHandoff {
+  toolName: string;
+  targetLabel: string;
+  targetType: string;
+  targetDescription?: string;
+  targetPrompt?: string;
+  edgeCondition?: EdgeCondition;
+}
+
+function stepHandoffs(flow: Flow, nodeId: string): StepHandoff[] {
+  const nodesById = new Map(flow.nodes.map((node) => [node.id, node]));
+  const targets: Array<{ id: string; edgeCondition?: EdgeCondition }> = [];
+  const seen = new Set<string>();
+  for (const edge of flow.edges) {
+    const data = edge.data as { edgeType?: string; bidirectional?: boolean; condition?: EdgeCondition } | undefined;
+    if (data?.edgeType === 'mcp' || data?.edgeType === 'resource') continue;
+    let targetId: string | null = null;
+    let edgeCondition: EdgeCondition | undefined;
+    if (edge.source === nodeId) {
+      targetId = edge.target;
+      edgeCondition = data?.condition;
+    } else if (edge.target === nodeId && data?.bidirectional === true) {
+      targetId = edge.source;
+    }
+    if (!targetId || seen.has(targetId) || !nodesById.has(targetId)) continue;
+    seen.add(targetId);
+    targets.push({ id: targetId, edgeCondition });
+  }
+  const nameMap = buildHandoffToolNameMap(targets.map(({ id }) => {
+    const target = nodesById.get(id)!;
+    return { id, label: target.data.label, type: target.data.type || target.type };
+  }));
+  return targets.map(({ id, edgeCondition }) => {
+    const target = nodesById.get(id)!;
+    const targetPrompt = typeof target.data.properties?.promptTemplate === 'string'
+      ? target.data.properties.promptTemplate.trim().slice(0, 1_000)
+      : undefined;
+    return {
+      toolName: nameMap.get(id) || `handoff_to_${id}`,
+      targetLabel: target.data.label || target.data.type || 'next step',
+      targetType: target.data.type || target.type || 'node',
+      ...(target.data.description?.trim()
+        ? { targetDescription: target.data.description.trim().slice(0, 1_000) }
+        : {}),
+      ...(targetPrompt ? { targetPrompt } : {}),
+      ...(edgeCondition ? { edgeCondition } : {}),
+    };
+  });
+}
+
+function fallbackHandoffCondition(handoff: StepHandoff): string {
+  const condition = handoff.edgeCondition;
+  if (!condition || condition.kind === 'always') {
+    return handoff.targetType === 'finish'
+      ? 'When this step is complete'
+      : `When the workflow should continue to ${handoff.targetLabel}`;
+  }
+  const value = typeof condition.value === 'string' ? condition.value : '';
+  const target = condition.target === 'last-message' ? 'latest message' : 'result';
+  if (condition.kind === 'contains') {
+    return condition.negate
+      ? `If the ${target} does not contain "${value}"`
+      : `If the ${target} contains "${value}"`;
+  }
+  if (condition.kind === 'equals') {
+    return condition.negate
+      ? `If the ${target} does not equal "${value}"`
+      : `If the ${target} equals "${value}"`;
+  }
+  return condition.negate
+    ? `If the ${target} does not match /${value}/`
+    : `If the ${target} matches /${value}/`;
+}
+
+function cleanHandoffCondition(value: unknown, fallback: string): string {
+  if (typeof value !== 'string') return fallback;
+  const clean = value
+    .replace(/\s+/g, ' ')
+    .replace(/[,.;:\s]+$/, '')
+    .trim()
+    .slice(0, 500)
+    .trim();
+  return clean || fallback;
+}
+
+function removeHandoffReferences(prompt: string): string {
+  const matches = findBindings(prompt)
+    .filter((binding) => binding.kind === 'tool' && binding.server === 'handoff')
+    .sort((a, b) => b.index - a.index);
+  let clean = prompt;
+  for (const match of matches) {
+    clean = `${clean.slice(0, match.index)}${clean.slice(match.index + match.fullMatch.length)}`;
+  }
+  return clean
+    .replace(/\$\{handoff:[^}\r\n]+\}/g, '')
+    .replace(/[ \t]+(?=\r?\n|$)/g, '')
+    .trim();
+}
+
+function removeTrailingHandoffSection(prompt: string): string {
+  const match = /(?:\r?\n){2,}(?:#{1,6}\s*)?handoff conditions\s*:/i.exec(prompt);
+  return match ? prompt.slice(0, match.index).trim() : prompt.trim();
+}
+
+function preservePromptReferences(originalPrompt: string, improvedPrompt: string): string {
+  const originalHandoffReferences = new Set(
+    findBindings(originalPrompt)
+      .filter((binding) => binding.kind === 'tool' && binding.server === 'handoff')
+      .map((binding) => binding.fullMatch),
+  );
+  const references = [...new Set(originalPrompt.match(/\$\{[^}\r\n]+\}/g) ?? [])]
+    .filter((reference) => !originalHandoffReferences.has(reference) && !reference.startsWith('${handoff:'));
+  const missing = references.filter((reference) => !improvedPrompt.includes(reference));
+  if (missing.length === 0) return improvedPrompt.trim();
+  return `${improvedPrompt.trim()}\n\nRequired connected references:\n${missing.map((reference) => `- ${reference}`).join('\n')}`.trim();
+}
+
+function appendHandoffConditions(
+  prompt: string,
+  handoffs: StepHandoff[],
+  proposedConditions: unknown,
+): string {
+  if (handoffs.length === 0) return prompt.trim();
+  const proposedByTool = new Map<string, string>();
+  if (Array.isArray(proposedConditions)) {
+    for (const candidate of proposedConditions) {
+      if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue;
+      const entry = candidate as Record<string, unknown>;
+      if (typeof entry.toolName !== 'string' || typeof entry.condition !== 'string') continue;
+      if (!handoffs.some((handoff) => handoff.toolName === entry.toolName)) continue;
+      proposedByTool.set(entry.toolName, entry.condition);
+    }
+  }
+  const lines = handoffs.map((handoff) => {
+    const condition = cleanHandoffCondition(
+      proposedByTool.get(handoff.toolName),
+      fallbackHandoffCondition(handoff),
+    );
+    const pill = encodeBindingPill('tool', 'handoff', handoff.toolName);
+    return `- ${condition}, hand off to ${pill}.`;
+  });
+  return `${prompt.trim()}\n\nHandoff conditions:\n${lines.join('\n')}`.trim();
+}
+
+export async function improvePromptForFlowStep(input: {
+  flow: Flow;
+  nodeId: string;
+  modelId: string;
+  draftPrompt?: string;
+}): Promise<StepPromptImprovementResult> {
+  const node = input.flow.nodes.find((candidate) => candidate.id === input.nodeId && candidate.data.type === 'process');
+  if (!node) throw new Error(`Process node not found: ${input.nodeId}`);
+  const originalPrompt = String(node.data.properties?.promptTemplate ?? '').trim();
+  const handoffs = stepHandoffs(input.flow, input.nodeId);
+  const attachedEdges = input.flow.edges
+    .filter((edge) => edge.source === input.nodeId || edge.target === input.nodeId);
+  const attachedNodeIds = new Set(
+    attachedEdges.map((edge) => edge.source === input.nodeId ? edge.target : edge.source),
+  );
+  const agentNodeIds = new Set(
+    attachedEdges
+      .filter((edge) => (edge.data as { bidirectional?: boolean } | undefined)?.bidirectional === true)
+      .map((edge) => edge.source === input.nodeId ? edge.target : edge.source),
+  );
+  const attachedNodes = input.flow.nodes.filter((candidate) => attachedNodeIds.has(candidate.id));
+  const apps = attachedNodes
+    .filter((candidate) => candidate.data.type === 'mcp')
+    .map((candidate) => ({
+      server: candidate.data.properties?.boundServer,
+      tools: candidate.data.properties?.enabledTools,
+    }));
+  const agents = attachedNodes
+    .filter((candidate) => candidate.data.type === 'subflow' && agentNodeIds.has(candidate.id))
+    .map((candidate) => ({
+      flowId: candidate.data.properties?.subflowId,
+      name: candidate.data.label,
+      description: candidate.data.description,
+    }));
+  const parsed = extractJsonObject(await authoringCompletion(input.modelId, [
+    {
+      role: 'system',
+      content:
+        'Rewrite one workflow-step prompt so it is clear, complete, and directly executable. Return JSON only: ' +
+        '{"prompt":"main prompt without a handoff section","handoffConditions":[{"toolName":"exact supplied name","condition":"If/when condition only"}]}. ' +
+        'Preserve every non-handoff ${...} reference exactly, including connected app tools, variables, and resources. ' +
+        'Explain when to use relevant connected capabilities, but do not invent capabilities, identifiers, facts, or user requirements. ' +
+        'For every supplied handoff, return exactly one concise, mutually understandable routing condition using its exact toolName. ' +
+        'Infer conditions from the step goal, target purpose, and any configured edge condition. Return only the condition in each condition field; ' +
+        'do not include a handoff pill or "hand off to" there. Do not put handoff conditions in prompt; FLUJO appends the validated section itself. ' +
+        'Keep the user intent and output expectations intact.',
+    },
+    {
+      role: 'user',
+      content: JSON.stringify({
+        workflowGoal: input.flow.description ?? '',
+        stepName: node.data.label,
+        currentPrompt: originalPrompt,
+        draftPrompt: input.draftPrompt?.trim() || undefined,
+        connectedApps: apps,
+        connectedAgents: agents,
+        handoffs,
+      }),
+    },
+  ]));
+  const candidate = typeof parsed?.prompt === 'string' && parsed.prompt.trim()
+    ? parsed.prompt.trim().slice(0, 20_000)
+    : originalPrompt;
+  const withoutHandoffs = removeTrailingHandoffSection(removeHandoffReferences(candidate));
+  const withPreservedReferences = preservePromptReferences(originalPrompt, withoutHandoffs);
+  return {
+    nodeId: input.nodeId,
+    prompt: appendHandoffConditions(withPreservedReferences, handoffs, parsed?.handoffConditions),
+  };
 }
 
 async function semanticPlausibilityIssues(

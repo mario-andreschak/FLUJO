@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Browser MCP</title>
+  <defs>
+    <linearGradient id="bg" x1="8" y1="7" x2="57" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#22B8CF"/>
+      <stop offset="1" stop-color="#176F9B"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="18" fill="url(#bg)"/>
+  <circle cx="32" cy="32" r="18" fill="none" stroke="#FFFFFF" stroke-width="3" stroke-opacity=".95"/>
+  <path d="M14 32h36M32 14c5 5 8 11 8 18s-3 13-8 18c-5-5-8-11-8-18s3-13 8-18Z" fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round"/>
+  <path d="m39 37 12 5-5 2-2 5-5-12Z" fill="#1A2740" stroke="#FFFFFF" stroke-width="2" stroke-linejoin="round"/>
+</svg>

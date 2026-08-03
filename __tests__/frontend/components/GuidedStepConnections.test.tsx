@@ -62,7 +62,7 @@ describe('Guided step connections', () => {
     );
 
     expect(screen.getByText('Uses Apps')).toBeInTheDocument();
-    expect(screen.getByText('Talks to other Agents')).toBeInTheDocument();
+    expect(screen.getByText('Agents this step can use')).toBeInTheDocument();
     expect(screen.getByText('github')).toBeInTheDocument();
     expect(screen.getByText('Research Agent')).toBeInTheDocument();
     expect(screen.getByText('Isolated input · Condensed output')).toBeInTheDocument();

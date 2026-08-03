@@ -1,13 +1,26 @@
 "use client";
 
-import React, { useMemo } from 'react';
-import { ReactFlow, ReactFlowProvider, Background, Edge, MarkerType, ConnectionLineType } from '@xyflow/react';
+import React, { useEffect, useMemo, useRef } from 'react';
+import {
+  ReactFlow,
+  ReactFlowProvider,
+  Background,
+  Edge,
+  MarkerType,
+  ConnectionLineType,
+  type ReactFlowInstance,
+} from '@xyflow/react';
 import { useTheme } from '@mui/material/styles';
 import { Flow, FlowNode } from '@/shared/types/flow';
 import { nodeTypes, edgeTypes } from './Canvas/Canvas';
+import { computeAutoLayout } from './Canvas/utils/autoLayout';
 
 interface FlowPreviewProps {
   flow: Flow;
+  /** Recompute the same top-to-bottom layout used by Expert mode's Auto-align. */
+  autoLayout?: boolean;
+  /** Reframe the graph whenever its streamed definition changes. */
+  fitViewOnChange?: boolean;
 }
 
 /**
@@ -21,8 +34,13 @@ interface FlowPreviewProps {
  * Wrapped in its own ReactFlowProvider so its store is isolated from the live
  * builder canvas mounted elsewhere on the page.
  */
-const FlowPreviewInner: React.FC<FlowPreviewProps> = ({ flow }) => {
+const FlowPreviewInner: React.FC<FlowPreviewProps> = ({
+  flow,
+  autoLayout = false,
+  fitViewOnChange = false,
+}) => {
   const theme = useTheme();
+  const instanceRef = useRef<ReactFlowInstance<FlowNode, Edge> | null>(null);
 
   // Same edge-validity filter the builder applies on load — a stored edge
   // missing source/target handles can't be rendered.
@@ -33,6 +51,21 @@ const FlowPreviewInner: React.FC<FlowPreviewProps> = ({ flow }) => {
       ) as Edge[],
     [flow.edges]
   );
+
+  const nodes = useMemo(
+    () => autoLayout
+      ? computeAutoLayout((flow.nodes || []) as FlowNode[], edges)
+      : (flow.nodes || []) as FlowNode[],
+    [autoLayout, edges, flow.nodes],
+  );
+
+  useEffect(() => {
+    if (!fitViewOnChange || !instanceRef.current) return;
+    const timer = window.setTimeout(() => {
+      void instanceRef.current?.fitView({ padding: 0.18, duration: 260 });
+    }, 40);
+    return () => window.clearTimeout(timer);
+  }, [fitViewOnChange, nodes]);
 
   const defaultEdgeOptions = useMemo(
     () => ({
@@ -51,12 +84,13 @@ const FlowPreviewInner: React.FC<FlowPreviewProps> = ({ flow }) => {
 
   return (
     <ReactFlow<FlowNode, Edge>
-      nodes={(flow.nodes || []) as FlowNode[]}
+      nodes={nodes}
       edges={edges}
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
       defaultEdgeOptions={defaultEdgeOptions}
       connectionLineType={ConnectionLineType.SmoothStep}
+      onInit={(instance) => { instanceRef.current = instance; }}
       fitView
       minZoom={0.1}
       maxZoom={2}

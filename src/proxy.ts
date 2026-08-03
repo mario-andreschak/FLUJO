@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isLocalRequest } from '@/utils/http/localRequest';
+import { isLocalRequest, isRequestHostAllowed } from '@/utils/http/localRequest';
 import { isPublicApiPath, isPublicOpenAiPath } from '@/utils/http/publicApiAllowlist';
 
 /**
@@ -17,10 +17,11 @@ import { isPublicApiPath, isPublicOpenAiPath } from '@/utils/http/publicApiAllow
  * This proxy makes the guard SECURE-BY-DEFAULT: it runs the same pure
  * `isLocalRequest(host, origin)` check against EVERY `/api/:path*` and
  * `/v1/:path*` request and returns 403 unless the request is local. The only
- * exceptions are the small, explicit, reviewed sets of intentionally-public
- * routes in `publicApiAllowlist.ts` (external webhooks + OAuth redirect/flow via
- * `isPublicApiPath`; the genuinely-public OpenAI surface
- * `/v1/chat/completions` + `/v1/models` via `isPublicOpenAiPath`). Any future
+ * exceptions to the same-Origin half are the small, explicit, reviewed sets of
+ * protocol-public routes in `publicApiAllowlist.ts` (external webhooks + OAuth
+ * redirect/flow via `isPublicApiPath`; the OpenAI surface
+ * `/v1/chat/completions` + `/v1/models` via `isPublicOpenAiPath`). They still
+ * pass the selected exposure mode's Host boundary. Any future
  * `/api` or `/v1` route is therefore fail-closed by construction — in
  * particular the internal `/v1/chat/conversations/**` control-plane
  * (list / respond-approve = RCE / PATCH / DELETE / debug / edit-state /
@@ -43,9 +44,17 @@ export function proxy(request: NextRequest): NextResponse {
 
   const { pathname } = request.nextUrl;
 
-  // Explicit, reviewed allow-lists of intentionally-public routes: the public
-  // `/api` set (webhooks / oauth) and the public OpenAI `/v1` surface
-  // (completions / models). Everything else under both matchers is fail-closed.
+  // The selected exposure mode is the outer boundary for every endpoint,
+  // including the intentionally public webhook/OAuth/OpenAI surfaces.
+  if (!isRequestHostAllowed(request.headers.get('host'))) {
+    return new NextResponse(
+      JSON.stringify({ error: 'Forbidden: this endpoint is not available at this host.' }),
+      { status: 403, headers: { 'content-type': 'application/json' } },
+    );
+  }
+
+  // Public protocol surfaces do not require a same-origin browser request, but
+  // they still cannot escape the selected Localhost/Network/Public host scope.
   if (isPublicApiPath(pathname) || isPublicOpenAiPath(pathname)) {
     return NextResponse.next();
   }
@@ -66,7 +75,8 @@ export function proxy(request: NextRequest): NextResponse {
 
 /** Scope the proxy to the `/api` and `/v1` surfaces (see matcher-scope note
  * in `publicApiAllowlist.ts`). `/v1/:path*` is guarded too (#143), with only the
- * public OpenAI endpoints allow-listed via `isPublicOpenAiPath`. `/mcp-proxy/*`
+ * protocol-public OpenAI endpoints identified via `isPublicOpenAiPath`.
+ * `/mcp-proxy/*`
  * and `/mcp-flows` are intentionally NOT matched here (they keep their inline
  * `isLocalRequest` guards). */
 export const config = {

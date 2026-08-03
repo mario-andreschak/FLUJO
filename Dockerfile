@@ -36,7 +36,6 @@ ENV NODE_ENV=production \
     FLUJO_CONTAINER=1 \
     FLUJO_APP_ROOT=/app \
     FLUJO_DATA_DIR=/app/data \
-    FLUJO_MCP_APP_SANDBOX_HOST=0.0.0.0 \
     PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
     # Optional: restrict the in-chat file-browser MCP tool to specific host directories
     # (requires a matching bind-mount in docker-compose.yml):

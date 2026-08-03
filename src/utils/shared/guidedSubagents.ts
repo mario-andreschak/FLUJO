@@ -39,7 +39,7 @@ export function isCanonicalGuidedSubagent(node: FlowNode): boolean {
     && properties.outputMode === 'final-only';
 }
 
-/** Apply the execution contract used by the Guided "Talks to other Agents" picker. */
+/** Apply the execution contract used by the Guided step-agent picker. */
 export function configureGuidedSubagentNode(node: FlowNode, agent: Pick<Flow, 'id' | 'name' | 'description'>): FlowNode {
   return {
     ...node,

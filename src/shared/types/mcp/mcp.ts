@@ -63,6 +63,19 @@ export type MCPHostPathAccessConfig = {
   snapshots: boolean;
 };
 
+/**
+ * Presentation metadata for an MCP server. Registry installs retain the safe
+ * http(s) icons published in server.json; FLUJO's bundled servers use trusted
+ * same-origin SVG assets. The metadata is optional so existing configs remain
+ * fully compatible.
+ */
+export type MCPServerIcon = {
+  src: string;
+  sizes?: string[];
+  mimeType?: string;
+  theme?: 'light' | 'dark';
+};
+
 export type MCPManagerConfig = {
   name: string;
   disabled: boolean;
@@ -79,6 +92,8 @@ export type MCPManagerConfig = {
    * packageable-vs-abort purely from `source.type`.
    */
   source?: MCPServerSource;
+  /** Optional logo variants displayed by MCP management and picker cards. */
+  icons?: MCPServerIcon[];
   /** Name-independent host-path security metadata supplied by an installer. */
   hostPathAccess?: MCPHostPathAccessConfig;
   /** Package-level protected-path policy; legacy Settings remains a read fallback. */
@@ -134,8 +149,9 @@ export type MCPManagerConfig = {
    * MCP elicitation (#238): opt-in capability letting this server ask the user for
    * additional input during a tool call (server -> client `elicitation/create`, spec
    * revision 2026-07-28). Opt-in: when absent/disabled, FLUJO declares NO elicitation
-   * capability and rejects any request. Unattended/scheduled runs auto-cancel elicitation
-   * requests rather than blocking. URL-mode elicitation is deferred to a follow-up.
+   * form capability and rejects form requests. Unattended/scheduled runs auto-cancel
+   * elicitation requests rather than blocking. URL-mode is separately available only
+   * while the user is explicitly starting a negotiated mcp-stdio-oauth flow.
    */
   elicitation?: MCPElicitationPolicy;
   /**
@@ -273,6 +289,30 @@ export interface MCPConnectionAttempt {
   error?: string;
 }
 
+/** A downstream OAuth authorization reported by the mcp-stdio-oauth extension. */
+export interface MCPStdioOAuthAuthorization {
+  /** Stable, opaque identifier supplied back to the server when authorization starts. */
+  id: string;
+  /** Optional provider display hint. It must not be used for security decisions. */
+  provider?: string;
+  /** Human-readable account/provider name, for example "Google Workspace". */
+  label: string;
+  /** Extension-defined state. `ready` is the only universally non-blocking state. */
+  state: string;
+  /** Whether a headless flow must stop until this requirement is ready. */
+  blocksUnattendedUse: boolean;
+  /** Optional safe-to-display explanation from the server. */
+  message?: string;
+}
+
+/** Negotiated mcp-stdio-oauth readiness included with an MCP server's status. */
+export interface MCPStdioOAuthStatus {
+  supported: boolean;
+  authorizations: MCPStdioOAuthAuthorization[];
+  /** The first authorization currently preventing unattended tool execution. */
+  blockingAuthorization?: MCPStdioOAuthAuthorization;
+}
+
 // Define ServerState as an intersection type
 export type MCPServerState = MCPServerConfig & {
   status: 'connected' | 'disconnected' | 'error' | 'connecting' | 'initialization' | 'requires_authentication';
@@ -284,4 +324,5 @@ export type MCPServerState = MCPServerConfig & {
   error?: string;
   stderrOutput?: string;
   authorizationUrl?: string; // OAuth authorization URL when authentication is required
+  stdioOAuth?: MCPStdioOAuthStatus;
 };

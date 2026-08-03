@@ -6,9 +6,16 @@ import type {
   FlowUsageContext,
   PlausibilityIssue,
   PlausibilityPatch,
+  StepAgentSuggestion,
   StepToolSuggestion,
 } from '@/shared/types/flow/assistance';
 import { encodeBindingPill, findBindings } from './mcpBinding';
+import { buildHandoffToolNameMap } from '@/shared/utils/handoffNaming';
+import {
+  configureGuidedSubagentEdge,
+  configureGuidedSubagentNode,
+  getGuidedSubagentLinks,
+} from './guidedSubagents';
 
 export interface ApplyStepToolsOptions {
   nodeId: string;
@@ -17,8 +24,34 @@ export interface ApplyStepToolsOptions {
   proposedPrompt?: string;
 }
 
+export interface ApplyStepAgentsOptions {
+  nodeId: string;
+  selections: StepAgentSuggestion[];
+  availableAgents: Flow[];
+}
+
 function cloneFlow(flow: Flow): Flow {
   return JSON.parse(JSON.stringify(flow)) as Flow;
+}
+
+/** Apply only the explicitly approved plausibility patches to an editable draft bundle. */
+export function applyPlausibilityPatches(
+  flows: Flow[],
+  patches: PlausibilityPatch[],
+): Flow[] {
+  const updated = flows.map(cloneFlow);
+  const byId = new Map(updated.map((flow) => [flow.id, flow]));
+
+  for (const patch of patches) {
+    const node = byId.get(patch.flowId)?.nodes.find((candidate) => candidate.id === patch.nodeId);
+    if (!node) continue;
+    const properties = { ...(node.data.properties ?? {}) };
+    for (const [key, value] of Object.entries(patch.set)) properties[key] = value;
+    for (const key of patch.remove) delete properties[key];
+    node.data = { ...node.data, properties };
+  }
+
+  return updated;
 }
 
 function edgeType(edge: Edge): string | undefined {
@@ -141,6 +174,97 @@ export function applyStepToolSelections(flow: Flow, options: ApplyStepToolsOptio
     ...(processNode.data.properties ?? {}),
     promptTemplate: ensurePills(approvedPrompt, approved),
   };
+  return next;
+}
+
+/**
+ * Attach approved saved flows as callable agents for one Process node.
+ * The generated Process/Subflow edge uses the same isolated, returning
+ * sub-agent contract as the Guided picker and is idempotent by child flow id.
+ */
+export function applyStepAgentSelections(flow: Flow, options: ApplyStepAgentsOptions): Flow {
+  const next = cloneFlow(flow);
+  const processNode = next.nodes.find((node) => node.id === options.nodeId && node.data.type === 'process');
+  if (!processNode) throw new Error(`Process node not found: ${options.nodeId}`);
+
+  const availableById = new Map(
+    options.availableAgents
+      .filter((agent) => agent.id !== next.id)
+      .map((agent) => [agent.id, agent]),
+  );
+  const nodeById = new Map(next.nodes.map((node) => [node.id, node]));
+  const existingFlowIds = new Set(
+    getGuidedSubagentLinks(next.nodes, next.edges)
+      .filter((link) => link.processNodeId === processNode.id)
+      .map((link) => nodeById.get(link.subflowNodeId)?.data.properties?.subflowId)
+      .filter((flowId): flowId is string => typeof flowId === 'string' && !!flowId),
+  );
+  const approved = options.selections.filter((selection, index, all) =>
+    availableById.has(selection.flowId)
+    && all.findIndex((candidate) => candidate.flowId === selection.flowId) === index,
+  );
+  const newlyAttached: Array<{ suggestion: StepAgentSuggestion; node: FlowNode }> = [];
+  let connectionCount = existingFlowIds.size;
+
+  for (const selection of approved) {
+    if (existingFlowIds.has(selection.flowId)) continue;
+    const agent = availableById.get(selection.flowId)!;
+    const preparedNode: FlowNode = {
+      id: uuidv4(),
+      type: 'subflow',
+      position: {
+        x: processNode.position.x - 350,
+        y: processNode.position.y + connectionCount * 150,
+      },
+      data: { label: agent.name, type: 'subflow', properties: {} },
+    };
+    connectionCount += 1;
+    const subagentNode = configureGuidedSubagentNode(preparedNode, agent);
+    const edge = configureGuidedSubagentEdge({
+      id: `${processNode.id}:process-bottom->${subagentNode.id}:subflow-top`,
+      source: processNode.id,
+      sourceHandle: 'process-bottom',
+      target: subagentNode.id,
+      targetHandle: 'subflow-top',
+      type: 'custom',
+      data: { edgeType: 'standard' },
+      animated: true,
+    });
+    next.nodes.push(subagentNode);
+    next.edges.push(edge);
+    existingFlowIds.add(selection.flowId);
+    newlyAttached.push({ suggestion: selection, node: subagentNode });
+  }
+
+  if (newlyAttached.length > 0) {
+    const currentNodeById = new Map(next.nodes.map((node) => [node.id, node]));
+    const targetIds = new Set<string>();
+    for (const edge of next.edges) {
+      if (edgeType(edge) === 'mcp' || edgeType(edge) === 'resource') continue;
+      if (edge.source === processNode.id) targetIds.add(edge.target);
+      if (edge.target === processNode.id && (edge.data as { bidirectional?: boolean } | undefined)?.bidirectional) {
+        targetIds.add(edge.source);
+      }
+    }
+    const handoffNames = buildHandoffToolNameMap(
+      [...targetIds]
+        .map((id) => currentNodeById.get(id))
+        .filter((node): node is FlowNode => !!node)
+        .map((node) => ({ id: node.id, label: node.data.label, type: node.type || node.data.type })),
+    );
+    const prompt = typeof processNode.data.properties?.promptTemplate === 'string'
+      ? processNode.data.properties.promptTemplate
+      : '';
+    processNode.data.properties = {
+      ...(processNode.data.properties ?? {}),
+      promptTemplate: ensurePills(prompt, newlyAttached.map(({ suggestion, node }) => ({
+        server: 'handoff',
+        tool: handoffNames.get(node.id) || `handoff_to_${node.id}`,
+        reason: suggestion.reason,
+      }))),
+    };
+  }
+
   return next;
 }
 

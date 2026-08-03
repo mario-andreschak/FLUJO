@@ -1,5 +1,5 @@
 import path from 'node:path';
-import type { MCPHostPathAccessConfig, MCPStdioConfig } from '@/shared/types/mcp';
+import type { MCPHostPathAccessConfig, MCPServerIcon, MCPStdioConfig } from '@/shared/types/mcp';
 
 type Environment = Readonly<Record<string, string | undefined>>;
 
@@ -9,6 +9,7 @@ export type ShippedMcpServerDescriptor = {
   packageDirectory: string;
   disabledByDefault?: (env: Environment) => boolean;
   enableMcpApps?: boolean;
+  icons: MCPServerIcon[];
   hostPathAccess?: MCPHostPathAccessConfig;
 };
 
@@ -22,11 +23,13 @@ export const SHIPPED_MCP_SERVERS: readonly ShippedMcpServerDescriptor[] = [
     defaultName: 'flujo',
     packageId: '@mario.andreschak/mcp-flujo',
     packageDirectory: 'flujo',
+    icons: [{ src: '/mcp-icons/flujo.svg', mimeType: 'image/svg+xml' }],
   },
   {
     defaultName: 'filesystem',
     packageId: '@mario.andreschak/mcp-filesystem',
     packageDirectory: 'filesystem',
+    icons: [{ src: '/mcp-icons/filesystem.svg', mimeType: 'image/svg+xml' }],
     hostPathAccess: {
       environmentRootVariables: ['FLUJO_FS_ROOTS'],
       protectedPaths: true,
@@ -37,6 +40,7 @@ export const SHIPPED_MCP_SERVERS: readonly ShippedMcpServerDescriptor[] = [
     defaultName: 'bash',
     packageId: '@mario.andreschak/mcp-bash',
     packageDirectory: 'bash',
+    icons: [{ src: '/mcp-icons/bash.svg', mimeType: 'image/svg+xml' }],
     enableMcpApps: true,
     hostPathAccess: {
       environmentRootVariables: ['FLUJO_BASH_ROOTS', 'FLUJO_FS_ROOTS'],
@@ -48,6 +52,7 @@ export const SHIPPED_MCP_SERVERS: readonly ShippedMcpServerDescriptor[] = [
     defaultName: 'browser',
     packageId: '@mario.andreschak/mcp-browser',
     packageDirectory: 'browser',
+    icons: [{ src: '/mcp-icons/browser.svg', mimeType: 'image/svg+xml' }],
     enableMcpApps: true,
     disabledByDefault: (env) => !/^(1|true|yes|on)$/i.test(
       env.FLUJO_BROWSER_ENABLED?.trim() ?? '',
@@ -129,6 +134,7 @@ export function createShippedServerConfig(
     _buildCommand: '',
     _installCommand: '',
     source: { type: 'marketplace', id: descriptor.packageId },
+    icons: descriptor.icons,
     exposeAsMcpServer: true,
     enableMcpApps: descriptor.enableMcpApps ?? false,
     ...(descriptor.hostPathAccess

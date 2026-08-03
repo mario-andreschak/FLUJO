@@ -331,7 +331,7 @@ export function buildSandboxUrl(
   } else {
     if (host.protocol !== 'http:') {
       throw new Error(
-        'MCP Apps on HTTPS require FLUJO_MCP_APP_SANDBOX_PUBLIC_URL to be configured',
+        'MCP Apps on HTTPS require Public or Local Network access and an HTTPS proxy for sandbox port 4201',
       );
     }
     if (

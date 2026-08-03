@@ -12,6 +12,7 @@ import {
 import AddRoundedIcon from '@mui/icons-material/AddRounded';
 import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
 import HubRoundedIcon from '@mui/icons-material/HubRounded';
+import SwapHorizRoundedIcon from '@mui/icons-material/SwapHorizRounded';
 import CardPickerDialog from '@/frontend/components/shared/CardPickerDialog';
 import type { CardPickerItem } from '@/frontend/components/shared/CardPickerGrid';
 import ServerCard from '@/frontend/components/mcp/MCPServerManager/ServerCard';
@@ -41,8 +42,12 @@ interface InspectorMcpServersProps {
   connections: InspectorMcpConnection[];
   beginnerMode?: boolean;
   heading?: React.ReactNode;
+  actionLabel?: string;
+  emptyMessage?: React.ReactNode;
+  pickerAriaLabel?: string;
+  singleSelection?: boolean;
   onConnect: (processNodeId: string, serverName: string) => void | Promise<void>;
-  onRemove: (processNodeId: string, mcpNodeId: string) => void;
+  onRemove?: (processNodeId: string, mcpNodeId: string) => void;
   loadServers: () => Promise<InspectorMcpServerOption[]>;
 }
 
@@ -65,6 +70,10 @@ const InspectorMcpServers: React.FC<InspectorMcpServersProps> = ({
   connections,
   beginnerMode = false,
   heading: headingOverride,
+  actionLabel: actionLabelOverride,
+  emptyMessage: emptyMessageOverride,
+  pickerAriaLabel,
+  singleSelection = false,
   onConnect,
   onRemove,
   loadServers,
@@ -153,9 +162,12 @@ const InspectorMcpServers: React.FC<InspectorMcpServersProps> = ({
   const heading = headingOverride ?? (beginnerMode
     ? t('flows.inspector.stepApps')
     : t('flows.inspector.connectedMcpServers'));
-  const addLabel = beginnerMode
+  const addLabel = actionLabelOverride ?? (beginnerMode
     ? t('flows.inspector.addApp')
-    : t('flows.inspector.addMcpServer');
+    : t('flows.inspector.addMcpServer'));
+  const emptyMessage = emptyMessageOverride ?? (beginnerMode
+    ? t('flows.inspector.noApps')
+    : t('flows.inspector.noMcpServers'));
 
   return (
     <Box
@@ -175,14 +187,16 @@ const InspectorMcpServers: React.FC<InspectorMcpServersProps> = ({
             aria-label={addLabel}
             onClick={() => { void openPicker(); }}
           >
-            <AddRoundedIcon fontSize="small" />
+            {singleSelection
+              ? <SwapHorizRoundedIcon fontSize="small" />
+              : <AddRoundedIcon fontSize="small" />}
           </IconButton>
         </Tooltip>
       </Stack>
 
       {connections.length === 0 ? (
         <Typography variant="caption" color="text.secondary" display="block" sx={{ px: 1.25, pb: 1.25 }}>
-          {beginnerMode ? t('flows.inspector.noApps') : t('flows.inspector.noMcpServers')}
+          {emptyMessage}
         </Typography>
       ) : (
         <Stack sx={{ borderTop: 1, borderColor: 'divider' }}>
@@ -203,22 +217,24 @@ const InspectorMcpServers: React.FC<InspectorMcpServersProps> = ({
               <Typography variant="body2" noWrap sx={{ flex: 1, minWidth: 0 }}>
                 {connection.serverName}
               </Typography>
-              <Tooltip title={t(
-                beginnerMode ? 'flows.inspector.removeApp' : 'flows.inspector.removeMcpServer',
-                { server: connection.serverName },
-              )}>
-                <IconButton
-                  size="small"
-                  color="error"
-                  aria-label={t(
+              {!singleSelection && onRemove && (
+                <Tooltip title={t(
                     beginnerMode ? 'flows.inspector.removeApp' : 'flows.inspector.removeMcpServer',
                     { server: connection.serverName },
-                  )}
-                  onClick={() => onRemove(processNodeId, connection.nodeId)}
-                >
-                  <DeleteOutlineRoundedIcon fontSize="small" />
-                </IconButton>
-              </Tooltip>
+                  )}>
+                  <IconButton
+                    size="small"
+                    color="error"
+                    aria-label={t(
+                      beginnerMode ? 'flows.inspector.removeApp' : 'flows.inspector.removeMcpServer',
+                      { server: connection.serverName },
+                    )}
+                    onClick={() => onRemove(processNodeId, connection.nodeId)}
+                  >
+                    <DeleteOutlineRoundedIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              )}
             </Stack>
           ))}
         </Stack>
@@ -227,7 +243,7 @@ const InspectorMcpServers: React.FC<InspectorMcpServersProps> = ({
       <CardPickerDialog
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}
-        ariaLabel={beginnerMode ? t('flows.inspector.chooseApp') : t('flows.serverTools.connectTitle')}
+        ariaLabel={pickerAriaLabel ?? (beginnerMode ? t('flows.inspector.chooseApp') : t('flows.serverTools.connectTitle'))}
         isLoading={isLoading}
         error={loadError}
         emptyMessage={beginnerMode ? t('flows.inspector.noAppsToAdd') : t('flows.serverTools.noneToConnect')}

@@ -9,6 +9,7 @@ import {
   buildSandboxCsp,
   buildSandboxProxyCsp,
   buildSandboxProxyHtml,
+  deriveSandboxPublicUrl,
   getConfiguredSandboxHostOrigins,
   getSandboxPublicUrl,
   SANDBOX_HOST_ORIGINS_ENV,
@@ -146,12 +147,18 @@ describe('buildSandboxProxyCsp', () => {
 describe('hosted sandbox endpoint configuration', () => {
   const originalPublicUrl = process.env[SANDBOX_PUBLIC_URL_ENV];
   const originalHostOrigins = process.env[SANDBOX_HOST_ORIGINS_ENV];
+  const originalExposure = process.env.FLUJO_EXPOSURE_MODE;
+  const originalExposureSource = process.env.FLUJO_EXPOSURE_MODE_SOURCE;
 
   afterEach(() => {
     if (originalPublicUrl === undefined) delete process.env[SANDBOX_PUBLIC_URL_ENV];
     else process.env[SANDBOX_PUBLIC_URL_ENV] = originalPublicUrl;
     if (originalHostOrigins === undefined) delete process.env[SANDBOX_HOST_ORIGINS_ENV];
     else process.env[SANDBOX_HOST_ORIGINS_ENV] = originalHostOrigins;
+    if (originalExposure === undefined) delete process.env.FLUJO_EXPOSURE_MODE;
+    else process.env.FLUJO_EXPOSURE_MODE = originalExposure;
+    if (originalExposureSource === undefined) delete process.env.FLUJO_EXPOSURE_MODE_SOURCE;
+    else process.env.FLUJO_EXPOSURE_MODE_SOURCE = originalExposureSource;
   });
 
   it('normalizes a separately hosted public URL and rejects credentialed URLs', () => {
@@ -160,6 +167,16 @@ describe('hosted sandbox endpoint configuration', () => {
 
     process.env[SANDBOX_PUBLIC_URL_ENV] = 'https://user:secret@apps.example.test/';
     expect(getSandboxPublicUrl()).toBeUndefined();
+  });
+
+  it('derives the HTTPS sandbox origin from the one Public setting', () => {
+    process.env.FLUJO_EXPOSURE_MODE = 'public';
+    expect(deriveSandboxPublicUrl('https://flujo.example.test', 4201)).toBe(
+      'https://flujo.example.test:4201/sandbox.html',
+    );
+
+    process.env.FLUJO_EXPOSURE_MODE = 'localhost';
+    expect(deriveSandboxPublicUrl('https://flujo.example.test', 4201)).toBeUndefined();
   });
 
   it('uses only exact valid host origins and embeds the allowlist in the proxy', () => {
@@ -171,5 +188,15 @@ describe('hosted sandbox endpoint configuration', () => {
     expect(html).toContain('var HOST_ALLOWLIST_CONFIGURED = true');
     expect(html).toContain('["https://flujo.example.test"]');
     expect(html).not.toContain('javascript:bad');
+  });
+
+  it('ignores leftover public sandbox variables when Settings narrows access', () => {
+    process.env.FLUJO_EXPOSURE_MODE = 'localhost';
+    process.env.FLUJO_EXPOSURE_MODE_SOURCE = 'settings';
+    process.env[SANDBOX_PUBLIC_URL_ENV] = 'https://old-apps.example.test';
+    process.env[SANDBOX_HOST_ORIGINS_ENV] = 'https://old-flujo.example.test';
+
+    expect(getSandboxPublicUrl()).toBeUndefined();
+    expect(getConfiguredSandboxHostOrigins()).toEqual([]);
   });
 });

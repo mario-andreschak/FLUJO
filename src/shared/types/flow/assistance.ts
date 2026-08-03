@@ -11,6 +11,24 @@ export interface StepToolSuggestionResult {
   suggestions: StepToolSuggestion[];
   /** A complete replacement prompt. It is not applied until the user consents. */
   proposedPrompt: string;
+  /** A short reply when the user asks the assistant to reconsider its proposal. */
+  assistantMessage?: string;
+}
+
+export interface StepAgentSuggestion {
+  flowId: string;
+  flowName: string;
+  reason: string;
+}
+
+export interface StepAgentSuggestionResult {
+  nodeId: string;
+  suggestions: StepAgentSuggestion[];
+}
+
+export interface StepPromptImprovementResult {
+  nodeId: string;
+  prompt: string;
 }
 
 export interface FlowUsageContext {

@@ -124,6 +124,7 @@ describe('normal stdio delivery', () => {
       ]);
       expect(path.isAbsolute(config.cwd ?? '')).toBe(true);
       expect(config.source).toEqual({ type: 'marketplace', id: descriptor.packageId });
+      expect(config.icons).toEqual(descriptor.icons);
       expect(config.roots).toEqual([]);
       expect(config.enableMcpApps).toBe(descriptor.enableMcpApps ?? false);
     }

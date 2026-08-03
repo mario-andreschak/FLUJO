@@ -10,6 +10,7 @@ import { MCPServerConfig, MCPElicitationPolicy } from '@/shared/types/mcp';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { getElicitationContext } from './elicitationContext';
 import { registerPendingElicitation } from './elicitationRegistry';
+import { captureExternalAuthorizationElicitation } from './externalAuthorization';
 
 const log = createLogger('backend/services/mcp/elicitation');
 
@@ -34,8 +35,8 @@ export function elicitationConfigKey(config: MCPServerConfig): string {
 
 /**
  * Register the `elicitation/create` handler on a v1 SDK client.
- * Only call this when elicitationEnabled(config) is true — the handler
- * requires the client to have declared the elicitation capability.
+ * The URL handler is always registered for the negotiated mcp-stdio-oauth
+ * extension. Form requests remain guarded by the server's explicit policy.
  */
 export function registerElicitationHandler(client: Client, config: MCPServerConfig): void {
   client.setRequestHandler(ElicitRequestSchema, createElicitationHandler(config));
@@ -46,18 +47,26 @@ export function registerElicitationHandler(client: Client, config: MCPServerConf
  * and the v2-beta client (betaClient.ts uses string method name).
  *
  * Flow:
- * 1. Check elicitation is enabled (guard against stale handlers).
- * 2. Look up the active run context for this server (conversationId + unattended flag).
- * 3. If unattended → immediately return { action: 'cancel' }.
- * 4. For URL-mode requests → also cancel (V1 only supports form mode).
- * 5. Emit `run:awaiting_elicitation` SSE event to the frontend.
- * 6. Await a promise registered in elicitationRegistry (with 5-min timeout).
- * 7. Return the user's ElicitResult to the server.
+ * URL mode is accepted only while an explicit mcp-stdio-oauth start
+ * request is pending; otherwise it is cancelled. Form mode follows the
+ * existing per-server trust policy and active-run context.
  */
 export function createElicitationHandler(
   config: MCPServerConfig
 ): (request: { params?: unknown }) => Promise<ElicitResult> {
   return async (request): Promise<ElicitResult> => {
+    const params = request.params as {
+      mode?: string;
+      message?: string;
+      requestedSchema?: Record<string, unknown>;
+      elicitationId?: string;
+      url?: string;
+    } | undefined;
+
+    const externalAuthorizationResult =
+      await captureExternalAuthorizationElicitation(config.name, params ?? {});
+    if (externalAuthorizationResult) return externalAuthorizationResult;
+
     if (!elicitationEnabled(config)) {
       throw new McpError(ErrorCode.MethodNotFound, 'Elicitation is not enabled for this server');
     }
@@ -72,20 +81,6 @@ export function createElicitationHandler(
 
     if (ctx.getUnattended()) {
       log.warn(`Elicitation request from ${config.name} in unattended run ${ctx.conversationId}; auto-cancelling`);
-      return { action: 'cancel' };
-    }
-
-    const params = request.params as {
-      mode?: string;
-      message?: string;
-      requestedSchema?: Record<string, unknown>;
-      elicitationId?: string;
-      url?: string;
-    } | undefined;
-
-    // V1: URL mode is not supported — cancel cleanly so the server can handle it.
-    if (params?.mode === 'url') {
-      log.warn(`Elicitation URL mode is not supported in V1 (server: ${config.name}); auto-cancelling`);
       return { action: 'cancel' };
     }
 

@@ -102,6 +102,7 @@ import {
   configureGuidedSubagentNode,
   getGuidedSubagentLinks,
 } from '@/utils/shared/guidedSubagents';
+import { resolveAutoNodeLabel } from '@/shared/utils/nodeLabel';
 
 const FlowBuilderContainer = styled(Box)(({ theme }) => ({
   display: 'flex',
@@ -384,6 +385,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   );
   const [assistanceOpen, setAssistanceOpen] = useState(false);
   const [assistanceNodeId, setAssistanceNodeId] = useState<string | null>(null);
+  const [assistanceFocus, setAssistanceFocus] = useState<'apps' | 'agents' | 'review'>('apps');
   const fallbackFlowId = useRef(initialFlow?.id ?? uuidv4());
   const editRevisionRef = useRef(0);
   const savePromiseRef = useRef<Promise<SaveResult> | null>(null);
@@ -1405,6 +1407,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         });
       }
       setAssistanceNodeId(processNode.id);
+      setAssistanceFocus('apps');
       setAssistanceOpen(true);
     } else if (!guidedSelectedModelId) {
       showBuilderNotice(t('flows.builder.connectModel'));
@@ -1622,6 +1625,40 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setEdges(eds => [...eds, edge]);
     log.info(`Connected MCP server "${serverName}" to process node ${processNodeId}`);
   }, [nodes, edges]);
+
+  const handleSelectMcpNodeServer = useCallback(async (mcpNode: FlowNode, serverName: string) => {
+    if (mcpNode.data.type !== 'mcp') return;
+
+    let enabledTools: string[] = [];
+    try {
+      const result = await mcpService.listServerTools(serverName);
+      if (!result.error && Array.isArray(result.tools)) {
+        enabledTools = result.tools.map((tool: { name: string }) => tool.name);
+      }
+    } catch (error) {
+      log.warn(`handleSelectMcpNodeServer: could not load tools for ${serverName}`, error);
+    }
+
+    const previousProperties = mcpNode.data.properties ?? {};
+    const { enabledResources: _enabledResources, ...retainedProperties } = previousProperties;
+    updateNodeData(mcpNode.id, {
+      ...mcpNode.data,
+      label: resolveAutoNodeLabel({
+        currentLabel: mcpNode.data.label,
+        nameIsCustom: previousProperties.nameIsCustom === true,
+        defaultLabel: 'MCP Node',
+        previousAutoLabel: typeof previousProperties.boundServer === 'string'
+          ? previousProperties.boundServer
+          : undefined,
+        nextAutoLabel: serverName,
+      }),
+      properties: {
+        ...retainedProperties,
+        boundServer: serverName,
+        enabledTools,
+      },
+    });
+  }, [updateNodeData]);
 
   const handleRemoveMcpServer = useCallback((processNodeId: string, mcpNodeId: string) => {
     const isTargetConnection = (edge: Edge) =>
@@ -2103,6 +2140,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
               onModelChange={setGuidedSelectedModelId}
               onCheckPlausibility={() => {
                 setAssistanceNodeId(null);
+                setAssistanceFocus('review');
                 setAssistanceOpen(true);
               }}
               currentFlowId={initialFlow?.id ?? fallbackFlowId.current}
@@ -2179,16 +2217,51 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
           onOpenPermissionRules={() => setPermissionRulesDialogOpen(true)}
           onSuggestTools={(node) => {
             setAssistanceNodeId(node.id);
+            setAssistanceFocus('apps');
             setAssistanceOpen(true);
+          }}
+          onSuggestAgents={(node) => {
+            setAssistanceNodeId(node.id);
+            setAssistanceFocus('agents');
+            setAssistanceOpen(true);
+          }}
+          onImprovePrompt={async (node) => {
+            const boundModel = node.data.properties?.boundModel;
+            const legacyModel = node.data.properties?.modelId;
+            const promptModelId = typeof boundModel === 'string' && boundModel
+              ? boundModel
+              : typeof legacyModel === 'string' && legacyModel
+                ? legacyModel
+                : guidedSelectedModelId;
+            if (!promptModelId) throw new Error(t('flows.inspector.chooseAiToImprove'));
+            const flowWithCommittedNode: Flow = {
+              ...currentFlow,
+              nodes: currentFlow.nodes.map((candidate) => candidate.id === node.id ? node : candidate),
+            };
+            const result = await flowService.improvePromptForStep({
+              flow: flowWithCommittedNode,
+              nodeId: node.id,
+              modelId: promptModelId,
+            });
+            return result.prompt;
           }}
           onCheckPlausibility={() => {
             setAssistanceNodeId(null);
+            setAssistanceFocus('review');
             setAssistanceOpen(true);
           }}
           connectedMcpServers={connectedInspectorMcpServers}
           onConnectMcpServer={handleConnectMcpServer}
           onRemoveMcpServer={handleRemoveMcpServer}
           loadMcpServers={loadInspectorMcpServers}
+          onSelectMcpNodeServer={handleSelectMcpNodeServer}
+          currentFlowId={initialFlow?.id ?? fallbackFlowId.current}
+          availableAgents={allFlows}
+          connectedAgents={selectedNode?.data.type === 'process'
+            ? agentConnectionsByProcess.get(selectedNode.id) ?? []
+            : []}
+          onConnectAgent={handleConnectGuidedAgent}
+          onRemoveAgent={handleRemoveGuidedAgent}
           models={guidedModels}
         />
       )}
@@ -2219,6 +2292,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         flow={currentFlow}
         relatedFlows={relatedDraftFlows}
         nodeId={assistanceNodeId}
+        initialFocus={assistanceFocus}
         modelId={assistanceModelId}
         models={guidedModels}
         onApply={applyAssistedFlow}

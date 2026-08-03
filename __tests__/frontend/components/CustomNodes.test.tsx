@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import {
   MCPNode,
@@ -117,14 +117,18 @@ describe('FlowBuilder CustomNodes', () => {
     expect(disclosure.closest('.nodrag')).not.toBeNull();
   });
 
-  it('offers quick-connect arrows for a selected node and emits the requested handle', () => {
+  it('reveals quick-connect controls on hover and emits the requested handle', () => {
+    jest.useFakeTimers();
     const listener = jest.fn();
     document.addEventListener(FLOW_QUICK_CONNECT_EVENT, listener);
     renderNode(ProcessNode, {
       label: 'Summarizer',
       type: 'process',
       properties: {},
-    }, {}, true);
+    });
+
+    fireEvent.mouseEnter(screen.getByText('Summarizer').closest('.MuiPaper-root')!);
+    act(() => { jest.advanceTimersByTime(450); });
 
     fireEvent.click(screen.getByRole('button', { name: /bottom of Summarizer/i }));
 
@@ -135,5 +139,31 @@ describe('FlowBuilder CustomNodes', () => {
       side: 'bottom',
     }));
     document.removeEventListener(FLOW_QUICK_CONNECT_EVENT, listener);
+    jest.useRealTimers();
+  });
+
+  it('does not pin quick-connect controls open when a node is selected', () => {
+    renderNode(ProcessNode, {
+      label: 'Summarizer',
+      type: 'process',
+      properties: {},
+    }, {}, true);
+
+    expect(screen.queryByRole('button', { name: /of Summarizer/i })).not.toBeInTheDocument();
+  });
+
+  it('does not offer add-and-connect controls from MCP nodes', () => {
+    jest.useFakeTimers();
+    renderNode(MCPNode as typeof ProcessNode, {
+      label: 'Docs',
+      type: 'mcp',
+      properties: { boundServer: 'documentation' },
+    });
+
+    fireEvent.mouseEnter(screen.getByText('Docs').closest('.MuiPaper-root')!);
+    act(() => { jest.advanceTimersByTime(450); });
+
+    expect(screen.queryByRole('button', { name: /of Docs/i })).not.toBeInTheDocument();
+    jest.useRealTimers();
   });
 });

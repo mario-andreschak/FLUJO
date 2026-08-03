@@ -6,6 +6,9 @@ import { Edge } from '@xyflow/react';
 import { createLogger } from '@/utils/logger';
 import type {
   FlowPlausibilityResult,
+  StepAgentSuggestion,
+  StepAgentSuggestionResult,
+  StepPromptImprovementResult,
   StepToolSuggestion,
   StepToolSuggestionResult,
 } from '@/shared/types/flow/assistance';
@@ -76,6 +79,8 @@ class FlowService {
     nodeId: string;
     modelId: string;
     goal?: string;
+    feedback?: string[];
+    previousSuggestion?: StepToolSuggestionResult;
   }): Promise<StepToolSuggestionResult> {
     const response = await fetch('/api/flow/assist', {
       method: 'POST',
@@ -118,6 +123,53 @@ class FlowService {
     const data = await response.json().catch(() => null);
     if (!response.ok) throw new Error(data?.error || 'Could not connect the approved tools.');
     return data.flow as Flow;
+  }
+
+  async suggestAgentsForStep(payload: {
+    flow: Flow;
+    nodeId: string;
+    modelId: string;
+    goal?: string;
+  }): Promise<StepAgentSuggestionResult> {
+    const response = await fetch('/api/flow/assist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'suggest-agents', ...payload }),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(data?.error || 'Could not suggest connected agents.');
+    return data as StepAgentSuggestionResult;
+  }
+
+  async applyAgentsToStep(payload: {
+    flow: Flow;
+    nodeId: string;
+    selections: StepAgentSuggestion[];
+  }): Promise<Flow> {
+    const response = await fetch('/api/flow/assist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'apply-agents', ...payload }),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(data?.error || 'Could not connect the approved agents.');
+    return data.flow as Flow;
+  }
+
+  async improvePromptForStep(payload: {
+    flow: Flow;
+    nodeId: string;
+    modelId: string;
+    draftPrompt?: string;
+  }): Promise<StepPromptImprovementResult> {
+    const response = await fetch('/api/flow/assist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'improve-prompt', ...payload }),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(data?.error || 'Could not improve this prompt.');
+    return data as StepPromptImprovementResult;
   }
 
   async checkPlausibility(payload: {

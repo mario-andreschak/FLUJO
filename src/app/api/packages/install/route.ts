@@ -8,7 +8,7 @@
  * For headless callers the request itself IS the consent (`consentGranted`
  * defaults to `true`) — this route is fail-closed behind `assertLocalRequest`
  * and is deliberately NOT on the public API allow-list. Hosted tenants opt in
- * only via `FLUJO_EXTRA_LOCAL_HOSTS`.
+ * only by choosing Local Network or Public in Settings.
  *
  * The Packages page "Install from registry" UI instead calls this route twice:
  * once with `consentGranted: false` to fetch a dry-run preview (manifest

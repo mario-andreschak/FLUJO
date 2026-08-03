@@ -34,9 +34,6 @@ services:
     #   - CLAUDE_CODE_OAUTH_TOKEN=...
     #   # Filesystem roots for the in-chat file-browser MCP tool (matches bind-mount above):
     #   - FLUJO_FS_ROOTS=/data/files
-    #   # Hosted HTTPS MCP Apps (proxy this distinct HTTPS origin to port 4201):
-    #   - FLUJO_MCP_APP_SANDBOX_PUBLIC_URL=https://flujo-apps.example.internal/sandbox.html
-    #   - FLUJO_MCP_APP_HOST_ORIGINS=https://flujo.example.internal
     restart: unless-stopped
 
 volumes:

@@ -26,6 +26,7 @@
 import http from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createLogger } from '@/utils/logger';
+import { getExposureMode } from '@/utils/http/exposureMode';
 
 const log = createLogger('backend/mcpApps/sandboxServer');
 
@@ -41,6 +42,13 @@ export const SANDBOX_PUBLIC_URL_ENV = 'FLUJO_MCP_APP_SANDBOX_PUBLIC_URL';
 export const SANDBOX_HOST_ORIGINS_ENV = 'FLUJO_MCP_APP_HOST_ORIGINS';
 
 const MAX_CONFIGURED_HOST_ORIGINS = 16;
+
+function shouldUseLegacySandboxConfiguration(): boolean {
+  const source = process.env.FLUJO_EXPOSURE_MODE_SOURCE;
+  return !source
+    || source === 'legacy'
+    || (source === 'settings' && getExposureMode() === 'public');
+}
 
 type SandboxServerStatus = 'idle' | 'starting' | 'listening' | 'failed';
 
@@ -99,9 +107,12 @@ export function getSandboxPort(): number {
   return Number.isInteger(n) && n > 0 && n < 65536 ? n : DEFAULT_SANDBOX_PORT;
 }
 
-/** Bind host for the listener. Loopback by default; set FLUJO_MCP_APP_SANDBOX_HOST to widen. */
+/** The sandbox follows the same single exposure mode as the main server. */
 function getSandboxBindHost(): string {
-  return process.env.FLUJO_MCP_APP_SANDBOX_HOST || '127.0.0.1';
+  // A container must listen on its bridge interface even when Docker publishes
+  // that port to host loopback only (the docker-compose secure default).
+  if (process.env.FLUJO_CONTAINER) return '0.0.0.0';
+  return getExposureMode() === 'localhost' ? '127.0.0.1' : '0.0.0.0';
 }
 
 function parseHttpOrigin(value: string): string | undefined {
@@ -129,6 +140,7 @@ function parseHttpOrigin(value: string): string | undefined {
  * empty (fail closed); same-host fallback applies only when it is omitted.
  */
 export function getConfiguredSandboxHostOrigins(): string[] {
+  if (!shouldUseLegacySandboxConfiguration()) return [];
   const raw = process.env[SANDBOX_HOST_ORIGINS_ENV];
   if (!raw?.trim()) return [];
 
@@ -145,7 +157,8 @@ export function getConfiguredSandboxHostOrigins(): string[] {
 }
 
 function hasConfiguredSandboxHostOrigins(): boolean {
-  return Boolean(process.env[SANDBOX_HOST_ORIGINS_ENV]?.trim());
+  return shouldUseLegacySandboxConfiguration()
+    && Boolean(process.env[SANDBOX_HOST_ORIGINS_ENV]?.trim());
 }
 
 /**
@@ -153,6 +166,7 @@ function hasConfiguredSandboxHostOrigins(): boolean {
  * TLS for this distinct origin and proxy it to the plain HTTP listener.
  */
 export function getSandboxPublicUrl(): string | undefined {
+  if (!shouldUseLegacySandboxConfiguration()) return undefined;
   const raw = process.env[SANDBOX_PUBLIC_URL_ENV]?.trim();
   if (!raw) return undefined;
   try {
@@ -169,6 +183,34 @@ export function getSandboxPublicUrl(): string | undefined {
     if (parsed.pathname === '/' || parsed.pathname === '') {
       parsed.pathname = '/sandbox.html';
     }
+    return parsed.href;
+  } catch {
+    return undefined;
+  }
+}
+
+export function hasSandboxPublicUrlConfiguration(): boolean {
+  return shouldUseLegacySandboxConfiguration()
+    && Boolean(process.env[SANDBOX_PUBLIC_URL_ENV]?.trim());
+}
+
+/**
+ * Public/network HTTPS installs use the same hostname and the sandbox port as
+ * a distinct browser origin. A reverse proxy only needs to terminate TLS on
+ * that port; no second hostname or origin allowlist is required.
+ */
+export function deriveSandboxPublicUrl(
+  hostOrigin: string,
+  port = getSandboxPort(),
+): string | undefined {
+  if (getExposureMode() === 'localhost') return undefined;
+  try {
+    const parsed = new URL(hostOrigin);
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password) return undefined;
+    parsed.pathname = '/sandbox.html';
+    parsed.search = '';
+    parsed.hash = '';
+    parsed.port = String(port);
     return parsed.href;
   } catch {
     return undefined;

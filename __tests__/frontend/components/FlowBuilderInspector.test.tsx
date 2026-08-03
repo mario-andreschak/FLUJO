@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { InspectorPanel } from '@/frontend/components/Flow/FlowManager/FlowBuilder/InspectorPanel';
 
 jest.mock('@/frontend/components/mcp/MCPServerManager/ServerCard', () => ({
@@ -51,6 +51,7 @@ describe('FlowBuilder InspectorPanel', () => {
     expect(screen.getByRole('tab', { name: 'Node' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByDisplayValue('Find reliable sources')).toBeInTheDocument();
     expect(screen.getByText('model-1')).toBeInTheDocument();
+    expect(screen.queryByLabelText('What this step does')).not.toBeInTheDocument();
 
     const name = screen.getByLabelText('Node name');
     fireEvent.change(name, { target: { value: 'Research deeply' } });
@@ -128,6 +129,43 @@ describe('FlowBuilder InspectorPanel', () => {
     expect(onConnectMcpServer).toHaveBeenCalledWith('process-1', 'github');
   });
 
+  it('changes an MCP node server through the same card picker used by process nodes', async () => {
+    const onSelectMcpNodeServer = jest.fn();
+    const mcpNode: any = {
+      id: 'mcp-1',
+      type: 'mcp',
+      position: { x: 400, y: 200 },
+      selected: true,
+      data: {
+        type: 'mcp',
+        label: 'filesystem',
+        properties: { boundServer: 'filesystem', enabledTools: ['read_file'] },
+      },
+    };
+    render(
+      <InspectorPanel
+        {...baseProps}
+        selectedNode={mcpNode}
+        loadMcpServers={jest.fn().mockResolvedValue([
+          { name: 'filesystem', status: 'connected', transport: 'stdio' },
+          { name: 'github', status: 'connected', transport: 'stdio' },
+        ])}
+        onSelectMcpNodeServer={onSelectMcpNodeServer}
+      />,
+    );
+
+    expect(screen.getByText('Server')).toBeInTheDocument();
+    expect(screen.getAllByText('filesystem')).toHaveLength(2); // inspector title + selected server row
+    fireEvent.click(screen.getByRole('button', { name: 'Choose MCP server' }));
+    expect(screen.getByRole('dialog', { name: 'Choose MCP server' })).toBeInTheDocument();
+    fireEvent.click(await screen.findByText('github'));
+
+    expect(onSelectMcpNodeServer).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'mcp-1' }),
+      'github',
+    );
+  });
+
   it('uses the same rail for flow-level settings when no node is selected', () => {
     render(<InspectorPanel {...baseProps} selectedNode={null} />);
 
@@ -189,6 +227,53 @@ describe('FlowBuilder InspectorPanel', () => {
     expect(onConnectMcpServer).toHaveBeenCalledWith('process-1', 'github');
   });
 
+  it('improves the current prompt with AI and commits the returned text', async () => {
+    const onImprovePrompt = jest.fn().mockResolvedValue('Find and cite reliable primary sources.');
+    const onCommitNode = jest.fn();
+    render(
+      <InspectorPanel
+        {...baseProps}
+        beginnerMode
+        selectedNode={processNode}
+        onCommitNode={onCommitNode}
+        onImprovePrompt={onImprovePrompt}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Improve prompt with AI' }));
+
+    await waitFor(() => expect(onImprovePrompt).toHaveBeenCalledWith(expect.objectContaining({ id: 'process-1' })));
+    await waitFor(() => expect(onCommitNode).toHaveBeenLastCalledWith('process-1', expect.objectContaining({
+      properties: expect.objectContaining({ promptTemplate: 'Find and cite reliable primary sources.' }),
+    })));
+    expect(screen.getByDisplayValue('Find and cite reliable primary sources.')).toBeInTheDocument();
+  });
+
+  it('shows agents directly below apps in the step inspector', () => {
+    const onRemoveAgent = jest.fn();
+    render(
+      <InspectorPanel
+        {...baseProps}
+        beginnerMode
+        selectedNode={processNode}
+        connectedMcpServers={[]}
+        onConnectMcpServer={jest.fn()}
+        onRemoveMcpServer={jest.fn()}
+        loadMcpServers={jest.fn().mockResolvedValue([])}
+        currentFlowId="root"
+        connectedAgents={[{ nodeId: 'agent-node', flowId: 'writer', flowName: 'Writer' }]}
+        onConnectAgent={jest.fn()}
+        onRemoveAgent={onRemoveAgent}
+      />,
+    );
+
+    const appsHeading = screen.getByText('Apps this step can use');
+    const agentsHeading = screen.getByText('Agents this step can use');
+    expect(appsHeading.compareDocumentPosition(agentsHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Writer' }));
+    expect(onRemoveAgent).toHaveBeenCalledWith('process-1', 'agent-node');
+  });
+
   it('binds models through a simple AI picker and an expert model-card picker', async () => {
     const models: any[] = [{
       id: 'model-friendly',
@@ -222,9 +307,18 @@ describe('FlowBuilder InspectorPanel', () => {
 
     unmount();
     render(<InspectorPanel {...baseProps} selectedNode={processNode} models={models} />);
-    expect(screen.getByText('Bound model')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Choose model' }));
-    expect(screen.getByRole('dialog', { name: 'Choose a bound model' })).toBeInTheDocument();
+    expect(screen.getByText('(Connected) AI')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Choose AI' }));
+    expect(screen.getByRole('dialog', { name: 'Choose the connected AI' })).toBeInTheDocument();
     expect(screen.getByText('A helpful model')).toBeInTheDocument();
+  });
+
+  it('highlights a missing connected AI without showing an add icon', () => {
+    render(<InspectorPanel {...baseProps} selectedNode={processNode} models={[]} />);
+
+    const message = screen.getByText('No AI connected.');
+    expect(message).toHaveStyle({ fontWeight: 700 });
+    expect(screen.getByRole('button', { name: 'Choose AI' })).toBeInTheDocument();
+    expect(screen.queryByTestId('AddRoundedIcon')).not.toBeInTheDocument();
   });
 });

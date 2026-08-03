@@ -9,9 +9,10 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import AddRoundedIcon from '@mui/icons-material/AddRounded';
+import { alpha } from '@mui/material/styles';
 import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
 import SmartToyRoundedIcon from '@mui/icons-material/SmartToyRounded';
+import SwapHorizRoundedIcon from '@mui/icons-material/SwapHorizRounded';
 import CardPickerDialog from '@/frontend/components/shared/CardPickerDialog';
 import type { CardPickerItem } from '@/frontend/components/shared/CardPickerGrid';
 import ModelCard from '@/frontend/components/models/list/ModelCard';
@@ -103,9 +104,10 @@ const InspectorModelBinding: React.FC<InspectorModelBindingProps> = ({
   return (
     <Box
       sx={(theme) => ({
-        border: `1px solid ${theme.palette.divider}`,
+        border: `1px solid ${selectedModelId ? theme.palette.divider : theme.palette.error.main}`,
         borderRadius: 2.5,
         overflow: 'hidden',
+        backgroundColor: selectedModelId ? 'transparent' : alpha(theme.palette.error.main, 0.07),
       })}
     >
       <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: 1.25, py: 0.75 }}>
@@ -116,15 +118,16 @@ const InspectorModelBinding: React.FC<InspectorModelBindingProps> = ({
           <IconButton
             size="small"
             aria-label={chooseLabel}
+            color={selectedModelId ? 'default' : 'error'}
             onClick={() => setPickerOpen(true)}
           >
-            <AddRoundedIcon fontSize="small" />
+            <SwapHorizRoundedIcon fontSize="small" />
           </IconButton>
         </Tooltip>
       </Stack>
 
       {!selectedModelId ? (
-        <Typography variant="caption" color="text.secondary" display="block" sx={{ px: 1.25, pb: 1.25 }}>
+        <Typography variant="caption" color="error.main" fontWeight={700} display="block" sx={{ px: 1.25, pb: 1.25 }}>
           {beginnerMode ? t('flows.inspector.noStepAi') : t('flows.inspector.noBoundModel')}
         </Typography>
       ) : (

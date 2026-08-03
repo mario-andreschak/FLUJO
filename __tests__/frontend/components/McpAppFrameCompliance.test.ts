@@ -265,7 +265,7 @@ describe('MCP App host policy helpers', () => {
     expect(() => buildSandboxUrl(
       { port: 4201, token: 'secret' },
       { origin: 'https://flujo.example.test', protocol: 'https:' },
-    )).toThrow(/PUBLIC_URL/);
+    )).toThrow(/sandbox port 4201/);
     expect(() => buildSandboxUrl(
       { url: 'https://flujo.example.test/sandbox.html', token: 'secret' },
       { origin: 'https://flujo.example.test', protocol: 'https:' },

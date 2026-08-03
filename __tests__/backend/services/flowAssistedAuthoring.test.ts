@@ -26,6 +26,8 @@ jest.mock('@/backend/services/flow/generationContext', () => ({
 import {
   checkFlowPlausibility,
   generateFlowName,
+  improvePromptForFlowStep,
+  suggestAgentsForFlowStep,
   suggestToolsForFlowStep,
 } from '@/backend/services/flow/assistedAuthoring';
 
@@ -111,6 +113,178 @@ describe('assisted flow authoring service', () => {
       modelId: 'model-1',
     });
     expect(second.suggestions).toEqual([]);
+  });
+
+  it('reconsiders the connected catalog with the prior proposal and user feedback', async () => {
+    const previousSuggestion = {
+      nodeId: 'root-work',
+      suggestions: [{ server: 'files', tool: 'read_file', reason: 'read notes' }],
+      proposedPrompt: 'Read with ${tool:files__read_file}.',
+    };
+    completionMock.mockResolvedValueOnce({
+      completion: { choices: [{ message: { content: JSON.stringify({
+        suggestions: [{ server: 'files', tool: 'write_file', reason: 'exports the result' }],
+        proposedPrompt: 'Export with ${tool:files__write_file}.',
+        assistantMessage: 'The write tool is a better fit for the requested export.',
+      }) } }] },
+    });
+
+    const result = await suggestToolsForFlowStep({
+      flow: processFlow('root', 'Export the notes'),
+      nodeId: 'root-work',
+      modelId: 'model-1',
+      feedback: ['There may be one tool that handles the whole export.'],
+      previousSuggestion,
+    });
+
+    const request = completionMock.mock.calls[0][0] as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const userPayload = JSON.parse(request.messages[1].content);
+    expect(userPayload).toEqual(expect.objectContaining({
+      feedback: ['There may be one tool that handles the whole export.'],
+      previousSuggestion,
+    }));
+    expect(userPayload.connectedTools[0].tools).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'read_file' }),
+      expect.objectContaining({ name: 'write_file' }),
+    ]));
+    expect(result.suggestions).toEqual([
+      { server: 'files', tool: 'write_file', reason: 'exports the result' },
+    ]);
+    expect(result.assistantMessage).toBe('The write tool is a better fit for the requested export.');
+  });
+
+  it('keeps only exact saved-agent suggestions and excludes the current flow', async () => {
+    gatherContextMock.mockResolvedValueOnce({
+      blocks: {
+        models: [{ id: 'model-1', name: 'Helper' }],
+        servers: [],
+        flows: [
+          { id: 'root', name: 'Current', nodeCount: 1 },
+          { id: 'writer', name: 'Writer', description: 'Drafts polished copy', nodeCount: 3 },
+        ],
+      },
+      compile: { models: [], servers: [], serverTools: {}, flows: [] },
+      validatorServers: [],
+      catalog: '',
+    });
+    completionMock.mockResolvedValueOnce({
+      completion: { choices: [{ message: { content: JSON.stringify({
+        suggestions: [
+          { flowId: 'writer', reason: 'draft the final copy' },
+          { flowId: 'missing', reason: 'invented' },
+          { flowId: 'root', reason: 'self reference' },
+        ],
+      }) } }] },
+    });
+
+    await expect(suggestAgentsForFlowStep({
+      flow: processFlow('root', 'Draft polished copy'),
+      nodeId: 'root-work',
+      modelId: 'model-1',
+    })).resolves.toEqual({
+      nodeId: 'root-work',
+      suggestions: [{ flowId: 'writer', flowName: 'Writer', reason: 'draft the final copy' }],
+    });
+  });
+
+  it('preserves connected references when improving a prompt', async () => {
+    const root = processFlow('root', 'Read with ${tool:files__read_file}.');
+    completionMock.mockResolvedValueOnce({
+      completion: { choices: [{ message: { content: '{"prompt":"Read the source carefully and summarize it."}' } }] },
+    });
+
+    const result = await improvePromptForFlowStep({
+      flow: root,
+      nodeId: 'root-work',
+      modelId: 'model-1',
+    });
+
+    expect(result.prompt).toContain('Read the source carefully');
+    expect(result.prompt).toContain('${tool:files__read_file}');
+  });
+
+  it('appends validated handoff conditions at the end of an improved prompt', async () => {
+    const root = processFlow('root', 'Check whether there are GitHub issues to plan.');
+    root.nodes.push(
+      {
+        id: 'convert',
+        type: 'process',
+        position: { x: -100, y: 100 },
+        data: {
+          label: 'Convert GitHub Issues to Plans',
+          type: 'process',
+          description: 'Convert discovered issues into implementation plans.',
+          properties: {},
+        },
+      },
+      {
+        id: 'available',
+        type: 'process',
+        position: { x: 100, y: 100 },
+        data: {
+          label: 'Plan Available',
+          type: 'process',
+          description: 'Continue when a plan is already available.',
+          properties: {},
+        },
+      },
+    );
+    root.edges = [
+      {
+        id: 'empty',
+        source: 'root-work',
+        target: 'convert',
+        data: { edgeType: 'standard', condition: { kind: 'equals', value: 'EMPTY', ignoreCase: true } },
+      },
+      {
+        id: 'not-empty',
+        source: 'root-work',
+        target: 'available',
+        data: { edgeType: 'standard' },
+      },
+    ];
+    completionMock.mockResolvedValueOnce({
+      completion: { choices: [{ message: { content: JSON.stringify({
+        prompt: 'Inspect the GitHub issue list. Ignore ${handoff:invented}.',
+        handoffConditions: [
+          {
+            toolName: 'handoff_to_convert_github_issues_to_plans',
+            condition: 'If the issue list IS empty',
+          },
+          {
+            toolName: 'handoff_to_plan_available',
+            condition: 'If the issue list is NOT empty',
+          },
+          { toolName: 'handoff_to_invented', condition: 'Always' },
+        ],
+      }) } }] },
+    });
+
+    const result = await improvePromptForFlowStep({
+      flow: root,
+      nodeId: 'root-work',
+      modelId: 'model-1',
+    });
+    const request = completionMock.mock.calls[0][0] as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const userPayload = JSON.parse(request.messages[1].content);
+
+    expect(userPayload.handoffs).toEqual([
+      expect.objectContaining({
+        toolName: 'handoff_to_convert_github_issues_to_plans',
+        targetLabel: 'Convert GitHub Issues to Plans',
+        edgeCondition: expect.objectContaining({ kind: 'equals', value: 'EMPTY' }),
+      }),
+      expect.objectContaining({
+        toolName: 'handoff_to_plan_available',
+        targetLabel: 'Plan Available',
+      }),
+    ]);
+    expect(result.prompt).not.toContain('${handoff:invented}');
+    expect(result.prompt).toMatch(/Handoff conditions:\n- If the issue list IS empty, hand off to \$\{tool:handoff__handoff_to_convert_github_issues_to_plans\}\.\n- If the issue list is NOT empty, hand off to \$\{tool:handoff__handoff_to_plan_available\}\.$/);
   });
 
   it('uses unsaved descendants over stored copies and repairs the referenced bundle', async () => {

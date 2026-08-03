@@ -27,6 +27,7 @@ import LanguageRoundedIcon from '@mui/icons-material/LanguageRounded';
 import MicRoundedIcon from '@mui/icons-material/MicRounded';
 import PaletteRoundedIcon from '@mui/icons-material/PaletteRounded';
 import PrivacyTipRoundedIcon from '@mui/icons-material/PrivacyTipRounded';
+import PublicRoundedIcon from '@mui/icons-material/PublicRounded';
 import RocketLaunchRoundedIcon from '@mui/icons-material/RocketLaunchRounded';
 import ScienceRoundedIcon from '@mui/icons-material/ScienceRounded';
 import SettingsSuggestRoundedIcon from '@mui/icons-material/SettingsSuggestRounded';
@@ -42,10 +43,12 @@ import OnboardingSettings from './OnboardingSettings';
 import ExperimentalFeaturesSettings from './ExperimentalFeaturesSettings';
 import PrivacySettings from './PrivacySettings';
 import LanguageSettings from './LanguageSettings';
+import NetworkExposureSettings from './NetworkExposureSettings';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n';
 
 type SettingsSectionId =
+  | 'network'
   | 'globalEnv'
   | 'encryption'
   | 'backup'
@@ -73,6 +76,13 @@ interface SettingsCategory {
 }
 
 const SETTINGS_SECTIONS: SettingsSection[] = [
+  {
+    id: 'network',
+    titleKey: 'settings.section.network',
+    descriptionKey: 'settings.section.networkDescription',
+    icon: PublicRoundedIcon,
+    component: NetworkExposureSettings,
+  },
   {
     id: 'globalEnv',
     titleKey: 'settings.section.globalEnv',
@@ -150,7 +160,7 @@ const SETTINGS_CATEGORIES: SettingsCategory[] = [
     id: 'security',
     titleKey: 'settings.category.security',
     descriptionKey: 'settings.category.securityDescription',
-    sectionIds: ['globalEnv', 'encryption', 'backup'],
+    sectionIds: ['network', 'globalEnv', 'encryption', 'backup'],
   },
   {
     id: 'experience',
@@ -169,7 +179,7 @@ const SETTINGS_CATEGORIES: SettingsCategory[] = [
 export default function Settings() {
   const theme = useTheme();
   const { t } = useI18n();
-  const [activeSectionId, setActiveSectionId] = useState<SettingsSectionId>('globalEnv');
+  const [activeSectionId, setActiveSectionId] = useState<SettingsSectionId>('network');
 
   const sectionsById = useMemo(
     () =>

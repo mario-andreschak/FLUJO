@@ -189,6 +189,23 @@ describe('buildConfigFromOption — npm packages', () => {
     expect(config.rootPath).toBe('.');
   });
 
+  it('retains safe marketplace icons on the installed config', () => {
+    const iconServer = baseServer({
+      icons: [
+        { src: 'https://example.com/weather-light.svg', theme: 'light', mimeType: 'image/svg+xml', sizes: ['48x48', '96x96'] },
+        { src: 'https://example.com/weather-dark.svg', theme: 'dark' },
+        { src: 'data:image/svg+xml;base64,AAAA' },
+      ],
+      packages: server.packages,
+    });
+    const config = buildConfigFromOption(iconServer, getInstallOptions(iconServer)[0]);
+
+    expect(config.icons).toEqual([
+      { src: 'https://example.com/weather-light.svg', theme: 'light', mimeType: 'image/svg+xml', sizes: ['48x48', '96x96'] },
+      { src: 'https://example.com/weather-dark.svg', theme: 'dark' },
+    ]);
+  });
+
   it('reports required env vars that still need a value', () => {
     const option = getInstallOptions(server)[0];
     expect(missingRequiredInputs(option)).toEqual(['WEATHER_API_KEY']);

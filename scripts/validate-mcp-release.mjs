@@ -86,6 +86,7 @@ for (const required of [
   'package.json',
   'bin/flujo.mjs',
   'scripts/launch-next.mjs',
+  'scripts/exposure-mode.mjs',
   '.next/BUILD_ID',
   '.next/routes-manifest.json',
   '.next/server/app-paths-manifest.json',

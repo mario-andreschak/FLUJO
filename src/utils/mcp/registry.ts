@@ -12,7 +12,7 @@
  * save) — the same handoff the GitHub/Remote/Reference tabs use.
  */
 
-import { MCPServerConfig, EnvVarValue, MCPServerSource } from '@/shared/types/mcp/mcp';
+import { MCPServerConfig, EnvVarValue, MCPServerIcon, MCPServerSource } from '@/shared/types/mcp/mcp';
 
 // ---------------------------------------------------------------------------
 // Registry API shapes (subset of server.schema.json that we consume)
@@ -66,7 +66,7 @@ export interface RegistryRepository {
 
 export interface RegistryIcon {
   src: string;
-  sizes?: string;
+  sizes?: string[];
   mimeType?: string;
   /** 'light' | 'dark' — which UI theme the icon is intended for. */
   theme?: string;
@@ -311,13 +311,31 @@ function buildEnvRecord(vars?: RegistryKeyValueInput[]): Record<string, EnvVarVa
 // ---------------------------------------------------------------------------
 
 function baseConfig(server: RegistryServer): Partial<MCPServerConfig> {
+  // Registry entries are untrusted. Persist only web-hosted icon sources so a
+  // saved config can never later inject a data:, javascript:, or file: URL.
+  const icons: MCPServerIcon[] = (server.icons ?? []).flatMap(icon => {
+    if (!icon?.src) return [];
+    try {
+      if (!/^https?:$/.test(new URL(icon.src).protocol)) return [];
+    } catch {
+      return [];
+    }
+    const safeIcon: MCPServerIcon = {
+      src: icon.src,
+      ...(icon.sizes ? { sizes: icon.sizes } : {}),
+      ...(icon.mimeType ? { mimeType: icon.mimeType } : {}),
+      ...(icon.theme === 'light' || icon.theme === 'dark' ? { theme: icon.theme } : {}),
+    };
+    return [safeIcon];
+  });
   return {
     name: sanitizeServerName(server.name),
     disabled: false,
     autoApprove: [],
     env: {},
     _buildCommand: '',
-    _installCommand: ''
+    _installCommand: '',
+    ...(icons.length > 0 ? { icons } : {}),
   };
 }
 

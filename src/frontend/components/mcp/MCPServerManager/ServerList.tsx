@@ -123,6 +123,7 @@ const ServerList: React.FC<ServerListProps> = ({
               selected={selectedServers.has(server.name)}
               onSelect={onServerSelectionChange ? (selected) => onServerSelectionChange(server.name, selected) : undefined}
               hasOAuthTokens={hasOAuthTokens}
+              stdioOAuth={server.stdioOAuth}
               updateInfo={server.rootPath ? updates?.[server.rootPath] : undefined}
               installCommand={server._installCommand}
               buildCommand={server._buildCommand}

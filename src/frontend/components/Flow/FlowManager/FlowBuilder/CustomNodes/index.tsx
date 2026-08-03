@@ -23,6 +23,7 @@ import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import DescriptionIcon from '@mui/icons-material/Description';
 import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
 import BoltIcon from '@mui/icons-material/Bolt';
+import BuildRoundedIcon from '@mui/icons-material/BuildRounded';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import PlayArrowRoundedIcon from '@mui/icons-material/PlayArrowRounded';
 import type { NodeType } from '@/frontend/types/flow/flow';
@@ -141,6 +142,8 @@ interface QuickConnectHandle {
   side: QuickConnectSide;
   /** Separates multiple semantic handles that share the same node side. */
   align?: 'start' | 'center' | 'end';
+  /** Pins a control beside a semantic handle instead of a node corner. */
+  anchor?: string;
 }
 
 // Only handles that can create a valid new neighbor get a quick-connect arrow.
@@ -150,18 +153,13 @@ const QUICK_CONNECT_HANDLES: Record<NodeType, QuickConnectHandle[]> = {
   start: [{ handleId: 'start-bottom', side: 'bottom' }],
   process: [
     { handleId: 'process-bottom', side: 'bottom' },
-    { handleId: 'process-left-mcp', side: 'left', align: 'start' },
-    { handleId: 'process-right-mcp', side: 'right', align: 'start' },
-    { handleId: 'process-left-resource', side: 'left', align: 'end' },
-    { handleId: 'process-right-resource', side: 'right', align: 'end' },
+    { handleId: 'process-left-mcp', side: 'left', anchor: '30%' },
+    { handleId: 'process-right-mcp', side: 'right', anchor: '30%' },
+    { handleId: 'process-left-resource', side: 'left', anchor: '70%' },
+    { handleId: 'process-right-resource', side: 'right', anchor: '70%' },
   ],
   finish: [],
-  mcp: [
-    { handleId: 'mcp-top', side: 'top' },
-    { handleId: 'mcp-right', side: 'right' },
-    { handleId: 'mcp-bottom', side: 'bottom' },
-    { handleId: 'mcp-left', side: 'left' },
-  ],
+  mcp: [],
   subflow: [{ handleId: 'subflow-bottom', side: 'bottom' }],
   resource: [{ handleId: 'resource-out', side: 'right' }],
   signal: [{ handleId: 'signal-bottom', side: 'bottom' }],
@@ -221,7 +219,7 @@ const getProcessHandleStyle = (theme: any) => ({
 });
 
 const getMCPConnectionHandleStyle = (theme: any) => ({
-  backgroundColor: theme.palette.primary.main,
+  backgroundColor: theme.palette.info.main,
   borderColor: theme.palette.mode === 'dark' ? theme.palette.background.paper : 'white',
   width: 16,
   height: 16,
@@ -252,6 +250,17 @@ const CustomNode = ({ id, data, nodeType, selected }: CustomNodeProps & { select
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
     if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
   }, []);
+
+  // Selection opens the inspector; it must not also pin the transient
+  // add-and-connect controls around the node.
+  useEffect(() => {
+    if (!selected) return;
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    hoverTimerRef.current = null;
+    hideTimerRef.current = null;
+    setHoverReady(false);
+  }, [selected]);
 
   const startHoverReveal = () => {
     if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
@@ -507,44 +516,82 @@ const CustomNode = ({ id, data, nodeType, selected }: CustomNodeProps & { select
             node: information.label,
             side: t(`flows.canvas.side.${quickConnect.side}`),
           });
+          const isToolHandle = quickConnect.handleId.includes('-mcp');
+          const isResourceHandle = quickConnect.handleId.includes('-resource');
+          const controlColor = isToolHandle
+            ? theme.palette.info.main
+            : isResourceHandle
+              ? RESOURCE_COLOR
+              : theme.palette.primary.main;
+          const control = (
+            <IconButton
+              className="nodrag nopan"
+              size="small"
+              aria-label={label}
+              title={label}
+              onPointerDown={stopNodeInteraction}
+              onClick={(event) => requestQuickConnect(event, quickConnect)}
+              sx={{
+                width: 32,
+                height: 32,
+                p: 0,
+                color: theme.palette.getContrastText(controlColor),
+                bgcolor: controlColor,
+                border: '2px solid',
+                borderColor: 'background.paper',
+                boxShadow: 3,
+                transition: 'transform 140ms ease, filter 140ms ease',
+                '&:hover, &:focus-visible': {
+                  bgcolor: controlColor,
+                  filter: 'brightness(0.9)',
+                  transform: 'scale(1.08)',
+                },
+              }}
+            >
+              {isToolHandle ? (
+                <BuildRoundedIcon sx={{ fontSize: 17 }} />
+              ) : isResourceHandle ? (
+                <DescriptionIcon sx={{ fontSize: 18 }} />
+              ) : (
+                <PlayArrowRoundedIcon
+                  sx={{ fontSize: 19, transform: `rotate(${quickConnectRotation[quickConnect.side]}deg)` }}
+                />
+              )}
+            </IconButton>
+          );
+
+          if (nodeType === 'process' && quickConnect.anchor) {
+            if (!hoverReady) return null;
+            return (
+              <Box
+                key={quickConnect.handleId}
+                onMouseEnter={startHoverReveal}
+                onMouseLeave={stopHoverReveal}
+                sx={{
+                  position: 'absolute',
+                  top: quickConnect.anchor,
+                  ...(quickConnect.side === 'left' ? { left: -50 } : { right: -50 }),
+                  transform: 'translateY(-50%)',
+                  zIndex: 5,
+                }}
+              >
+                {control}
+              </Box>
+            );
+          }
+
           return (
             <NodeToolbar
               key={quickConnect.handleId}
               nodeId={id}
-              isVisible={!!selected || hoverReady}
+              isVisible={hoverReady}
               position={Position[quickConnect.side.charAt(0).toUpperCase() + quickConnect.side.slice(1) as keyof typeof Position]}
               align={quickConnect.align ?? 'center'}
               offset={10}
               onMouseEnter={startHoverReveal}
               onMouseLeave={stopHoverReveal}
             >
-              <IconButton
-                className="nodrag nopan"
-                size="small"
-                aria-label={label}
-                title={label}
-                onPointerDown={stopNodeInteraction}
-                onClick={(event) => requestQuickConnect(event, quickConnect)}
-                sx={{
-                  width: 32,
-                  height: 32,
-                  p: 0,
-                  color: 'primary.contrastText',
-                  bgcolor: 'primary.main',
-                  border: '2px solid',
-                  borderColor: 'background.paper',
-                  boxShadow: 3,
-                  transition: 'transform 140ms ease, background-color 140ms ease',
-                  '&:hover, &:focus-visible': {
-                    bgcolor: 'primary.dark',
-                    transform: 'scale(1.08)',
-                  },
-                }}
-              >
-                <PlayArrowRoundedIcon
-                  sx={{ fontSize: 19, transform: `rotate(${quickConnectRotation[quickConnect.side]}deg)` }}
-                />
-              </IconButton>
+              {control}
             </NodeToolbar>
           );
         })}

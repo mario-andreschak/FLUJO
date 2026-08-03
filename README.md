@@ -253,55 +253,27 @@ Then open http://localhost:4200.
 > Do **not** expose it on `0.0.0.0` / publish it publicly unless it sits behind
 > your own authenticating reverse proxy on a trusted network.
 
-### Hosted deployments behind a trusted proxy (`FLUJO_EXTRA_LOCAL_HOSTS`)
+### Network exposure
 
-FLUJO's `/api/*` routes are guarded by a fail-closed **localhost origin check**
-(the defense against drive-by, cross-origin RCE on its command/secret sinks). By
-default only the localhost family (`localhost`, `127.0.0.1`, `::1`) counts as
-"local", so a request that arrives with any other Host — e.g. an internal DNS
-name like `http://<id>.vm.<tenants>.internal:4200` — gets a `403`. That is a
-problem only when FLUJO is deliberately run **one instance per tenant on a
-private network, reached exclusively by an authenticating reverse proxy /
-control plane** over an internal name. A standalone install never needs this.
+Use **Settings → Network access** to choose one deployment posture:
 
-For that hosted posture, set the opt-in env var `FLUJO_EXTRA_LOCAL_HOSTS` to
-extend what counts as "local" for **both** the Host and the Origin hostname
-checks:
+- **Localhost** (default) — only this computer; both listeners bind loopback.
+- **Local Network** — listen on all interfaces and accept private LAN addresses
+  and this machine's hostnames.
+- **Public** — accept any hostname. FLUJO has no built-in authentication, so use
+  this only behind an authenticating HTTPS reverse proxy.
 
-- **Format:** a comma-separated list. Each entry is either an **exact hostname**
-  (`flujo-box`) or, when it starts with a dot, a **domain suffix**
-  (`.vm.my-tenants.internal` matches any `<sub>.vm.my-tenants.internal`, but not
-  the bare apex and not `...internal.evil.com`). Entries are trimmed and
-  case-insensitive.
-- **Default:** **unset** — behavior is unchanged (localhost family only), so
-  every standalone install is unaffected.
-- **Example:** `FLUJO_EXTRA_LOCAL_HOSTS=.vm.my-tenants.internal`
+The one setting controls the UI, API, OpenAI/MCP endpoints, Host/Origin guard,
+and MCP Apps sandbox together. Restart FLUJO after changing it. Existing hosted
+installs that used the former host/sandbox environment variables remain
+supported as a compatibility path, but new setup no longer needs them.
 
-> ⚠️ **Security precondition:** only set this when **nothing untrusted can reach
-> FLUJO's port at those names**. The DNS-rebinding protection is still enforced
-> — an attacker page's Origin never matches these entries — but widening the
-> trusted-host set is only safe on a private network fronted by your own
-> authenticating proxy.
-
-#### MCP Apps behind HTTPS
-
-MCP Apps must run on a different origin from FLUJO. For a hosted HTTPS install,
-give the sandbox its own HTTPS origin (for example
-`https://flujo-apps.example.internal`) and have the trusted proxy TLS-terminate
-that origin to the container's plain HTTP port `4201`. Configure:
-
-```text
-FLUJO_MCP_APP_SANDBOX_PUBLIC_URL=https://flujo-apps.example.internal/sandbox.html
-FLUJO_MCP_APP_HOST_ORIGINS=https://flujo.example.internal
-```
-
-`FLUJO_MCP_APP_HOST_ORIGINS` is a comma-separated allowlist of exact
-`http(s)://host[:port]` origins permitted to embed the sandbox. Preserve the
-browser's `Referer` header through the proxy; the sandbox checks it against this
-allowlist and pins its `frame-ancestors` CSP to that exact origin. Do not serve
-the sandbox beneath FLUJO's own origin, and do not point the browser directly at
-port `4201` from an HTTPS page—the listener expects TLS termination at the
-separate proxy origin.
+For MCP Apps over HTTPS, expose the sandbox listener on the same hostname at
+HTTPS port `4201` and proxy it to FLUJO's plain HTTP port `4201`. The port makes
+it a distinct browser origin, and FLUJO derives the URL and exact embedding
+origin automatically. Preserve the browser's `Referer` header through the
+proxy. Docker Compose still publishes both ports to host loopback by default;
+change those two port mappings when choosing Local Network or Public.
 
 See [MCP Apps host support](docs/features/mcp/apps.md) for protocol behavior,
 security guarantees, display modes, compatibility limits, and the versioned

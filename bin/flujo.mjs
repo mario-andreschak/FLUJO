@@ -71,7 +71,10 @@ if (!process.env.FLUJO_BASE_URL || process.env.FLUJO_BASE_URL.trim().length === 
 
 // --- build env (TLS/CA), reusing the launcher's single source of truth ------
 const { buildLaunchEnv } = await import(pathToFileURL(path.join(packageRoot, 'scripts', 'launch-next.mjs')).href);
-const env = buildLaunchEnv(process.env);
+const { applyExposureRuntimeEnv, withExposureHostname } = await import(
+  pathToFileURL(path.join(packageRoot, 'scripts', 'exposure-mode.mjs')).href
+);
+const env = applyExposureRuntimeEnv(buildLaunchEnv(process.env), packageRoot);
 
 // --- resolve Next's own CLI from the package's bundled node_modules ---------
 // Never rely on a `next` on the user's PATH — run the exact version this package
@@ -85,10 +88,11 @@ try {
 }
 
 const url = `http://localhost:${port}`;
-console.log(`[FLUJO] Starting on ${url}`);
+console.log(`[FLUJO] Starting on ${url} [exposure: ${env.FLUJO_EXPOSURE_MODE}]`);
 console.log(`[FLUJO] Data directory: ${process.env.FLUJO_DATA_DIR}`);
 
-const child = spawn(process.execPath, [nextBin, 'start', '-p', String(port)], {
+const nextArgs = withExposureHostname(['start', '-p', String(port)], env);
+const child = spawn(process.execPath, [nextBin, ...nextArgs], {
   stdio: 'inherit',
   cwd: packageRoot,
   env,

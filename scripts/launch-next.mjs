@@ -22,6 +22,7 @@ import { spawn } from 'node:child_process';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
+import { applyExposureRuntimeEnv, withExposureHostname } from './exposure-mode.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -75,13 +76,17 @@ function launchNext(passthroughArgs) {
     FLUJO_APP_ROOT: process.env.FLUJO_APP_ROOT || process.cwd(),
     FLUJO_BASE_URL: process.env.FLUJO_BASE_URL || `http://127.0.0.1:${portFromNextArgs(passthroughArgs)}`,
   };
-  const env = buildLaunchEnv(baseEnv);
+  const env = applyExposureRuntimeEnv(buildLaunchEnv(baseEnv), process.cwd());
+  const nextArgs = withExposureHostname(passthroughArgs, env);
 
   const tlsSummary = [
     env.NODE_OPTIONS ? `NODE_OPTIONS="${env.NODE_OPTIONS}"` : null,
     env.NODE_EXTRA_CA_CERTS ? `NODE_EXTRA_CA_CERTS="${env.NODE_EXTRA_CA_CERTS}"` : null,
   ].filter(Boolean).join(', ');
-  console.log(`[FLUJO] Starting next ${passthroughArgs.join(' ')}${tlsSummary ? ` (${tlsSummary})` : ''}`);
+  console.log(
+    `[FLUJO] Starting next ${nextArgs.join(' ')} [exposure: ${env.FLUJO_EXPOSURE_MODE}]`
+    + `${tlsSummary ? ` (${tlsSummary})` : ''}`
+  );
 
   // Resolve Next's own CLI from node_modules and run it with the current Node binary.
   // Never rely on a `next` on PATH: npm injects node_modules/.bin into PATH for `npm run`
@@ -96,7 +101,7 @@ function launchNext(passthroughArgs) {
     process.exit(1);
   }
 
-  const child = spawn(process.execPath, [nextBin, ...passthroughArgs], {
+  const child = spawn(process.execPath, [nextBin, ...nextArgs], {
     stdio: 'inherit',
     env,
   });

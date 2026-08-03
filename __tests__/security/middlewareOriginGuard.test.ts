@@ -73,7 +73,7 @@ describe('middleware origin guard: allows legitimate local requests', () => {
   });
 });
 
-describe('middleware origin guard: public allow-list stays reachable', () => {
+describe('middleware origin guard: public allow-list follows exposure mode', () => {
   const PUBLIC_PATHS = [
     '/api/webhooks/abc123',
     '/api/oauth/callback',
@@ -81,9 +81,11 @@ describe('middleware origin guard: public allow-list stays reachable', () => {
     '/api/oauth/reset',
   ];
 
-  it.each(PUBLIC_PATHS)('lets a non-local Origin reach %s (not 403)', (p) => {
+  it.each(PUBLIC_PATHS)('lets a non-local Origin reach %s in Public mode', (p) => {
+    process.env.FLUJO_EXPOSURE_MODE = 'public';
     const res = middleware(makeRequest(`http://evil.com${p}`, { host: 'evil.com', origin: 'http://evil.com' }));
     expect(res.status).not.toBe(403);
+    delete process.env.FLUJO_EXPOSURE_MODE;
   });
 
   it('does not open a sibling of an exact allow-list entry', () => {
@@ -188,14 +190,16 @@ describe('middleware origin guard: allows legitimate local /v1 conversations req
   });
 });
 
-describe('middleware origin guard: public OpenAI /v1 surface stays reachable (#143)', () => {
+describe('middleware origin guard: public OpenAI /v1 surface follows exposure mode (#143)', () => {
   const PUBLIC_OPENAI_PATHS = ['/v1/chat/completions', '/v1/models'];
 
-  it.each(PUBLIC_OPENAI_PATHS)('lets a cross-origin (evil Origin) request reach %s (not 403)', (p) => {
+  it.each(PUBLIC_OPENAI_PATHS)('lets a public same-origin request reach %s in Public mode', (p) => {
+    process.env.FLUJO_EXPOSURE_MODE = 'public';
     const res = middleware(
       makeRequest(`http://evil.com${p}`, { host: 'evil.com', origin: 'http://evil.com', method: 'POST' })
     );
     expect(res.status).not.toBe(403);
+    delete process.env.FLUJO_EXPOSURE_MODE;
   });
 
   it('does not treat a sibling of the OpenAI allow-list as public', () => {

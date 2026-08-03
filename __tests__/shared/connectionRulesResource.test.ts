@@ -90,6 +90,11 @@ describe('pane-drop defaults', () => {
     expect(defaultTargetHandleFor('process', 'resource-out')).toBe('process-left-resource');
   });
 
+  it('connects a newly added MCP node on the side facing its process node', () => {
+    expect(defaultTargetHandleFor('mcp', 'process-left-mcp')).toBe('mcp-right');
+    expect(defaultTargetHandleFor('mcp', 'process-right-mcp')).toBe('mcp-left');
+  });
+
   it('flow-control defaults unchanged', () => {
     expect(defaultTargetHandleFor('process', 'start-bottom')).toBe('process-top');
     expect(defaultTargetHandleFor('finish', 'process-bottom')).toBe('finish-top');

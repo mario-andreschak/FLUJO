@@ -128,6 +128,18 @@ export interface TelemetrySettings {
   notifyDaily: boolean;
 }
 
+/** How broadly the FLUJO web server and MCP Apps sandbox are exposed. */
+export type ExposureMode = 'localhost' | 'network' | 'public';
+
+export interface NetworkSettings {
+  /**
+   * `localhost` binds only to this computer; `network` accepts private-LAN
+   * addresses and this machine's hostnames; `public` accepts any hostname and
+   * is intended only behind an authenticating HTTPS reverse proxy.
+   */
+  exposure: ExposureMode;
+}
+
 /**
  * Experimental-features settings interface (issue #184)
  */
@@ -266,6 +278,8 @@ export interface Settings {
   update?: UpdateSettings;
   onboarding?: OnboardingSettings;
   telemetry?: TelemetrySettings;
+  /** Missing on existing installs; the secure default is localhost-only. */
+  network?: NetworkSettings;
   /**
    * Optional so existing persisted settings load unchanged; a missing value is
    * treated as disabled (experimental features hidden).

@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const generateFlowMock = jest.fn();
 const improveFlowMock = jest.fn();
+const startVisualGenerationMock = jest.fn();
 const loadModelsMock = jest.fn();
 const synthesizeFlowGeneratorMock = jest.fn();
 const createConversationMock = jest.fn();
@@ -19,6 +20,10 @@ jest.mock('@/frontend/services/flow', () => ({
     generateFlow: (...args: unknown[]) => generateFlowMock(...args),
     improveFlow: (...args: unknown[]) => improveFlowMock(...args),
   },
+}));
+
+jest.mock('@/frontend/services/flow/visualGeneration', () => ({
+  startVisualGeneration: (...args: unknown[]) => startVisualGenerationMock(...args),
 }));
 
 jest.mock('@/frontend/services/model', () => ({
@@ -79,6 +84,20 @@ const root = {
   edges: [],
 };
 const revisedRoot = { ...root, name: 'Revised draft' };
+const visualAgent = {
+  id: root.id,
+  name: root.name,
+  goal: 'Build the requested flow',
+  depth: 0,
+  steps: [{
+    id: 'write',
+    label: 'Write answer',
+    task: 'Build the requested flow',
+    tools: [],
+    connectedAgentIds: [],
+  }],
+  status: 'ready' as const,
+};
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -97,6 +116,21 @@ beforeEach(() => {
     rootFlowId: root.id,
     attempts: 1,
     installedServers: [],
+  });
+  startVisualGenerationMock.mockImplementation(async (
+    _input: unknown,
+    onEvent: (event: Record<string, unknown>) => void | Promise<void>,
+  ) => {
+    await onEvent({ type: 'session-started', sessionId: 'visual-1', maxDepth: 8, message: 'Starting' });
+    await onEvent({ type: 'agent-created', agent: visualAgent });
+    return {
+      flow: root,
+      validation,
+      flows: [child, root],
+      rootFlowId: root.id,
+      attempts: 1,
+      installedServers: [],
+    };
   });
   improveFlowMock.mockResolvedValue({
     success: true,
@@ -137,17 +171,20 @@ describe('GenerateFlowDialog generation contract', () => {
     await waitFor(() => expect(send).toBeEnabled());
     fireEvent.click(send);
 
-    await waitFor(() => expect(generateFlowMock).toHaveBeenCalledWith(
-      'Build the requested flow',
-      'model-1',
+    await waitFor(() => expect(startVisualGenerationMock).toHaveBeenCalledWith(
       {
+        description: 'Build the requested flow',
+        modelId: 'model-1',
         allowInstall: false,
-        allowSubflows: true,
-        maxDepth: 2,
-      }
+        maxDepth: 8,
+      },
+      expect.any(Function),
+      expect.anything(),
     ));
+    expect(generateFlowMock).not.toHaveBeenCalled();
     expect(improveFlowMock).not.toHaveBeenCalled();
-    expect(await screen.findByText(/Your agent is ready:/)).toBeInTheDocument();
+    expect((await screen.findAllByText('Draft')).length).toBeGreaterThan(0);
+    expect(screen.getByText('Write answer')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Send request' }));
     await waitFor(() => expect(improveFlowMock).toHaveBeenCalledWith(
@@ -159,8 +196,7 @@ describe('GenerateFlowDialog generation contract', () => {
         relatedFlows: [child],
       }
     ));
-    expect(generateFlowMock).toHaveBeenCalledTimes(1);
-    expect(await screen.findByText(/I updated your agent:/)).toBeInTheDocument();
+    expect(startVisualGenerationMock).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByRole('button', { name: 'Continue to simple builder' }));
     expect(onGenerated).toHaveBeenCalledWith(expect.objectContaining({
@@ -178,6 +214,10 @@ describe('GenerateFlowDialog generation contract', () => {
     const advancedOptions = screen.getByText('Advanced options');
     fireEvent.click(advancedOptions);
     expect(advancedOptions.closest('details')).toHaveAttribute('open');
+    const depth = screen.getByRole('slider', { name: 'Maximum helper nesting' });
+    expect(depth).toHaveAttribute('aria-valuemin', '1');
+    expect(depth).toHaveAttribute('aria-valuemax', '8');
+    expect(depth).toHaveAttribute('aria-valuenow', '8');
     const consent = await screen.findByRole('checkbox', {
       name: 'Allow adding new connected tools',
     });
@@ -185,10 +225,10 @@ describe('GenerateFlowDialog generation contract', () => {
     fireEvent.click(consent);
     fireEvent.click(screen.getByRole('button', { name: 'Send request' }));
 
-    await waitFor(() => expect(generateFlowMock).toHaveBeenCalledWith(
-      expect.any(String),
-      'model-1',
-      expect.objectContaining({ allowInstall: true })
+    await waitFor(() => expect(startVisualGenerationMock).toHaveBeenCalledWith(
+      expect.objectContaining({ allowInstall: true, maxDepth: 8 }),
+      expect.any(Function),
+      expect.anything(),
     ));
   });
 
@@ -229,7 +269,7 @@ describe('GenerateFlowDialog generation contract', () => {
 
     expect(await screen.findByText('Experimental · Flow-based')).toBeInTheDocument();
     expect(screen.getByRole('button', {
-      name: 'Restore experimental Generation Flow',
+      name: 'Restore the bundled experimental Generation Flow',
     })).toBeInTheDocument();
     const send = screen.getByRole('button', { name: 'Send request' });
     await waitFor(() => expect(send).toBeEnabled());
@@ -242,6 +282,7 @@ describe('GenerateFlowDialog generation contract', () => {
       })
     ));
     expect(generateFlowMock).not.toHaveBeenCalled();
+    expect(startVisualGenerationMock).not.toHaveBeenCalled();
     expect(improveFlowMock).not.toHaveBeenCalled();
     await waitFor(() => expect(completeFlowGeneratorTurnMock).toHaveBeenCalledTimes(1));
 

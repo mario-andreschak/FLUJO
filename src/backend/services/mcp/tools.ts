@@ -1,18 +1,29 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { createLogger } from '@/utils/logger';
-import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
-import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';
-import { MCPToolResponse as ToolResponse, MCPServiceResponse, isTaskCallResponse, MCPTaskHandle } from '@/shared/types/mcp';
-import { isBetaClient } from './betaClient';
-import { sleep } from '@/backend/utils/sleep';
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { createLogger } from "@/utils/logger";
+import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { resolveGlobalVars } from "@/backend/utils/resolveGlobalVars";
+import {
+  MCPToolResponse as ToolResponse,
+  MCPServiceResponse,
+  isTaskCallResponse,
+  MCPTaskHandle,
+} from "@/shared/types/mcp";
+import { isBetaClient } from "./betaClient";
+import { sleep } from "@/backend/utils/sleep";
 import {
   checkToolCallVisibility,
   filterToolsForAudience,
   ToolCallSource,
   ToolListAudience,
-} from './appsProtocol';
+} from "./appsProtocol";
+import {
+  getExternalAuthorizationStatus,
+  invalidateExternalAuthorizationStatus,
+  serverSupportsExternalAuthorization,
+} from "./externalAuthorization";
+import { parseStdioOAuthRevocation } from "mcp-stdio-oauth/protocol";
 
-const log = createLogger('backend/services/mcp/tools');
+const log = createLogger("backend/services/mcp/tools");
 
 /** Progress update forwarded from an MCP server during a long-running tool call. */
 export interface ToolCallProgress {
@@ -30,35 +41,62 @@ const MAX_TIMEOUT_MS = 2 ** 31 - 1;
  * Normalize tool arguments to ensure we don't pass undefined values to MCP servers
  * This function replaces undefined/null values with appropriate defaults based on expected types
  */
-function normalizeToolArguments(args: Record<string, unknown>, toolName: string): Record<string, unknown> {
+function normalizeToolArguments(
+  args: Record<string, unknown>,
+  toolName: string,
+): Record<string, unknown> {
   if (!args) return {};
-  
+
   const normalizedArgs: Record<string, unknown> = {};
-  
+
   // Process each argument
   for (const key in args) {
     const value = args[key];
-    
+
     // Handle undefined or null values
     if (value === undefined || value === null) {
-      log.debug(`Normalizing undefined/null value for parameter '${key}' in tool '${toolName}'`);
-      
+      log.debug(
+        `Normalizing undefined/null value for parameter '${key}' in tool '${toolName}'`,
+      );
+
       // Try to infer the type from the key name
-      if (key.includes('number') || key.endsWith('Count') || key.endsWith('Id') || key.endsWith('Limit')) {
+      if (
+        key.includes("number") ||
+        key.endsWith("Count") ||
+        key.endsWith("Id") ||
+        key.endsWith("Limit")
+      ) {
         normalizedArgs[key] = 0;
         log.debug(`Using default value 0 for likely number parameter: ${key}`);
-      } else if (key.includes('bool') || key.startsWith('is') || key.startsWith('has') || key.startsWith('should')) {
+      } else if (
+        key.includes("bool") ||
+        key.startsWith("is") ||
+        key.startsWith("has") ||
+        key.startsWith("should")
+      ) {
         normalizedArgs[key] = false;
-        log.debug(`Using default value false for likely boolean parameter: ${key}`);
-      } else if (key.includes('array') || key.endsWith('s') || key.endsWith('List') || key.endsWith('Items')) {
+        log.debug(
+          `Using default value false for likely boolean parameter: ${key}`,
+        );
+      } else if (
+        key.includes("array") ||
+        key.endsWith("s") ||
+        key.endsWith("List") ||
+        key.endsWith("Items")
+      ) {
         normalizedArgs[key] = [];
         log.debug(`Using empty array for likely array parameter: ${key}`);
-      } else if (key.includes('object') || key.endsWith('Options') || key.endsWith('Config') || key.endsWith('Settings')) {
+      } else if (
+        key.includes("object") ||
+        key.endsWith("Options") ||
+        key.endsWith("Config") ||
+        key.endsWith("Settings")
+      ) {
         normalizedArgs[key] = {};
         log.debug(`Using empty object for likely object parameter: ${key}`);
       } else {
         // Default to empty string for unknown types
-        normalizedArgs[key] = '';
+        normalizedArgs[key] = "";
         log.debug(`Using empty string for parameter with unknown type: ${key}`);
       }
     } else {
@@ -66,7 +104,7 @@ function normalizeToolArguments(args: Record<string, unknown>, toolName: string)
       normalizedArgs[key] = value;
     }
   }
-  
+
   return normalizedArgs;
 }
 
@@ -76,22 +114,22 @@ function normalizeToolArguments(args: Record<string, unknown>, toolName: string)
 export async function listServerTools(
   client: Client | undefined,
   serverName: string,
-  audience: ToolListAudience = 'model'
-): Promise<{ tools: ToolResponse[], error?: string }> {
-  log.debug('Entering listServerTools method');
+  audience: ToolListAudience = "model",
+): Promise<{ tools: ToolResponse[]; error?: string }> {
+  log.debug("Entering listServerTools method");
   if (!client) {
     log.warn(`Server ${serverName} not connected`);
-    return { tools: [], error: 'Server not connected' };
+    return { tools: [], error: "Server not connected" };
   }
 
   try {
     log.info(`Listing tools for server ${serverName}`);
     const response = await client.listTools();
-    log.verbose('Raw response from MCP server:', response);
+    log.verbose("Raw response from MCP server:", response);
 
-    const tools = (response.tools || []).map(tool => ({
+    const tools = (response.tools || []).map((tool) => ({
       name: tool.name,
-      description: tool.description || '',
+      description: tool.description || "",
       inputSchema: tool.inputSchema || {},
       // Preserve server-declared annotations and `_meta`. MCP Apps (#97) link a
       // tool to its `ui://` UI resource via `_meta.ui.resourceUri` on the tool
@@ -106,13 +144,14 @@ export async function listServerTools(
     return { tools: visibleTools };
   } catch (error) {
     log.warn(`Failed to list tools for server ${serverName}:`, error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown error";
 
     return {
       tools: [],
-      error: errorMessage.includes('Connection timeout')
+      error: errorMessage.includes("Connection timeout")
         ? errorMessage
-        : `Failed to list tools: ${errorMessage}`
+        : `Failed to list tools: ${errorMessage}`,
     };
   }
 }
@@ -141,23 +180,24 @@ export async function callTool(
   timeout?: number,
   onProgress?: (progress: ToolCallProgress) => void,
   signal?: AbortSignal,
-  source: ToolCallSource = 'host',
+  source: ToolCallSource = "host",
   callerNodeId?: string,
   ownerScope?: string,
 ): Promise<MCPServiceResponse> {
-  log.debug('Entering callTool method');
+  log.debug("Entering callTool method");
   if (!client) {
     log.warn(`Server ${serverName} not found`);
     return {
       success: false,
       error: `Server ${serverName} not found`,
-      statusCode: 404
+      statusCode: 404,
     };
   }
 
-  const timeoutMs = timeout !== undefined && timeout > 0
-    ? Math.min(timeout * 1000, MAX_TIMEOUT_MS)
-    : MAX_TIMEOUT_MS;
+  const timeoutMs =
+    timeout !== undefined && timeout > 0
+      ? Math.min(timeout * 1000, MAX_TIMEOUT_MS)
+      : MAX_TIMEOUT_MS;
 
   try {
     // MCP Apps may call tools only on their own backing server, and only when
@@ -165,18 +205,23 @@ export async function callTool(
     // the exact client belonging to the frame's server; listing and dispatch
     // both happen on that same client object, so authorization cannot be
     // borrowed from another server connection.
-    if (source === 'app' || source === 'model') {
-      const listed = await listServerTools(client, serverName, 'all');
+    if (source === "app" || source === "model") {
+      const listed = await listServerTools(client, serverName, "all");
       if (listed.error) {
         return {
           success: false,
           error: `Could not verify MCP App access to tool '${toolName}' on '${serverName}': ${listed.error}`,
-          errorType: 'tool-authorization-list',
+          errorType: "tool-authorization-list",
           statusCode: 502,
         };
       }
 
-      const access = checkToolCallVisibility(listed.tools, serverName, toolName, source);
+      const access = checkToolCallVisibility(
+        listed.tools,
+        serverName,
+        toolName,
+        source,
+      );
       if (!access.allowed) {
         log.warn(`Rejected ${source} tool call: ${access.error}`);
         return {
@@ -192,9 +237,10 @@ export async function callTool(
     const resolvedArgs = await resolveGlobalVars(args);
 
     // Ensure resolvedArgs is a record before normalizing
-    const argsRecord = (typeof resolvedArgs === 'object' && resolvedArgs !== null)
-      ? resolvedArgs as Record<string, unknown>
-      : {};
+    const argsRecord =
+      typeof resolvedArgs === "object" && resolvedArgs !== null
+        ? (resolvedArgs as Record<string, unknown>)
+        : {};
 
     // Normalize undefined/null values based on parameter types
     // This ensures we don't pass undefined values to MCP servers
@@ -207,7 +253,9 @@ export async function callTool(
       resetTimeoutOnProgress: true,
       ...(signal ? { signal } : {}),
       onprogress: (progress: ToolCallProgress) => {
-        log.debug(`Progress for tool ${toolName}: ${progress.progress}${progress.total !== undefined ? `/${progress.total}` : ''}${progress.message ? ` — ${progress.message}` : ''}`);
+        log.debug(
+          `Progress for tool ${toolName}: ${progress.progress}${progress.total !== undefined ? `/${progress.total}` : ""}${progress.message ? ` — ${progress.message}` : ""}`,
+        );
         onProgress?.(progress);
       },
     };
@@ -230,10 +278,12 @@ export async function callTool(
         : {}),
     };
     const response = isBetaClient(client)
-      ? await (client.callTool as unknown as (
-          params: typeof requestParams,
-          options?: typeof callOptions
-        ) => ReturnType<Client['callTool']>).call(client, requestParams, callOptions)
+      ? await (
+          client.callTool as unknown as (
+            params: typeof requestParams,
+            options?: typeof callOptions,
+          ) => ReturnType<Client["callTool"]>
+        ).call(client, requestParams, callOptions)
       : await client.callTool(requestParams, undefined, callOptions);
 
     // -----------------------------------------------------------------------
@@ -247,31 +297,36 @@ export async function callTool(
     // -----------------------------------------------------------------------
     if (isTaskCallResponse(response)) {
       const taskHandle = response.task as MCPTaskHandle;
-      log.info(`Tool ${toolName} on ${serverName} returned task handle ${taskHandle.taskId} (status: ${taskHandle.status})`);
-      onProgress?.({ progress: 0, message: `Task ${taskHandle.taskId} created (${taskHandle.status})` });
+      log.info(
+        `Tool ${toolName} on ${serverName} returned task handle ${taskHandle.taskId} (status: ${taskHandle.status})`,
+      );
+      onProgress?.({
+        progress: 0,
+        message: `Task ${taskHandle.taskId} created (${taskHandle.status})`,
+      });
 
       const POLL_MIN_MS = 1_000;
       const POLL_MAX_MS = 30_000;
       const pollMs = Math.min(
         Math.max(taskHandle.pollInterval ?? 5_000, POLL_MIN_MS),
-        POLL_MAX_MS
+        POLL_MAX_MS,
       );
 
-      const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
+      const TERMINAL = new Set(["completed", "failed", "cancelled"]);
       let currentStatus = taskHandle.status;
       let elapsed = 0;
       let terminal = TERMINAL.has(currentStatus);
 
       // A server may return an already-terminal task. Preserve its actual
       // outcome instead of treating every terminal handle as cancellation.
-      if (currentStatus === 'completed') {
+      if (currentStatus === "completed") {
         return {
           success: true,
           data: taskHandle.result,
           progressToken: taskHandle.taskId,
         };
       }
-      if (currentStatus === 'failed') {
+      if (currentStatus === "failed") {
         return {
           success: false,
           error: taskHandle.error ?? `Task ${taskHandle.taskId} failed`,
@@ -287,17 +342,26 @@ export async function callTool(
           // short SDK timeout and is deliberately best-effort.
           cancelTaskPromise = (async () => {
             try {
-              await (client as unknown as {
-                request: (req: unknown, schema: unknown, opts?: unknown) => Promise<unknown>;
-              }).request(
-                { method: 'tasks/cancel', params: { taskId: taskHandle.taskId } },
+              await (
+                client as unknown as {
+                  request: (
+                    req: unknown,
+                    schema: unknown,
+                    opts?: unknown,
+                  ) => Promise<unknown>;
+                }
+              ).request(
+                {
+                  method: "tasks/cancel",
+                  params: { taskId: taskHandle.taskId },
+                },
                 undefined,
-                { timeout: 10_000 }
+                { timeout: 10_000 },
               );
             } catch (cancelError) {
               log.warn(
                 `Best-effort cancellation failed for task ${taskHandle.taskId}:`,
-                cancelError
+                cancelError,
               );
             }
           })();
@@ -307,7 +371,7 @@ export async function callTool(
       const onTaskAbort = () => {
         void cancelTask();
       };
-      signal?.addEventListener('abort', onTaskAbort, { once: true });
+      signal?.addEventListener("abort", onTaskAbort, { once: true });
 
       try {
         while (!TERMINAL.has(currentStatus)) {
@@ -324,13 +388,19 @@ export async function callTool(
             throw new Error(`Tool call cancelled (task ${taskHandle.taskId})`);
           }
 
-          const pollResponse = await (client as unknown as {
-            request: (req: unknown, schema: unknown, opts?: unknown) => Promise<unknown>;
-          }).request(
-            { method: 'tasks/get', params: { taskId: taskHandle.taskId } },
+          const pollResponse = (await (
+            client as unknown as {
+              request: (
+                req: unknown,
+                schema: unknown,
+                opts?: unknown,
+              ) => Promise<unknown>;
+            }
+          ).request(
+            { method: "tasks/get", params: { taskId: taskHandle.taskId } },
             undefined,
-            { signal, timeout: timeoutMs }
-          ) as { task: MCPTaskHandle };
+            { signal, timeout: timeoutMs },
+          )) as { task: MCPTaskHandle };
 
           if (signal?.aborted) {
             await cancelTask();
@@ -340,21 +410,26 @@ export async function callTool(
           const task = pollResponse.task;
           currentStatus = task.status;
           terminal = TERMINAL.has(currentStatus);
-          log.debug(`Task ${taskHandle.taskId} poll: status=${task.status}, elapsed=${elapsed}ms`);
+          log.debug(
+            `Task ${taskHandle.taskId} poll: status=${task.status}, elapsed=${elapsed}ms`,
+          );
 
           onProgress?.({
-            progress: task.status === 'completed' ? 100 : Math.min(99, Math.round(elapsed / 1000)),
+            progress:
+              task.status === "completed"
+                ? 100
+                : Math.min(99, Math.round(elapsed / 1000)),
             message: `Task ${taskHandle.taskId}: ${task.status}`,
           });
 
-          if (task.status === 'completed') {
+          if (task.status === "completed") {
             return {
               success: true,
               data: task.result,
               progressToken: taskHandle.taskId,
             };
           }
-          if (task.status === 'failed') {
+          if (task.status === "failed") {
             return {
               success: false,
               error: task.error ?? `Task ${taskHandle.taskId} failed`,
@@ -369,7 +444,7 @@ export async function callTool(
         return {
           success: false,
           error: `Tool '${toolName}' task ${taskHandle.taskId} was cancelled by the server.`,
-          errorType: 'cancelled',
+          errorType: "cancelled",
           progressToken: taskHandle.taskId,
         };
       } catch (taskError) {
@@ -378,17 +453,17 @@ export async function callTool(
         if (!terminal) await cancelTask();
         throw taskError;
       } finally {
-        signal?.removeEventListener('abort', onTaskAbort);
+        signal?.removeEventListener("abort", onTaskAbort);
       }
     }
 
     return {
       success: true,
-      data: response
+      data: response,
     };
   } catch (error) {
     log.warn(`Failed to call tool ${toolName} on server ${serverName}:`, error);
-    let errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    let errorMessage = error instanceof Error ? error.message : "Unknown error";
     let statusCode = 500;
 
     // A caller-driven AbortSignal is an intentional cancellation, not a server
@@ -398,7 +473,7 @@ export async function callTool(
       return {
         success: false,
         error: `Tool '${toolName}' call was cancelled.`,
-        errorType: 'cancelled',
+        errorType: "cancelled",
         toolName,
       };
     }
@@ -409,55 +484,101 @@ export async function callTool(
     // standardized timeout response shape.
     if (error instanceof McpError && error.code === ErrorCode.RequestTimeout) {
       const timeoutSeconds = Math.round(timeoutMs / 1000);
-      log.warn(`Tool ${toolName} execution timed out after ${timeoutSeconds} seconds`);
+      log.warn(
+        `Tool ${toolName} execution timed out after ${timeoutSeconds} seconds`,
+      );
       return {
         success: false,
         error: `Tool execution timed out after ${timeoutSeconds} seconds`,
-        errorType: 'timeout',
+        errorType: "timeout",
         toolName,
         timeout: timeoutSeconds,
-        statusCode: 408
+        statusCode: 408,
+      };
+    }
+
+    // A server can report revocation between FLUJO's readiness preflight and
+    // actual dispatch. Preserve the namespaced extension error instead of
+    // guessing from a tool name or parsing provider-specific text.
+    const stdioOAuthRevocation = serverSupportsExternalAuthorization(client)
+      ? parseStdioOAuthRevocation(error)
+      : undefined;
+    if (stdioOAuthRevocation) {
+      invalidateExternalAuthorizationStatus(serverName);
+      try {
+        // The namespaced error invalidates any readiness snapshot. Refresh it
+        // immediately as required by the extension, while preserving the
+        // original authorization-required result if status itself now fails.
+        await getExternalAuthorizationStatus(client, serverName, {
+          force: true,
+        });
+      } catch (statusError) {
+        log.warn(
+          `Failed to refresh mcp-stdio-oauth status after revocation on ${serverName}:`,
+          statusError,
+        );
+      }
+      return {
+        success: false,
+        error: stdioOAuthRevocation.message
+          ? stdioOAuthRevocation.message
+          : "External account authorization is required. Open the MCP page to authenticate.",
+        errorType: "stdio-oauth-required",
+        statusCode: 428,
+        requiresAuthentication: true,
       };
     }
 
     // Check for OAuth-related errors
-    if (errorMessage.includes('401') || errorMessage.includes('Unauthorized') || 
-        errorMessage.includes('invalid_token') || errorMessage.includes('token_expired')) {
-      log.info(`OAuth authentication error detected for tool ${toolName} on server ${serverName}`);
+    if (
+      errorMessage.includes("401") ||
+      errorMessage.includes("Unauthorized") ||
+      errorMessage.includes("invalid_token") ||
+      errorMessage.includes("token_expired")
+    ) {
+      log.info(
+        `OAuth authentication error detected for tool ${toolName} on server ${serverName}`,
+      );
       return {
         success: false,
-        error: 'OAuth authentication failed or tokens have expired. Please re-authenticate the server.',
+        error:
+          "OAuth authentication failed or tokens have expired. Please re-authenticate the server.",
         statusCode: 401,
-        requiresAuthentication: true
+        requiresAuthentication: true,
       };
     }
 
     // Check for 404 errors which might indicate OAuth issues
-    if (errorMessage.includes('404') || errorMessage.includes('Not Found')) {
-      log.info(`404 error detected for tool ${toolName} on server ${serverName} - may indicate OAuth issues`);
+    if (errorMessage.includes("404") || errorMessage.includes("Not Found")) {
+      log.info(
+        `404 error detected for tool ${toolName} on server ${serverName} - may indicate OAuth issues`,
+      );
       statusCode = 404;
       errorMessage = `Tool endpoint not found (404). This may indicate OAuth authentication issues or the server may not be properly configured.`;
     }
 
     if (error instanceof McpError) {
       errorMessage = `Failed to call tool: ${errorMessage} (Code: ${error.code})`;
-      
+
       // Map MCP error codes to HTTP status codes
-      if (error.code === -32601) { // Method not found
+      if (error.code === -32601) {
+        // Method not found
         statusCode = 404;
-      } else if (error.code === -32602) { // Invalid params
+      } else if (error.code === -32602) {
+        // Invalid params
         statusCode = 400;
-      } else if (error.code === -32603) { // Internal error
+      } else if (error.code === -32603) {
+        // Internal error
         statusCode = 500;
       }
     } else {
       errorMessage = `Failed to call tool: ${errorMessage}`;
     }
 
-    return { 
-      success: false, 
+    return {
+      success: false,
       error: errorMessage,
-      statusCode
+      statusCode,
     };
   }
 }

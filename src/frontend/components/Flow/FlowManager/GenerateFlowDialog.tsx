@@ -7,7 +7,7 @@
  * endpoints. An explicit Settings > Experimental toggle swaps in the editable,
  * multi-stage system Flow for the whole conversation.
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -24,6 +24,8 @@ import {
   IconButton,
   MenuItem,
   Select,
+  Slider,
+  Stack,
   Tooltip,
   Typography,
 } from '@mui/material';
@@ -38,13 +40,19 @@ import ChatMessages from '@/frontend/components/Chat/ChatMessages';
 import { chatService } from '@/frontend/services/chat';
 import { flowService } from '@/frontend/services/flow';
 import { modelService } from '@/frontend/services/model';
+import { startVisualGeneration } from '@/frontend/services/flow/visualGeneration';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import { createLogger } from '@/utils/logger';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { Translator } from '@/frontend/i18n/core';
+import { MAX_VISUAL_GENERATION_DEPTH } from '@/shared/types/flow/visualGeneration';
+import VisualGenerationCanvas, {
+  initialVisualGenerationState,
+  visualGenerationReducer,
+} from './VisualGenerationCanvas';
 
 const log = createLogger('frontend/components/Flow/FlowManager/GenerateFlowDialog');
-const DEFAULT_SUBFLOW_DEPTH = 2;
+const DEFAULT_SUBFLOW_DEPTH = MAX_VISUAL_GENERATION_DEPTH;
 
 interface InstalledServerInfo {
   name: string;
@@ -219,9 +227,15 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
   const [wireMessages, setWireMessages] = useState<Array<Record<string, any>>>([]);
   const [draft, setDraft] = useState<DraftPayload | null>(null);
   const [allowInstall, setAllowInstall] = useState(false);
+  const [maxDepth, setMaxDepth] = useState(DEFAULT_SUBFLOW_DEPTH);
   const [isWorking, setIsWorking] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [visualState, dispatchVisual] = useReducer(
+    visualGenerationReducer,
+    initialVisualGenerationState,
+  );
+  const generationAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -249,6 +263,8 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
     setWireMessages([]);
     setDraft(null);
     setAllowInstall(false);
+    setMaxDepth(DEFAULT_SUBFLOW_DEPTH);
+    dispatchVisual({ type: 'reset' });
     setError(null);
   }, [flowBasedExperimental, open]);
 
@@ -321,20 +337,31 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
       }
 
       if (!draft) {
-        // Preserve the original generator's contract: a clear request always
-        // produces a checked draft. Nested subflows are now enabled by default.
-        const result = await flowService.generateFlow(trimmed, modelId, {
-          allowInstall,
-          allowSubflows: true,
-          maxDepth: DEFAULT_SUBFLOW_DEPTH,
+        const controller = new AbortController();
+        generationAbortRef.current = controller;
+        dispatchVisual({
+          type: 'session-started',
+          sessionId: 'starting',
+          maxDepth,
+          message: t('flows.generator.visualStarting'),
         });
-        if (!result.success) {
-          setError(result.error);
-          return;
-        }
+        const result = await startVisualGeneration({
+          description: trimmed,
+          modelId,
+          maxDepth,
+          allowInstall,
+        }, async (event) => {
+          dispatchVisual(event);
+          const animate = event.type === 'agent-created'
+            || event.type === 'step-added'
+            || event.type === 'suggestion-decision';
+          if (animate && process.env.NODE_ENV !== 'test') {
+            await new Promise((resolve) => window.setTimeout(resolve, 140));
+          }
+        }, controller.signal);
         const generated: DraftPayload = {
           flow: result.flow,
-          flows: result.flows.map((entry) => entry.flow),
+          flows: result.flows,
           rootFlowId: result.rootFlowId,
           errorCount: result.validation.errorCount,
           warningCount: result.validation.warningCount,
@@ -385,8 +412,13 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
       setDraft(revised);
       setWireMessages([...nextMessages, message('assistant', draftSummary(revised, true, t, tp))]);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      if ((cause as { name?: string } | null)?.name === 'AbortError') {
+        setError(t('flows.generator.cancelled'));
+      } else {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      }
     } finally {
+      generationAbortRef.current = null;
       setIsWorking(false);
     }
   }, [
@@ -394,6 +426,7 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
     draft,
     flowBasedExperimental,
     isWorking,
+    maxDepth,
     modelId,
     startFlowSession,
     t,
@@ -414,6 +447,7 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
       setConversationId(null);
       setWireMessages([]);
       setDraft(null);
+      dispatchVisual({ type: 'reset' });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -427,12 +461,24 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
     setWireMessages([]);
     setDraft(null);
     setAllowInstall(false);
+    setMaxDepth(DEFAULT_SUBFLOW_DEPTH);
+    dispatchVisual({ type: 'reset' });
     setError(null);
     onClose();
   }, [isRestoring, isWorking, onClose]);
 
+  const handleCancelGeneration = useCallback(() => {
+    generationAbortRef.current?.abort();
+  }, []);
+
   return (
-    <Dialog open={open} onClose={handleClose} maxWidth="md" fullWidth>
+    <Dialog
+      open={open}
+      onClose={handleClose}
+      maxWidth={!flowBasedExperimental && visualState.started ? 'xl' : 'md'}
+      fullWidth
+      slotProps={{ paper: { sx: { overflow: 'hidden', transition: 'max-width 240ms ease, width 240ms ease' } } }}
+    >
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <AutoAwesomeIcon color="primary" />
         <Box sx={{ flex: 1 }}>
@@ -466,7 +512,7 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
           </Tooltip>
         )}
       </DialogTitle>
-      <DialogContent dividers sx={{ p: 0 }}>
+      <DialogContent dividers sx={{ p: 0, overflowX: 'hidden' }}>
         <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
           {error && (
             <Alert severity="error" sx={{ mb: 1.5 }} onClose={() => setError(null)}>
@@ -534,8 +580,37 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
             />
             <Typography variant="caption" color="text.secondary" display="block">
               {t('flows.generator.allowToolsHelp')}
-              {flowBasedExperimental && ` ${t('flows.generator.depth', { count: DEFAULT_SUBFLOW_DEPTH })}`}
             </Typography>
+            {!flowBasedExperimental && (
+              <Box sx={{ mt: 2, px: 0.5 }}>
+                <Stack direction="row" justifyContent="space-between" alignItems="center">
+                  <Typography variant="body2" fontWeight={750}>
+                    {t('flows.generator.maxDepth')}
+                  </Typography>
+                  <Chip
+                    size="small"
+                    color="primary"
+                    variant="outlined"
+                    label={t('flows.generator.levelCount', { count: maxDepth })}
+                  />
+                </Stack>
+                <Slider
+                  aria-label={t('flows.generator.maxDepth')}
+                  value={maxDepth}
+                  min={1}
+                  max={MAX_VISUAL_GENERATION_DEPTH}
+                  step={1}
+                  marks
+                  valueLabelDisplay="auto"
+                  disabled={isWorking}
+                  onChange={(_event, value) => setMaxDepth(Array.isArray(value) ? value[0] : value)}
+                  sx={{ mt: 0.5 }}
+                />
+                <Typography variant="caption" color="text.secondary">
+                  {t('flows.generator.maxDepthHelp')}
+                </Typography>
+              </Box>
+            )}
             {allowInstall && (
               <Alert severity="warning" sx={{ mt: 1 }}>
                 {t('flows.generator.installWarning')}
@@ -544,23 +619,31 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
           </Box>
         </Box>
 
-        <Box sx={{ minHeight: 360, maxHeight: '55vh', overflowY: 'auto', p: 2 }}>
-          {visibleMessages.length === 0 ? (
+        {!flowBasedExperimental && visualState.started ? (
+          <VisualGenerationCanvas
+            state={visualState}
+            working={isWorking}
+            onSelectAgent={(agentId) => dispatchVisual({ type: 'focus', agentId })}
+          />
+        ) : (
+          <Box sx={{ minHeight: 360, maxHeight: '55vh', overflowY: 'auto', p: 2 }}>
+            {visibleMessages.length === 0 ? (
             <Box sx={{ py: 8, textAlign: 'center', color: 'text.secondary' }}>
               <Typography variant="h6">{t('flows.generator.question')}</Typography>
               <Typography variant="body2">
                 {t('flows.generator.example')}
               </Typography>
             </Box>
-          ) : (
-            <ChatMessages
-              messages={visibleMessages}
-              conversationId="new-flow-generator"
-              onToggleDisabled={() => undefined}
-              onSplitConversation={() => undefined}
-            />
-          )}
-        </Box>
+            ) : (
+              <ChatMessages
+                messages={visibleMessages}
+                conversationId="new-flow-generator"
+                onToggleDisabled={() => undefined}
+                onSplitConversation={() => undefined}
+              />
+            )}
+          </Box>
+        )}
 
         {draft && (
           <Alert severity={draft.errorCount ? 'warning' : 'success'} sx={{ mx: 2, mb: 1 }}>
@@ -588,6 +671,11 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
         </Box>
       </DialogContent>
       <DialogActions>
+        {isWorking && !flowBasedExperimental && (
+          <Button color="warning" onClick={handleCancelGeneration}>
+            {t('flows.generator.cancel')}
+          </Button>
+        )}
         <Button onClick={handleClose} disabled={isWorking || isRestoring}>{t('flows.generator.close')}</Button>
         <Button
           variant="contained"

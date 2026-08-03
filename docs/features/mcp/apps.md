@@ -19,13 +19,13 @@ Malformed visibility metadata fails closed.
 
 ## Security boundary
 
-App HTML is untrusted. FLUJO serves it through a separately configured sandbox origin, applies a restrictive Content Security Policy, and embeds it in a script-only sandbox. The host validates relay messages and does not grant forms, top-level navigation, popups, or same-origin access to the App frame.
+App HTML is untrusted. FLUJO serves it through a separate sandbox origin, applies a restrictive Content Security Policy, and embeds it in a script-only sandbox. The host validates relay messages and does not grant forms, top-level navigation, popups, or same-origin access to the App frame.
 
 Declared CSP origins are normalized and constrained to supported HTTP(S) origins. Missing or malformed declarations keep restrictive defaults: no undeclared network connections, nested frames, objects, or base URIs are enabled. Camera, microphone, geolocation, and clipboard-write permissions are granted only when both declared by the resource and allowed by FLUJO's host policy; the effective grant is reported to the App in host capabilities.
 
 External links are limited to safe HTTP(S) URLs. App-originated tool calls and resource reads pass through host authorization. App-provided model context is treated as untrusted, validated, size-bounded, and applied to later turns using last-write-wins semantics.
 
-For hosted HTTPS deployment, the sandbox must use a different HTTPS origin from FLUJO. Configure `FLUJO_MCP_APP_SANDBOX_PUBLIC_URL` and the exact embedding-origin allowlist in `FLUJO_MCP_APP_HOST_ORIGINS`; see [MCP Apps behind HTTPS](../../../README.md#mcp-apps-behind-https).
+For hosted HTTPS deployment, choose **Settings → Network access → Public** and expose the sandbox on the same hostname at HTTPS port `4201`, proxied to FLUJO's sandbox listener. FLUJO derives the distinct sandbox origin and embedding origin automatically; see [Network exposure](../../../README.md#network-exposure).
 
 ## Lifecycle and display modes
 
@@ -42,7 +42,7 @@ A transition occurs only when both host and App declared the mode. If a requeste
 ## Compatibility and limits
 
 - Only raw HTML resources with MIME type `text/html;profile=mcp-app` are supported. External URL content types, multiple views per result, View-to-View communication, and other future-specification features are not advertised.
-- A resource's host-specific `_meta.ui.domain` hint is not used to select arbitrary origins. Operators configure one trusted sandbox origin for the deployment.
+- A resource's host-specific `_meta.ui.domain` hint is not used to select arbitrary origins. FLUJO derives one trusted sandbox origin from the deployment's network exposure setting.
 - Partial streaming tool input is optional in the stable specification and is not advertised as a guarantee. Complete tool input is always delivered before a result.
 - Browser downloads are a FLUJO host extension, not a message defined by the stable `2026-01-26` specification. They are handled only through the host bridge with bounded content, a sanitized filename, and a host-created download action.
 - Browser/platform constraints can prevent a requested display transition. In that case the current supported mode is returned and the App remains usable.

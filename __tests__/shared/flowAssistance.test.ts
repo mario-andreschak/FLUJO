@@ -1,6 +1,8 @@
 import type { Flow } from '@/shared/types/flow';
 import {
   analyzeFlowPlausibility,
+  applyPlausibilityPatches,
+  applyStepAgentSelections,
   applyStepToolSelections,
   collectReferencedFlows,
   inferFlowUsageContexts,
@@ -77,11 +79,57 @@ describe('flow assistance', () => {
     expect(prompt).not.toContain('${tool:files__write_file}');
   });
 
+  it('attaches approved saved agents with canonical returning handoffs idempotently', () => {
+    const writer = { ...processFlow(), id: 'writer-flow', name: 'Writer Agent', description: 'Draft polished copy' };
+    const selection = { flowId: writer.id, flowName: writer.name, reason: 'draft the final copy' };
+    const once = applyStepAgentSelections(processFlow(), {
+      nodeId: 'work',
+      selections: [selection],
+      availableAgents: [writer],
+    });
+    const agentNode = once.nodes.find((node) => node.data.properties?.subflowId === writer.id);
+    expect(agentNode?.data.properties).toEqual(expect.objectContaining({
+      inputMode: 'isolated',
+      outputMode: 'final-only',
+    }));
+    expect(once.edges.find((edge) => edge.target === agentNode?.id)?.data).toEqual(expect.objectContaining({
+      bidirectional: true,
+    }));
+    expect(once.nodes.find((node) => node.id === 'work')?.data.properties?.promptTemplate)
+      .toContain('${tool:handoff__handoff_to_writer_agent}');
+
+    const twice = applyStepAgentSelections(once, {
+      nodeId: 'work',
+      selections: [selection],
+      availableAgents: [writer],
+    });
+    expect(twice.nodes.filter((node) => node.data.properties?.subflowId === writer.id)).toHaveLength(1);
+  });
+
   it('repairs small Process flows to full-history input and latest-message output', () => {
     const result = analyzeFlowPlausibility(processFlow());
     expect(result.repairedFlow.nodes.find((node) => node.id === 'work')?.data.properties)
       .toEqual(expect.objectContaining({ inputMode: 'full-history', outputMode: 'latest-message' }));
     expect(result.patches).toHaveLength(1);
+  });
+
+  it('applies only the explicitly selected plausibility patches', () => {
+    const original = processFlow();
+    const updated = applyPlausibilityPatches([original], [{
+      flowId: original.id,
+      nodeId: 'work',
+      set: { inputMode: 'full-history' },
+      remove: ['promptTemplate'],
+      reason: 'Repair input mode.',
+    }]);
+
+    expect(updated[0].nodes.find((node) => node.id === 'work')?.data.properties).toEqual({
+      inputMode: 'full-history',
+    });
+    expect(original.nodes.find((node) => node.id === 'work')?.data.properties).toEqual({
+      promptTemplate: 'Read the project notes',
+      inputMode: 'latest-message',
+    });
   });
 
   it('classifies a bidirectional Process/Subflow connection as a queue-backed sub-agent', () => {

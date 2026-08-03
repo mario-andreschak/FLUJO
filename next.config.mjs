@@ -54,7 +54,8 @@ const nextConfig = {
     '@mui/system',
     '@mui/utils',
     '@emotion/react',
-    '@emotion/styled'
+    '@emotion/styled',
+    'mcp-stdio-oauth',
   ],
   // Increase the webpack chunk loading timeout and configure other performance settings
   webpack: (config, { dev, isServer }) => {

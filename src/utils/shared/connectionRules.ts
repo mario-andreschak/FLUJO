@@ -136,6 +136,10 @@ export function getConnectionError(
 
 /** The default target handle a node type is connected on when auto-wiring. */
 export function defaultTargetHandleFor(nodeType: NodeType, sourceHandleId?: string | null): string {
+  // MCP attachments are placed beside a Process node. Connect the new MCP
+  // node on the side facing the Process node so the edge stays horizontal.
+  if (nodeType === 'mcp' && sourceHandleId === 'process-left-mcp') return 'mcp-right';
+  if (nodeType === 'mcp' && sourceHandleId === 'process-right-mcp') return 'mcp-left';
   // Resource wiring targets the dedicated resource handles, not the top
   // flow-control handle: a drag from process-right-resource lands on the
   // resource node's input; a drag from resource-out lands on the process

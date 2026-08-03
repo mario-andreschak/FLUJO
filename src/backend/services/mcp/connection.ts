@@ -1,30 +1,56 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport, StdioServerParameters } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
-import { StreamableHTTPClientTransportOptions, StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { SSEClientTransportOptions, SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
-import { MCPSSEConfig } from '@/shared/types/mcp/mcp';
-import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
-import { createLogger } from '@/utils/logger';
-import { MCPServerConfig, MCPStdioConfig, MCPStreamableConfig, SERVER_DIR_PREFIX } from '@/shared/types/mcp';
-import { ChildProcess } from 'child_process';
-import { createOAuthClientProvider } from './oauth';
-import { isClientConnectionClosed } from '@/utils/mcp/utils';
-import { resolveServerCwd } from '@/utils/mcp/resolveServerCwd';
-import { resolveNodeCommand } from '@/utils/mcp/resolveNodeCommand';
-import { getDataDir } from '@/utils/paths';
-import { registerRootsHandler } from './roots';
-import { samplingEnabled, registerSamplingHandler, samplingConfigKey } from './sampling';
-import { elicitationEnabled, registerElicitationHandler, elicitationConfigKey } from './elicitation';
-import { resolveAndDecryptApiKey } from '@/backend/utils/resolveGlobalVars';
-import { normalizeHeaderValue, isMaskedHeaderValue } from '@/utils/mcp/headers';
-import { MCPHeaderValue } from '@/shared/types/mcp/mcp';
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import {
+  StdioClientTransport,
+  StdioServerParameters,
+} from "@modelcontextprotocol/sdk/client/stdio.js";
+import { WebSocketClientTransport } from "@modelcontextprotocol/sdk/client/websocket.js";
+import {
+  StreamableHTTPClientTransportOptions,
+  StreamableHTTPClientTransport,
+} from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import {
+  SSEClientTransportOptions,
+  SSEClientTransport,
+} from "@modelcontextprotocol/sdk/client/sse.js";
+import { MCPSSEConfig } from "@/shared/types/mcp/mcp";
+import * as fs from "fs";
+import * as path from "path";
+import * as os from "os";
+import { createLogger } from "@/utils/logger";
+import {
+  MCPServerConfig,
+  MCPStdioConfig,
+  MCPStreamableConfig,
+  SERVER_DIR_PREFIX,
+} from "@/shared/types/mcp";
+import { ChildProcess } from "child_process";
+import { createOAuthClientProvider } from "./oauth";
+import { isClientConnectionClosed } from "@/utils/mcp/utils";
+import { resolveServerCwd } from "@/utils/mcp/resolveServerCwd";
+import { resolveNodeCommand } from "@/utils/mcp/resolveNodeCommand";
+import { getDataDir } from "@/utils/paths";
+import { registerRootsHandler } from "./roots";
+import {
+  samplingEnabled,
+  registerSamplingHandler,
+  samplingConfigKey,
+} from "./sampling";
+import {
+  elicitationEnabled,
+  registerElicitationHandler,
+  elicitationConfigKey,
+} from "./elicitation";
+import { resolveAndDecryptApiKey } from "@/backend/utils/resolveGlobalVars";
+import { normalizeHeaderValue, isMaskedHeaderValue } from "@/utils/mcp/headers";
+import { MCPHeaderValue } from "@/shared/types/mcp/mcp";
 import {
   MCP_APPS_EXTENSION_ID,
   MCP_APP_RESOURCE_MIME_TYPE,
-} from './appsProtocol';
+} from "./appsProtocol";
+import {
+  STDIO_OAUTH_EXTENSION_CAPABILITY,
+  STDIO_OAUTH_EXTENSION_ID,
+} from "mcp-stdio-oauth/protocol";
 
 // We stash a capabilities key on the client so shouldRecreateClient can detect a change to
 // a client-declared MCP capability that is negotiated at connect time (the SDK doesn't
@@ -33,15 +59,17 @@ import {
 // participate: the roots capability is always declared and roots content is resolved
 // fresh per roots/list request (changes are announced via notifications/roots/
 // list_changed) — so no roots change may ever force a client rebuild (issue 46).
-interface ClientWithCapKey { __flujoCapKey?: string }
+interface ClientWithCapKey {
+  __flujoCapKey?: string;
+}
 
 /** Key of config that drives connect-time client capabilities. */
 export function capabilityKey(config: MCPServerConfig): string {
   return [
     samplingConfigKey(config),
     elicitationConfigKey(config),
-    config.enableMcpApps === true ? 'mcp-apps:on' : 'mcp-apps:off',
-  ].join('|');
+    config.enableMcpApps === true ? "mcp-apps:on" : "mcp-apps:off",
+  ].join("|");
 }
 
 // We stash the RAW config key on the transport at creation time so
@@ -53,16 +81,33 @@ export function capabilityKey(config: MCPServerConfig): string {
 export interface TransportWithConfigKey {
   __flujoStdioKey?: string;
   __flujoHttpKey?: string;
-  __flujoKind?: 'stdio' | 'streamable' | 'sse' | 'websocket';
+  __flujoKind?: "stdio" | "streamable" | "sse" | "websocket";
+  /** Inner SDK transport when FLUJO applies a protocol decorator. */
+  __flujoInnerTransport?: unknown;
+}
+
+/** Resolve through FLUJO-owned transport decorators without relying on SDK privates. */
+export function getUnderlyingTransport(transport: unknown): unknown {
+  let current = transport;
+  const seen = new Set<unknown>();
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const inner = (current as TransportWithConfigKey).__flujoInnerTransport;
+    if (!inner) break;
+    current = inner;
+  }
+  return current;
 }
 
 // Marker stashed on clients built by the v2-beta path (betaClient.ts), so
 // shouldRecreateClient can rebuild a connection when the experimental
 // mcpBetaProtocol toggle flips — a v1 client must never be reused as a beta
 // client or vice versa.
-export interface ClientWithBetaMarker { __flujoBeta?: boolean }
+export interface ClientWithBetaMarker {
+  __flujoBeta?: boolean;
+}
 
-const log = createLogger('backend/services/mcp/connection');
+const log = createLogger("backend/services/mcp/connection");
 
 /**
  * Flatten + resolve a server's env values and custom headers to plain strings for the live
@@ -77,21 +122,23 @@ const log = createLogger('backend/services/mcp/connection');
  * rebuild on every connect). A changed bound-global therefore still rebuilds the client,
  * because the resolved header material — and thus the key — changes.
  */
-export async function resolveConfigHeaders(config: MCPServerConfig): Promise<MCPServerConfig> {
+export async function resolveConfigHeaders(
+  config: MCPServerConfig,
+): Promise<MCPServerConfig> {
   let resolvedConfig = config;
 
   // Environment bindings must remain portable in storage and be resolved fresh
   // for each connection. Previously updateServerConfig baked `${global:VAR}` into
   // the saved config, so rotating the global had no effect and package re-export
   // could no longer see the binding.
-  if (config.env && typeof config.env === 'object') {
+  if (config.env && typeof config.env === "object") {
     const resolvedEnv: Record<string, string> = {};
     for (const [key, raw] of Object.entries(config.env)) {
       if (!key) continue;
       const value =
-        raw && typeof raw === 'object' && 'value' in raw
-          ? (raw as { value?: string }).value ?? ''
-          : (raw as string) ?? '';
+        raw && typeof raw === "object" && "value" in raw
+          ? ((raw as { value?: string }).value ?? "")
+          : ((raw as string) ?? "");
       if (!value || isMaskedHeaderValue(value)) continue;
       const out = await resolveAndDecryptApiKey(value);
       if (out) resolvedEnv[key] = out;
@@ -99,11 +146,11 @@ export async function resolveConfigHeaders(config: MCPServerConfig): Promise<MCP
     resolvedConfig = { ...resolvedConfig, env: resolvedEnv } as MCPServerConfig;
   }
 
-  if (config.transport !== 'streamable' && config.transport !== 'sse') {
+  if (config.transport !== "streamable" && config.transport !== "sse") {
     return resolvedConfig;
   }
   const c = config as unknown as { headers?: Record<string, MCPHeaderValue> };
-  if (!c.headers || typeof c.headers !== 'object') {
+  if (!c.headers || typeof c.headers !== "object") {
     return resolvedConfig;
   }
   const resolved: Record<string, string> = {};
@@ -134,12 +181,14 @@ export async function resolveConfigHeaders(config: MCPServerConfig): Promise<MCP
  * keys/values. Values are normally already resolved plain strings (see resolveConfigHeaders);
  * this stays defensive against a residual `{ value, metadata }` object by reading `.value`.
  */
-export function flattenCustomHeaders(headers: Record<string, MCPHeaderValue>): Record<string, string> {
+export function flattenCustomHeaders(
+  headers: Record<string, MCPHeaderValue>,
+): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, raw] of Object.entries(headers)) {
     if (!key) continue;
     const { value } = normalizeHeaderValue(raw, key);
-    if (typeof value === 'string' && value.length > 0) {
+    if (typeof value === "string" && value.length > 0) {
       out[key] = value;
     }
   }
@@ -150,7 +199,7 @@ function transformEnv(env?: Record<string, unknown>): Record<string, string> {
   const transformed: Record<string, string> = {};
   if (env) {
     for (const [key, envVar] of Object.entries(env)) {
-      if (envVar && typeof envVar === 'object' && 'value' in envVar) {
+      if (envVar && typeof envVar === "object" && "value" in envVar) {
         transformed[key] = (envVar as { value: string }).value;
       } else {
         transformed[key] = envVar as string;
@@ -177,8 +226,8 @@ export function stdioConfigKey(config: MCPStdioConfig): string {
     command: config.command,
     args: config.args ?? [],
     env: transformEnv(config.env),
-    cwd: String(config.cwd ?? ''),
-    rootPath: config.rootPath ?? '',
+    cwd: String(config.cwd ?? ""),
+    rootPath: config.rootPath ?? "",
   });
 }
 
@@ -211,15 +260,15 @@ export function httpConfigKey(config: MCPServerConfig): string {
   };
   return JSON.stringify({
     transport: config.transport,
-    url: c.serverUrl ?? '',
+    url: c.serverUrl ?? "",
     headers: c.headers ?? {},
     requestInit: c.requestInit ?? {},
     eventSourceInit: c.eventSourceInit ?? {},
     reconnectionOptions: c.reconnectionOptions ?? {},
-    sessionId: c.sessionId ?? '',
-    oauthClientId: c.oauthClientId ?? '',
+    sessionId: c.sessionId ?? "",
+    oauthClientId: c.oauthClientId ?? "",
     oauthClientInformation: c.oauthClientInformation ?? {},
-    oauthClientSecret: c.oauthClientSecret ?? '',
+    oauthClientSecret: c.oauthClientSecret ?? "",
     oauthTokens: c.oauthTokens ?? {},
   });
 }
@@ -228,7 +277,7 @@ export function httpConfigKey(config: MCPServerConfig): string {
  * Create a new MCP client with proper capabilities
  */
 export function createNewClient(config: MCPServerConfig): Client {
-  log.debug('Entering createNewClient method');
+  log.debug("Entering createNewClient method");
 
   // CLIENT capabilities advertise what FLUJO (as the MCP client) offers to the server —
   // e.g. roots/sampling/elicitation. tools/resources/prompts are SERVER capabilities and
@@ -240,42 +289,55 @@ export function createNewClient(config: MCPServerConfig): Client {
   // unconditional means roots changes never require a client rebuild; content changes
   // are announced via notifications/roots/list_changed instead. Sampling stays opt-in:
   // it is declared only when the server has an enabled sampling trust policy, so a
-  // server can't ask FLUJO to run LLM calls unless the user opted in. MCP Apps is
-  // likewise advertised only for a server whose explicit security opt-in is on.
+  // server can't ask FLUJO to run LLM calls unless the user opted in. URL elicitation
+  // and mcp-stdio-oauth are declared for local stdio servers; the handler accepts a URL
+  // only inside an explicit user-started authorization request. MCP Apps is
+  // advertised only for a server whose explicit security opt-in is on.
   // Every configured server, including packages shipped with FLUJO, uses this
   // same client factory and handshake.
   const serverHasSampling = samplingEnabled(config);
   const serverHasElicitation = elicitationEnabled(config);
   const serverHasMcpApps = config.enableMcpApps === true;
+  const serverHasStdioOAuth = config.transport === "stdio";
   const client = new Client(
     {
       name: `flujo-${config.name}-client`,
-      version: '3.41.0',
+      version: "3.41.0",
     },
     {
       capabilities: {
         experimental: {},
         roots: { listChanged: true },
         ...(serverHasSampling ? { sampling: {} } : {}),
-        ...(serverHasElicitation ? { elicitation: {} } : {}),
-        ...(serverHasMcpApps
+        ...(serverHasStdioOAuth || serverHasElicitation
           ? {
-              extensions: {
-                [MCP_APPS_EXTENSION_ID]: {
-                  mimeTypes: [MCP_APP_RESOURCE_MIME_TYPE],
-                },
+              elicitation: {
+                ...(serverHasStdioOAuth ? { url: {} } : {}),
+                ...(serverHasElicitation ? { form: {} } : {}),
               },
             }
           : {}),
-      }
-    }
+        extensions: {
+          ...(serverHasStdioOAuth
+            ? { [STDIO_OAUTH_EXTENSION_ID]: STDIO_OAUTH_EXTENSION_CAPABILITY }
+            : {}),
+          ...(serverHasMcpApps
+            ? {
+                [MCP_APPS_EXTENSION_ID]: {
+                  mimeTypes: [MCP_APP_RESOURCE_MIME_TYPE],
+                },
+              }
+            : {}),
+        },
+      },
+    },
   );
 
   registerRootsHandler(client, config);
   if (serverHasSampling) {
     registerSamplingHandler(client, config);
   }
-  if (serverHasElicitation) {
+  if (serverHasStdioOAuth || serverHasElicitation) {
     registerElicitationHandler(client, config);
   }
   (client as unknown as ClientWithCapKey).__flujoCapKey = capabilityKey(config);
@@ -286,26 +348,44 @@ export function createNewClient(config: MCPServerConfig): Client {
 /**
  * Create a transport for the MCP client
  */
-export function createTransport(config: MCPServerConfig): StdioClientTransport | WebSocketClientTransport | StreamableHTTPClientTransport | SSEClientTransport {
-  log.debug('Entering createTransport method');
+export function createTransport(
+  config: MCPServerConfig,
+):
+  | StdioClientTransport
+  | WebSocketClientTransport
+  | StreamableHTTPClientTransport
+  | SSEClientTransport {
+  log.debug("Entering createTransport method");
 
-  if (config.transport === 'streamable') {
-    log.info(`Creating streamable http transport for server ${config.name} with URL ${config.serverUrl}`);
+  if (config.transport === "streamable") {
+    log.info(
+      `Creating streamable http transport for server ${config.name} with URL ${config.serverUrl}`,
+    );
     const streamableConfig = config as MCPStreamableConfig;
-    
+
     // Create transport options.
     // Build defensively: only include object-typed options when they are actual objects.
     // Legacy persisted configs may contain empty strings (''), which would be spread into
     // the SDK's internal fetch() call and cause a generic "fetch failed" error.
     const transportoptions: StreamableHTTPClientTransportOptions = {};
 
-    if (streamableConfig.requestInit && typeof streamableConfig.requestInit === 'object') {
+    if (
+      streamableConfig.requestInit &&
+      typeof streamableConfig.requestInit === "object"
+    ) {
       transportoptions.requestInit = streamableConfig.requestInit;
     }
-    if (streamableConfig.reconnectionOptions && typeof streamableConfig.reconnectionOptions === 'object') {
-      transportoptions.reconnectionOptions = streamableConfig.reconnectionOptions;
+    if (
+      streamableConfig.reconnectionOptions &&
+      typeof streamableConfig.reconnectionOptions === "object"
+    ) {
+      transportoptions.reconnectionOptions =
+        streamableConfig.reconnectionOptions;
     }
-    if (typeof streamableConfig.sessionId === 'string' && streamableConfig.sessionId.length > 0) {
+    if (
+      typeof streamableConfig.sessionId === "string" &&
+      streamableConfig.sessionId.length > 0
+    ) {
       transportoptions.sessionId = streamableConfig.sessionId;
     }
 
@@ -313,48 +393,70 @@ export function createTransport(config: MCPServerConfig): StdioClientTransport |
     // into requestInit so they are sent on every request the SDK makes. Headers are expected
     // to have been resolved to plain strings by resolveConfigHeaders() before this point;
     // flattenCustomHeaders is defensive against any residual { value, metadata } shape.
-    if (streamableConfig.headers && typeof streamableConfig.headers === 'object') {
+    if (
+      streamableConfig.headers &&
+      typeof streamableConfig.headers === "object"
+    ) {
       const customHeaders = flattenCustomHeaders(streamableConfig.headers);
       if (Object.keys(customHeaders).length > 0) {
         transportoptions.requestInit = {
           ...(transportoptions.requestInit || {}),
           headers: {
-            ...((transportoptions.requestInit?.headers as Record<string, string>) || {}),
+            ...((transportoptions.requestInit?.headers as Record<
+              string,
+              string
+            >) || {}),
             ...customHeaders,
           },
         };
-        log.info(`Applied ${Object.keys(customHeaders).length} custom header(s) for ${config.name}: ${Object.keys(customHeaders).join(', ')}`);
+        log.info(
+          `Applied ${Object.keys(customHeaders).length} custom header(s) for ${config.name}: ${Object.keys(customHeaders).join(", ")}`,
+        );
       }
     }
 
     // Add OAuth authentication if configured
-    if (streamableConfig.oauthClientId || streamableConfig.oauthClientInformation) {
+    if (
+      streamableConfig.oauthClientId ||
+      streamableConfig.oauthClientInformation
+    ) {
       log.info(`Setting up OAuth authentication for ${config.name}`);
       const oauthProvider = createOAuthClientProvider(streamableConfig);
-      
+
       // Always set the OAuth provider - let the transport handle the OAuth flow
       transportoptions.authProvider = oauthProvider;
-      
+
       // Check if we have stored tokens, for logging purposes only - actual freshness/expiry
       // is resolved async by oauthProvider.tokens() when the transport uses it.
       if (streamableConfig.oauthTokens?.access_token) {
-        log.debug(`OAuth provider configured for ${config.name} with existing tokens`);
-        log.debug(`Token expires in: ${streamableConfig.oauthTokens.expires_in} seconds`);
+        log.debug(
+          `OAuth provider configured for ${config.name} with existing tokens`,
+        );
+        log.debug(
+          `Token expires in: ${streamableConfig.oauthTokens.expires_in} seconds`,
+        );
       } else {
-        log.debug(`OAuth provider configured for ${config.name} - will initiate OAuth flow if needed`);
+        log.debug(
+          `OAuth provider configured for ${config.name} - will initiate OAuth flow if needed`,
+        );
       }
     } else {
       log.debug(`No OAuth configuration found for ${config.name}`);
     }
-    
-    const transport = new StreamableHTTPClientTransport(new URL(config.serverUrl), transportoptions);
+
+    const transport = new StreamableHTTPClientTransport(
+      new URL(config.serverUrl),
+      transportoptions,
+    );
     // Key the transport with the RAW auth/session material so shouldRecreateClient can
     // detect a PAT / Bearer token / header change even when the URL is unchanged.
-    (transport as unknown as TransportWithConfigKey).__flujoHttpKey = httpConfigKey(config);
+    (transport as unknown as TransportWithConfigKey).__flujoHttpKey =
+      httpConfigKey(config);
     return transport;
-
-  } else if (config.transport === 'sse') {
-    log.info(`Creating legacy sse transport for server ${config.name} with URL ${config.serverUrl}`);
+  } else if (config.transport === "sse") {
+    log.info(
+      `Creating legacy sse transport for server ${config.name} with URL ${config.serverUrl}`,
+    );
     const sseConfig = config as MCPSSEConfig;
 
     // Build options defensively. Do NOT spread the entire config: it contains many
@@ -362,10 +464,13 @@ export function createTransport(config: MCPServerConfig): StdioClientTransport |
     // that would corrupt the SDK's internal fetch() call and cause "fetch failed".
     const transportoptions: SSEClientTransportOptions = {};
 
-    if (sseConfig.requestInit && typeof sseConfig.requestInit === 'object') {
+    if (sseConfig.requestInit && typeof sseConfig.requestInit === "object") {
       transportoptions.requestInit = sseConfig.requestInit;
     }
-    if (sseConfig.eventSourceInit && typeof sseConfig.eventSourceInit === 'object') {
+    if (
+      sseConfig.eventSourceInit &&
+      typeof sseConfig.eventSourceInit === "object"
+    ) {
       transportoptions.eventSourceInit = sseConfig.eventSourceInit;
     }
 
@@ -373,30 +478,39 @@ export function createTransport(config: MCPServerConfig): StdioClientTransport |
     // into requestInit so they are sent on every request the SDK makes. Headers are expected
     // to have been resolved to plain strings by resolveConfigHeaders() before this point;
     // flattenCustomHeaders is defensive against any residual { value, metadata } shape.
-    if (sseConfig.headers && typeof sseConfig.headers === 'object') {
+    if (sseConfig.headers && typeof sseConfig.headers === "object") {
       const customHeaders = flattenCustomHeaders(sseConfig.headers);
       if (Object.keys(customHeaders).length > 0) {
         transportoptions.requestInit = {
           ...(transportoptions.requestInit || {}),
           headers: {
-            ...((transportoptions.requestInit?.headers as Record<string, string>) || {}),
+            ...((transportoptions.requestInit?.headers as Record<
+              string,
+              string
+            >) || {}),
             ...customHeaders,
           },
         };
-        log.info(`Applied ${Object.keys(customHeaders).length} custom header(s) for ${config.name}: ${Object.keys(customHeaders).join(', ')}`);
+        log.info(
+          `Applied ${Object.keys(customHeaders).length} custom header(s) for ${config.name}: ${Object.keys(customHeaders).join(", ")}`,
+        );
       }
     }
 
-    const transport = new SSEClientTransport(new URL(config.serverUrl), transportoptions);
+    const transport = new SSEClientTransport(
+      new URL(config.serverUrl),
+      transportoptions,
+    );
     // Key the transport with the RAW auth/session material so shouldRecreateClient can
     // detect a PAT / Bearer token / header change even when the URL is unchanged.
-    (transport as unknown as TransportWithConfigKey).__flujoHttpKey = httpConfigKey(config);
+    (transport as unknown as TransportWithConfigKey).__flujoHttpKey =
+      httpConfigKey(config);
     return transport;
-
-  } else if (config.transport === 'websocket') {
-    log.info(`Creating WebSocket transport for server ${config.name} with URL ${config.websocketUrl}`);
+  } else if (config.transport === "websocket") {
+    log.info(
+      `Creating WebSocket transport for server ${config.name} with URL ${config.websocketUrl}`,
+    );
     return new WebSocketClientTransport(new URL(config.websocketUrl));
-
   } else {
     return createStdioTransport(config);
   }
@@ -420,7 +534,6 @@ export interface StdioLaunch {
  * Resolve a stdio config into concrete spawn parameters (see StdioLaunch).
  */
 export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
-
   // For Windows .bat files, we need to use cmd.exe to execute them
   let command = config.command;
   let args = config.args ? [...config.args] : [];
@@ -432,16 +545,17 @@ export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
   log.debug(`Server directory: ${serverDir}`);
 
   // Check if the command is a relative path or just a filename
-  const isRelativePath = !path.isAbsolute(command) &&
-    (command.includes('/') || command.includes('\\'));
-  const isJustFilename = !command.includes('/') && !command.includes('\\');
+  const isRelativePath =
+    !path.isAbsolute(command) &&
+    (command.includes("/") || command.includes("\\"));
+  const isJustFilename = !command.includes("/") && !command.includes("\\");
 
   // Log the path analysis
   log.debug(`Is relative path: ${isRelativePath}`);
   log.debug(`Is just filename: ${isJustFilename}`);
 
   // Check if this is a .bat file on Windows
-  if (os.platform() === 'win32' && command.toLowerCase().endsWith('.bat')) {
+  if (os.platform() === "win32" && command.toLowerCase().endsWith(".bat")) {
     log.debug(`Detected .bat file on Windows: ${command}`);
 
     // If it's just a filename (e.g., "run.bat"), check if it exists in the server directory
@@ -456,19 +570,19 @@ export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
         // Use the full path to the .bat file
         log.debug(`Using full path to .bat file: ${fullPath}`);
         // Use cmd.exe to execute the .bat file
-        args = ['/c', fullPath, ...args];
-        command = 'cmd.exe';
+        args = ["/c", fullPath, ...args];
+        command = "cmd.exe";
       } else {
         log.warn(`WARNING: .bat file not found at ${fullPath}`);
         // Still try to use cmd.exe, but log the warning
-        args = ['/c', command, ...args];
-        command = 'cmd.exe';
+        args = ["/c", command, ...args];
+        command = "cmd.exe";
       }
     } else {
       // For relative or absolute paths, use as is with cmd.exe
       log.debug(`Using cmd.exe with path as provided: ${command}`);
-      args = ['/c', command, ...args];
-      command = 'cmd.exe';
+      args = ["/c", command, ...args];
+      command = "cmd.exe";
     }
   }
 
@@ -484,7 +598,9 @@ export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
     fileExists: fs.existsSync,
   });
   if (resolvedCommand !== command) {
-    log.debug(`Resolved Node toolchain command "${command}" to absolute path: ${resolvedCommand}`);
+    log.debug(
+      `Resolved Node toolchain command "${command}" to absolute path: ${resolvedCommand}`,
+    );
     command = resolvedCommand;
   }
 
@@ -508,7 +624,10 @@ export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
 
   // Transform the env object to extract only the value part from each key
   const transformedEnv = transformEnv(config.env);
-  log.verbose('Transformed environment variables', JSON.stringify(transformedEnv));
+  log.verbose(
+    "Transformed environment variables",
+    JSON.stringify(transformedEnv),
+  );
 
   return { command, args, env: transformedEnv, cwd };
 }
@@ -516,32 +635,37 @@ export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
 /**
  * Create a stdio transport for the MCP client
  */
-export function createStdioTransport(config: MCPServerConfig): StdioClientTransport {
-  log.debug('Entering createStdioTransport method');
+export function createStdioTransport(
+  config: MCPServerConfig,
+): StdioClientTransport {
+  log.debug("Entering createStdioTransport method");
 
   // Ensure we're working with a stdio config
-  if (config.transport !== 'stdio') {
-    throw new Error('Cannot create stdio transport for non-stdio config');
+  if (config.transport !== "stdio") {
+    throw new Error("Cannot create stdio transport for non-stdio config");
   }
 
   const { command, args, env, cwd } = resolveStdioLaunch(config);
 
   // Create the transport with stderr capture
-  log.info(`Creating StdioClientTransport for ${config.name} with stderr: 'pipe'`);
+  log.info(
+    `Creating StdioClientTransport for ${config.name} with stderr: 'pipe'`,
+  );
 
   const transportoptions: StdioServerParameters = {
     command: command,
     args: args,
     env: env,
     cwd: cwd,
-    stderr: 'pipe'
+    stderr: "pipe",
   };
 
   const transport = new StdioClientTransport(transportoptions);
 
   // Key the transport with the RAW config so shouldRecreateClient can tell whether a
   // later config is byte-identical, independent of the command/args rewrites above.
-  (transport as unknown as TransportWithConfigKey).__flujoStdioKey = stdioConfigKey(config);
+  (transport as unknown as TransportWithConfigKey).__flujoStdioKey =
+    stdioConfigKey(config);
 
   // Check if stderr is available
   if (transport.stderr) {
@@ -563,9 +687,9 @@ export function createStdioTransport(config: MCPServerConfig): StdioClientTransp
 export function shouldRecreateClient(
   client: Client,
   config: MCPServerConfig,
-  useBetaProtocol = false
+  useBetaProtocol = false,
 ): { needsNewClient: boolean; reason?: string } {
-  log.debug('Entering shouldRecreateClient method');
+  log.debug("Entering shouldRecreateClient method");
 
   // A closed connection can never serve another request — for HTTP transports the
   // aborted internal signal makes every send() reject instantly with AbortError
@@ -575,7 +699,7 @@ export function shouldRecreateClient(
   // restart death-spiral this function's raw-key comparisons guard against: a
   // healthy connection never reads as closed.
   if (isClientConnectionClosed(client)) {
-    return { needsNewClient: true, reason: 'Existing connection is closed' };
+    return { needsNewClient: true, reason: "Existing connection is closed" };
   }
 
   // A change to a connect-time-negotiated client capability must rebuild the
@@ -583,20 +707,27 @@ export function shouldRecreateClient(
   // request handlers close over. Roots are exempt by design (issue 46): the capability
   // is always declared and content changes are served live by the roots/list handler +
   // announced via notifications/roots/list_changed — never a rebuild.
-  const currentCapKey = (client as unknown as ClientWithCapKey).__flujoCapKey ?? '';
+  const currentCapKey =
+    (client as unknown as ClientWithCapKey).__flujoCapKey ?? "";
   if (currentCapKey !== capabilityKey(config)) {
-    return { needsNewClient: true, reason: 'Client capabilities (sampling/elicitation/MCP Apps) changed' };
+    return {
+      needsNewClient: true,
+      reason: "Client capabilities (sampling/elicitation/MCP Apps) changed",
+    };
   }
 
   // Experimental v2-beta protocol toggle (betaClient.ts). Websocket configs always
   // stay on the v1 SDK (the v2 SDK has no websocket transport), so for them the
   // toggle is not a config change.
-  const clientIsBeta = (client as unknown as ClientWithBetaMarker).__flujoBeta === true;
-  const wantBeta = useBetaProtocol && config.transport !== 'websocket';
+  const clientIsBeta =
+    (client as unknown as ClientWithBetaMarker).__flujoBeta === true;
+  const wantBeta = useBetaProtocol && config.transport !== "websocket";
   if (clientIsBeta !== wantBeta) {
     return {
       needsNewClient: true,
-      reason: wantBeta ? 'Beta MCP protocol enabled' : 'Beta MCP protocol disabled',
+      reason: wantBeta
+        ? "Beta MCP protocol enabled"
+        : "Beta MCP protocol disabled",
     };
   }
 
@@ -604,26 +735,36 @@ export function shouldRecreateClient(
   // below cannot see them. Its transports carry the same raw config keys plus an
   // explicit kind marker (stashed in betaClient.ts), so compare those instead.
   if (clientIsBeta) {
-    const transport = client.transport as unknown as TransportWithConfigKey | undefined;
+    const transport = client.transport as unknown as
+      TransportWithConfigKey | undefined;
     if (!transport || transport.__flujoKind !== config.transport) {
-      return { needsNewClient: true, reason: `Transport type changed to ${config.transport}` };
+      return {
+        needsNewClient: true,
+        reason: `Transport type changed to ${config.transport}`,
+      };
     }
-    if (config.transport === 'stdio') {
+    if (config.transport === "stdio") {
       if (transport.__flujoStdioKey !== stdioConfigKey(config)) {
-        return { needsNewClient: true, reason: 'Connection parameters changed' };
+        return {
+          needsNewClient: true,
+          reason: "Connection parameters changed",
+        };
       }
     } else if (transport.__flujoHttpKey !== httpConfigKey(config)) {
-      return { needsNewClient: true, reason: `${config.transport} auth/connection parameters changed` };
+      return {
+        needsNewClient: true,
+        reason: `${config.transport} auth/connection parameters changed`,
+      };
     }
     return { needsNewClient: false };
   }
 
   // Check if transport type has changed
-  if (config.transport === 'websocket') {
+  if (config.transport === "websocket") {
     if (!(client.transport instanceof WebSocketClientTransport)) {
       return {
         needsNewClient: true,
-        reason: 'Transport type changed to websocket',
+        reason: "Transport type changed to websocket",
       };
     }
 
@@ -632,71 +773,98 @@ export function shouldRecreateClient(
     // if (transport._url?.toString() !== config.websocketUrl) { // Property '_url' is private and only accessible within class 'WebSocketClientTransport'.
     //   return { needsNewClient: true, reason: 'WebSocket URL changed' };
     // }
-  } else if (config.transport === 'streamable') {
+  } else if (config.transport === "streamable") {
     // For streamable HTTP transport, ensure the existing client uses the matching transport.
     if (!(client.transport instanceof StreamableHTTPClientTransport)) {
       return {
         needsNewClient: true,
-        reason: 'Transport type changed to streamable',
+        reason: "Transport type changed to streamable",
       };
     }
 
     // Check if the server URL has changed
     const transport = client.transport as StreamableHTTPClientTransport;
-    const currentUrl = (transport as unknown as { _url?: URL })._url?.toString();
-    if (currentUrl !== undefined && currentUrl !== new URL(config.serverUrl).toString()) {
-      return { needsNewClient: true, reason: 'Streamable server URL changed' };
+    const currentUrl = (
+      transport as unknown as { _url?: URL }
+    )._url?.toString();
+    if (
+      currentUrl !== undefined &&
+      currentUrl !== new URL(config.serverUrl).toString()
+    ) {
+      return { needsNewClient: true, reason: "Streamable server URL changed" };
     }
 
     // The URL alone cannot reveal a changed PAT / Bearer token or custom header (same URL,
     // new auth). Compare the RAW auth/session key stashed at creation so a token update
     // rebuilds the client instead of silently reusing the stale-token connection — the
     // direct cause of the planned execution's `unauthorized` after a PAT update.
-    const existingHttpKey = (transport as unknown as TransportWithConfigKey).__flujoHttpKey;
+    const existingHttpKey = (transport as unknown as TransportWithConfigKey)
+      .__flujoHttpKey;
     if (!existingHttpKey) {
-      return { needsNewClient: true, reason: 'Existing streamable transport has no config key' };
+      return {
+        needsNewClient: true,
+        reason: "Existing streamable transport has no config key",
+      };
     }
     if (existingHttpKey !== httpConfigKey(config)) {
-      return { needsNewClient: true, reason: 'Streamable auth/connection parameters changed' };
+      return {
+        needsNewClient: true,
+        reason: "Streamable auth/connection parameters changed",
+      };
     }
-  } else if (config.transport === 'sse') {
+  } else if (config.transport === "sse") {
     // For SSE transport, ensure the existing client uses the matching transport.
     if (!(client.transport instanceof SSEClientTransport)) {
       return {
         needsNewClient: true,
-        reason: 'Transport type changed to sse',
+        reason: "Transport type changed to sse",
       };
     }
 
     // Check if the server URL has changed
     const sseConfig = config as MCPSSEConfig;
     const transport = client.transport as SSEClientTransport;
-    const currentUrl = (transport as unknown as { _url?: URL })._url?.toString();
-    if (currentUrl !== undefined && currentUrl !== new URL(sseConfig.serverUrl).toString()) {
-      return { needsNewClient: true, reason: 'SSE server URL changed' };
+    const currentUrl = (
+      transport as unknown as { _url?: URL }
+    )._url?.toString();
+    if (
+      currentUrl !== undefined &&
+      currentUrl !== new URL(sseConfig.serverUrl).toString()
+    ) {
+      return { needsNewClient: true, reason: "SSE server URL changed" };
     }
 
     // Same as streamable: detect a changed PAT / Bearer token or custom header behind an
     // unchanged URL by comparing the RAW auth/session key stashed at creation time.
-    const existingHttpKey = (transport as unknown as TransportWithConfigKey).__flujoHttpKey;
+    const existingHttpKey = (transport as unknown as TransportWithConfigKey)
+      .__flujoHttpKey;
     if (!existingHttpKey) {
-      return { needsNewClient: true, reason: 'Existing sse transport has no config key' };
+      return {
+        needsNewClient: true,
+        reason: "Existing sse transport has no config key",
+      };
     }
     if (existingHttpKey !== httpConfigKey(config)) {
-      return { needsNewClient: true, reason: 'SSE auth/connection parameters changed' };
+      return {
+        needsNewClient: true,
+        reason: "SSE auth/connection parameters changed",
+      };
     }
   } else {
     // Default is stdio transport
     if (!(client.transport instanceof StdioClientTransport)) {
       return {
         needsNewClient: true,
-        reason: 'Transport type changed to stdio',
+        reason: "Transport type changed to stdio",
       };
     }
 
     // Ensure we're working with a stdio config
-    if (config.transport !== 'stdio') {
-      return { needsNewClient: true, reason: 'Transport type changed from stdio' };
+    if (config.transport !== "stdio") {
+      return {
+        needsNewClient: true,
+        reason: "Transport type changed from stdio",
+      };
     }
 
     // Compare the RAW config the transport was created from against the incoming raw
@@ -704,18 +872,22 @@ export function shouldRecreateClient(
     // REWRITTEN command/args (.bat -> cmd.exe, bare node -> absolute path), so for e.g.
     // command "node" they never matched the raw config and every reconnect attempt
     // needlessly killed and respawned a healthy server (the restart death-spiral).
-    const existingKey = (client.transport as unknown as TransportWithConfigKey).__flujoStdioKey;
+    const existingKey = (client.transport as unknown as TransportWithConfigKey)
+      .__flujoStdioKey;
     if (!existingKey) {
       // Transport predates the config-key mechanism (only possible for a client adopted
       // across a dev hot-reload via the global recovery map) — we cannot prove the
       // config still matches, so rebuild once to get a keyed transport.
-      return { needsNewClient: true, reason: 'Existing stdio transport has no config key' };
+      return {
+        needsNewClient: true,
+        reason: "Existing stdio transport has no config key",
+      };
     }
 
     if (existingKey !== stdioConfigKey(config)) {
       return {
         needsNewClient: true,
-        reason: 'Connection parameters changed',
+        reason: "Connection parameters changed",
       };
     }
   }
@@ -731,17 +903,17 @@ function waitForExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
   if (child.exitCode !== null || child.signalCode !== null) {
     return Promise.resolve(true);
   }
-  return new Promise<boolean>(resolve => {
+  return new Promise<boolean>((resolve) => {
     const onExit = () => {
       clearTimeout(timer);
       resolve(true);
     };
     const timer = setTimeout(() => {
-      child.removeListener('exit', onExit);
+      child.removeListener("exit", onExit);
       resolve(false);
     }, timeoutMs);
     timer.unref?.();
-    child.once('exit', onExit);
+    child.once("exit", onExit);
   });
 }
 
@@ -764,16 +936,24 @@ export interface SafeCloseOptions {
  * teardown work (browser destroy, session flush) legitimately need more than 2s.
  * Once the child has exited, the SDK's ladder is a no-op.
  */
-export async function safelyCloseClient(client: Client, serverName: string, config?: MCPServerConfig, options?: SafeCloseOptions): Promise<void> {
-  log.debug('Entering safelyCloseClient method');
+export async function safelyCloseClient(
+  client: Client,
+  serverName: string,
+  config?: MCPServerConfig,
+  options?: SafeCloseOptions,
+): Promise<void> {
+  log.debug("Entering safelyCloseClient method");
   const gracePeriodMs = options?.gracePeriodMs ?? 15000;
   const killEscalationMs = options?.killEscalationMs ?? 5000;
   try {
     // Check if the transport is stdio. Duck-typed on the private _process field
     // (present on both the v1 and v2-beta StdioClientTransport) instead of a v1
     // instanceof, so beta-built connections get the same graceful shutdown.
-    const child: ChildProcess | undefined = (client.transport as unknown as { _process?: ChildProcess } | undefined)?._process;
-    if (child && typeof child.kill === 'function') {
+    const rawTransport = getUnderlyingTransport(client.transport);
+    const child: ChildProcess | undefined = (
+      rawTransport as { _process?: ChildProcess } | undefined
+    )?._process;
+    if (child && typeof child.kill === "function") {
       if (child.exitCode === null && child.signalCode === null) {
         // First close stdin to signal graceful shutdown (the MCP stdio convention)
         try {
@@ -788,9 +968,11 @@ export async function safelyCloseClient(client: Client, serverName: string, conf
         let exited = await waitForExit(child, gracePeriodMs);
 
         if (!exited) {
-          log.warn(`Process did not exit within ${gracePeriodMs}ms after stdin close, sending SIGTERM for ${serverName}`);
+          log.warn(
+            `Process did not exit within ${gracePeriodMs}ms after stdin close, sending SIGTERM for ${serverName}`,
+          );
           try {
-            child.kill('SIGTERM');
+            child.kill("SIGTERM");
           } catch (termError) {
             log.error(`Error sending SIGTERM for ${serverName}:`, termError);
           }
@@ -800,9 +982,11 @@ export async function safelyCloseClient(client: Client, serverName: string, conf
         }
 
         if (!exited) {
-          log.warn(`Process did not respond to SIGTERM, sending SIGKILL for ${serverName}`);
+          log.warn(
+            `Process did not respond to SIGTERM, sending SIGKILL for ${serverName}`,
+          );
           try {
-            child.kill('SIGKILL');
+            child.kill("SIGKILL");
           } catch (killError) {
             log.error(`Error sending SIGKILL for ${serverName}:`, killError);
           }

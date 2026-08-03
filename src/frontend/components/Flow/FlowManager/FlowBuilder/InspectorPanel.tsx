@@ -5,6 +5,7 @@ import {
   Box,
   Button,
   Chip,
+  CircularProgress,
   Divider,
   FormControlLabel,
   IconButton,
@@ -23,7 +24,8 @@ import OpenInNewRoundedIcon from '@mui/icons-material/OpenInNewRounded';
 import SettingsSuggestRoundedIcon from '@mui/icons-material/SettingsSuggestRounded';
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
 import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
-import type { FlowNode } from '@/frontend/types/flow/flow';
+import AutoFixHighRoundedIcon from '@mui/icons-material/AutoFixHighRounded';
+import type { Flow, FlowNode } from '@/frontend/types/flow/flow';
 import type { Model } from '@/shared/types';
 import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
 import { useI18n } from '@/frontend/contexts/I18nContext';
@@ -33,6 +35,7 @@ import InspectorMcpServers, {
   type InspectorMcpServerOption,
 } from './InspectorMcpServers';
 import InspectorModelBinding from './InspectorModelBinding';
+import GuidedAgentConnections, { type GuidedAgentConnection } from './GuidedAgentConnections';
 
 const InspectorSurface = styled(Paper)(({ theme }) => ({
   width: 320,
@@ -81,11 +84,19 @@ interface InspectorPanelProps {
   onOpenPermissionRules: () => void;
   beginnerMode?: boolean;
   onSuggestTools?: (node: FlowNode) => void;
+  onSuggestAgents?: (node: FlowNode) => void;
+  onImprovePrompt?: (node: FlowNode) => Promise<string>;
   onCheckPlausibility?: () => void;
   connectedMcpServers?: InspectorMcpConnection[];
   onConnectMcpServer?: (processNodeId: string, serverName: string) => void | Promise<void>;
   onRemoveMcpServer?: (processNodeId: string, mcpNodeId: string) => void;
   loadMcpServers?: () => Promise<InspectorMcpServerOption[]>;
+  onSelectMcpNodeServer?: (node: FlowNode, serverName: string) => void | Promise<void>;
+  currentFlowId?: string;
+  availableAgents?: Flow[];
+  connectedAgents?: GuidedAgentConnection[];
+  onConnectAgent?: (processNodeId: string, flowId: string) => void;
+  onRemoveAgent?: (processNodeId: string, subflowNodeId: string) => void;
   models?: Model[];
 }
 
@@ -124,20 +135,29 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onOpenPermissionRules,
   beginnerMode = false,
   onSuggestTools,
+  onSuggestAgents,
+  onImprovePrompt,
   onCheckPlausibility,
   connectedMcpServers = [],
   onConnectMcpServer,
   onRemoveMcpServer,
   loadMcpServers,
+  onSelectMcpNodeServer,
+  currentFlowId,
+  availableAgents = [],
+  connectedAgents = [],
+  onConnectAgent,
+  onRemoveAgent,
   models = [],
 }) => {
   const { t, tp } = useI18n();
   const [tab, setTab] = useState<InspectorTab>(selectedNode ? 'node' : 'flow');
   const [label, setLabel] = useState(selectedNode?.data.label ?? '');
-  const [description, setDescription] = useState(selectedNode?.data.description ?? '');
   const [promptTemplate, setPromptTemplate] = useState(
     String(selectedNode?.data.properties?.promptTemplate ?? ''),
   );
+  const [improvingPrompt, setImprovingPrompt] = useState(false);
+  const [promptImprovementError, setPromptImprovementError] = useState<string | null>(null);
 
   useEffect(() => {
     if (selectedNode) setTab('node');
@@ -146,8 +166,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
   useEffect(() => {
     setLabel(selectedNode?.data.label ?? '');
-    setDescription(selectedNode?.data.description ?? '');
     setPromptTemplate(String(selectedNode?.data.properties?.promptTemplate ?? ''));
+    setPromptImprovementError(null);
   }, [selectedNode?.id, selectedNode?.data]);
 
   const nodeSummary = useMemo(() => {
@@ -165,7 +185,10 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     } else if (typeof properties.model === 'string' && properties.model) {
       entries.push({ label: beginnerMode ? t('flows.inspector.summary.ai') : t('flows.inspector.summary.model'), value: properties.model });
     }
-    if (typeof properties.boundServer === 'string' && properties.boundServer) {
+    const serverHasInlinePicker = selectedNode.data.type === 'mcp'
+      && !!loadMcpServers
+      && !!onSelectMcpNodeServer;
+    if (typeof properties.boundServer === 'string' && properties.boundServer && !serverHasInlinePicker) {
       entries.push({ label: beginnerMode ? t('flows.inspector.summary.app') : t('flows.inspector.summary.server'), value: properties.boundServer });
     }
     if (typeof properties.subflowId === 'string' && properties.subflowId) {
@@ -175,7 +198,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
       entries.push({ label: beginnerMode ? t('flows.inspector.summary.notification') : t('flows.inspector.summary.signal'), value: properties.signalName });
     }
     return entries;
-  }, [selectedNode, beginnerMode, models, t]);
+  }, [selectedNode, beginnerMode, models, t, loadMcpServers, onSelectMcpNodeServer]);
 
   const commitNode = (): FlowNode | null => {
     if (!selectedNode) return null;
@@ -186,7 +209,6 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     const nextData: FlowNode['data'] = {
       ...selectedNode.data,
       label: label.trim() || selectedNode.data.label,
-      description: description.trim() || undefined,
       properties: nextProperties,
     };
     if (JSON.stringify(nextData) !== JSON.stringify(selectedNode.data)) {
@@ -214,6 +236,35 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     if (!updatedNode) return;
     const { boundModel: _boundModel, modelName: _modelName, ...properties } = updatedNode.data.properties ?? {};
     onCommitNode(updatedNode.id, { ...updatedNode.data, properties });
+  };
+
+  const selectMcpNodeServer = async (_nodeId: string, serverName: string) => {
+    if (!onSelectMcpNodeServer) return;
+    const updatedNode = commitNode();
+    if (updatedNode) await onSelectMcpNodeServer(updatedNode, serverName);
+  };
+
+  const improvePrompt = async () => {
+    if (!onImprovePrompt) return;
+    const updatedNode = commitNode();
+    if (!updatedNode) return;
+    setImprovingPrompt(true);
+    setPromptImprovementError(null);
+    try {
+      const improved = await onImprovePrompt(updatedNode);
+      setPromptTemplate(improved);
+      onCommitNode(updatedNode.id, {
+        ...updatedNode.data,
+        properties: {
+          ...(updatedNode.data.properties ?? {}),
+          promptTemplate: improved,
+        },
+      });
+    } catch (error) {
+      setPromptImprovementError(error instanceof Error ? error.message : t('flows.inspector.improvePromptFailed'));
+    } finally {
+      setImprovingPrompt(false);
+    }
   };
 
   return (
@@ -286,53 +337,54 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               }}
             />
 
-            {!beginnerMode && (
-              <TextField
-                label={t('flows.inspector.whatStepDoes')}
-                size="small"
-                fullWidth
-                multiline
-                minRows={2}
-                maxRows={4}
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-                onBlur={commitNode}
-                placeholder={t('flows.inspector.optionalNote')}
-              />
-            )}
-
             {(selectedNode.data.type === 'process' || selectedNode.data.type === 'start') && (
-              <TextField
-                label={
-                  beginnerMode
-                    ? selectedNode.data.type === 'start' ? t('flows.inspector.helpfulBackground') : t('flows.inspector.aiTask')
-                    : selectedNode.data.type === 'start' ? t('flows.inspector.startingContext') : t('flows.inspector.taskPrompt')
-                }
-                size="small"
-                fullWidth
-                multiline
-                minRows={5}
-                maxRows={12}
-                value={promptTemplate}
-                onChange={(event) => setPromptTemplate(event.target.value)}
-                onBlur={commitNode}
-                onKeyDown={(event) => {
-                  if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
-                    event.preventDefault();
-                    commitNode();
+              <Stack spacing={0.75}>
+                <TextField
+                  label={
+                    beginnerMode
+                      ? selectedNode.data.type === 'start' ? t('flows.inspector.helpfulBackground') : t('flows.inspector.aiTask')
+                      : selectedNode.data.type === 'start' ? t('flows.inspector.startingContext') : t('flows.inspector.taskPrompt')
                   }
-                }}
-                placeholder={
-                  selectedNode.data.type === 'start'
-                    ? beginnerMode ? t('flows.inspector.startBeginnerPlaceholder') : t('flows.inspector.startPlaceholder')
-                    : beginnerMode ? t('flows.inspector.taskBeginnerPlaceholder') : t('flows.inspector.taskPlaceholder')
-                }
-                helperText={
-                  beginnerMode
-                    ? t('flows.inspector.blurHelp')
-                    : t('flows.inspector.keyboardHelp')
-                }
-              />
+                  size="small"
+                  fullWidth
+                  multiline
+                  minRows={5}
+                  maxRows={12}
+                  value={promptTemplate}
+                  onChange={(event) => setPromptTemplate(event.target.value)}
+                  onBlur={commitNode}
+                  onKeyDown={(event) => {
+                    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+                      event.preventDefault();
+                      commitNode();
+                    }
+                  }}
+                  placeholder={
+                    selectedNode.data.type === 'start'
+                      ? beginnerMode ? t('flows.inspector.startBeginnerPlaceholder') : t('flows.inspector.startPlaceholder')
+                      : beginnerMode ? t('flows.inspector.taskBeginnerPlaceholder') : t('flows.inspector.taskPlaceholder')
+                  }
+                  helperText={
+                    beginnerMode
+                      ? t('flows.inspector.blurHelp')
+                      : t('flows.inspector.keyboardHelp')
+                  }
+                />
+                {selectedNode.data.type === 'process' && onImprovePrompt && (
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    startIcon={improvingPrompt ? <CircularProgress size={16} /> : <AutoFixHighRoundedIcon />}
+                    disabled={improvingPrompt}
+                    onClick={() => { void improvePrompt(); }}
+                  >
+                    {improvingPrompt ? t('flows.inspector.improvingPrompt') : t('flows.inspector.improvePrompt')}
+                  </Button>
+                )}
+                {promptImprovementError && (
+                  <Typography variant="caption" color="error">{promptImprovementError}</Typography>
+                )}
+              </Stack>
             )}
 
             {!beginnerMode && nodeSummary.length > 0 && (
@@ -352,6 +404,26 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 ))}
               </Box>
             )}
+
+            {selectedNode.data.type === 'mcp'
+              && loadMcpServers
+              && onSelectMcpNodeServer
+              && (
+                <InspectorMcpServers
+                  processNodeId={selectedNode.id}
+                  connections={typeof selectedNode.data.properties?.boundServer === 'string'
+                    && selectedNode.data.properties.boundServer
+                    ? [{ nodeId: selectedNode.id, serverName: selectedNode.data.properties.boundServer }]
+                    : []}
+                  heading={t('flows.inspector.summary.server')}
+                  actionLabel={t('flows.inspector.chooseMcpServer')}
+                  emptyMessage={t('flows.mcpNode.select')}
+                  pickerAriaLabel={t('flows.inspector.chooseMcpServer')}
+                  singleSelection
+                  onConnect={selectMcpNodeServer}
+                  loadServers={loadMcpServers}
+                />
+              )}
 
             <Button
               variant={beginnerMode ? 'outlined' : 'contained'}
@@ -392,6 +464,21 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 />
               )}
 
+            {selectedNode.data.type === 'process'
+              && currentFlowId
+              && onConnectAgent
+              && onRemoveAgent
+              && (
+                <GuidedAgentConnections
+                  processNodeId={selectedNode.id}
+                  currentFlowId={currentFlowId}
+                  flows={availableAgents}
+                  connections={connectedAgents}
+                  onConnect={onConnectAgent}
+                  onRemove={onRemoveAgent}
+                />
+              )}
+
             {selectedNode.data.type === 'process' && onSuggestTools && (
               <Button
                 variant="contained"
@@ -402,6 +489,19 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 }}
               >
                 {t('flows.inspector.suggestTools')}
+              </Button>
+            )}
+
+            {selectedNode.data.type === 'process' && onSuggestAgents && (
+              <Button
+                variant="contained"
+                startIcon={<AutoAwesomeRoundedIcon />}
+                onClick={() => {
+                  const updatedNode = commitNode();
+                  if (updatedNode) onSuggestAgents(updatedNode);
+                }}
+              >
+                {t('flows.inspector.suggestAgents')}
               </Button>
             )}
 
