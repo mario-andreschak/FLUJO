@@ -4,12 +4,18 @@ import { ThemeProvider, createTheme } from '@mui/material/styles';
 
 import McpConnectionWizard from '@/frontend/components/mcp/MCPServerManager/McpConnectionWizard';
 
+jest.mock('@/frontend/services/model', () => ({
+  modelService: { loadModels: jest.fn(async () => []) },
+}));
+
 function renderWizard(overrides?: Partial<React.ComponentProps<typeof McpConnectionWizard>>) {
   const props: React.ComponentProps<typeof McpConnectionWizard> = {
     open: true,
     onClose: jest.fn(),
     onChooseSetup: jest.fn(),
     onManualCreation: jest.fn(),
+    onInstalled: jest.fn(),
+    onAuthenticate: jest.fn(async () => undefined),
     ...overrides,
   };
 
@@ -52,5 +58,14 @@ describe('McpConnectionWizard', () => {
     fireEvent.click(screen.getByRole('button', { name: /at a remote url/i }));
 
     expect(props.onChooseSetup).toHaveBeenCalledWith('remote');
+  });
+
+  it('opens the single-prompt AI-assisted connection mode', () => {
+    renderWizard();
+
+    fireEvent.click(screen.getByRole('button', { name: /ai-assisted/i }));
+
+    expect(screen.getByRole('heading', { name: /what do you want to connect/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/one thing to connect/i)).toBeInTheDocument();
   });
 });

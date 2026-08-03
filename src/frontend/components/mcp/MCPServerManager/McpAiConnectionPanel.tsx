@@ -142,6 +142,7 @@ export default function McpAiConnectionPanel({
       const installResult = await installMcpRecommendation({
         registryName: selected.registryName,
         transport: selected.plan.transport,
+        reviewedPlan: selected.plan,
         approved: true,
         inputs,
         authMode: selected.authMode,

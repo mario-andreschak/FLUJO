@@ -463,6 +463,25 @@ export interface BestInstallOptions {
 }
 
 /**
+ * Registry search is name-only, so a natural-language capability sentence is a
+ * particularly poor query. Fan it into a few concrete aliases before quality
+ * enrichment. The interactive AI path supplies better semantic aliases; this
+ * lexical fallback also fixes the internal install_best_mcp_server tool.
+ */
+export function capabilitySearchTerms(query: string): string[] {
+  const ignored = new Set(['connect', 'with', 'from', 'into', 'using', 'want', 'need', 'server', 'mcp', 'that', 'this', 'the', 'and', 'for']);
+  const words = query.toLocaleLowerCase()
+    .replace(/[^a-z0-9@._/-]+/g, ' ')
+    .split(/\s+/)
+    .map((word) => word.replace(/^[-/@.]+|[-/@.]+$/g, ''))
+    .filter((word) => word.length >= 2 && !ignored.has(word));
+  const terms = [words.slice(0, 3).join(' '), ...words]
+    .map((term) => term.trim().slice(0, 80))
+    .filter(Boolean);
+  return Array.from(new Set(terms)).slice(0, 6);
+}
+
+/**
  * Install the BEST WORKING server for a capability, unattended: search the
  * registry, rank by blended quality, then walk best→worst installing with the
  * works-gate on — the first candidate that boots with a non-empty tool list
@@ -481,7 +500,12 @@ export async function installBestForCapability(
 
   let results: RegistryServerResult[];
   try {
-    results = await fetchRegistryResults(query, 10);
+    const pages = await Promise.all(capabilitySearchTerms(query).map((term) => fetchRegistryResults(term, 10)));
+    const byName = new Map<string, RegistryServerResult>();
+    for (const result of pages.flat()) {
+      if (!byName.has(result.server.name)) byName.set(result.server.name, result);
+    }
+    results = [...byName.values()];
   } catch (err) {
     return { installed: false, error: `Registry lookup failed: ${err instanceof Error ? err.message : String(err)}` };
   }

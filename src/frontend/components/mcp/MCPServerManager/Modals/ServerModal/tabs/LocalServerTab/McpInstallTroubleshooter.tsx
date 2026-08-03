@@ -9,6 +9,7 @@ import {
   CircularProgress,
   FormControl,
   InputLabel,
+  Link,
   MenuItem,
   Paper,
   Select,
@@ -17,6 +18,7 @@ import {
 } from '@mui/material';
 import AutoFixHighRoundedIcon from '@mui/icons-material/AutoFixHighRounded';
 import BuildCircleRoundedIcon from '@mui/icons-material/BuildCircleRounded';
+import OpenInNewRoundedIcon from '@mui/icons-material/OpenInNewRounded';
 import type { Model } from '@/shared/types/model';
 import type { McpTroubleshootContext, McpTroubleshootPatch, McpTroubleshootResult } from '@/shared/types/mcp/assistant';
 import { modelService } from '@/frontend/services/model';
@@ -122,6 +124,15 @@ export default function McpInstallTroubleshooter({ context, onApplyPatch }: McpI
               </Box>
             ) : null}
             {result.authHelp ? <Alert severity="warning">{result.authHelp}</Alert> : null}
+            {result.researchedUrls?.length ? (
+              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                {result.researchedUrls.map((url) => (
+                  <Link key={url} href={url} target="_blank" rel="noreferrer" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.4, fontSize: 12 }}>
+                    {t('mcp.troubleshoot.researchedSource')} <OpenInNewRoundedIcon fontSize="inherit" />
+                  </Link>
+                ))}
+              </Box>
+            ) : null}
             {result.patch && lines.length ? (
               <Paper variant="outlined" sx={{ p: 1.4, bgcolor: 'action.hover' }}>
                 <Typography variant="subtitle2">{t('mcp.troubleshoot.proposedChanges')}</Typography>
