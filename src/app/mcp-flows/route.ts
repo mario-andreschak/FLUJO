@@ -31,7 +31,7 @@ import { createLogger } from '@/utils/logger';
 export const runtime = 'nodejs';
 
 const log = createLogger('app/mcp-flows/route');
-const SERVER_VERSION = '3.42.0';
+const SERVER_VERSION = '3.42.1';
 
 function jsonError(status: number, message: string): Response {
   return new Response(JSON.stringify({ error: message }), {
