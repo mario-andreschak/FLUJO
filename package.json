@@ -75,7 +75,7 @@
     "lodash": "^4.18.1",
     "mcp-remote": "^0.1.38",
     "mcp-stdio-oauth": "^0.1.0",
-    "next": "^16.2.12",
+    "next": "16.2.12",
     "node-fetch": "^3.3.2",
     "openai": "^7.3.0",
     "react": "^19.2.8",

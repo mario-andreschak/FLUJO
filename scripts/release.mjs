@@ -135,13 +135,17 @@ show(`npm version ${bump} -m "Bump version to %s"`);
 
 const version = JSON.parse(readFileSync('package.json', 'utf8')).version;
 const tag = `v${version}`;
+show('npm run build');
 show('npm run validate:mcp-release');
+show('npm run smoke:mcp-artifacts');
 
 try {
   for (const packageName of publicMcpPackages) {
     show(`npm publish --workspace ${packageName} --access public`);
   }
-  show('npm publish');
+  // The complete root artifact was built and smoke-tested above. Do not run
+  // prepublishOnly again and risk publishing output different from what passed.
+  show('npm publish --ignore-scripts');
 } catch {
   fail(
     `npm publish failed. No Git refs were pushed, but earlier packages in the sequence may already be on npm. Inspect which packages reached npm, finish publishing all four MCP packages and flujo-ai at ${version}, then run "git push origin main ${tag}".`,
