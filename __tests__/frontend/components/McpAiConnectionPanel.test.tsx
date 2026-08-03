@@ -82,6 +82,7 @@ describe('McpAiConnectionPanel', () => {
 
     await act(async () => { finishResearch(result); });
     expect(await screen.findByText('npx -y @example/search')).toBeInTheDocument();
+    expect(screen.getByLabelText(/connection name/i)).toHaveValue('search');
     const installButton = screen.getByRole('button', { name: /install and connect/i });
     expect(installButton).toBeDisabled();
 
@@ -91,9 +92,69 @@ describe('McpAiConnectionPanel', () => {
 
     await waitFor(() => expect(installMcpRecommendationMock).toHaveBeenCalledWith(expect.objectContaining({
       registryName: 'io.example/search',
-      reviewedPlan,
+      serverName: 'search',
+      reviewedPlan: { ...reviewedPlan, serverName: 'search' },
       approved: true,
     })));
     await waitFor(() => expect(onInstalled).toHaveBeenCalledWith('search'));
+  });
+
+  it('does not render an Authorization credential field for an OAuth DCR recommendation', async () => {
+    const dcrPlan = {
+      ...reviewedPlan,
+      registryName: 'com.paypal.mcp/mcp',
+      resolvedName: 'com.paypal.mcp/mcp',
+      serverName: 'paypal',
+      transport: 'streamable' as const,
+      command: undefined,
+      args: undefined,
+      serverUrl: 'https://mcp.paypal.com/mcp',
+      requiredEnvNames: [],
+    };
+    const dcrResult: McpAssistantResearchResult = {
+      ...result,
+      query: 'PayPal',
+      recommendedId: 'com.paypal.mcp/mcp::streamable',
+      candidates: [{
+        ...result.candidates[0],
+        id: 'com.paypal.mcp/mcp::streamable',
+        registryName: 'com.paypal.mcp/mcp',
+        title: 'PayPal',
+        plan: dcrPlan,
+        config: { name: 'paypal', transport: 'streamable', serverUrl: dcrPlan.serverUrl, headers: {} },
+        authMode: 'oauth-dcr',
+        requiredInputs: [],
+        alternateTransports: ['streamable'],
+      }],
+    };
+    researchMcpConnectionMock.mockResolvedValue(dcrResult);
+    installMcpRecommendationMock.mockResolvedValue({
+      installed: true,
+      serverName: 'paypal',
+      needsAuthentication: true,
+    });
+
+    render(
+      <ThemeProvider theme={createTheme()}>
+        <McpAiConnectionPanel onInstalled={jest.fn()} onAuthenticate={jest.fn()} onManual={jest.fn()} />
+      </ThemeProvider>,
+    );
+
+    fireEvent.change(screen.getByLabelText(/one thing to connect/i), { target: { value: 'PayPal' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: /research options/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /research options/i }));
+
+    expect(await screen.findByLabelText(/connection name/i)).toHaveValue('paypal');
+    expect(screen.queryByLabelText(/^Authorization$/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText(/approve saving and connecting/i));
+    const installButton = screen.getByRole('button', { name: /install and connect/i });
+    expect(installButton).toBeEnabled();
+    fireEvent.click(installButton);
+
+    await waitFor(() => expect(installMcpRecommendationMock).toHaveBeenCalledWith(expect.objectContaining({
+      serverName: 'paypal',
+      inputs: {},
+      authMode: 'oauth-dcr',
+    })));
   });
 });

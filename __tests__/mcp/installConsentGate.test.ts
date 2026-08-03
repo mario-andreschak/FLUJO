@@ -32,6 +32,12 @@ jest.mock('@/backend/services/mcp/autoInstall', () => ({
   appendInstallAudit: (...a: unknown[]) => appendInstallAuditMock(...a),
 }));
 
+jest.mock('@/backend/services/flow/assistedAuthoring', () => ({
+  suggestToolsForFlowStep: jest.fn(),
+  applyToolsToFlowStep: jest.fn(),
+  checkFlowPlausibility: jest.fn(),
+}));
+
 import { authoringCallTool } from '@/backend/services/mcp/flowAuthoringTools';
 import { DEFAULT_MCP_AUTO_INSTALL_SETTINGS } from '@/utils/mcp/autoInstallConsent';
 

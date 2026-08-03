@@ -48,6 +48,7 @@ describe('sanitizeServerName / displayName', () => {
     expect(sanitizeServerName('com.googleapis.firestore/mcp')).toBe('firestore-mcp');
     expect(sanitizeServerName('com.notion/mcp')).toBe('notion-mcp');
     expect(sanitizeServerName('com.example/server')).toBe('example-server');
+    expect(sanitizeServerName('com.paypal.mcp/mcp')).toBe('paypal-mcp');
   });
 
   it('displays qualified names for generic slugs when there is no title', () => {

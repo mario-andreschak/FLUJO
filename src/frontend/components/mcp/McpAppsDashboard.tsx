@@ -238,6 +238,12 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
   const discoveryErrors = servers.filter((server) => server.error);
   const eligibleServerCount = servers.length;
 
+  // Opening the library should show an app, not another empty selection step.
+  useEffect(() => {
+    if (!open || selectedKey || allApps.length === 0) return;
+    setSelectedKey(appKey(allApps[0].serverName, allApps[0].uri));
+  }, [allApps, open, selectedKey]);
+
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="xl" aria-labelledby="mcp-apps-dashboard-title">
       <DialogTitle id="mcp-apps-dashboard-title" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -349,7 +355,7 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
                 </Stack>
               ) : (
                 <Box>
-                  <Typography variant="h6">{selectedApp.name}</Typography>
+                  <Typography variant="h6">{t('mcp.apps.preview', { app: selectedApp.name })}</Typography>
                   {selectedApp.description && (
                     <Typography color="text.secondary" sx={{ mt: 0.5 }}>{selectedApp.description}</Typography>
                   )}
@@ -381,6 +387,7 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
 
                   <McpAppFrame
                     key={appKey(selectedApp.serverName, selectedApp.uri)}
+                    defaultExpanded
                     serverName={selectedApp.serverName}
                     uri={selectedApp.uri}
                   />

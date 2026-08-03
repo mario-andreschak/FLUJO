@@ -15,6 +15,8 @@ import { pathToFileURL } from 'url';
 import {
   normalizeRootUri,
   resolveServerRoots,
+  mcpRootsRestrictionEnabled,
+  unrestrictedHostRoots,
   _resetNodeRootsForTests,
 } from '@/backend/services/mcp/roots';
 
@@ -71,5 +73,21 @@ describe('resolveServerRoots', () => {
   it('returns an empty list when neither roots nor a usable rootPath exist', async () => {
     expect(await resolveServerRoots(cfg(undefined))).toEqual([]);
     expect(await resolveServerRoots(cfg(undefined, '   '))).toEqual([]);
+  });
+});
+
+describe('opt-in roots confinement', () => {
+  it('is unrestricted by default and enables confinement only explicitly', () => {
+    expect(mcpRootsRestrictionEnabled(undefined)).toBe(false);
+    expect(mcpRootsRestrictionEnabled({ experimental: { enabled: false } } as any)).toBe(false);
+    expect(mcpRootsRestrictionEnabled({
+      experimental: { enabled: false, restrictMcpFilesystemToRoots: true },
+    } as any)).toBe(true);
+  });
+
+  it('advertises at least one absolute host filesystem root when unrestricted', () => {
+    const roots = unrestrictedHostRoots();
+    expect(roots.length).toBeGreaterThan(0);
+    expect(roots.every((root) => root.uri.startsWith('file://'))).toBe(true);
   });
 });

@@ -479,8 +479,8 @@ const DEVCANVAS_DIFF_HTML = `<!doctype html>
 <head>
 <meta charset="utf-8" />
 <style>
-  :root { --bg:#fff; --fg:#1a1a1a; --muted:#666; --border:#e0e0e0; --accent:#1565c0; --add:#e6ffed; --addln:#22863a; --hover:#f5f5f5; }
-  [data-theme="dark"] { --bg:#1e1e1e; --fg:#e8e8e8; --muted:#9e9e9e; --border:#3a3a3a; --accent:#64b5f6; --add:#0f2f18; --addln:#7bd88f; --hover:#2a2a2a; }
+  :root { --bg:#fff; --fg:#1a1a1a; --muted:#666; --border:#d0d7de; --accent:#1565c0; --add:#e6ffed; --addln:#22863a; --del:#ffebe9; --delln:#cf222e; --hover:#f6f8fa; --gutter:#f6f8fa; }
+  [data-theme="dark"] { --bg:#1e1e1e; --fg:#e8e8e8; --muted:#9e9e9e; --border:#3a3a3a; --accent:#64b5f6; --add:#0f2f18; --addln:#7bd88f; --del:#3b1518; --delln:#ff7b72; --hover:#2a2a2a; --gutter:#252525; }
   * { box-sizing: border-box; }
   html,body { margin:0; padding:0; height:100%; }
   body { font: 13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; background:var(--bg); color:var(--fg); }
@@ -491,8 +491,21 @@ const DEVCANVAS_DIFF_HTML = `<!doctype html>
   .card h4 { margin:0; padding:6px 10px; background:var(--hover); font-size:12px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; word-break:break-all; display:flex; gap:8px; align-items:center; }
   .badge { font-size:11px; padding:1px 6px; border-radius:10px; border:1px solid var(--border); color:var(--muted); }
   .stat { font-size:11px; color:var(--addln); }
-  pre { margin:0; padding:8px 10px; max-height:220px; overflow:auto; white-space:pre-wrap; word-break:break-word; background:var(--bg); }
-  .del { color:#d32f2f; }
+  pre { margin:0; padding:8px 10px; max-height:320px; overflow:auto; white-space:pre-wrap; word-break:break-word; background:var(--bg); }
+  .diff-section { border-top:1px solid var(--border); }
+  .diff-section:first-of-type { border-top:0; }
+  .diff-label { padding:4px 8px; color:var(--muted); font-size:11px; background:var(--hover); border-bottom:1px solid var(--border); }
+  .diff-grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); min-height:34px; overflow:auto; }
+  .pane { min-width:0; overflow:auto; font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  .pane + .pane { border-left:1px solid var(--border); }
+  .pane-title { position:sticky; top:0; z-index:1; padding:4px 8px; font:600 11px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--gutter); border-bottom:1px solid var(--border); }
+  .line { display:grid; grid-template-columns:42px minmax(max-content,1fr); min-height:18px; }
+  .line-no { padding:0 7px; text-align:right; color:var(--muted); background:var(--gutter); user-select:none; border-right:1px solid var(--border); }
+  .line-code { padding:0 8px; white-space:pre; }
+  .removed { background:var(--del); color:var(--delln); }
+  .added { background:var(--add); color:var(--addln); }
+  .empty-side { padding:12px; color:var(--muted); font-style:italic; }
+  @media (max-width:700px) { .diff-grid { grid-template-columns:1fr; } .pane + .pane { border-left:0; border-top:1px solid var(--border); } }
 </style>
 </head>
 <body>
@@ -541,10 +554,61 @@ const DEVCANVAS_DIFF_HTML = `<!doctype html>
       if (c.mode) { var b = document.createElement("span"); b.className = "badge"; b.textContent = c.mode; h.appendChild(b); }
       if (c.stat) { var s = document.createElement("span"); s.className = "stat"; s.textContent = c.stat; h.appendChild(s); }
       card.appendChild(h);
-      if (c.body) { var pre = document.createElement("pre"); pre.textContent = c.body; card.appendChild(pre); }
+      if (Array.isArray(c.comparisons) && c.comparisons.length) {
+        c.comparisons.forEach(function (comparison, index) {
+          renderSideBySide(card, comparison.oldText, comparison.newText, comparison.label || (c.comparisons.length > 1 ? "Edit " + (index + 1) : ""));
+        });
+      } else if (c.diffText) {
+        renderUnifiedDiff(card, c.diffText);
+      } else if (c.body) {
+        renderSideBySide(card, "", c.body, "New content");
+      }
       logEl.appendChild(card);
     }
     sendSize();
+  }
+
+  function textLines(value) {
+    if (typeof value !== "string" || value.length === 0) return [];
+    return value.replace(/\\r\\n?/g, "\\n").split("\\n");
+  }
+
+  function appendPane(grid, title, lines, kind) {
+    var pane = document.createElement("div"); pane.className = "pane";
+    var paneTitle = document.createElement("div"); paneTitle.className = "pane-title"; paneTitle.textContent = title; pane.appendChild(paneTitle);
+    if (!lines.length) {
+      var empty = document.createElement("div"); empty.className = "empty-side"; empty.textContent = "(empty / not captured)"; pane.appendChild(empty);
+    } else {
+      lines.forEach(function (text, index) {
+        var row = document.createElement("div"); row.className = "line " + kind;
+        var no = document.createElement("span"); no.className = "line-no"; no.textContent = String(index + 1);
+        var code = document.createElement("span"); code.className = "line-code"; code.textContent = text || " ";
+        row.appendChild(no); row.appendChild(code); pane.appendChild(row);
+      });
+    }
+    grid.appendChild(pane);
+  }
+
+  function renderSideBySide(card, oldText, newText, label) {
+    var section = document.createElement("div"); section.className = "diff-section";
+    if (label) { var caption = document.createElement("div"); caption.className = "diff-label"; caption.textContent = label; section.appendChild(caption); }
+    var grid = document.createElement("div"); grid.className = "diff-grid";
+    appendPane(grid, "Before", textLines(oldText), "removed");
+    appendPane(grid, "After", textLines(newText), "added");
+    section.appendChild(grid); card.appendChild(section);
+  }
+
+  function renderUnifiedDiff(card, diffText) {
+    var oldLines = [], newLines = [];
+    textLines(diffText).forEach(function (line) {
+      if (line.indexOf("--- ") === 0 || line.indexOf("+++ ") === 0 || line.indexOf("\\\\ No newline") === 0) return;
+      if (line.indexOf("@@") === 0) { oldLines.push(line); newLines.push(line); return; }
+      if (line.charAt(0) === "-") { oldLines.push(line.slice(1)); return; }
+      if (line.charAt(0) === "+") { newLines.push(line.slice(1)); return; }
+      var context = line.charAt(0) === " " ? line.slice(1) : line;
+      oldLines.push(context); newLines.push(context);
+    });
+    renderSideBySide(card, oldLines.join("\\n"), newLines.join("\\n"), "Unified diff");
   }
 
   function addFromResult(payload, args) {
@@ -558,8 +622,8 @@ const DEVCANVAS_DIFF_HTML = `<!doctype html>
         path: (sd.nodeName || sd.nodeId || "Snapshot") + " — " + (sd.root || ""),
         mode: "snapshot",
         stat: files.length + " file(s)",
-        body: files.map(function (f) { return (f.status || "?") + "  " + (f.path || ""); }).join("\n")
-          + (sd.resourceUri ? "\n\nPatch resource: " + sd.resourceUri : "")
+        body: files.map(function (f) { return (f.status || "?") + "  " + (f.path || ""); }).join("\\n")
+          + (sd.resourceUri ? "\\n\\nPatch resource: " + sd.resourceUri : "")
       };
       changes.push(change);
       render();
@@ -568,14 +632,14 @@ const DEVCANVAS_DIFF_HTML = `<!doctype html>
           var contents = result && result.contents;
           var text = contents && contents[0] && contents[0].text;
           if (typeof text === "string" && text.length) {
-            change.body = text;
+            change.diffText = text;
             render();
           }
         }).catch(function () {});
       }
       return;
     }
-    var change = { path: p.path || a.path || "", mode: p.mode || (a.edits ? "edit" : (a.diff ? "diff" : undefined)), stat: "", body: "" };
+    var change = { path: p.path || a.path || "", mode: p.mode || (a.edits ? "edit" : (a.diff ? "diff" : undefined)), stat: "", body: "", diffText: "", comparisons: [] };
     if (p.diff && (typeof p.diff.added === "number" || typeof p.diff.removed === "number")) {
       change.stat = "+" + (p.diff.added || 0) + " -" + (p.diff.removed || 0);
     } else if (typeof p.bytesWritten === "number") {
@@ -585,8 +649,16 @@ const DEVCANVAS_DIFF_HTML = `<!doctype html>
     } else if (typeof p.applied === "number") {
       change.stat = p.applied + " edit(s)";
     }
-    if (typeof a.content === "string") change.body = a.content.slice(0, 4000);
-    else if (typeof a.diff === "string") change.body = a.diff.slice(0, 4000);
+    if (Array.isArray(a.edits)) {
+      change.comparisons = a.edits.slice(0, 50).map(function (edit, index) {
+        return {
+          oldText: typeof edit.oldText === "string" ? edit.oldText.slice(0, 12000) : "",
+          newText: typeof edit.newText === "string" ? edit.newText.slice(0, 12000) : "",
+          label: "Edit " + (index + 1) + (edit.startLine ? " near line " + edit.startLine : "")
+        };
+      });
+    } else if (typeof a.diff === "string") change.diffText = a.diff.slice(0, 30000);
+    else if (typeof a.content === "string") change.body = a.content.slice(0, 30000);
     changes.push(change);
     render();
   }

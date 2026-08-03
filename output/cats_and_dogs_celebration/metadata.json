@@ -1,0 +1,23 @@
+{
+  "title": "Paws & Whiskers: A Celebration of Cats and Dogs",
+  "description": "A warm 20-second celebration of the joy, friendship, and everyday magic cats and dogs bring to our lives.\n\nFeaturing original narration and an upbeat instrumental music bed. #Cats #Dogs #Pets #AnimalLovers",
+  "tags": [
+    "cats",
+    "dogs",
+    "pets",
+    "animal lovers",
+    "cute animals",
+    "pet friendship",
+    "cats and dogs",
+    "wholesome",
+    "feel good",
+    "animals"
+  ],
+  "narration_script": "Cats bring gentle wonder. Dogs bring boundless joy. Together, they fill ordinary moments with play, trust, and love. Here’s to every purr, every wag, and every pawprint making life brighter.",
+  "narration_audio": "C:\\Users\\Moe\\AppData\\Local\\Temp\\elevenlabs_5d7db026-ed89-4bfc-8732-58f2bfa76392.mp3",
+  "music_audio": "C:\\Users\\Moe\\AppData\\Local\\Temp\\elevenlabs_6eec22dc-b8c3-42fb-a31e-acc388ad947a.mp3",
+  "visual_asset": "C:\\Users\\Moe\\Documents\\GitHub\\FLUJO\\db\\codex-runtime\\generated_images\\019fc8e7-c239-7db1-ae00-aba842812c8c\\exec-bf999927-516b-4d50-8261-b7446abd678e.png",
+  "output_path": "C:\\Users\\Moe\\Documents\\GitHub\\FLUJO\\output\\cats_and_dogs_celebration\\paws_and_whiskers_20s.mp4",
+  "duration_seconds": 20,
+  "format": "1920x1080, H.264/AAC, 16:9"
+}

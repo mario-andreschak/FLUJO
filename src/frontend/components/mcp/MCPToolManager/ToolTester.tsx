@@ -26,6 +26,7 @@ import { useThemeUtils } from '@/frontend/utils/theme';
 import { extractUiResourceUri } from '@/shared/utils/mcpApps';
 import McpAppFrame from '@/frontend/components/Chat/McpAppFrame'; // #97: render a tool's MCP App here too
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useStorage } from '@/frontend/contexts/StorageContext';
 
 const log = createLogger('frontend/components/mcp/MCPToolManager/ToolTester');
 
@@ -62,6 +63,8 @@ const ToolTester: React.FC<ToolTesterProps> = ({
   prefill,
 }) => {
   const { t, formatNumber } = useI18n();
+  const { settings } = useStorage();
+  const autoOpenMcpApps = settings?.experimental?.requireMcpAppLaunchClick !== true;
   log.debug('Props:', { serverName, toolsCount: tools?.length });
   // Ensure tools is always an array
   const toolsArray = Array.isArray(tools) ? tools : [];
@@ -418,6 +421,31 @@ const ToolTester: React.FC<ToolTesterProps> = ({
         <Typography color="text.secondary">{t('mcp.tester.noSelection')}</Typography>
       )}
 
+      {/* Interactive output is the primary result for an MCP App tool. Put it
+          before the raw/text payload and reveal it immediately once the server
+          has already been granted MCP Apps access. */}
+      {result?.success && (() => {
+        const uiUri = extractUiResourceUri(selectedToolData?._meta);
+        if (!uiUri) return null;
+        let resultContent: string | undefined;
+        try {
+          const parsed = JSON.parse(result.output);
+          resultContent = JSON.stringify(parsed?.data ?? parsed);
+        } catch {
+          resultContent = undefined;
+        }
+        return (
+          <McpAppFrame
+            defaultExpanded={autoOpenMcpApps}
+            serverName={serverName}
+            uri={uiUri}
+            toolName={selectedTool}
+            toolArgs={JSON.stringify(params)}
+            toolResultContent={resultContent}
+          />
+        );
+      })()}
+
       {result && (
         <Paper
           sx={{
@@ -552,28 +580,6 @@ const ToolTester: React.FC<ToolTesterProps> = ({
         </Paper>
       )}
 
-      {/* #97: if the just-tested tool links a ui:// MCP App, render it live here
-          — so apps can be tried straight from the tool tester, no flow needed. */}
-      {result?.success && (() => {
-        const uiUri = extractUiResourceUri(selectedToolData?._meta);
-        if (!uiUri) return null;
-        let resultContent: string | undefined;
-        try {
-          const parsed = JSON.parse(result.output);
-          resultContent = JSON.stringify(parsed?.data ?? parsed);
-        } catch {
-          resultContent = undefined;
-        }
-        return (
-          <McpAppFrame
-            serverName={serverName}
-            uri={uiUri}
-            toolName={selectedTool}
-            toolArgs={JSON.stringify(params)}
-            toolResultContent={resultContent}
-          />
-        );
-      })()}
     </Paper>
   );
 };

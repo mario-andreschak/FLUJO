@@ -1,11 +1,55 @@
+import fs from 'fs';
+import path from 'path';
 import { pathToFileURL } from 'url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { ListRootsRequestSchema, Root } from '@modelcontextprotocol/sdk/types.js';
 import { createLogger } from '@/utils/logger';
 import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';
 import { MCPServerConfig } from '@/shared/types/mcp';
+import { StorageKey, type Settings } from '@/shared/types/storage';
 
 const log = createLogger('backend/services/mcp/roots');
+
+/** Missing/false intentionally means unrestricted; confinement is opt-in. */
+export function mcpRootsRestrictionEnabled(settings: Settings | undefined): boolean {
+  return settings?.experimental?.restrictMcpFilesystemToRoots === true;
+}
+
+/**
+ * Filesystem roots exposed when the user has not opted into MCP roots
+ * confinement. Windows needs one entry per mounted drive; POSIX has one root.
+ */
+export function unrestrictedHostRoots(): Root[] {
+  if (process.platform !== 'win32') {
+    return [{ uri: pathToFileURL('/').href, name: '/' }];
+  }
+
+  const roots: Root[] = [];
+  for (let code = 65; code <= 90; code += 1) {
+    const drive = `${String.fromCharCode(code)}:\\`;
+    try {
+      if (fs.existsSync(drive)) roots.push({ uri: pathToFileURL(drive).href, name: drive });
+    } catch {
+      // An inaccessible removable/network drive should not break roots/list.
+    }
+  }
+  if (roots.length > 0) return roots;
+
+  const fallback = path.parse(process.cwd()).root || 'C:\\';
+  return [{ uri: pathToFileURL(fallback).href, name: fallback }];
+}
+
+async function loadMcpRootsRestriction(): Promise<boolean> {
+  try {
+    const { loadItem } = await import('@/utils/storage/backend');
+    const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
+    return mcpRootsRestrictionEnabled(settings);
+  } catch (error) {
+    // A settings read failure must not silently turn the opt-in restriction on.
+    log.warn('Could not read the MCP roots restriction setting; using unrestricted roots', error);
+    return false;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // MCP roots (issues 15 + 46 + owner directive of 2026-07-06)
@@ -225,7 +269,10 @@ async function freshestConfig(connectTimeConfig: MCPServerConfig): Promise<MCPSe
  */
 export function createRootsListHandler(config: MCPServerConfig): () => Promise<{ roots: Root[] }> {
   return async () => {
-    const roots = await resolveServerRoots(await freshestConfig(config));
+    const restricted = await loadMcpRootsRestriction();
+    const roots = restricted
+      ? await resolveServerRoots(await freshestConfig(config))
+      : unrestrictedHostRoots();
     log.debug(`roots/list for ${config.name}: ${roots.length} root(s)`);
     return { roots };
   };

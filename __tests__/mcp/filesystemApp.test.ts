@@ -23,6 +23,7 @@ jest.mock('@modelcontextprotocol/ext-apps', () => ({
 const LATEST_PROTOCOL_VERSION = '2026-01-26';
 
 import { filesystemReadResource, FILESYSTEM_APP_URI, DEVCANVAS_DIFF_URI } from '@/backend/services/mcp/internal/filesystemResources';
+import { Script } from 'node:vm';
 
 function appHtml(): string {
   const res = filesystemReadResource(FILESYSTEM_APP_URI);
@@ -65,5 +66,22 @@ describe('filesystem MCP App', () => {
     const html = devcanvasHtml();
     expect(html).toContain(`protocolVersion: "${LATEST_PROTOCOL_VERSION}"`);
     expect(LATEST_PROTOCOL_VERSION).toBeTruthy();
+  });
+
+  it('renders literal edits and unified patches as red/green side-by-side diffs', () => {
+    const html = devcanvasHtml();
+    expect(html).toContain('grid-template-columns:minmax(0,1fr) minmax(0,1fr)');
+    expect(html).toContain('renderSideBySide(card, comparison.oldText, comparison.newText');
+    expect(html).toContain('renderUnifiedDiff(card, c.diffText)');
+    expect(html).toContain('className = "line " + kind');
+    expect(html).toContain('oldText: typeof edit.oldText');
+    expect(html).toContain('newText: typeof edit.newText');
+  });
+
+  it('ships syntactically valid devcanvas JavaScript', () => {
+    const html = devcanvasHtml();
+    const scripts = Array.from(html.matchAll(/<script>([\s\S]*?)<\/script>/g), match => match[1]);
+    expect(scripts).toHaveLength(1);
+    expect(() => new Script(scripts[0])).not.toThrow();
   });
 });

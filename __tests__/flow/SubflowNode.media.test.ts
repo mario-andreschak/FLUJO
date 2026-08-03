@@ -6,9 +6,11 @@ jest.mock('@/backend/execution/flow/runFlow', () => ({
 }));
 
 const copyRunResourceMock = jest.fn();
+const getRunResourceLocalPathMock = jest.fn();
 const writeRunResourceMock = jest.fn();
 jest.mock('@/backend/services/runResources', () => ({
   copyRunResourceToConversation: (...args: unknown[]) => copyRunResourceMock(...args),
+  getRunResourceLocalPath: (...args: unknown[]) => getRunResourceLocalPathMock(...args),
   writeRunResource: (...args: unknown[]) => writeRunResourceMock(...args),
 }));
 
@@ -61,9 +63,12 @@ function copiedEntry(sourceUri: string) {
 beforeEach(() => {
   runFlowMock.mockReset();
   copyRunResourceMock.mockReset();
+  getRunResourceLocalPathMock.mockReset();
   writeRunResourceMock.mockReset();
   getFlowMock.mockClear();
   copyRunResourceMock.mockImplementation(async ({ uri }: { uri: string }) => copiedEntry(uri));
+  getRunResourceLocalPathMock.mockImplementation(async (uri: string) =>
+    `C:\\parent-artifacts\\${uri.split('/').at(-1)}.mp4`);
 });
 
 describe('SubflowNode media output promotion', () => {
@@ -76,6 +81,7 @@ describe('SubflowNode media output promotion', () => {
         type: 'video',
         mimeType: 'video/mp4',
         resourceUri: childUri,
+        localPath: 'C:\\child-artifacts\\clip-1.dat',
         url: '/old-child-url',
       }],
     });
@@ -97,13 +103,17 @@ describe('SubflowNode media output promotion', () => {
     expect(folded.content).toContain('Returned result from sub-agent');
     expect(folded.content).toContain('Completed artifacts:');
     expect(folded.content).toContain('flujo://run/parent-conv/parent-clip-1');
+    expect(folded.content).toContain('C:\\parent-artifacts\\parent-clip-1.mp4');
+    expect(folded.content).not.toContain('C:\\child-artifacts\\clip-1.dat');
+    expect(folded.content).not.toContain('Pass the `flujo://` URI to `read_resource`');
     expect(folded.content).not.toContain('finished and returned control to you with no output');
     expect(folded.media).toEqual([expect.objectContaining({
       type: 'video',
       resourceUri: 'flujo://run/parent-conv/parent-clip-1',
+      localPath: 'C:\\parent-artifacts\\parent-clip-1.mp4',
       url: '/v1/chat/conversations/parent-conv/resources/parent-clip-1/content',
     })]);
-    expect(shared.lastResponse).toContain('Use `read_resource`');
+    expect(shared.lastResponse).toContain('C:\\parent-artifacts\\parent-clip-1.mp4');
   });
 
   it('preserves deterministic lane order when promoting parallel media', async () => {

@@ -89,6 +89,28 @@ export default function ExperimentalFeaturesSettings() {
     });
   };
 
+  const handleMcpAppLaunchRestrictionChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    log.debug(`MCP App click-to-launch restriction toggled: ${event.target.checked}`);
+    updateSettings({
+      ...settings,
+      experimental: {
+        ...experimental,
+        requireMcpAppLaunchClick: event.target.checked,
+      },
+    });
+  };
+
+  const handleMcpRootsRestrictionChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    log.debug(`MCP roots restriction toggled: ${event.target.checked}`);
+    updateSettings({
+      ...settings,
+      experimental: {
+        ...experimental,
+        restrictMcpFilesystemToRoots: event.target.checked,
+      },
+    });
+  };
+
   const handleSnapshotsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     log.debug(`Filesystem snapshots toggled: ${event.target.checked}`);
     updateSettings({
@@ -146,6 +168,38 @@ export default function ExperimentalFeaturesSettings() {
 
   return (
     <Box sx={{ p: 2 }}>
+      <FormControl fullWidth sx={{ mb: 2 }}>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={experimental.requireMcpAppLaunchClick ?? false}
+              onChange={handleMcpAppLaunchRestrictionChange}
+              name="requireMcpAppLaunchClick"
+            />
+          }
+          label={t('settings.experimental.requireMcpAppLaunchClick')}
+        />
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+          {t('settings.experimental.requireMcpAppLaunchClickDescription')}
+        </Typography>
+      </FormControl>
+
+      <FormControl fullWidth sx={{ mb: 2 }}>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={experimental.restrictMcpFilesystemToRoots ?? false}
+              onChange={handleMcpRootsRestrictionChange}
+              name="restrictMcpFilesystemToRoots"
+            />
+          }
+          label={t('settings.experimental.restrictMcpFilesystemToRoots')}
+        />
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+          {t('settings.experimental.restrictMcpFilesystemToRootsDescription')}
+        </Typography>
+      </FormControl>
+
       <FormControl fullWidth sx={{ mb: 2 }}>
         <FormControlLabel
           control={

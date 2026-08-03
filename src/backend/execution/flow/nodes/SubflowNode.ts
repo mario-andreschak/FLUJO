@@ -18,7 +18,11 @@ import { EmitFn, NodeRef } from '@/shared/types/execution/events';
 import { resolveRunVars } from '@/utils/shared/resolveRunVars';
 import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { resolveKvNodeRefs, captureKvValue } from '../resolveKvNodeRefs';
-import { copyRunResourceToConversation, writeRunResource } from '@/backend/services/runResources';
+import {
+  copyRunResourceToConversation,
+  getRunResourceLocalPath,
+  writeRunResource,
+} from '@/backend/services/runResources';
 import { isCancelledByAncestry } from '../cancellation';
 import { buildConversationTitle } from '@/utils/shared/conversationTitle';
 
@@ -115,15 +119,19 @@ function buildMediaArtifactSummary(media: ModelMediaPart[]): string {
   const lines = media.map((part, index) => {
     const label = part.name?.trim() || `${part.type} ${index + 1}`;
     const mime = part.mimeType ? ` (${part.mimeType})` : '';
-    const reference = part.resourceUri ?? part.url;
+    const reference = part.localPath
+      ? `${part.localPath}${part.resourceUri ? ` (resource ${part.resourceUri})` : ''}`
+      : part.resourceUri ?? part.url;
     return reference ? `- ${label}${mime}: ${reference}` : `- ${label}${mime}: attached media`;
   });
-  const hasRunResource = media.some(part => part.resourceUri?.startsWith('flujo://run/'));
+  const hasUnmaterializedRunResource = media.some(
+    part => part.resourceUri?.startsWith('flujo://run/') && !part.localPath,
+  );
   return [
     'Completed artifacts:',
     ...lines,
-    ...(hasRunResource
-      ? ['Use `read_resource` with a `flujo://` URI to obtain its validated `localPath` before passing it to filesystem tools.']
+    ...(hasUnmaterializedRunResource
+      ? ['Pass the `flujo://` URI to `read_resource` if a host-local path is required.']
       : []),
   ].join('\n');
 }
@@ -170,9 +178,15 @@ async function promoteSubflowMedia(
         size: copied.size,
         source: 'capture',
       });
+      const localPath = await getRunResourceLocalPath(copied.uri);
+      // Never leak the source conversation's path after promotion. A stale path
+      // can point at a grandchild artifact even though resourceUri now names the
+      // parent-owned copy.
+      const { localPath: _sourceLocalPath, ...rest } = part;
       return {
-        ...part,
+        ...rest,
         resourceUri: copied.uri,
+        ...(localPath ? { localPath } : {}),
         url: `/v1/chat/conversations/${copied.conversationId}/resources/${copied.id}/content`,
       };
     } catch (error) {

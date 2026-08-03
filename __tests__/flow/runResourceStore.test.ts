@@ -153,6 +153,7 @@ describe('cross-conversation promotion', () => {
     const localPath = await getRunResourceLocalPath(promoted.uri);
     expect(localPath).not.toBeNull();
     expect(path.isAbsolute(localPath!)).toBe(true);
+    expect(path.extname(localPath!)).toBe('.mp4');
     expect(await fs.readFile(localPath!)).toEqual(payloadBytes);
   });
 

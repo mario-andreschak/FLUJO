@@ -6,7 +6,11 @@ jest.mock('@/backend/services/mcp/registryInstall', () => ({
   searchRegistry: jest.fn(),
 }));
 
-import { installAssistedMcpServer } from '@/backend/services/mcp/assistedInstall';
+import {
+  assistantRequiredInputs,
+  installAssistedMcpServer,
+  normalizeMcpAssistantServerName,
+} from '@/backend/services/mcp/assistedInstall';
 
 const plan = {
   registryName: 'io.example/search',
@@ -28,6 +32,7 @@ describe('installAssistedMcpServer', () => {
     const result = await installAssistedMcpServer({
       registryName: 'io.example/search',
       transport: 'stdio',
+      serverName: 'search',
       reviewedPlan: plan,
       approved: false as true,
     });
@@ -43,6 +48,7 @@ describe('installAssistedMcpServer', () => {
     const result = await installAssistedMcpServer({
       registryName: 'io.example/search',
       transport: 'stdio',
+      serverName: 'search',
       reviewedPlan: plan,
       approved: true,
       inputs: { SEARCH_KEY: 'allowed', SURPRISE_TOKEN: 'blocked' },
@@ -62,6 +68,7 @@ describe('installAssistedMcpServer', () => {
     const result = await installAssistedMcpServer({
       registryName: 'io.example/search',
       transport: 'stdio',
+      serverName: 'search',
       reviewedPlan: plan,
       approved: true,
       inputs: { SEARCH_KEY: 'secret-value' },
@@ -80,6 +87,7 @@ describe('installAssistedMcpServer', () => {
     const result = await installAssistedMcpServer({
       registryName: 'io.example/search',
       transport: 'stdio',
+      serverName: 'search',
       reviewedPlan: plan,
       approved: true,
       inputs: { SEARCH_KEY: 'secret-value' },
@@ -91,5 +99,66 @@ describe('installAssistedMcpServer', () => {
       { SEARCH_KEY: 'secret-value' },
       expect.objectContaining({ preferredTransport: 'stdio', worksGate: true }),
     );
+  });
+
+  it('installs a DCR endpoint without requesting or saving a static Authorization value', async () => {
+    const dcrPlan = {
+      ...plan,
+      registryName: 'com.paypal.mcp/mcp',
+      resolvedName: 'com.paypal.mcp/mcp',
+      serverName: 'paypal',
+      transport: 'streamable' as const,
+      command: undefined,
+      args: undefined,
+      serverUrl: 'https://mcp.paypal.com/mcp',
+      requiredEnvNames: [],
+    };
+    installRegistryServerMock
+      .mockResolvedValueOnce({ installed: false, plan: dcrPlan })
+      .mockResolvedValueOnce({ installed: true, serverName: 'paypal', plan: dcrPlan, tools: [] });
+
+    const result = await installAssistedMcpServer({
+      registryName: 'com.paypal.mcp/mcp',
+      transport: 'streamable',
+      serverName: 'paypal',
+      reviewedPlan: dcrPlan,
+      approved: true,
+      authMode: 'oauth-dcr',
+    });
+
+    expect(result).toEqual(expect.objectContaining({ installed: true, needsAuthentication: true }));
+    expect(installRegistryServerMock).toHaveBeenLastCalledWith(
+      'com.paypal.mcp/mcp',
+      undefined,
+      expect.objectContaining({
+        serverName: 'paypal',
+        oauthDynamicClientRegistration: true,
+        headerOverrides: {},
+      }),
+    );
+  });
+});
+
+describe('assisted install policy helpers', () => {
+  it('uses the AI service name instead of a generic Registry slug', () => {
+    expect(normalizeMcpAssistantServerName('PayPal MCP Server', 'paypal-mcp')).toBe('paypal');
+    expect(normalizeMcpAssistantServerName('mcp', 'paypal-mcp')).toBe('paypal');
+  });
+
+  it('omits only Authorization when DCR was advertised', () => {
+    const option = {
+      kind: 'remote' as const,
+      label: 'Hosted',
+      remote: {
+        type: 'streamable-http',
+        url: 'https://mcp.paypal.com/mcp',
+        headers: [
+          { name: 'Authorization', isRequired: true },
+          { name: 'X-Tenant', isRequired: true },
+        ],
+      },
+    };
+    expect(assistantRequiredInputs(option, 'oauth-dcr')).toEqual(['X-Tenant']);
+    expect(assistantRequiredInputs(option, 'oauth-manual')).toEqual(['Authorization', 'X-Tenant']);
   });
 });

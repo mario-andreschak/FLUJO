@@ -41,7 +41,7 @@ import { GITHUB_PROVIDER_ID } from '@/backend/services/mcp/quality/providers/git
 import { NPM_PROVIDER_ID } from '@/backend/services/mcp/quality/providers/npmDownloads';
 import { REGISTRY_STATUS_PROVIDER_ID } from '@/backend/services/mcp/quality/providers/registryStatus';
 import { loadQualitySettings } from '@/backend/services/mcp/quality/settings';
-import type { MCPHeaderValue } from '@/shared/types/mcp';
+import type { MCPHeaderValue, MCPServerConfig } from '@/shared/types/mcp';
 
 const log = createLogger('backend/services/mcp/registryInstall');
 
@@ -215,6 +215,20 @@ export interface InstallOptions {
    * exported instead of blindly taking the registry's first option.
    */
   preferredTransport?: 'stdio' | 'sse' | 'streamable' | 'websocket';
+  /** Optional reviewed FLUJO config name (used by the assisted-install UI). */
+  serverName?: string;
+  /**
+   * The hosted endpoint was probed and advertised OAuth dynamic client
+   * registration. In this mode the OAuth provider owns Authorization, so a
+   * Registry-declared static Authorization header must not be requested/saved.
+   */
+  oauthDynamicClientRegistration?: boolean;
+  /**
+   * Exact plan that was reviewed/audited immediately before this call. The
+   * install is rejected before saving or spawning if a fresh Registry resolve
+   * changes any security-relevant field.
+   */
+  expectedPlan?: ResolvedInstallPlan;
   /** Resolved package header declarations (including secret metadata). */
   headerOverrides?: Record<string, MCPHeaderValue>;
   /** Explicit approval to execute locally when the exported remote kind is unavailable. */
@@ -244,6 +258,21 @@ function chooseInstallOption(
 
 function headerLiteral(value: MCPHeaderValue): string {
   return typeof value === 'string' ? value : value.value;
+}
+
+function plansMatch(left: ResolvedInstallPlan, right: ResolvedInstallPlan): boolean {
+  const comparable = (value: ResolvedInstallPlan) => ({
+    registryName: value.registryName,
+    resolvedName: value.resolvedName,
+    serverName: value.serverName,
+    transport: value.transport,
+    command: value.command,
+    args: value.args,
+    serverUrl: value.serverUrl,
+    requiredEnvNames: value.requiredEnvNames,
+    verificationStatus: value.verificationStatus,
+  });
+  return JSON.stringify(comparable(left)) === JSON.stringify(comparable(right));
 }
 
 function applyArgTemplates(
@@ -325,16 +354,48 @@ export async function installRegistryServer(
   // Resolve-only / consent preview: exact command + args + required env NAMES,
   // never touching updateServerConfig. Available before any missing-env or
   // already-exists check so a caller can always show/log what would run.
+  const requestedServerName = options?.serverName;
+  if (
+    requestedServerName !== undefined
+    && (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(requestedServerName))
+  ) {
+    return {
+      installed: false,
+      error: 'The server name must be 1-64 characters and use only letters, numbers, hyphens, or underscores.',
+    };
+  }
+  const omitOAuthAuthorization = option.kind === 'remote' && options?.oauthDynamicClientRegistration === true;
+  const isAuthorization = (name: string) => name.trim().toLocaleLowerCase() === 'authorization';
   const verificationStatus = verificationStatusOf(result);
-  const plan = resolvedPlanFrom(registryName, server, option, verificationStatus);
+  const basePlan = resolvedPlanFrom(registryName, server, option, verificationStatus);
+  const plan: ResolvedInstallPlan = {
+    ...basePlan,
+    ...(requestedServerName ? { serverName: requestedServerName } : {}),
+    ...(omitOAuthAuthorization
+      ? { requiredEnvNames: basePlan.requiredEnvNames.filter(name => !isAuthorization(name)) }
+      : {}),
+  };
+  if (options?.expectedPlan && !plansMatch(plan, options.expectedPlan)) {
+    return {
+      installed: false,
+      serverName: plan.serverName,
+      plan,
+      error: 'The Registry install plan changed after it was reviewed and audited. Resolve and approve the new exact plan before installing.',
+    };
+  }
   if (options?.resolveOnly) {
     return { installed: false, serverName: plan.serverName, plan };
   }
 
-  const providedHeaders = Object.fromEntries(
-    Object.entries(options?.headerOverrides ?? {}).map(([name, value]) => [name, headerLiteral(value)]),
+  const effectiveHeaderOverrides = Object.fromEntries(
+    Object.entries(options?.headerOverrides ?? {})
+      .filter(([name]) => !omitOAuthAuthorization || !isAuthorization(name)),
   );
-  const missing = missingRequiredInputs(option, { ...envOverrides, ...providedHeaders });
+  const providedHeaders = Object.fromEntries(
+    Object.entries(effectiveHeaderOverrides).map(([name, value]) => [name, headerLiteral(value)]),
+  );
+  const missing = missingRequiredInputs(option, { ...envOverrides, ...providedHeaders })
+    .filter(name => !omitOAuthAuthorization || !isAuthorization(name));
   if (missing.length > 0) {
     return {
       installed: false,
@@ -344,14 +405,28 @@ export async function installRegistryServer(
     };
   }
 
-  const registryConfig = buildConfigFromOption(server, option);
+  const builtConfig = buildConfigFromOption(server, option);
+  const builtHeaders = 'headers' in builtConfig
+    ? (builtConfig.headers as Record<string, MCPHeaderValue> | undefined)
+    : undefined;
+  const policyHeaders = omitOAuthAuthorization
+    ? Object.fromEntries(Object.entries(builtHeaders ?? {}).filter(([name]) => !isAuthorization(name)))
+    : builtHeaders;
+  const registryConfig = {
+    ...builtConfig,
+    ...(requestedServerName ? { name: requestedServerName } : {}),
+    ...(option.kind === 'remote' && requestedServerName
+      ? { rootPath: `mcp-servers/${requestedServerName}` }
+      : {}),
+    ...(option.kind === 'remote' ? { headers: policyHeaders ?? {} } : {}),
+  } as Partial<MCPServerConfig>;
   const currentHeaders =
     'headers' in registryConfig
       ? (registryConfig.headers as Record<string, MCPHeaderValue> | undefined)
       : undefined;
   const baseConfig = applySpotlightEnvDefaults(
-    option.kind === 'remote' && Object.keys(options?.headerOverrides ?? {}).length > 0
-      ? { ...registryConfig, headers: { ...(currentHeaders ?? {}), ...options?.headerOverrides } }
+    option.kind === 'remote' && Object.keys(effectiveHeaderOverrides).length > 0
+      ? { ...registryConfig, headers: { ...(currentHeaders ?? {}), ...effectiveHeaderOverrides } }
       : registryConfig,
     envOverrides,
   );
@@ -456,6 +531,11 @@ export interface BestInstallOptions {
   /** Minimum composite score to attempt. Defaults to the mcpQuality `minScore`. */
   minScore?: number;
   /**
+   * Called with the exact resolve-only plan before any package can be spawned.
+   * Return false to stop the ranked walk without executing that candidate.
+   */
+  beforeAttempt?: (plan: ResolvedInstallPlan) => Promise<boolean | void> | boolean | void;
+  /**
    * Audit hook invoked after each attempt with its plan + result, so a caller
    * (e.g. the authoring tool) can record every spawn to the SEP-1024 audit log.
    */
@@ -532,7 +612,29 @@ export async function installBestForCapability(
     if (tried >= maxAttempts) break;
     tried += 1;
 
-    const res = await installRegistryServer(name, envOverrides, { worksGate: true });
+    const preview = await installRegistryServer(name, undefined, { resolveOnly: true });
+    if (!preview.plan) {
+      attempts.push({ name, score: sc.score, reason: preview.error ?? 'could not resolve exact install plan' });
+      continue;
+    }
+    if (options?.beforeAttempt) {
+      try {
+        const proceed = await options.beforeAttempt(preview.plan);
+        if (proceed === false) {
+          attempts.push({ name, score: sc.score, reason: 'blocked before execution' });
+          break;
+        }
+      } catch (auditErr) {
+        log.error('installBestForCapability: beforeAttempt hook failed', auditErr);
+        attempts.push({ name, score: sc.score, reason: 'pre-install audit failed' });
+        break;
+      }
+    }
+
+    const res = await installRegistryServer(name, envOverrides, {
+      worksGate: true,
+      expectedPlan: preview.plan,
+    });
     if (options?.onAttempt) {
       try {
         await options.onAttempt(res.plan, res);

@@ -819,20 +819,17 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
               </>
             )}
             
-            <Tooltip title={t('mcp.server.openApps')}>
-              <IconButton
-                size="small"
-                aria-label={t('mcp.server.openApps')}
-                onClick={() => setShowAppsDashboard(true)}
-                color={showAppsDashboard ? 'primary' : 'default'}
-                sx={{
-                  border: `1px solid ${theme.palette.divider}`,
-                  backgroundColor: theme.palette.background.default
-                }}
-              >
-                <AppsIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
+            <Button
+              size="small"
+              aria-label={t('mcp.server.openApps')}
+              onClick={() => setShowAppsDashboard(true)}
+              color={showAppsDashboard ? 'primary' : 'inherit'}
+              variant={showAppsDashboard ? 'contained' : 'outlined'}
+              startIcon={<AppsIcon fontSize="small" />}
+              sx={{ whiteSpace: 'nowrap', backgroundColor: showAppsDashboard ? undefined : theme.palette.background.default }}
+            >
+              {t('mcp.apps.title')}
+            </Button>
 
             {/* Group-by button (#71 folders / #73 sort-fold) */}
             <IconButton

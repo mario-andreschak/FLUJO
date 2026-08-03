@@ -2169,9 +2169,21 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   const toolCalls = externalToolsXml
     ? undefined
     : (lastMessage?.role === 'assistant' ? lastMessage.tool_calls : undefined);
-  const outputMedia = lastMessage?.role === 'assistant' && lastMessage.media?.length
-    ? lastMessage.media
-    : undefined;
+
+  // A child flow may generate media and then finish with a text-only process or
+  // handoff message. Returning media only from the literal last message drops
+  // those artifacts at the subflow boundary, so SubflowNode never gets a chance
+  // to promote them into the parent run. Preserve the most recent assistant
+  // artifact set instead; this also naturally prefers a later replacement over
+  // an earlier draft without returning every historical attachment.
+  let outputMedia: ModelMediaPart[] | undefined;
+  for (let i = sharedState.messages.length - 1; i >= 0; i--) {
+    const message = sharedState.messages[i];
+    if (message.role === 'assistant' && message.media?.length) {
+      outputMedia = message.media;
+      break;
+    }
+  }
 
   log.info(`Returning success result for conv ${effectiveConvId}`, { action: currentAction, status: sharedState.status, flujo, requireApproval, flujodebug });
 

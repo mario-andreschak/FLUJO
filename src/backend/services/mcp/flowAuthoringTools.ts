@@ -40,9 +40,11 @@ import {
 import type { Flow } from '@/shared/types/flow';
 import type { StepToolSuggestion } from '@/shared/types/flow/assistance';
 import { searchRegistry, installRegistryServer, installBestForCapability } from '@/backend/services/mcp/registryInstall';
+import { researchMcpServers, sameMcpInstallPlan } from '@/backend/services/mcp/assistedInstall';
 import { loadAutoInstallSettings, appendInstallAudit } from '@/backend/services/mcp/autoInstall';
 import { decideInstallConsent, planToAuditEntry } from '@/utils/mcp/autoInstallConsent';
 import { isVerifiedStatus } from '@/utils/mcp/registry';
+import { modelService } from '@/backend/services/model';
 import {
   assertAllowedArguments,
   listInputSchema,
@@ -264,17 +266,22 @@ export function authoringToolDefinitions(): Tool[] {
     {
       name: 'install_best_mcp_server',
       description:
-        'Install the BEST WORKING MCP server for a capability, unattended — the recommended way to acquire a capability when you don\'t already have a specific server name. Searches the registry, RANKS candidates by blended quality (GitHub stars + recent activity, npm weekly downloads, registry status), then installs best→worst until one actually boots and exposes tools (the "works-gate"): candidates that need unavailable keys, can\'t be installed, or start with zero tools are skipped automatically. Same consent/audit rules and third-party-code warning as install_mcp_server. Returns the installed server name + its tools and the list of candidates tried, or needsEnv/consentRequired. Prefer this over search+install for headless self-improvement; use install_mcp_server only when you must pin an exact server.',
+        'AI-assisted install for a natural-language connection request — the recommended way to acquire an MCP capability when you do not already have a specific server name. Researches the official MCP Registry, GitHub, npm, and Awesome MCP community lists; probes hosted endpoints for OAuth 2.1 dynamic client registration; and ranks candidates using relevance, Registry status, GitHub stars/activity, npm installs, local installability, auth friction, and required credentials. It then tries the strongest candidates until one passes the works-gate. OAuth servers can be configured but may return needsAuthentication with researched auth help for the interactive handoff. This DOWNLOADS AND MAY RUN third-party code on the FLUJO host. Same exact-plan consent and secrets-safe audit rules as install_mcp_server: supplied credential VALUES are never sent to the research model or audit log. Falls back to deterministic Registry ranking if AI research is unavailable.',
       inputSchema: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           capability: {
             type: 'string',
-            description: 'Short capability term matched against server names, e.g. "youtube", "email", "browser".',
+            description: 'What the user wants to connect, in natural language, e.g. "connect my PayPal account" or "search YouTube transcripts".',
+          },
+          modelId: {
+            type: 'string',
+            description: 'Optional configured model id for research planning and evidence explanation. Defaults to the first configured model.',
           },
           env: {
             type: 'object',
-            description: 'Optional env var values shared across attempted servers (e.g. an API key).',
+            description: 'Optional credential values. Each candidate receives only values whose NAMES its exact resolved plan declares; values never go to the research model or audit log.',
             additionalProperties: { type: 'string' },
           },
         },
@@ -443,7 +450,7 @@ export async function authoringCallTool(
         });
       }
 
-      const result = await installRegistryServer(name, env);
+      const result = await installRegistryServer(name, env, { expectedPlan: resolved.plan });
       await appendInstallAudit(
         planToAuditEntry(result.plan ?? resolved.plan, 'authoring-tool', decision, result.installed, result.error)
       );
@@ -454,51 +461,250 @@ export async function authoringCallTool(
     }
 
     if (toolName === 'install_best_mcp_server') {
-      const capability = typeof args?.capability === 'string' ? args.capability : '';
+      const capability = typeof args?.capability === 'string' ? args.capability.trim() : '';
+      const requestedModelId = typeof args?.modelId === 'string' ? args.modelId.trim() : '';
       const env =
         args?.env && typeof args.env === 'object' && !Array.isArray(args.env)
           ? (args.env as Record<string, string>)
           : undefined;
       if (!capability) {
-        return textResult({ error: 'Provide a "capability" search term.' }, true);
+        return textResult({ error: 'Describe what you want to connect in "capability".' }, true);
       }
 
-      // Consent for the authoring-tool caller is name-independent (it keys on
-      // trustBrainStem), so it can be decided once for the whole ranked walk.
       const settings = await loadAutoInstallSettings();
-      const decision = decideInstallConsent({ caller: 'authoring-tool', settings, registryName: capability });
+      const models = await modelService.loadModels();
+      const configuredModel = requestedModelId
+        ? models.find((model) => model.id === requestedModelId)
+        : models[0];
+      let researchWarning: string | undefined;
+      let research: Awaited<ReturnType<typeof researchMcpServers>> | undefined;
 
-      if (!decision.allowed) {
-        // Preview the top-ranked installable candidate's exact command so the
-        // caller can obtain approval — never spawn anything.
-        const hits = await searchRegistry(capability);
-        const top = hits.find((h) => h.installable);
-        const preview = top ? await installRegistryServer(top.name, env, { resolveOnly: true }) : null;
-        if (preview?.plan) {
-          await appendInstallAudit(planToAuditEntry(preview.plan, 'authoring-tool', decision, false));
+      if (configuredModel) {
+        try {
+          // Deliberately pass only the user's capability. Credential values stay
+          // in this process and are never included in either AI prompt.
+          research = await researchMcpServers({ query: capability, modelId: configuredModel.id });
+          if (research.candidates.length === 0) {
+            researchWarning = 'AI-assisted research found no installable candidates; using deterministic Registry ranking.';
+            research = undefined;
+          }
+        } catch (error) {
+          researchWarning = `AI-assisted research was unavailable; using deterministic Registry ranking. ${error instanceof Error ? error.message : String(error)}`;
+          log.warn('install_best_mcp_server: assisted research failed', error);
         }
-        return textResult({
-          installed: false,
-          consentRequired: true,
-          message: decision.message,
-          ...(preview?.plan ? { plan: preview.plan } : {}),
-        });
+      } else {
+        researchWarning = requestedModelId
+          ? `Configured model "${requestedModelId}" was not found; using deterministic Registry ranking.`
+          : 'No AI model is configured; using deterministic Registry ranking.';
       }
 
-      // Trusted: walk best→worst with the works-gate, auditing every spawn.
-      const result = await installBestForCapability(capability, env, {
-        onAttempt: async (plan, res) => {
-          if (plan) await appendInstallAudit(planToAuditEntry(plan, 'authoring-tool', decision, res.installed, res.error));
-        },
-      });
-      const verificationWarning =
-        result.installed && !isVerifiedStatus(result.plan?.verificationStatus)
-          ? `Installed an unverified / self-asserted registry entry (status: ${result.plan?.verificationStatus}).`
-          : undefined;
-      return textResult(
-        { ...result, ...(verificationWarning ? { verificationWarning } : {}) },
-        !result.installed
-      );
+      if (!research) {
+        // Preserve the original headless path as a robust fallback. The new
+        // beforeAttempt hook resolves and audits the exact candidate plan before
+        // any package spawn, and can stop the walk for consent.
+        let blocked: { plan: NonNullable<Awaited<ReturnType<typeof installRegistryServer>>['plan']>; message: string } | undefined;
+        const decisions = new Map<string, ReturnType<typeof decideInstallConsent>>();
+        const result = await installBestForCapability(capability, env, {
+          beforeAttempt: async (plan) => {
+            const decision = decideInstallConsent({ caller: 'authoring-tool', settings, registryName: plan.registryName });
+            decisions.set(plan.registryName, decision);
+            await appendInstallAudit(planToAuditEntry(plan, 'authoring-tool', decision, false));
+            if (!decision.allowed) {
+              blocked = { plan, message: decision.message };
+              return false;
+            }
+          },
+          onAttempt: async (plan, res) => {
+            if (!plan) return;
+            const decision = decisions.get(plan.registryName)
+              ?? decideInstallConsent({ caller: 'authoring-tool', settings, registryName: plan.registryName });
+            await appendInstallAudit(planToAuditEntry(plan, 'authoring-tool', decision, res.installed, res.error));
+          },
+        });
+        if (blocked) {
+          return textResult({
+            installed: false,
+            consentRequired: true,
+            message: blocked.message,
+            plan: blocked.plan,
+            researchMode: 'registry-fallback',
+            ...(researchWarning ? { researchWarning } : {}),
+          });
+        }
+        const verificationWarning =
+          result.installed && !isVerifiedStatus(result.plan?.verificationStatus)
+            ? `Installed an unverified / self-asserted registry entry (status: ${result.plan?.verificationStatus}).`
+            : undefined;
+        return textResult(
+          {
+            ...result,
+            researchMode: 'registry-fallback',
+            ...(researchWarning ? { researchWarning } : {}),
+            ...(verificationWarning ? { verificationWarning } : {}),
+          },
+          !result.installed,
+        );
+      }
+
+      const researchEvidence = {
+        mode: 'ai-assisted',
+        modelId: configuredModel?.id,
+        summary: research.summary,
+        recommendedId: research.recommendedId,
+        sources: research.sources,
+        candidates: research.candidates.map((candidate) => ({
+          id: candidate.id,
+          registryName: candidate.registryName,
+          title: candidate.title,
+          score: candidate.score,
+          transport: candidate.plan.transport,
+          authMode: candidate.authMode,
+          freeNote: candidate.freeNote,
+          reasons: candidate.reasons,
+          warnings: candidate.warnings,
+          requiredInputs: candidate.requiredInputs,
+          ...(candidate.githubStars !== undefined ? { githubStars: candidate.githubStars } : {}),
+          ...(candidate.weeklyDownloads !== undefined ? { weeklyDownloads: candidate.weeklyDownloads } : {}),
+          ...(candidate.authHelp ? { authHelp: candidate.authHelp } : {}),
+        })),
+      };
+      const attempts: Array<Record<string, unknown>> = [];
+      const neededInputs = new Set<string>();
+
+      for (const candidate of research.candidates) {
+        const transport = candidate.plan.transport;
+        const oauthDynamicClientRegistration = candidate.authMode === 'oauth-dcr';
+        const preview = await installRegistryServer(candidate.registryName, undefined, {
+          resolveOnly: true,
+          preferredTransport: transport,
+          serverName: candidate.plan.serverName,
+          oauthDynamicClientRegistration,
+        });
+        if (!preview.plan) {
+          attempts.push({
+            candidateId: candidate.id,
+            registryName: candidate.registryName,
+            score: candidate.score,
+            outcome: 'resolve-failed',
+            error: preview.error ?? 'Could not resolve the exact install plan.',
+          });
+          continue;
+        }
+
+        const decision = decideInstallConsent({
+          caller: 'authoring-tool',
+          settings,
+          registryName: preview.plan.registryName,
+        });
+        const planChanged = !sameMcpInstallPlan(preview.plan, candidate.plan);
+        await appendInstallAudit(planToAuditEntry(
+          preview.plan,
+          'authoring-tool',
+          decision,
+          false,
+          planChanged ? 'The Registry install plan changed after research.' : undefined,
+        ));
+
+        if (!decision.allowed) {
+          attempts.push({
+            candidateId: candidate.id,
+            registryName: candidate.registryName,
+            score: candidate.score,
+            outcome: 'consent-required',
+          });
+          return textResult({
+            installed: false,
+            consentRequired: true,
+            message: decision.message,
+            plan: preview.plan,
+            candidate: researchEvidence.candidates.find((entry) => entry.id === candidate.id),
+            attempts,
+            research: researchEvidence,
+          });
+        }
+
+        if (planChanged) {
+          attempts.push({
+            candidateId: candidate.id,
+            registryName: candidate.registryName,
+            score: candidate.score,
+            outcome: 'plan-changed',
+            error: 'The exact Registry plan changed after research; this candidate was not executed.',
+          });
+          continue;
+        }
+
+        const supplied = Object.fromEntries(
+          preview.plan.requiredEnvNames
+            .filter((name) => typeof env?.[name] === 'string' && env[name].length > 0)
+            .map((name) => [name, env?.[name] as string]),
+        );
+        const missing = preview.plan.requiredEnvNames.filter((name) => !(name in supplied));
+        if (missing.length > 0) {
+          missing.forEach((name) => neededInputs.add(name));
+          attempts.push({
+            candidateId: candidate.id,
+            registryName: candidate.registryName,
+            score: candidate.score,
+            outcome: 'needs-inputs',
+            needsInputs: missing,
+          });
+          continue;
+        }
+
+        const remote = transport !== 'stdio';
+        const result = await installRegistryServer(
+          candidate.registryName,
+          remote ? undefined : supplied,
+          {
+            preferredTransport: transport,
+            serverName: preview.plan.serverName,
+            oauthDynamicClientRegistration,
+            expectedPlan: preview.plan,
+            worksGate: remote && candidate.authMode.startsWith('oauth') ? false : true,
+            ...(remote ? { headerOverrides: supplied } : {}),
+          },
+        );
+        await appendInstallAudit(planToAuditEntry(
+          result.plan ?? preview.plan,
+          'authoring-tool',
+          decision,
+          result.installed,
+          result.error,
+        ));
+        const needsAuthentication = remote && candidate.authMode.startsWith('oauth');
+        attempts.push({
+          candidateId: candidate.id,
+          registryName: candidate.registryName,
+          score: candidate.score,
+          outcome: result.installed ? (needsAuthentication ? 'installed-needs-authentication' : 'installed') : 'install-failed',
+          ...(result.needsEnv ? { needsInputs: result.needsEnv } : {}),
+          ...(result.error ? { error: result.error } : {}),
+        });
+        if (result.installed) {
+          const verificationWarning = !isVerifiedStatus(result.plan?.verificationStatus)
+            ? `Installed an unverified / self-asserted registry entry (status: ${result.plan?.verificationStatus}).`
+            : undefined;
+          return textResult({
+            ...result,
+            ...(needsAuthentication ? { needsAuthentication: true } : {}),
+            ...(needsAuthentication && candidate.authHelp ? { authHelp: candidate.authHelp } : {}),
+            selectedCandidateId: candidate.id,
+            attempts,
+            research: researchEvidence,
+            ...(verificationWarning ? { verificationWarning } : {}),
+          });
+        }
+        result.needsEnv?.forEach((name) => neededInputs.add(name));
+      }
+
+      return textResult({
+        installed: false,
+        error: `No researched MCP server could be installed for "${capability}".`,
+        ...(neededInputs.size > 0 ? { needsEnv: [...neededInputs] } : {}),
+        attempts,
+        research: researchEvidence,
+      }, true);
     }
 
     if (toolName === 'draft_generated_flow') {

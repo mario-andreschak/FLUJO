@@ -193,6 +193,20 @@ export interface ExperimentalSettings {
    */
   autoUnloadOllamaModels?: boolean;
   /**
+   * When true, an MCP App that has already passed the per-server
+   * `enableMcpApps` permission still waits for an explicit launch click in chat
+   * and the tool tester. Missing/false keeps the user-friendly default: allowed
+   * apps reveal themselves immediately.
+   */
+  requireMcpAppLaunchClick?: boolean;
+  /**
+   * Constrain MCP servers (including the shipped filesystem and bash packages)
+   * to configured server/node roots. This is opt-in; when missing/false the
+   * host advertises every filesystem root so trusted tools work everywhere.
+   * Operator environment ceilings remain authoritative either way.
+   */
+  restrictMcpFilesystemToRoots?: boolean;
+  /**
    * When true, installed filesystem and bash MCP packages block sensitive
    * home-directory locations even when a configured root would otherwise allow
    * them. Off by default: configured roots are an explicit user grant and take

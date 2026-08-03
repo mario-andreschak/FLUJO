@@ -135,6 +135,50 @@ describe('runFlow keystone', () => {
     expect(result.sharedState.flowId).toBe(FLOW_ID);
   });
 
+  it('returns the most recent assistant media when a later final message is text-only', async () => {
+    const media = [{
+      type: 'video' as const,
+      mimeType: 'video/mp4',
+      resourceUri: 'flujo://run/child-conv/final-video',
+      localPath: 'C:\\artifacts\\final-video.mp4',
+    }];
+
+    (FlowExecutor.executeStep as jest.Mock)
+      .mockImplementationOnce(async (sharedState: SharedState) => {
+        sharedState.currentNodeId = START;
+        return { sharedState, action: `${START}->${PROCESS}` };
+      })
+      .mockImplementationOnce(async (sharedState: SharedState) => {
+        sharedState.messages.push({
+          role: 'assistant',
+          content: 'Generated the video.',
+          media,
+          id: 'media-result',
+          timestamp: 2,
+          processNodeId: PROCESS,
+        } as any);
+        sharedState.lastResponse = 'Finished verification.';
+        sharedState.messages.push({
+          role: 'assistant',
+          content: 'Finished verification.',
+          id: 'text-final',
+          timestamp: 3,
+          processNodeId: PROCESS,
+        } as any);
+        return { sharedState, action: 'FINAL_RESPONSE' };
+      });
+
+    const result = await runFlow({
+      flowId: FLOW_ID,
+      prompt: 'generate and verify media',
+      mode: 'conversation',
+    });
+
+    expect(result.status).toBe('completed');
+    expect(result.outputText).toBe('Finished verification.');
+    expect(result.outputMedia).toEqual(media);
+  });
+
   it('stores and clears the caller-aware return marker around a terminal one-way Subflow', async () => {
     const SUBFLOW = 'terminal-worker';
     const START_TO_PROCESS = `${START}->${PROCESS}`;

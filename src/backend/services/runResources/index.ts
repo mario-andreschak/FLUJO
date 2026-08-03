@@ -57,6 +57,38 @@ function assertSafeId(id: string, what: string): void {
 const conversationDir = (conversationId: string) => path.join(runResourcesDir, conversationId);
 const indexPath = (conversationId: string) => path.join(conversationDir(conversationId), 'index.json');
 const payloadPath = (conversationId: string, id: string) => path.join(conversationDir(conversationId), `${id}.dat`);
+
+// The canonical store stays extension-agnostic, while host tools receive a
+// lazily-created hard-link with a useful extension. This preserves the opaque,
+// metadata-driven store without leaking `.dat` paths into FFmpeg, image tools,
+// upload clients, or other extension-sensitive integrations.
+const LOCAL_EXTENSION_BY_MIME: Readonly<Record<string, string>> = {
+  'video/mp4': '.mp4',
+  'video/webm': '.webm',
+  'video/quicktime': '.mov',
+  'audio/mpeg': '.mp3',
+  'audio/mp4': '.m4a',
+  'audio/wav': '.wav',
+  'audio/x-wav': '.wav',
+  'audio/ogg': '.ogg',
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/webp': '.webp',
+  'image/gif': '.gif',
+  'application/pdf': '.pdf',
+  'application/zip': '.zip',
+  'application/json': '.json',
+  'text/plain': '.txt',
+  'text/markdown': '.md',
+  'text/csv': '.csv',
+};
+
+function materializedPayloadPath(entry: Pick<RunResourceEntry, 'conversationId' | 'id' | 'mimeType'>): string | null {
+  const mimeType = entry.mimeType?.split(';', 1)[0].trim().toLowerCase();
+  const extension = mimeType ? LOCAL_EXTENSION_BY_MIME[mimeType] : undefined;
+  return extension ? path.join(conversationDir(entry.conversationId), `${entry.id}${extension}`) : null;
+}
+
 const chainKey = (conversationId: string) => `run-resources/${conversationId}`;
 
 export function buildRunResourceUri(conversationId: string, id: string): string {
@@ -267,6 +299,8 @@ export async function writeRunResource(input: WriteRunResourceInput): Promise<Wr
   if (replacedToUnlink) {
     // Best-effort: the replaced payload is already unreferenced by the index.
     fs.unlink(payloadPath(input.conversationId, replacedToUnlink.id)).catch(() => { /* may not exist */ });
+    const materialized = materializedPayloadPath(replacedToUnlink);
+    if (materialized) fs.unlink(materialized).catch(() => { /* may not exist */ });
   }
 
   return result;
@@ -424,12 +458,29 @@ export async function getRunResourceLocalPath(uri: string): Promise<string | nul
   const entries = await loadIndex(parsed.conversationId);
   const entry = entries.find(candidate => candidate.id === parsed.id);
   if (!entry || entry.kind === 'link' || entry.size <= 0) return null;
-  const localPath = path.resolve(payloadPath(parsed.conversationId, parsed.id));
+  const canonicalPath = path.resolve(payloadPath(parsed.conversationId, parsed.id));
+  try {
+    await fs.access(canonicalPath);
+  } catch {
+    return null;
+  }
+
+  const materialized = materializedPayloadPath(entry);
+  if (!materialized) return canonicalPath;
+  const localPath = path.resolve(materialized);
+  try {
+    await fs.link(canonicalPath, localPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+      log.warn(`Could not materialize extension-aware path for ${uri}; using canonical payload`, error);
+      return canonicalPath;
+    }
+  }
   try {
     await fs.access(localPath);
     return localPath;
   } catch {
-    return null;
+    return canonicalPath;
   }
 }
 
@@ -551,6 +602,8 @@ export async function sweepOldRunResources(now: number = Date.now()): Promise<{ 
     for (const e of toUnlink) {
       if (e.size > 0) {
         await fs.unlink(payloadPath(conversationId, e.id)).catch(() => { /* may not exist */ });
+        const materialized = materializedPayloadPath(e);
+        if (materialized) await fs.unlink(materialized).catch(() => { /* may not exist */ });
       }
       removed++;
     }

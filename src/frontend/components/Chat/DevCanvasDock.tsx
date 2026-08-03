@@ -16,7 +16,7 @@
  * conditionally unmounting inactive hosts.
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Typography, Tooltip, IconButton, Badge, useTheme } from '@mui/material';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import WidgetsIcon from '@mui/icons-material/Widgets';
@@ -26,6 +26,9 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import FullscreenIcon from '@mui/icons-material/Fullscreen';
 import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 import ViewColumnIcon from '@mui/icons-material/ViewColumn';
+import KeyboardArrowLeftIcon from '@mui/icons-material/KeyboardArrowLeft';
+import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import type {
   McpUiDisplayMode,
   McpUiUpdateModelContextRequest,
@@ -59,6 +62,13 @@ interface DevCanvasDockProps {
   ) => void;
 }
 
+type DockPlacement = 'bottom' | 'left' | 'right';
+type FloatingRect = { x: number; y: number; width: number; height: number };
+
+const clamp = (value: number, min: number, max: number): number => (
+  Math.min(Math.max(value, min), Math.max(min, max))
+);
+
 /** Short, human label for a `ui://server/name` resource. */
 function shortResource(uri: string): string {
   const tail = uri.replace(/\/+$/, '').split('/').pop();
@@ -88,8 +98,25 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
 }) => {
   const { t } = useI18n();
   const theme = useTheme();
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [placement, setPlacement] = useState<DockPlacement>(() => {
+    if (typeof window === 'undefined') return 'bottom';
+    const stored = window.localStorage.getItem('flujo-mcp-canvas-placement');
+    return stored === 'left' || stored === 'right' ? stored : 'bottom';
+  });
+  const [dockHeight, setDockHeight] = useState(() => {
+    if (typeof window === 'undefined') return 440;
+    const stored = Number(window.localStorage.getItem('flujo-mcp-canvas-height'));
+    return Number.isFinite(stored) && stored >= 240 ? stored : 440;
+  });
+  const [dockWidth, setDockWidth] = useState(() => {
+    if (typeof window === 'undefined') return 560;
+    const stored = Number(window.localStorage.getItem('flujo-mcp-canvas-width'));
+    return Number.isFinite(stored) && stored >= 320 ? stored : 560;
+  });
+  const [floatingRect, setFloatingRect] = useState<FloatingRect | null>(null);
   const [appModesByKey, setAppModesByKey] = useState<Record<string, McpUiDisplayMode[]>>({});
   // #216 owner decision #3: general N-up split grid. Keys currently pinned into
   // the split. Empty → only the active tab is shown.
@@ -125,6 +152,91 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
     if (fullscreen && !fullscreenAvailable) setFullscreen(false);
   }, [fullscreen, fullscreenAvailable]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('flujo-mcp-canvas-placement', placement);
+  }, [placement]);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('flujo-mcp-canvas-height', String(Math.round(dockHeight)));
+  }, [dockHeight]);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('flujo-mcp-canvas-width', String(Math.round(dockWidth)));
+  }, [dockWidth]);
+
+  const enterFullscreen = useCallback(() => {
+    if (typeof window !== 'undefined') {
+      const width = clamp(Math.round(window.innerWidth * 0.86), 480, window.innerWidth - 24);
+      const height = clamp(Math.round(window.innerHeight * 0.84), 320, window.innerHeight - 24);
+      setFloatingRect({
+        x: Math.round((window.innerWidth - width) / 2),
+        y: Math.round((window.innerHeight - height) / 2),
+        width,
+        height,
+      });
+    }
+    setFullscreen(true);
+    setCollapsed(false);
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    if (fullscreen) setFullscreen(false);
+    else enterFullscreen();
+  }, [enterFullscreen, fullscreen]);
+
+  const startDockResize = useCallback((event: React.PointerEvent) => {
+    if (fullscreen || !rootRef.current) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startRect = rootRef.current.getBoundingClientRect();
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.userSelect = 'none';
+    const onMove = (move: PointerEvent) => {
+      if (placement === 'bottom') {
+        setDockHeight(clamp(startRect.height + startY - move.clientY, 240, window.innerHeight * 0.82));
+      } else if (placement === 'left') {
+        setDockWidth(clamp(startRect.width + move.clientX - startX, 320, window.innerWidth * 0.82));
+      } else {
+        setDockWidth(clamp(startRect.width + startX - move.clientX, 320, window.innerWidth * 0.82));
+      }
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      document.body.style.userSelect = previousUserSelect;
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }, [fullscreen, placement]);
+
+  const startFullscreenDrag = useCallback((event: React.PointerEvent) => {
+    if (!fullscreen || !rootRef.current) return;
+    if ((event.target as HTMLElement).closest('button,[role="button"]')) return;
+    event.preventDefault();
+    const rect = rootRef.current.getBoundingClientRect();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.userSelect = 'none';
+    const onMove = (move: PointerEvent) => {
+      setFloatingRect({
+        x: clamp(rect.left + move.clientX - startX, 0, window.innerWidth - 120),
+        y: clamp(rect.top + move.clientY - startY, 0, window.innerHeight - 56),
+        width: rect.width,
+        height: rect.height,
+      });
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      document.body.style.userSelect = previousUserSelect;
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }, [fullscreen]);
+
   if (entries.length === 0) return null;
 
   const toggleSplit = (key: string) => {
@@ -158,7 +270,7 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
       && appModes.includes('pip')
       && appModes.includes('fullscreen')
     ) {
-      setFullscreen(true);
+      enterFullscreen();
       return 'fullscreen';
     }
     if (mode === 'pip' && current === 'fullscreen' && appModes.includes('pip')) {
@@ -170,21 +282,90 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
 
   return (
     <Box
+      ref={rootRef}
       data-testid="dev-canvas-dock"
       sx={{
-        borderTop: 1,
+        border: 1,
         borderColor: 'divider',
         bgcolor: 'background.paper',
         display: 'flex',
         flexDirection: 'column',
         minHeight: 0,
+        overflow: 'hidden',
         ...(fullscreen
-          ? { position: 'fixed', inset: 16, zIndex: 1300, borderRadius: 1, boxShadow: 6, border: 1 }
-          : { maxHeight: '45vh' }),
+          ? {
+              position: 'fixed',
+              left: floatingRect?.x ?? 16,
+              top: floatingRect?.y ?? 16,
+              width: floatingRect?.width ?? 'calc(100vw - 32px)',
+              height: floatingRect?.height ?? 'calc(100vh - 32px)',
+              minWidth: 480,
+              minHeight: 320,
+              maxWidth: '100vw',
+              maxHeight: '100vh',
+              zIndex: 1300,
+              borderRadius: 1,
+              boxShadow: 6,
+              resize: 'both',
+            }
+          : placement === 'bottom'
+            ? {
+                position: 'relative',
+                width: '100%',
+                height: collapsed ? 'auto' : dockHeight,
+                maxHeight: '82vh',
+                flexShrink: 0,
+                borderLeft: 0,
+                borderRight: 0,
+              }
+            : {
+                position: 'fixed',
+                top: 72,
+                bottom: 16,
+                [placement]: 16,
+                width: dockWidth,
+                maxWidth: '82vw',
+                height: collapsed ? 'auto' : 'calc(100vh - 88px)',
+                zIndex: 1200,
+                borderRadius: 1,
+                boxShadow: 6,
+              }),
       }}
     >
+      {!fullscreen && !collapsed && (
+        <Box
+          role="separator"
+          tabIndex={0}
+          aria-orientation={placement === 'bottom' ? 'horizontal' : 'vertical'}
+          aria-label={t('chat.canvas.resize')}
+          onPointerDown={startDockResize}
+          sx={{
+            position: 'absolute',
+            zIndex: 4,
+            ...(placement === 'bottom'
+              ? { top: 0, left: 0, right: 0, height: 7, cursor: 'row-resize' }
+              : placement === 'left'
+                ? { right: 0, top: 0, bottom: 0, width: 7, cursor: 'col-resize' }
+                : { left: 0, top: 0, bottom: 0, width: 7, cursor: 'col-resize' }),
+            '&:hover, &:focus-visible': { bgcolor: 'primary.main' },
+            touchAction: 'none',
+          }}
+        />
+      )}
       {/* Tab strip + dock controls */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 1, py: 0.5, bgcolor: 'action.hover' }}>
+      <Box
+        onPointerDown={startFullscreenDrag}
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 0.5,
+          px: 1,
+          py: 0.5,
+          bgcolor: 'action.hover',
+          cursor: fullscreen ? 'move' : 'default',
+          userSelect: 'none',
+        }}
+      >
         <WidgetsIcon fontSize="small" color="primary" />
         <Typography variant="caption" sx={{ fontWeight: 600, mr: 1 }}>{t('chat.canvas.title')}</Typography>
 
@@ -245,6 +426,41 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
           })}
         </Box>
 
+        {!fullscreen && (
+          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+            <Tooltip title={t('chat.canvas.dockLeft')}>
+              <IconButton
+                size="small"
+                color={placement === 'left' ? 'primary' : 'default'}
+                onClick={() => setPlacement('left')}
+                aria-label={t('chat.canvas.dockLeft')}
+              >
+                <KeyboardArrowLeftIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title={t('chat.canvas.dockBottom')}>
+              <IconButton
+                size="small"
+                color={placement === 'bottom' ? 'primary' : 'default'}
+                onClick={() => setPlacement('bottom')}
+                aria-label={t('chat.canvas.dockBottom')}
+              >
+                <KeyboardArrowDownIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title={t('chat.canvas.dockRight')}>
+              <IconButton
+                size="small"
+                color={placement === 'right' ? 'primary' : 'default'}
+                onClick={() => setPlacement('right')}
+                aria-label={t('chat.canvas.dockRight')}
+              >
+                <KeyboardArrowRightIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </Box>
+        )}
+
         <Tooltip
           title={fullscreen
             ? t('chat.canvas.exitFullscreen')
@@ -256,7 +472,7 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
             <IconButton
               size="small"
               disabled={!fullscreen && !fullscreenAvailable}
-              onClick={() => setFullscreen((value) => !value)}
+              onClick={toggleFullscreen}
               aria-label={t('chat.canvas.toggleFullscreen')}
             >
               {fullscreen ? <FullscreenExitIcon fontSize="small" /> : <FullscreenIcon fontSize="small" />}
@@ -287,7 +503,7 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
           gap: 1,
           p: 1,
           flex: 1,
-          height: fullscreen ? 'auto' : 320,
+          height: 'auto',
           minHeight: 0,
           overflow: 'hidden',
         }}

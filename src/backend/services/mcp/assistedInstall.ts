@@ -19,16 +19,18 @@ import type {
   McpTroubleshootResult,
 } from '@/shared/types/mcp/assistant';
 import { normalizeMaxTokens } from '@/shared/types/model';
-import type { MCPHeaderValue } from '@/shared/types/mcp';
+import type { MCPHeaderValue, MCPServerConfig } from '@/shared/types/mcp';
 import {
   buildConfigFromOption,
   getInstallOptions,
   missingRequiredInputs,
   resolvedPlanFrom,
+  sanitizeServerName,
   verificationStatusOf,
   type InstallOption,
   type QualitySummary,
   type RegistryServer,
+  type ResolvedInstallPlan,
 } from '@/utils/mcp/registry';
 import { probeOAuthSupport } from '@/utils/mcp/oauthProbe';
 import { createLogger } from '@/utils/logger';
@@ -50,6 +52,7 @@ interface WebDiscovery {
 interface AiResearchPlan {
   searches: string[];
   service?: string;
+  suggestedName?: string;
   authHint?: string;
 }
 
@@ -128,13 +131,65 @@ function fallbackSearches(query: string): string[] {
   return Array.from(new Set(searches)).slice(0, 4);
 }
 
+const GENERIC_ASSISTANT_NAMES = new Set(['mcp', 'server', 'mcp-server', 'mcpserver', 'connector']);
+
+/** Turn an AI name suggestion into a stable, safe config key. */
+export function normalizeMcpAssistantServerName(value: string | undefined, fallback: string): string {
+  const normalize = (candidate: string): string => {
+    const parts = candidate
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLocaleLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .split('-')
+      .filter(Boolean);
+    while (parts.length > 1 && ['mcp', 'server', 'connector'].includes(parts.at(-1) ?? '')) parts.pop();
+    return parts.join('-').slice(0, 64).replace(/-+$/g, '');
+  };
+  const suggested = normalize(value ?? '');
+  if (suggested && !GENERIC_ASSISTANT_NAMES.has(suggested)) return suggested;
+  const safeFallback = normalize(fallback) || sanitizeServerName(fallback).slice(0, 64);
+  return safeFallback && !GENERIC_ASSISTANT_NAMES.has(safeFallback) ? safeFallback : 'mcp-server';
+}
+
+function isAuthorizationInput(name: string): boolean {
+  return name.trim().toLocaleLowerCase() === 'authorization';
+}
+
+export function assistantRequiredInputs(
+  option: InstallOption,
+  authMode: McpAssistantCandidate['authMode'],
+): string[] {
+  const missing = missingRequiredInputs(option);
+  return authMode === 'oauth-dcr' ? missing.filter(name => !isAuthorizationInput(name)) : missing;
+}
+
+function assistantConfig(
+  server: RegistryServer,
+  option: InstallOption,
+  authMode: McpAssistantCandidate['authMode'],
+  serverName: string,
+): Partial<MCPServerConfig> {
+  const config = buildConfigFromOption(server, option) as Partial<MCPServerConfig> & {
+    headers?: Record<string, MCPHeaderValue>;
+  };
+  if (option.kind !== 'remote') return { ...config, name: serverName };
+  const headers = Object.fromEntries(
+    Object.entries(config.headers ?? {})
+      .filter(([name]) => authMode !== 'oauth-dcr' || !isAuthorizationInput(name)),
+  ) as Record<string, MCPHeaderValue>;
+  return { ...config, name: serverName, rootPath: `mcp-servers/${serverName}`, headers };
+}
+
 async function planResearch(query: string, modelId: string): Promise<AiResearchPlan> {
   try {
     const raw = await aiCompletion(modelId, [{
       role: 'system',
       content:
         'Turn a user request for an MCP connection into short discovery terms. Return JSON only: ' +
-        '{"service":"canonical service or capability","searches":["2-6 short terms"],"authHint":"likely auth constraints"}. ' +
+        '{"service":"canonical service or capability","suggestedName":"short lowercase kebab-case connection name","searches":["2-6 short terms"],"authHint":"likely auth constraints"}. ' +
+        'The suggestedName should identify the user-requested service (for example "paypal"), not a package or a generic name such as "mcp". ' +
         'Registry search matches names, so include aliases and product names. Do not recommend or invent a server.',
     }, { role: 'user', content: query }]);
     const parsed = extractJsonObject(raw);
@@ -144,6 +199,7 @@ async function planResearch(query: string, modelId: string): Promise<AiResearchP
     return {
       searches: Array.from(new Set([...searches, ...fallbackSearches(query)])).slice(0, 6),
       ...(typeof parsed?.service === 'string' ? { service: parsed.service.slice(0, 120) } : {}),
+      ...(typeof parsed?.suggestedName === 'string' ? { suggestedName: parsed.suggestedName.slice(0, 120) } : {}),
       ...(typeof parsed?.authHint === 'string' ? { authHint: parsed.authHint.slice(0, 500) } : {}),
     };
   } catch (error) {
@@ -309,6 +365,15 @@ function popularityReason(quality?: QualitySummary): string | undefined {
 
 function scoreDraft(query: string, draft: CandidateDraft): number {
   const quality = draft.hit.quality;
+  const authMode = draft.option.kind === 'package'
+    ? 'none'
+    : draft.auth?.dynamicClientRegistration
+      ? 'oauth-dcr'
+      : draft.auth?.oauthCapable
+        ? 'oauth-manual'
+        : draft.auth?.unauthenticated
+          ? 'none'
+          : 'unknown';
   return scoreMcpAssistantCandidate({
     qualityScore: quality?.score,
     relevance: lexicalRelevance(query, draft.server),
@@ -316,16 +381,8 @@ function scoreDraft(query: string, draft: CandidateDraft): number {
     awesomeMention: draft.awesomeMention,
     transport: draft.option.kind,
     weeklyDownloads: quality?.weeklyDownloads,
-    authMode: draft.option.kind === 'package'
-      ? 'none'
-      : draft.auth?.dynamicClientRegistration
-        ? 'oauth-dcr'
-        : draft.auth?.oauthCapable
-          ? 'oauth-manual'
-          : draft.auth?.unauthenticated
-            ? 'none'
-            : 'unknown',
-    requiredInputCount: missingRequiredInputs(draft.option).length,
+    authMode,
+    requiredInputCount: assistantRequiredInputs(draft.option, authMode).length,
   });
 }
 
@@ -486,8 +543,6 @@ export async function researchMcpServers(input: {
   let candidates: McpAssistantCandidate[] = rankedDrafts.map((draft, index) => {
     const transport = transportOf(draft.option);
     const verificationStatus = draft.hit.quality?.status ?? draft.verificationStatus;
-    const planPreview = resolvedPlanFrom(draft.server.name, draft.server, draft.option, verificationStatus);
-    const requiredInputs = missingRequiredInputs(draft.option);
     const authMode = draft.option.kind === 'package'
       ? 'none'
       : draft.auth?.dynamicClientRegistration
@@ -497,6 +552,19 @@ export async function researchMcpServers(input: {
             : draft.auth?.unauthenticated
             ? 'none'
             : 'unknown';
+    const suggestedName = normalizeMcpAssistantServerName(
+      plan.suggestedName ?? plan.service,
+      draft.server.title ?? sanitizeServerName(draft.server.name),
+    );
+    const basePlanPreview = resolvedPlanFrom(draft.server.name, draft.server, draft.option, verificationStatus);
+    const requiredInputs = assistantRequiredInputs(draft.option, authMode);
+    const planPreview = {
+      ...basePlanPreview,
+      serverName: suggestedName,
+      ...(authMode === 'oauth-dcr'
+        ? { requiredEnvNames: basePlanPreview.requiredEnvNames.filter(name => !isAuthorizationInput(name)) }
+        : {}),
+    };
     const reasons = [
       popularityReason(draft.hit.quality),
       verificationStatus === 'active' ? 'Active entry in the official MCP Registry' : undefined,
@@ -520,7 +588,7 @@ export async function researchMcpServers(input: {
       score: Number(scoreDraft(query, draft).toFixed(3)),
       recommended: index === 0,
       plan: planPreview,
-      config: buildConfigFromOption(draft.server, draft.option),
+      config: assistantConfig(draft.server, draft.option, authMode, suggestedName),
       authMode,
       freeNote: draft.option.kind === 'package'
         ? 'The connector is free to install locally; the connected service may still have its own plan or usage charges.'
@@ -567,17 +635,8 @@ export async function researchMcpServers(input: {
   };
 }
 
-export async function installAssistedMcpServer(input: McpAssistantInstallInput): Promise<McpAssistantInstallResult> {
-  if (input.approved !== true) return { installed: false, error: 'Review and approve the exact install plan first.' };
-  if (!input.registryName || !['stdio', 'streamable', 'sse'].includes(input.transport)) {
-    return { installed: false, error: 'A Registry server and supported transport are required.' };
-  }
-  const preview = await installRegistryServer(input.registryName, undefined, {
-    resolveOnly: true,
-    preferredTransport: input.transport,
-  });
-  if (!preview.plan) return { installed: false, error: preview.error ?? 'Could not resolve this Registry entry.' };
-  const comparablePlan = (value: typeof preview.plan | undefined) => value ? {
+function comparableInstallPlan(value: ResolvedInstallPlan | undefined) {
+  return value ? {
     registryName: value.registryName,
     resolvedName: value.resolvedName,
     serverName: value.serverName,
@@ -588,7 +647,33 @@ export async function installAssistedMcpServer(input: McpAssistantInstallInput):
     requiredEnvNames: value.requiredEnvNames,
     verificationStatus: value.verificationStatus,
   } : null;
-  if (JSON.stringify(comparablePlan(preview.plan)) !== JSON.stringify(comparablePlan(input.reviewedPlan))) {
+}
+
+/** Compare every security-relevant part of a reviewed Registry install plan. */
+export function sameMcpInstallPlan(
+  left: ResolvedInstallPlan | undefined,
+  right: ResolvedInstallPlan | undefined,
+): boolean {
+  return JSON.stringify(comparableInstallPlan(left)) === JSON.stringify(comparableInstallPlan(right));
+}
+
+export async function installAssistedMcpServer(input: McpAssistantInstallInput): Promise<McpAssistantInstallResult> {
+  if (input.approved !== true) return { installed: false, error: 'Review and approve the exact install plan first.' };
+  if (!input.registryName || !['stdio', 'streamable', 'sse'].includes(input.transport)) {
+    return { installed: false, error: 'A Registry server and supported transport are required.' };
+  }
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(input.serverName ?? '')) {
+    return { installed: false, error: 'The server name must be 1-64 characters and use only letters, numbers, hyphens, or underscores.' };
+  }
+  const oauthDynamicClientRegistration = input.authMode === 'oauth-dcr';
+  const preview = await installRegistryServer(input.registryName, undefined, {
+    resolveOnly: true,
+    preferredTransport: input.transport,
+    serverName: input.serverName,
+    oauthDynamicClientRegistration,
+  });
+  if (!preview.plan) return { installed: false, error: preview.error ?? 'Could not resolve this Registry entry.' };
+  if (!sameMcpInstallPlan(preview.plan, input.reviewedPlan)) {
     return {
       installed: false,
       plan: preview.plan,
@@ -609,6 +694,9 @@ export async function installAssistedMcpServer(input: McpAssistantInstallInput):
     remote ? undefined : supplied,
     {
       preferredTransport: input.transport,
+      serverName: input.serverName,
+      oauthDynamicClientRegistration,
+      expectedPlan: preview.plan,
       worksGate: remote && input.authMode?.startsWith('oauth') ? false : true,
       ...(remote ? { headerOverrides: supplied as Record<string, MCPHeaderValue> } : {}),
     },

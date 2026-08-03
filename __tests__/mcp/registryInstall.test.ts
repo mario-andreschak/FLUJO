@@ -107,6 +107,39 @@ describe('installRegistryServer', () => {
     });
   });
 
+  it('lets OAuth DCR own Authorization while preserving other required headers and the reviewed name', async () => {
+    const entry = npmEntry('com.paypal.mcp/mcp');
+    entry.server.remotes = [{
+      type: 'streamable-http',
+      url: 'https://mcp.paypal.com/mcp',
+      headers: [
+        { name: 'Authorization', isRequired: true, isSecret: true },
+        { name: 'X-Tenant', isRequired: true },
+      ],
+    }];
+    registryGetJsonMock.mockResolvedValue({ servers: [entry] });
+
+    const result = await installRegistryServer(entry.server.name, undefined, {
+      preferredTransport: 'streamable',
+      serverName: 'paypal',
+      oauthDynamicClientRegistration: true,
+      headerOverrides: { 'X-Tenant': 'merchant-1' },
+      worksGate: false,
+    });
+
+    expect(result.installed).toBe(true);
+    expect(result.serverName).toBe('paypal');
+    expect(result.plan).toEqual(expect.objectContaining({
+      serverName: 'paypal',
+      requiredEnvNames: ['X-Tenant'],
+    }));
+    const config = updateServerConfigMock.mock.calls[0][1];
+    expect(config.name).toBe('paypal');
+    expect(config.rootPath).toBe('mcp-servers/paypal');
+    expect(config.headers).toEqual({ 'X-Tenant': 'merchant-1' });
+    expect(config.headers.Authorization).toBeUndefined();
+  });
+
   it('does not silently fall back from an exported remote server to local execution', async () => {
     registryGetJsonMock.mockResolvedValue({ servers: [npmEntry('io.github.acme/voice')] });
     const result = await installRegistryServer('io.github.acme/voice', undefined, {

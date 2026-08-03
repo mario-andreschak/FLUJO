@@ -147,6 +147,14 @@ export interface McpAppFrameProps {
   docked?: boolean;
   /** #216: CSS-only visibility for a docked host (tab switch / collapse). */
   visible?: boolean;
+  /**
+   * Mount and reveal the app immediately. The server-level `enableMcpApps`
+   * permission remains the trust gate; this only removes the extra launch
+   * click after that permission has already been granted.
+   */
+  defaultExpanded?: boolean;
+  /** Promote a revealed app to the persistent canvas as soon as it declares pip support. */
+  autoDock?: boolean;
 }
 
 /**
@@ -745,6 +753,8 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   teardownRegistrationKey,
   docked = false,
   visible = true,
+  defaultExpanded = false,
+  autoDock = false,
 }) => {
   const { t } = useI18n();
   const theme = useTheme();
@@ -755,10 +765,11 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       : `app:${serverName}:${uri}:${frameInstanceId}`,
     [conversationId, frameInstanceId, serverName, uri],
   );
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [displayMode, setDisplayMode] = useState<McpUiDisplayMode>(docked ? 'pip' : 'inline');
+  const [floatingRect, setFloatingRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [appDisplayModes, setAppDisplayModes] = useState<McpUiDisplayMode[]>([]);
   const effectiveDisplayMode = hostDisplayMode ?? displayMode;
   const hostDisplayModes = useMemo<McpUiDisplayMode[]>(
@@ -769,7 +780,9 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   );
 
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const frameRootRef = useRef<HTMLDivElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const inlineHeightRef = useRef(200);
   const bridgeRef = useRef<AppBridge | null>(null);
   const mountedRef = useRef(false);
   // Invalidates every async continuation from an older mount. This prevents a
@@ -793,6 +806,49 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
     isError: toolIsError,
     updateId: toolUpdateId,
   });
+
+  useEffect(() => {
+    if (docked || effectiveDisplayMode !== 'fullscreen' || typeof window === 'undefined') return;
+    setFloatingRect((current) => {
+      if (current) return current;
+      const width = Math.min(Math.max(520, Math.round(window.innerWidth * 0.86)), window.innerWidth - 24);
+      const height = Math.min(Math.max(360, Math.round(window.innerHeight * 0.84)), window.innerHeight - 24);
+      return {
+        x: Math.round((window.innerWidth - width) / 2),
+        y: Math.round((window.innerHeight - height) / 2),
+        width,
+        height,
+      };
+    });
+  }, [docked, effectiveDisplayMode]);
+
+  const startFullscreenDrag = useCallback((event: React.PointerEvent) => {
+    if (effectiveDisplayMode !== 'fullscreen' || !frameRootRef.current) return;
+    if ((event.target as HTMLElement).closest('button,[role="button"]')) return;
+    event.preventDefault();
+    const rect = frameRootRef.current.getBoundingClientRect();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.userSelect = 'none';
+    const onMove = (move: PointerEvent) => {
+      const maxX = Math.max(0, window.innerWidth - 120);
+      const maxY = Math.max(0, window.innerHeight - 56);
+      setFloatingRect({
+        x: Math.min(Math.max(rect.left + move.clientX - startX, 0), maxX),
+        y: Math.min(Math.max(rect.top + move.clientY - startY, 0), maxY),
+        width: rect.width,
+        height: rect.height,
+      });
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      document.body.style.userSelect = previousUserSelect;
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }, [effectiveDisplayMode]);
   latestToolDeliveryRef.current = {
     args: toolArgs,
     resultContent: toolResultContent,
@@ -807,6 +863,8 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   useEffect(() => { onUpdateModelContextRef.current = onUpdateModelContext; }, [onUpdateModelContext]);
   const onRequestDockRef = useRef(onRequestDock);
   useEffect(() => { onRequestDockRef.current = onRequestDock; }, [onRequestDock]);
+  const autoDockRef = useRef(autoDock);
+  useEffect(() => { autoDockRef.current = autoDock; }, [autoDock]);
   const onDockableRef = useRef(onDockable);
   useEffect(() => { onDockableRef.current = onDockable; }, [onDockable]);
   const onAvailableDisplayModesRef = useRef(onAvailableDisplayModes);
@@ -947,7 +1005,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       iframe.referrerPolicy = 'origin'; // the sandbox validates the embedder via referrer
       const allow = buildAllowAttribute(app.permissions as any);
       if (allow) iframe.setAttribute('allow', allow);
-      iframe.style.cssText = dockedRef.current
+      iframe.style.cssText = dockedRef.current || displayModeRef.current === 'fullscreen'
         ? 'width:100%;height:100%;border:none;background:#fff;'
         : 'width:100%;min-height:120px;height:200px;border:none;border-radius:4px;background:#fff;';
       containerRef.current.appendChild(iframe);
@@ -1125,7 +1183,10 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
           || containerRef.current?.clientWidth
           || 0;
         const clamped = clampInlineSize({ width, height }, containerWidth);
-        if (clamped.height !== undefined) iframe.style.height = `${clamped.height}px`;
+        if (clamped.height !== undefined) {
+          inlineHeightRef.current = clamped.height;
+          if (displayModeRef.current !== 'fullscreen') iframe.style.height = `${clamped.height}px`;
+        }
         if (clamped.width !== undefined) {
           iframe.style.width = `${clamped.width}px`;
           iframe.style.maxWidth = '100%';
@@ -1201,6 +1262,15 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
         setAppDisplayModes(modes);
         onDockableRef.current?.(modes.includes('pip'));
         onAvailableDisplayModesRef.current?.([...modes]);
+
+        if (
+          autoDockRef.current
+          && modes.includes('pip')
+          && !dockedRef.current
+          && onRequestDockRef.current
+        ) {
+          setTimeout(handoffToDock, 0);
+        }
 
         initializedRef.current = true;
         const verifiedDisplayMode = getVerifiedPostHandshakeDisplayMode(
@@ -1309,6 +1379,37 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   useEffect(() => {
     if (docked && !mountedRef.current) void mount();
   }, [docked, mount]);
+
+  // An opted-in app should be visible without a second consent-like click.
+  // Wait for the expanded container to exist, then mount exactly as the manual
+  // toggle does. The docked path above remains independently auto-mounted.
+  useEffect(() => {
+    if (!docked && defaultExpanded && expanded && !mountedRef.current) {
+      const timer = window.setTimeout(() => { void mount(); }, 0);
+      return () => window.clearTimeout(timer);
+    }
+    return undefined;
+  }, [defaultExpanded, docked, expanded, mount]);
+
+  // The proxy iframe used to keep its original 200px inline height after the
+  // host entered fullscreen, leaving a large blank panel around terminals and
+  // other fixed-height apps. Make the live iframe follow its presentation and
+  // restore the last app-requested inline height when fullscreen closes.
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+    if (docked || effectiveDisplayMode === 'fullscreen') {
+      iframe.style.width = '100%';
+      iframe.style.height = '100%';
+      iframe.style.minHeight = '0';
+      iframe.style.borderRadius = '0';
+      return;
+    }
+    iframe.style.width = '100%';
+    iframe.style.height = `${inlineHeightRef.current}px`;
+    iframe.style.minHeight = '120px';
+    iframe.style.borderRadius = '4px';
+  }, [docked, effectiveDisplayMode]);
 
   // Stable MCP Apps delivers at most one input/outcome pair to a View. A later
   // invocation for the same canvas identity therefore gets a fresh View, after
@@ -1437,6 +1538,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
 
   return (
     <Box
+      ref={frameRootRef}
       sx={{
         mt: 1,
         border: '1px solid',
@@ -1444,11 +1546,40 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
         borderRadius: 1,
         overflow: 'hidden',
         ...(displayMode === 'fullscreen'
-          ? { position: 'fixed', inset: 16, zIndex: 1300, bgcolor: 'background.paper', boxShadow: 6 }
+          ? {
+              position: 'fixed',
+              left: floatingRect?.x ?? 16,
+              top: floatingRect?.y ?? 16,
+              width: floatingRect?.width ?? 'calc(100vw - 32px)',
+              height: floatingRect?.height ?? 'calc(100vh - 32px)',
+              minWidth: 480,
+              minHeight: 320,
+              maxWidth: '100vw',
+              maxHeight: '100vh',
+              zIndex: 1300,
+              bgcolor: 'background.paper',
+              boxShadow: 6,
+              resize: 'both',
+              display: 'flex',
+              flexDirection: 'column',
+            }
           : {}),
       }}
     >
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1, py: 0.5, bgcolor: 'action.hover' }}>
+      <Box
+        onPointerDown={startFullscreenDrag}
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 1,
+          px: 1,
+          py: 0.5,
+          bgcolor: 'action.hover',
+          cursor: displayMode === 'fullscreen' ? 'move' : 'default',
+          userSelect: 'none',
+          flexShrink: 0,
+        }}
+      >
         <WidgetsIcon fontSize="small" color="primary" />
         <Typography variant="body2" sx={{ fontWeight: 500 }}>
           {t('chat.app.fromServer', { server: serverName })}
@@ -1498,8 +1629,23 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
         </Button>
       </Box>
 
-      <Collapse in={expanded} onExited={() => { void teardown(); }}>
-        <Box sx={{ p: 1, height: displayMode === 'fullscreen' ? 'calc(100vh - 100px)' : 'auto' }}>
+      <Collapse
+        in={expanded}
+        onExited={() => { void teardown(); }}
+        sx={displayMode === 'fullscreen' ? {
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          '& .MuiCollapse-wrapper, & .MuiCollapse-wrapperInner': {
+            height: '100%',
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+          },
+        } : undefined}
+      >
+        <Box sx={{ p: 1, height: displayMode === 'fullscreen' ? '100%' : 'auto', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           {loading && (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 2, justifyContent: 'center' }}>
               <CircularProgress size={16} thickness={6} />
@@ -1507,7 +1653,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
             </Box>
           )}
           {error && <Alert severity="error" sx={{ my: 1 }}>{error}</Alert>}
-          <Box ref={containerRef} sx={{ width: '100%', height: displayMode === 'fullscreen' ? '100%' : 'auto', display: error ? 'none' : 'block' }} />
+          <Box ref={containerRef} sx={{ width: '100%', flex: displayMode === 'fullscreen' ? 1 : undefined, minHeight: 0, height: displayMode === 'fullscreen' ? '100%' : 'auto', display: error ? 'none' : 'block' }} />
         </Box>
       </Collapse>
     </Box>

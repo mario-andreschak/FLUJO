@@ -204,6 +204,58 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
     ).not.toBeChecked();
   });
 
+  it('defaults MCP App click gating and MCP roots confinement to off', () => {
+    mockStorageValue = {
+      settings: { speech: { enabled: true } },
+      settingsHydrated: true,
+      updateSettings: mockUpdateSettings,
+    };
+    render(<ExperimentalFeaturesSettings />);
+
+    expect(screen.getByRole('checkbox', {
+      name: /Require a click to open allowed MCP Apps/i,
+    })).not.toBeChecked();
+    expect(screen.getByRole('checkbox', {
+      name: /Restrict MCP filesystem access to configured roots/i,
+    })).not.toBeChecked();
+  });
+
+  it('persists both optional restrictions without dropping other settings', () => {
+    mockStorageValue = {
+      settings: {
+        speech: { enabled: true },
+        experimental: { enabled: true, mcpBetaProtocol: true },
+      },
+      settingsHydrated: true,
+      updateSettings: mockUpdateSettings,
+    };
+    render(<ExperimentalFeaturesSettings />);
+
+    fireEvent.click(screen.getByRole('checkbox', {
+      name: /Require a click to open allowed MCP Apps/i,
+    }));
+    expect(mockUpdateSettings).toHaveBeenLastCalledWith({
+      speech: { enabled: true },
+      experimental: {
+        enabled: true,
+        mcpBetaProtocol: true,
+        requireMcpAppLaunchClick: true,
+      },
+    });
+
+    fireEvent.click(screen.getByRole('checkbox', {
+      name: /Restrict MCP filesystem access to configured roots/i,
+    }));
+    expect(mockUpdateSettings).toHaveBeenLastCalledWith({
+      speech: { enabled: true },
+      experimental: {
+        enabled: true,
+        mcpBetaProtocol: true,
+        restrictMcpFilesystemToRoots: true,
+      },
+    });
+  });
+
   it('defaults filesystem snapshots to on', () => {
     mockStorageValue = {
       settings: { speech: { enabled: true } },

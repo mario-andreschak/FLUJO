@@ -65,6 +65,7 @@ export default function McpAiConnectionPanel({
   const [progress, setProgress] = useState<string[]>([]);
   const [result, setResult] = useState<McpAssistantResearchResult | null>(null);
   const [selectedId, setSelectedId] = useState('');
+  const [serverName, setServerName] = useState('');
   const [inputs, setInputs] = useState<Record<string, string>>({});
   const [approved, setApproved] = useState(false);
   const [installing, setInstalling] = useState(false);
@@ -104,6 +105,7 @@ export default function McpAiConnectionPanel({
     setSuccess(null);
     setResult(null);
     setSelectedId('');
+    setServerName('');
     setApproved(false);
     setInputs({});
     setProgress([]);
@@ -118,7 +120,10 @@ export default function McpAiConnectionPanel({
         controller.signal,
       );
       setResult(next);
-      setSelectedId(next.recommendedId ?? next.candidates[0]?.id ?? '');
+      const nextSelectedId = next.recommendedId ?? next.candidates[0]?.id ?? '';
+      const nextSelected = next.candidates.find((candidate) => candidate.id === nextSelectedId);
+      setSelectedId(nextSelectedId);
+      setServerName(nextSelected?.plan.serverName ?? '');
     } catch (cause) {
       if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -128,6 +133,7 @@ export default function McpAiConnectionPanel({
 
   const selectCandidate = (candidate: McpAssistantCandidate) => {
     setSelectedId(candidate.id);
+    setServerName(candidate.plan.serverName);
     setApproved(false);
     setInputs({});
     setError(null);
@@ -142,7 +148,8 @@ export default function McpAiConnectionPanel({
       const installResult = await installMcpRecommendation({
         registryName: selected.registryName,
         transport: selected.plan.transport,
-        reviewedPlan: selected.plan,
+        serverName,
+        reviewedPlan: { ...selected.plan, serverName },
         approved: true,
         inputs,
         authMode: selected.authMode,
@@ -310,6 +317,18 @@ export default function McpAiConnectionPanel({
                     {selected.warnings.length ? <Alert severity="warning">{selected.warnings.join(' ')}</Alert> : null}
                     {selected.authHelp ? <Alert severity="info">{selected.authHelp}</Alert> : null}
                     <Divider />
+                    <TextField
+                      size="small"
+                      label={t('mcp.ai.connectionName')}
+                      value={serverName}
+                      onChange={(event) => {
+                        setServerName(event.target.value);
+                        setApproved(false);
+                      }}
+                      error={!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(serverName)}
+                      helperText={t('mcp.ai.connectionNameHelper')}
+                      inputProps={{ maxLength: 64 }}
+                    />
                     <Box>
                       <Typography variant="caption" color="text.secondary">
                         {selected.plan.transport === 'stdio' ? t('mcp.ai.commandToRun') : t('mcp.ai.endpointToConnect')}
@@ -340,7 +359,12 @@ export default function McpAiConnectionPanel({
                       variant="contained"
                       size="large"
                       startIcon={installing ? <CircularProgress size={18} color="inherit" /> : <AutoAwesomeRoundedIcon />}
-                      disabled={installing || !approved || selected.requiredInputs.some((name) => !inputs[name]?.trim())}
+                      disabled={
+                        installing
+                        || !approved
+                        || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(serverName)
+                        || selected.requiredInputs.some((name) => !inputs[name]?.trim())
+                      }
                       onClick={() => void install()}
                     >
                       {installing ? t('mcp.ai.installing') : t('mcp.ai.connectBest')}

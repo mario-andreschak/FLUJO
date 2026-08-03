@@ -217,7 +217,13 @@ function qualifiedSlug(registryName: string): string {
   const namespace = slashIndex >= 0 ? registryName.slice(0, slashIndex) : '';
   const slug = slashIndex >= 0 ? registryName.slice(slashIndex + 1) : registryName;
   if (!GENERIC_SLUGS.has(slug.toLowerCase()) || !namespace) return slug;
-  const nsSegment = namespace.split('.').pop() || '';
+  // Some publishers repeat the generic word in the namespace as well, e.g.
+  // "com.paypal.mcp/mcp". Walk backwards to the first distinctive segment so
+  // those entries become "paypal-mcp" instead of the meaningless "mcp-mcp".
+  const nsSegment = namespace
+    .split('.')
+    .reverse()
+    .find(segment => segment && !GENERIC_SLUGS.has(segment.toLowerCase())) || '';
   return nsSegment ? `${nsSegment}-${slug}` : slug;
 }
 

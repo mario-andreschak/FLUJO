@@ -88,6 +88,7 @@ import { deriveExecutedNodeIds } from '@/utils/shared/executedNodes';
 import { Flow, FlowNode } from '@/shared/types/flow'; // Import Flow and FlowNode types
 import { LLM_REQUEST_TIMEOUT_MS } from '@/shared/config/timeouts';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useStorage } from '@/frontend/contexts/StorageContext';
 
 const log = createLogger('frontend/components/Chat/index');
 
@@ -305,6 +306,8 @@ const Chat: React.FC = () => {
   const router = useRouter();
   const theme = useTheme();
   const { t, tp } = useI18n();
+  const { settings } = useStorage();
+  const autoOpenMcpApps = settings?.experimental?.requireMcpAppLaunchClick !== true;
   const isCompactLayout = useMediaQuery(theme.breakpoints.down('lg'), { noSsr: true });
   const isPhoneLayout = useMediaQuery(theme.breakpoints.down('sm'), { noSsr: true });
   // --- State Management ---
@@ -3849,6 +3852,7 @@ const Chat: React.FC = () => {
                 onUpdateModelContext={handleAppModelContext}
                 onRegisterAppTeardown={handleRegisterInlineTeardown}
                 onOpenInCanvas={handleOpenInCanvas}
+                autoOpenMcpApps={autoOpenMcpApps}
                 queuedMessages={getMsgQueue(queuedMessages, detailedConversation.id)}
                 queueHoldReason={translateQueueHoldReason(drainHoldReason({
                   running: runningConvs.has(detailedConversation.id),

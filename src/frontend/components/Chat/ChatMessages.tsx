@@ -141,6 +141,8 @@ interface ChatMessagesProps {
    * inline as before.
    */
   onOpenInCanvas?: (info: CanvasLaunchInfo) => void;
+  /** Allowed MCP Apps reveal themselves unless the user opted into click-only launch. */
+  autoOpenMcpApps?: boolean;
   /**
    * #221: messages the user submitted while a run was in flight (queued).
    * Rendered as dimmed pending bubbles after the last real message so the user
@@ -498,6 +500,7 @@ const ToolCallTimeline: React.FC<{
   ) => boolean | Promise<boolean>;
   onRegisterAppTeardown?: ChatMessagesProps['onRegisterAppTeardown'];
   onOpenInCanvas?: (info: CanvasLaunchInfo) => void;
+  autoOpenMcpApps?: boolean;
 }> = ({
   pairs,
   messageId,
@@ -506,12 +509,26 @@ const ToolCallTimeline: React.FC<{
   onUpdateModelContext,
   onRegisterAppTeardown,
   onOpenInCanvas,
+  autoOpenMcpApps = true,
 }) => {
   const { t, tp } = useI18n();
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [rawByKey, setRawByKey] = useState<Record<string, boolean>>({});
   const keyFor = (pair: ToolCallPair<ChatMessage>, index: number) =>
     pair.toolCall.id || `tc-${messageId}-${index}`;
+  const launchInfoFor = (pair: ToolCallPair<ChatMessage>): CanvasLaunchInfo | null => {
+    const ui = pair.result?.ui;
+    if (!ui?.uri || !ui.serverName) return null;
+    return {
+      serverName: ui.serverName,
+      uri: ui.uri,
+      toolName: ui.toolName ?? pair.toolCall.function.name,
+      toolArgs: pair.toolCall.function.arguments,
+      resultContent: typeof pair.result?.content === 'string' ? pair.result.content : undefined,
+      cancelledReason: ui.cancelledReason,
+      isError: ui.isError,
+    };
+  };
 
   return (
     <Box sx={{ mt: 1, pt: 1, borderTop: '1px solid', borderColor: 'divider' }}>
@@ -521,6 +538,36 @@ const ToolCallTimeline: React.FC<{
           {tp('chat.messages.toolUsed', pairs.length)}
         </Typography>
       </Box>
+
+      {/* Apps are first-class output, not an easter egg inside the tool-detail
+          collapse. Per-server MCP Apps permission is already enforced before a
+          ui link reaches the transcript; the optional Settings restriction only
+          decides whether the live View opens immediately or waits for one click. */}
+      {pairs.map((pair, index) => {
+        const launchInfo = launchInfoFor(pair);
+        if (!launchInfo) return null;
+        const key = keyFor(pair, index);
+        return (
+          <McpAppFrame
+            key={`app-${key}`}
+            defaultExpanded={autoOpenMcpApps}
+            autoDock={autoOpenMcpApps}
+            conversationId={conversationId}
+            serverName={launchInfo.serverName}
+            uri={launchInfo.uri}
+            toolName={launchInfo.toolName}
+            toolArgs={launchInfo.toolArgs}
+            toolResultContent={launchInfo.resultContent}
+            toolCancelledReason={launchInfo.cancelledReason}
+            toolIsError={launchInfo.isError}
+            onAppMessage={onAppMessage}
+            onUpdateModelContext={onUpdateModelContext}
+            onRegisterTeardown={onRegisterAppTeardown}
+            teardownRegistrationKey={`${launchInfo.serverName}::${launchInfo.uri}::${key}`}
+            onRequestDock={onOpenInCanvas ? () => onOpenInCanvas(launchInfo) : undefined}
+          />
+        );
+      })}
 
       {/* Horizontal, wrapping timeline of clickable nodes. */}
       <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 0.5 }}>
@@ -636,38 +683,6 @@ const ToolCallTimeline: React.FC<{
                 </Typography>
               )}
 
-              {/* Inline is the protocol default. The user's "Open app" click is
-                  the mount/consent gate; only a View that later declares pip may
-                  request promotion into the persistent canvas. */}
-              {pair.result?.ui?.uri && pair.result.ui.serverName && (
-                <McpAppFrame
-                  conversationId={conversationId}
-                  serverName={pair.result.ui.serverName}
-                  uri={pair.result.ui.uri}
-                  toolName={pair.result.ui.toolName ?? pair.toolCall.function.name}
-                  toolArgs={pair.toolCall.function.arguments}
-                  toolResultContent={typeof pair.result.content === 'string' ? pair.result.content : undefined}
-                  toolCancelledReason={pair.result.ui.cancelledReason}
-                  toolIsError={pair.result.ui.isError}
-                  onAppMessage={onAppMessage}
-                  onUpdateModelContext={onUpdateModelContext}
-                  onRegisterTeardown={onRegisterAppTeardown}
-                  teardownRegistrationKey={`${pair.result.ui.serverName}::${pair.result.ui.uri}::${key}`}
-                  onRequestDock={onOpenInCanvas
-                    ? () => onOpenInCanvas({
-                        serverName: pair.result!.ui!.serverName,
-                        uri: pair.result!.ui!.uri,
-                        toolName: pair.result!.ui!.toolName ?? pair.toolCall.function.name,
-                        toolArgs: pair.toolCall.function.arguments,
-                        resultContent: typeof pair.result!.content === 'string'
-                          ? pair.result!.content
-                          : undefined,
-                        cancelledReason: pair.result!.ui!.cancelledReason,
-                        isError: pair.result!.ui!.isError,
-                      })
-                    : undefined}
-                />
-              )}
             </Box>
           </Collapse>
         );
@@ -701,6 +716,7 @@ interface MessageBubbleProps {
   onRegisterAppTeardown?: ChatMessagesProps['onRegisterAppTeardown'];
   /** #216: route a tool app to the docked canvas (see ChatMessagesProps). */
   onOpenInCanvas?: (info: CanvasLaunchInfo) => void;
+  autoOpenMcpApps?: boolean;
   /**
    * #95 (follow-up): handoff tool calls hoisted from suppressed tool-call-only
    * messages in the same assistant run, rendered as slim markers on this anchor
@@ -731,6 +747,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
   onUpdateModelContext,
   onRegisterAppTeardown,
   onOpenInCanvas,
+  autoOpenMcpApps,
   hoistedHandoffs,
   isBeingEdited,
   onMenuOpen,
@@ -966,6 +983,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
             onUpdateModelContext={onUpdateModelContext}
             onRegisterAppTeardown={onRegisterAppTeardown}
             onOpenInCanvas={onOpenInCanvas}
+            autoOpenMcpApps={autoOpenMcpApps}
           />
         )}
 
@@ -1350,6 +1368,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   onUpdateModelContext,
   onRegisterAppTeardown,
   onOpenInCanvas, // #216: route a tool app to the docked canvas
+  autoOpenMcpApps = true,
   queuedMessages = [], // #221: inline pending bubbles
   queueHoldReason = null,
 }) => {
@@ -1546,6 +1565,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
             onUpdateModelContext={onUpdateModelContext}
             onRegisterAppTeardown={onRegisterAppTeardown}
             onOpenInCanvas={onOpenInCanvas}
+            autoOpenMcpApps={autoOpenMcpApps}
             hoistedHandoffs={renderHandoffsById.get(message.id)}
             isBeingEdited={!!editingMessageId && message.id === editingMessageId}
             onMenuOpen={handleMenuOpen}

@@ -50,6 +50,8 @@ export type McpAssistantResearchEvent =
 export interface McpAssistantInstallInput {
   registryName: string;
   transport: 'stdio' | 'streamable' | 'sse';
+  /** AI-suggested name shown in review; the user may edit it before approval. */
+  serverName: string;
   /** Exact proposal displayed by the UI; install aborts if the Registry changed. */
   reviewedPlan: ResolvedInstallPlan;
   /** The UI must set this only after the exact plan has been shown to the user. */
