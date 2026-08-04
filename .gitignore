@@ -177,6 +177,8 @@ ISSUE_TRIAGE.md
 /.playwright-mcp
 /userdata
 /short
+/output/
+/outputs/
 *.jpeg
 jest-output.txt
 
@@ -184,3 +186,7 @@ jest-output.txt
 .claude/settings.local.json
 .claude/worktrees/
 /snapshots
+/mcp-servers/browser/snapshots/
+/mcp-servers/browser/bin/
+/mcp-servers/browser/outputs/
+/mcp-servers/browser/*-evidence-*/
