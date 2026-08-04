@@ -759,6 +759,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
   const depth = message.depth ?? 0;
   return (
     <Box
+      data-ask-flujo-message-id={message.id}
       sx={{
         display: 'flex',
         flexDirection: 'column',

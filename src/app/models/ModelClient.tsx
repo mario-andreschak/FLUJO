@@ -33,6 +33,7 @@ import { getModelService, ModelResult } from '@/frontend/services/model';
 import Spinner from '@/frontend/components/shared/Spinner';
 import { collectFolders } from '@/utils/shared/cardGrouping';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useAskFlujoPage } from '@/frontend/contexts/AskFlujoContext';
 
 const log = createLogger('app/models/ModelClient');
 
@@ -54,6 +55,23 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
   // user clicks Save, which replaces the old approach of writing a "preliminary" model record
   // immediately and cleaning it up on cancel.
   const [newModelDraft, setNewModelDraft] = useState<Model | null>(null);
+
+  useAskFlujoPage({
+    scopeId: 'models:dashboard',
+    pageType: 'models',
+    route: '/models',
+    title: 'AI Setup',
+    data: {
+      models: models.map(model => ({
+        ...model,
+        ApiKey: model.ApiKey ? '[REDACTED]' : '',
+      })),
+      searchTerm,
+    },
+    capabilities: {
+      notes: ['API keys are intentionally redacted before model configuration enters AI context.'],
+    },
+  });
 
   const addMode = searchParams.get('add');
   const isWizardOpen = addMode === '1';

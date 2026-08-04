@@ -103,6 +103,12 @@ import {
   getGuidedSubagentLinks,
 } from '@/utils/shared/guidedSubagents';
 import { resolveAutoNodeLabel } from '@/shared/utils/nodeLabel';
+import { useAskFlujoPage } from '@/frontend/contexts/AskFlujoContext';
+import type { AskFlujoUiAction } from '@/frontend/types/askFlujo';
+import {
+  highlightAskFlujoElement,
+  setAskFlujoValueAtPath,
+} from '@/frontend/utils/askFlujoActions';
 
 const FlowBuilderContainer = styled(Box)(({ theme }) => ({
   display: 'flex',
@@ -1505,6 +1511,126 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     permissionRulesConfigured,
   ]);
 
+  const highlightAskFlowNode = useCallback((nodeId: string) => {
+    const node = nodes.find(candidate => candidate.id === nodeId);
+    if (!node) return false;
+    setNodes(current => current.map(candidate => ({
+      ...candidate,
+      selected: candidate.id === nodeId,
+    })));
+    reactFlowInstance?.setCenter(node.position.x, node.position.y, { zoom: 1.2, duration: 450 });
+    window.requestAnimationFrame(() => {
+      const element = [...document.querySelectorAll('.react-flow__node')]
+        .find(candidate => candidate.getAttribute('data-id') === nodeId) ?? null;
+      highlightAskFlujoElement(element);
+    });
+    return true;
+  }, [nodes, reactFlowInstance]);
+
+  const handleAskFlujoAction = useCallback((action: AskFlujoUiAction) => {
+    if (action.target.kind === 'flow-node' && action.target.id && action.type === 'highlight') {
+      const highlighted = highlightAskFlowNode(action.target.id);
+      return {
+        success: highlighted,
+        message: highlighted ? 'Highlighted the matching flow step.' : 'That flow step is no longer on screen.',
+      };
+    }
+
+    if (action.target.kind === 'flow-field' && action.target.field) {
+      const field = action.target.field;
+      if (field !== 'name' && field !== 'description') {
+        return { success: false, message: `The flow field "${field}" is not editable here.` };
+      }
+      if (action.type === 'highlight') {
+        const target = document.querySelector(`[data-ask-flujo-flow-field="${field}"]`);
+        const highlighted = highlightAskFlujoElement(target);
+        return { success: highlighted, message: highlighted ? `Highlighted flow ${field}.` : `Could not find flow ${field}.` };
+      }
+      if (typeof action.value !== 'string') {
+        return { success: false, message: `Flow ${field} must be text.` };
+      }
+      if (field === 'name') {
+        flowNameRef.current = action.value;
+        setFlowName(action.value);
+        setFlowNameError(validateFlowName(action.value));
+      } else {
+        setFlowDescription(action.value);
+      }
+      markDirty();
+      return { success: true, message: `Updated flow ${field} in the unsaved editor.` };
+    }
+
+    if (action.target.kind === 'flow-node-field' && action.target.id) {
+      const nodeId = action.target.id;
+      if (action.type === 'highlight') {
+        const highlighted = highlightAskFlowNode(nodeId);
+        return { success: highlighted, message: highlighted ? 'Highlighted the matching flow step.' : 'That flow step is no longer on screen.' };
+      }
+      const path = action.target.path;
+      if (!path || (!path.startsWith('data.') && !path.startsWith('/data/'))) {
+        return { success: false, message: 'Only advertised node data fields are editable.' };
+      }
+      const existingNode = nodes.find(node => node.id === nodeId);
+      if (!existingNode) return { success: false, message: 'That flow step is no longer on screen.' };
+      let updatedNode: FlowNode;
+      try {
+        updatedNode = setAskFlujoValueAtPath(existingNode, path, action.value);
+      } catch (error) {
+        return {
+          success: false,
+          message: error instanceof Error ? error.message : 'The node field could not be changed.',
+        };
+      }
+      setNodes(current => current.map(node => node.id === nodeId ? updatedNode : node));
+      markDirty();
+      window.requestAnimationFrame(() => highlightAskFlowNode(nodeId));
+      return { success: true, message: 'Updated the step in the unsaved flow. Review it, then Save.' };
+    }
+
+    return { success: false, message: 'That flow UI target is not supported.' };
+  }, [highlightAskFlowNode, markDirty, nodes, validateFlowName]);
+
+  useAskFlujoPage({
+    scopeId: `flow:${currentFlow.id}`,
+    pageType: 'flow',
+    route: '/flows',
+    title: currentFlow.name,
+    identifiers: { flowId: currentFlow.id },
+    data: {
+      flow: currentFlow,
+      selectedNodeId: selectedNode?.id ?? null,
+      authoringMode,
+      isDraft,
+      hasUnsavedChanges,
+    },
+    capabilities: {
+      highlightTargets: currentFlow.nodes.map(node => ({
+        kind: 'flow-node',
+        id: node.id,
+        label: node.data.label,
+        nodeType: node.data.type,
+      })),
+      editableTargets: [
+        { kind: 'flow-field', field: 'name' },
+        { kind: 'flow-field', field: 'description' },
+        ...currentFlow.nodes.flatMap(node => (
+          [
+            'data.label',
+            ...Object.keys(node.data.properties ?? {}).map(key => `data.properties.${key}`),
+          ].map(path => ({
+            kind: 'flow-node-field',
+            id: node.id,
+            path,
+          }))
+        )),
+      ],
+      notes: [
+        'This is the live Flow Builder state, including unsaved edits and full node prompts/configuration.',
+        'Screen changes remain unsaved until the user presses the normal Save button.',
+      ],
+    },
+  }, handleAskFlujoAction, 100);
+
   const assistanceModelId = useMemo(() => {
     if (assistanceNodeId) {
       const node = nodes.find(candidate => candidate.id === assistanceNodeId);
@@ -1834,7 +1960,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         <MainContent>
           <ToolbarContainer elevation={1}>
             <Box sx={{ minWidth: 0, flex: '1 1 180px', display: { xs: 'none', md: 'block' } }}>
-              <Typography variant="subtitle2" fontWeight={850} noWrap>{flowName}</Typography>
+              <Typography data-ask-flujo-flow-field="name" variant="subtitle2" fontWeight={850} noWrap>{flowName}</Typography>
               <Typography variant="caption" color="text.secondary">
                 {authoringMode === 'guided'
                   ? tp('flows.builder.step', nodes.filter(node => ['process', 'subflow', 'signal'].includes(node.data.type)).length)

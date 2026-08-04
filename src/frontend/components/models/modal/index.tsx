@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { createLogger } from '@/utils/logger';
 import {
@@ -40,6 +40,10 @@ import { MASKED_API_KEY } from '@/shared/types/constants';
 import { modelService } from '@/frontend/services/model';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n/messages';
+import { useAskFlujoPage } from '@/frontend/contexts/AskFlujoContext';
+import type { AskFlujoUiAction } from '@/frontend/types/askFlujo';
+import { highlightAskFlujoElement } from '@/frontend/utils/askFlujoActions';
+import AskFlujoButton from '@/frontend/components/AskFlujo/AskFlujoButton';
 
 const log = createLogger('frontend/components/models/modal');
 
@@ -78,6 +82,84 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const promptBuilderRef = useRef<PromptBuilderRef>(null);
   const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const askEditableFields = useMemo(() => [
+    'displayName',
+    'name',
+    'description',
+    'baseUrl',
+    'promptTemplate',
+    'temperature',
+    'reasoningEffort',
+    'thinkingLevel',
+    'thinkingBudget',
+    'serviceTier',
+    'contextWindow',
+    'maxTurns',
+    'maxTokens',
+  ] as const, []);
+
+  const highlightModelField = useCallback((field: string) => {
+    const root = [...document.querySelectorAll('[data-ask-flujo-model-id]')]
+      .find(element => element.getAttribute('data-ask-flujo-model-id') === model.id) ?? null;
+    const named = root
+      ? [...root.querySelectorAll('[name]')].find(element => element.getAttribute('name') === field) ?? null
+      : null;
+    const target = named?.closest('.MuiFormControl-root') ?? root;
+    return highlightAskFlujoElement(target);
+  }, [model.id]);
+
+  const handleAskFlujoAction = useCallback((action: AskFlujoUiAction) => {
+    if (action.target.kind !== 'model-field' || !action.target.field) {
+      return { success: false, message: 'That model UI target is not supported.' };
+    }
+    const field = action.target.field;
+    if (!askEditableFields.includes(field as typeof askEditableFields[number])) {
+      return { success: false, message: `The model field "${field}" is read-only for Ask FLUJO.` };
+    }
+    if (action.type === 'highlight') {
+      const highlighted = highlightModelField(field);
+      return {
+        success: highlighted,
+        message: highlighted ? `Highlighted ${field}.` : `Could not find ${field} on screen.`,
+      };
+    }
+    const numericFields = new Set(['thinkingBudget', 'contextWindow', 'maxTurns', 'maxTokens']);
+    if (numericFields.has(field)) {
+      if (typeof action.value !== 'number' || !Number.isFinite(action.value)) {
+        return { success: false, message: `${field} must be a finite number.` };
+      }
+    } else if (typeof action.value !== 'string') {
+      return { success: false, message: `${field} must be text.` };
+    }
+    setFormState(current => ({ ...current, [field]: action.value }));
+    window.requestAnimationFrame(() => highlightModelField(field));
+    return { success: true, message: `Updated ${field} in the unsaved form. Review it, then Save.` };
+  }, [askEditableFields, highlightModelField]);
+
+  useAskFlujoPage({
+    scopeId: `model:${model.id}`,
+    pageType: 'model',
+    route: '/models',
+    title: formState.displayName || model.displayName || model.name || 'Model',
+    identifiers: { modelId: model.id },
+    data: {
+      model: {
+        ...formState,
+        id: model.id,
+        ApiKey: formState.ApiKey ? '[REDACTED]' : '',
+      },
+      saved: false,
+    },
+    capabilities: {
+      highlightTargets: askEditableFields.map(field => ({ kind: 'model-field', field })),
+      editableTargets: askEditableFields.map(field => ({ kind: 'model-field', field })),
+      notes: [
+        'This is the live, unsaved model form.',
+        'API keys are never included in Ask FLUJO context and cannot be edited by Ask FLUJO.',
+      ],
+    },
+  }, handleAskFlujoAction, 100);
 
   // Clear models list when modal opens
   useEffect(() => {
@@ -402,6 +484,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
       fullWidth
       fullScreen={isMobile}
       PaperProps={{
+        'data-ask-flujo-model-id': model.id,
         sx: {
           width: isMobile ? '100%' : '95vw',
           height: isMobile ? '100dvh' : '90vh',
@@ -414,8 +497,9 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         onSubmit={handleSubmit}
         style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}
       >
-        <DialogTitle sx={{ flexShrink: 0 }}>
-          {model.name ? t('models.modal.editTitle') : t('models.modal.createTitle')}
+        <DialogTitle sx={{ display: 'flex', flexShrink: 0, alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
+          <span>{model.name ? t('models.modal.editTitle') : t('models.modal.createTitle')}</span>
+          <AskFlujoButton />
         </DialogTitle>
         <DialogContent
           sx={{
@@ -455,6 +539,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                 </Typography>
                 
                 <TextField
+                  name="displayName"
                   autoFocus
                   margin="dense"
                   label={t('models.modal.displayName')}
@@ -469,6 +554,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                 <FormControl fullWidth margin="dense">
                   <InputLabel id="provider-profile-label">{t('models.modal.provider')}</InputLabel>
                   <Select
+                    name="provider"
                     labelId="provider-profile-label"
                     label={t('models.modal.provider')}
                     value={currentProfile.id}
@@ -493,6 +579,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
 
                 {currentProfile.showBaseUrl && (
                   <TextField
+                    name="baseUrl"
                     margin="dense"
                     label={t('models.card.baseUrl')}
                     fullWidth
@@ -504,6 +591,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
 
                 <Box sx={{ position: 'relative', mt: 1, mb: 1 }}>
                   <TextField
+                    name="ApiKey"
                     margin="dense"
                     label={t('models.modal.apiKey')}
                     fullWidth
@@ -642,6 +730,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                 />
 
                 <TextField
+                  name="description"
                   margin="dense"
                   label={t('models.modal.description')}
                   fullWidth
@@ -653,6 +742,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
 
                 {configurationCapabilities.creativity && (
                   <TextField
+                    name="temperature"
                     margin="dense"
                     label={t('models.modal.creativity')}
                     fullWidth
@@ -672,6 +762,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                   <FormControl fullWidth margin="dense">
                     <InputLabel id="reasoning-effort-label">{t('models.modal.effort')}</InputLabel>
                     <Select
+                      name="reasoningEffort"
                       labelId="reasoning-effort-label"
                       label={t('models.modal.effort')}
                       value={formState.reasoningEffort || ''}
@@ -699,6 +790,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                   <FormControl fullWidth margin="dense">
                     <InputLabel id="thinking-level-label">{t('models.modal.thinkingLevel')}</InputLabel>
                     <Select
+                      name="thinkingLevel"
                       labelId="thinking-level-label"
                       label={t('models.modal.thinkingLevel')}
                       value={formState.thinkingLevel || ''}
@@ -721,6 +813,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
 
                 {configurationCapabilities.thinkingBudget && (
                   <TextField
+                    name="thinkingBudget"
                     margin="dense"
                     label={t('models.modal.thinkingBudget')}
                     fullWidth
@@ -745,6 +838,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                   <FormControl fullWidth margin="dense">
                     <InputLabel id="service-tier-label">{t('models.modal.priority')}</InputLabel>
                     <Select
+                      name="serviceTier"
                       labelId="service-tier-label"
                       label={t('models.modal.priority')}
                       value={formState.serviceTier || 'default'}
@@ -763,6 +857,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                 )}
 
                 <TextField
+                  name="contextWindow"
                   margin="dense"
                   label={t('models.modal.contextWindow')}
                   fullWidth
@@ -780,6 +875,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                 />
 
                 <TextField
+                  name="maxTurns"
                   margin="dense"
                   label={t('models.modal.maxTurns')}
                   fullWidth
@@ -799,6 +895,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
 
                 {configurationCapabilities.maxOutputTokens && (
                   <TextField
+                    name="maxTokens"
                     margin="dense"
                     label={t('models.modal.maxOutputTokens')}
                     fullWidth

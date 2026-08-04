@@ -190,6 +190,37 @@ export function internalToolDefinitions(): Tool[] {
     // create_flow, search_mcp_marketplace, install_mcp_server).
     ...authoringToolDefinitions(),
     {
+      name: 'propose_ui_action',
+      description:
+        'Propose a highlight or value change in the currently open FLUJO browser UI. ' +
+        'Use this only when the prompt includes a current-page-context with an exact matching ' +
+        'highlightTarget or editableTarget. This tool records a proposal; the browser validates ' +
+        'the target and value again, highlights immediately, and requires the user to press Apply ' +
+        'before any value change. Never invent a target that was not advertised in page context.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          type: { type: 'string', enum: ['highlight', 'set_value'] },
+          target: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              kind: { type: 'string', minLength: 1, maxLength: 64 },
+              id: { type: 'string', minLength: 1, maxLength: 256 },
+              field: { type: 'string', minLength: 1, maxLength: 128 },
+              path: { type: 'string', minLength: 1, maxLength: 512 },
+            },
+            required: ['kind'],
+          },
+          value: {},
+          label: { type: 'string', maxLength: 160 },
+          evidence: { type: 'string', maxLength: 2000 },
+        },
+        required: ['type', 'target'],
+      },
+    },
+    {
       name: 'list_flows',
       description:
         'List all flows in this FLUJO instance with lightweight metadata only ' +
@@ -1654,6 +1685,39 @@ async function kvSetTool(args: Record<string, unknown>): Promise<CallToolResult>
   return textResult({ scope, name, saved: true, size: res.size });
 }
 
+function proposeUiAction(args: Record<string, unknown>): CallToolResult {
+  const type = args.type === 'highlight' || args.type === 'set_value' ? args.type : null;
+  const rawTarget = args.target && typeof args.target === 'object'
+    ? args.target as Record<string, unknown>
+    : null;
+  const kind = typeof rawTarget?.kind === 'string' ? rawTarget.kind.trim() : '';
+  if (!type || !kind || (type === 'set_value' && !('value' in args))) {
+    return textResult({
+      error: 'propose_ui_action requires a valid type, target.kind, and a value for set_value.',
+    }, true);
+  }
+  const target = {
+    kind,
+    ...(typeof rawTarget?.id === 'string' ? { id: rawTarget.id } : {}),
+    ...(typeof rawTarget?.field === 'string' ? { field: rawTarget.field } : {}),
+    ...(typeof rawTarget?.path === 'string' ? { path: rawTarget.path } : {}),
+  };
+  return textResult({
+    type: 'flujo_ui_action',
+    accepted: true,
+    action: {
+      type,
+      target,
+      ...('value' in args ? { value: args.value } : {}),
+      ...(typeof args.label === 'string' ? { label: args.label.slice(0, 160) } : {}),
+      ...(typeof args.evidence === 'string' ? { evidence: args.evidence.slice(0, 2000) } : {}),
+    },
+    note: type === 'set_value'
+      ? 'The browser will show an Apply control; no value changed yet.'
+      : 'The browser will validate and highlight the target.',
+  });
+}
+
 /**
  * Dispatch one internal-server tool call. Always resolves to a CallToolResult
  * (errors become isError results, mirroring how a real MCP server responds).
@@ -1669,6 +1733,8 @@ export async function internalCallTool(
       return await authoringCallTool(toolName, args);
     }
     switch (toolName) {
+      case 'propose_ui_action':
+        return proposeUiAction(args);
       case 'list_flows':
         return await listFlows(args);
       case 'discover_capabilities':

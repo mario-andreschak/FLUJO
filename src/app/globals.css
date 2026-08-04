@@ -513,3 +513,16 @@ a {
     transition-duration: 0.01ms !important;
   }
 }
+@keyframes ask-flujo-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(139, 124, 246, 0.42), 0 0 0 8px rgba(24, 184, 215, 0.14); }
+  50% { box-shadow: 0 0 0 5px rgba(139, 124, 246, 0.7), 0 0 0 14px rgba(24, 184, 215, 0.08); }
+}
+
+.ask-flujo-highlight {
+  position: relative;
+  z-index: 2;
+  border-radius: 10px;
+  outline: 2px solid rgba(139, 124, 246, 0.95) !important;
+  outline-offset: 3px;
+  animation: ask-flujo-pulse 1.35s ease-in-out infinite;
+}

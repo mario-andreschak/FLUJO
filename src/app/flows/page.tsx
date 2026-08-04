@@ -38,6 +38,7 @@ import { createLogger } from '@/utils/logger';
 import { writeUiPreference } from '@/frontend/hooks/useUiPreference';
 import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useAskFlujoPage } from '@/frontend/contexts/AskFlujoContext';
 
 const log = createLogger('app/flows/page');
 
@@ -63,6 +64,23 @@ const FlowsPage = () => {
   const [draftDescendants, setDraftDescendants] = useState<Flow[]>([]);
   const [generateDialogOpen, setGenerateDialogOpen] = useState(false);
   const createAssistantHandled = useRef(false);
+
+  const askSelectedFlow = selectedFlow
+    ? flows.find(flow => flow.id === selectedFlow) ?? (draftFlow?.id === selectedFlow ? draftFlow : null)
+    : null;
+  useAskFlujoPage({
+    scopeId: askSelectedFlow ? `flow:${askSelectedFlow.id}` : 'flows:dashboard',
+    pageType: askSelectedFlow ? 'flow' : 'flows',
+    route: '/flows',
+    title: askSelectedFlow?.name ?? t('flows.page.title'),
+    identifiers: { flowId: askSelectedFlow?.id ?? null },
+    data: askSelectedFlow ? { flow: askSelectedFlow } : { flows },
+    capabilities: {
+      notes: askSelectedFlow
+        ? ['The nested Flow Builder adapter replaces this saved snapshot with live unsaved state while the editor is mounted.']
+        : ['The dashboard context contains every flow currently shown on screen.'],
+    },
+  });
 
   // Copy flow dialog state
   const [copyDialogOpen, setCopyDialogOpen] = useState(false);

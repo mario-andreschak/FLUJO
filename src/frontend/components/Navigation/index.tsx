@@ -41,6 +41,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 
 import BugReportButton from '@/frontend/components/BugReport/BugReportButton';
+import AskFlujoButton from '@/frontend/components/AskFlujo/AskFlujoButton';
 import LanguageMenu from '@/frontend/components/LanguageMenu';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useStorage } from '@/frontend/contexts/StorageContext';
@@ -465,6 +466,8 @@ export default function Navigation() {
         {isCompact && <Box sx={{ flex: 1 }} />}
 
         <Stack direction="row" spacing={0.7} alignItems="center">
+          <AskFlujoButton />
+
           {!isCompact && (
             <Chip
               data-app-private-chip

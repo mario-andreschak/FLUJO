@@ -29,6 +29,30 @@ export async function parseRepositoryConfig(options: ConfigParseOptions): Promis
   const readmeResult = await parseReadmeConfig(repoPath, repoName);
   if (readmeResult.detected && readmeResult.foundExplicitConfig && readmeResult.runCommand) {
     log.debug(`Explicit configuration found in README for ${repoPath}`);
+
+    // Keep the README's explicit runtime command, but supplement build metadata
+    // from package.json when the README parser did not recognize an install or
+    // build command. This is especially important for npm projects whose README
+    // uses `npm ci`: the loose README parser does not treat that as an install
+    // command, while the TypeScript parser supplies a production-safe install
+    // command that includes the devDependencies needed by the build.
+    const tsResult = await parseTypeScriptConfig(options);
+    if (tsResult.detected && tsResult.config) {
+      const installCommand = readmeResult.installCommand || tsResult.installCommand || '';
+      const buildCommand = readmeResult.buildCommand || tsResult.buildCommand || '';
+
+      return {
+        ...readmeResult,
+        installCommand,
+        buildCommand,
+        config: {
+          ...readmeResult.config,
+          _installCommand: readmeResult.config?._installCommand || tsResult.config._installCommand || '',
+          _buildCommand: readmeResult.config?._buildCommand || tsResult.config._buildCommand || '',
+        },
+      };
+    }
+
     return readmeResult;
   }
 

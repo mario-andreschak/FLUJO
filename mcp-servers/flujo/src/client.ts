@@ -26,6 +26,7 @@ const AUTHORING_TOOLS = new Set([
   'install_best_mcp_server',
 ]);
 const FLOW_TOOLS = new Set([
+  'propose_ui_action',
   'list_flows',
   'discover_capabilities',
   'execute_flow',
@@ -84,13 +85,14 @@ async function requestJson<T>(
   try {
     const response = await fetch(`${flujoBaseUrl()}${path}`, {
       ...init,
+      cache: 'no-store',
       signal: controller.signal,
       headers: {
         accept: 'application/json',
         ...(init.body ? { 'content-type': 'application/json' } : {}),
         ...init.headers,
       },
-    });
+    } as RequestInit);
     const text = await response.text();
     let body: unknown = {};
     if (text) {

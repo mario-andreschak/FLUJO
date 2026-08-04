@@ -20,6 +20,7 @@ describe('standalone flujo HTTP client', () => {
 
   it('maps every tool group to a narrow domain endpoint', () => {
     expect(toolRoute('execute_flow')).toBe('/api/mcp/flujo/flows');
+    expect(toolRoute('propose_ui_action')).toBe('/api/mcp/flujo/flows');
     expect(toolRoute('restart_mcp_server')).toBe('/api/mcp/flujo/servers');
     expect(toolRoute('create_planned_execution')).toBe('/api/mcp/flujo/automation');
     expect(toolRoute('kv_set')).toBe('/api/mcp/flujo/state');

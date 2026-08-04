@@ -89,6 +89,9 @@ import { Flow, FlowNode } from '@/shared/types/flow'; // Import Flow and FlowNod
 import { LLM_REQUEST_TIMEOUT_MS } from '@/shared/config/timeouts';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useStorage } from '@/frontend/contexts/StorageContext';
+import { useAskFlujoPage } from '@/frontend/contexts/AskFlujoContext';
+import type { AskFlujoUiAction } from '@/frontend/types/askFlujo';
+import { highlightAskFlujoElement } from '@/frontend/utils/askFlujoActions';
 
 const log = createLogger('frontend/components/Chat/index');
 
@@ -1093,6 +1096,58 @@ const Chat: React.FC = () => {
     () => flows.find(f => f.id === detailedConversation?.flowId) || null,
     [flows, detailedConversation?.flowId]
   );
+
+  const handleAskFlujoAction = useCallback((action: AskFlujoUiAction) => {
+    if (action.target.kind === 'chat-message' && action.target.id && action.type === 'highlight') {
+      const target = [...document.querySelectorAll('[data-ask-flujo-message-id]')]
+        .find(element => element.getAttribute('data-ask-flujo-message-id') === action.target.id) ?? null;
+      const highlighted = highlightAskFlujoElement(target);
+      return { success: highlighted, message: highlighted ? 'Highlighted the conversation message.' : 'That message is not currently visible.' };
+    }
+    if (action.target.kind === 'chat-field' && action.target.field === 'title') {
+      if (action.type === 'highlight') {
+        const highlighted = highlightAskFlujoElement(document.querySelector('[data-ask-flujo-chat-title]'));
+        return { success: highlighted, message: highlighted ? 'Highlighted the conversation title.' : 'The title is not currently visible.' };
+      }
+      if (typeof action.value !== 'string' || !action.value.trim()) {
+        return { success: false, message: 'The conversation title must be non-empty text.' };
+      }
+      setTitleDraft(action.value);
+      setIsEditingTitle(true);
+      return { success: true, message: 'Updated the title field. Confirm it with the normal save control.' };
+    }
+    return { success: false, message: 'That conversation UI target is not supported.' };
+  }, []);
+
+  useAskFlujoPage({
+    scopeId: detailedConversation ? `chat:${detailedConversation.id}` : 'chat:none',
+    pageType: 'chat',
+    route: '/chat',
+    title: detailedConversation?.title ?? t('nav.talk'),
+    identifiers: {
+      conversationId: detailedConversation?.id ?? currentConversationId,
+      flowId: detailedConversation?.flowId ?? null,
+    },
+    data: {
+      conversation: detailedConversation,
+      selectedFlow: currentFlow,
+      requireApproval,
+      executeInDebugger,
+    },
+    capabilities: {
+      highlightTargets: [
+        ...(detailedConversation?.messages ?? []).map(message => ({
+          kind: 'chat-message',
+          id: message.id,
+          role: message.role,
+          processNodeId: message.processNodeId,
+        })),
+        { kind: 'chat-field', field: 'title' },
+      ],
+      editableTargets: [{ kind: 'chat-field', field: 'title' }],
+      notes: ['The conversation id and flow id are always supplied explicitly.'],
+    },
+  }, handleAskFlujoAction, 100);
 
   const availableNodes = useMemo(
     () =>
@@ -3722,6 +3777,7 @@ const Chat: React.FC = () => {
               )}
               {isEditingTitle ? (
                 <TextField
+                  data-ask-flujo-chat-title
                   value={titleDraft}
                   onChange={(e) => setTitleDraft(e.target.value)}
                   onBlur={commitEditTitle}
@@ -3737,6 +3793,7 @@ const Chat: React.FC = () => {
               ) : (
                 <>
                   <Typography
+                    data-ask-flujo-chat-title
                     variant="subtitle1"
                     noWrap
                     onClick={beginEditTitle}

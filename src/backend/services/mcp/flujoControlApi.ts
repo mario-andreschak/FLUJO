@@ -21,6 +21,7 @@ export const FLUJO_AUTHORING_TOOLS = [
 ] as const;
 
 export const FLUJO_FLOW_TOOLS = [
+  'propose_ui_action',
   'list_flows',
   'discover_capabilities',
   'execute_flow',

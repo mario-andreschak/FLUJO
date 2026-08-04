@@ -77,6 +77,7 @@ import {
   internalCallTool,
   InternalDispatchService,
 } from '@/backend/services/mcp/internalTools';
+import { FLUJO_FLOW_TOOLS } from '@/backend/services/mcp/flujoControlApi';
 import { flowService } from '@/backend/services/flow';
 import { modelService } from '@/backend/services/model';
 import { runFlow } from '@/backend/execution/flow/runFlow';
@@ -132,6 +133,7 @@ describe('internalToolDefinitions', () => {
     expect(names).toEqual(
       expect.arrayContaining([
         'create_flow', // from the (stubbed) authoring set
+        'propose_ui_action',
         'list_flows',
         'discover_capabilities',
         'execute_flow',
@@ -204,6 +206,39 @@ describe('internalToolDefinitions', () => {
         }));
       }
     }
+  });
+});
+
+describe('propose_ui_action', () => {
+  it('is assigned to the standalone FLUJO flow-control route', () => {
+    expect(FLUJO_FLOW_TOOLS).toContain('propose_ui_action');
+  });
+
+  it('returns a reviewable screen-edit proposal without mutating backend state', async () => {
+    const result = await internalCallTool(makeService(), 'propose_ui_action', {
+      type: 'set_value',
+      target: { kind: 'model-field', field: 'displayName' },
+      value: 'Terra UI Test',
+    });
+
+    expect(JSON.parse(text(result))).toEqual(expect.objectContaining({
+      type: 'flujo_ui_action',
+      accepted: true,
+      action: expect.objectContaining({
+        type: 'set_value',
+        target: { kind: 'model-field', field: 'displayName' },
+        value: 'Terra UI Test',
+      }),
+    }));
+  });
+
+  it('rejects a value-less screen edit', async () => {
+    const result = await internalCallTool(makeService(), 'propose_ui_action', {
+      type: 'set_value',
+      target: { kind: 'model-field', field: 'displayName' },
+    });
+
+    expect(result.isError).toBe(true);
   });
 });
 

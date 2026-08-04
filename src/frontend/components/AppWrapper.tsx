@@ -8,6 +8,7 @@ import { createLogger } from '@/utils/logger';
 import { I18nProvider, useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n';
 import useCompactAppChrome from '@/frontend/hooks/useCompactAppChrome';
+import { AskFlujoProvider } from '@/frontend/contexts/AskFlujoContext';
 
 const log = createLogger('frontend/components/AppWrapper');
 
@@ -72,6 +73,11 @@ const TourOverlay = dynamic(() => import('./Tour/TourOverlay'), {
 const TelemetryNotice = dynamic(() => import('./TelemetryNotice'), {
   ssr: false,
   loading: () => null
+});
+
+const AskFlujoDock = dynamic(() => import('./AskFlujo/AskFlujoDock'), {
+  ssr: false,
+  loading: () => null,
 });
 
 // Error boundary component to catch chunk loading errors
@@ -156,11 +162,13 @@ export default function AppWrapper({ children }: AppWrapperProps) {
         <Suspense fallback={<AppLoading />}>
           <ThemeProvider>
             <StorageProvider>
-              <TourProvider>
-                <LocalizedAppShell>
-                  {children}
-                </LocalizedAppShell>
-              </TourProvider>
+              <AskFlujoProvider>
+                <TourProvider>
+                  <LocalizedAppShell>
+                    {children}
+                  </LocalizedAppShell>
+                </TourProvider>
+              </AskFlujoProvider>
             </StorageProvider>
           </ThemeProvider>
         </Suspense>
@@ -181,6 +189,7 @@ function LocalizedAppShell({ children }: { children: React.ReactNode }) {
         <Navigation />
         <EncryptionAuthDialog />
         <TelemetryNotice />
+        <AskFlujoDock />
       </Suspense>
       <main id="main-content" className="app-main" tabIndex={-1}>
         <RouteStage>{children}</RouteStage>
