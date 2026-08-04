@@ -215,7 +215,8 @@
 /* Route/location HUD ------------------------------------------------------ */
 :root.modern-theme.living-world-active .living-watershed__location {
   position: fixed;
-  z-index: 1200;
+  /* Decorative route context stays below MUI's app-bar layer (1100). */
+  z-index: 1090;
   top: calc((var(--app-bar-height) - 60px) / 2);
   right: clamp(300px, 18vw, 340px);
   bottom: auto;

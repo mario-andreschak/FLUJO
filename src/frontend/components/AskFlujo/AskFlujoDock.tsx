@@ -386,6 +386,15 @@ export default function AskFlujoDock() {
                 label="Model"
                 value={modelId}
                 onChange={event => void handleModelChange(event.target.value)}
+                MenuProps={{
+                  sx: { zIndex: theme.zIndex.modal + 30 },
+                  PaperProps: {
+                    sx: {
+                      bgcolor: 'background.paper',
+                      color: 'text.primary',
+                    },
+                  },
+                }}
               >
                 {models.map(model => (
                   <MenuItem key={model.id} value={model.id}>{model.displayName || model.name}</MenuItem>
@@ -437,7 +446,31 @@ export default function AskFlujoDock() {
                     bgcolor: message.role === 'user' ? alpha(theme.palette.primary.main, 0.12) : alpha(theme.palette.background.paper, 0.7),
                     borderRadius: message.role === 'user' ? '16px 16px 4px 16px' : '4px 16px 16px 16px',
                     '& p': { my: 0.5 },
-                    '& pre': { overflowX: 'auto' },
+                    '& code': {
+                      px: 0.45,
+                      py: 0.1,
+                      border: 1,
+                      borderColor: alpha(theme.palette.text.primary, 0.16),
+                      borderRadius: 0.75,
+                      color: 'text.primary',
+                      bgcolor: alpha(theme.palette.text.primary, 0.09),
+                      fontFamily: 'monospace',
+                      fontSize: '0.88em',
+                      overflowWrap: 'anywhere',
+                    },
+                    '& pre': {
+                      overflowX: 'auto',
+                      p: 1,
+                      border: 1,
+                      borderColor: alpha(theme.palette.text.primary, 0.14),
+                      borderRadius: 1,
+                      bgcolor: alpha(theme.palette.text.primary, 0.07),
+                    },
+                    '& pre code': {
+                      p: 0,
+                      border: 0,
+                      bgcolor: 'transparent',
+                    },
                   }}
                 >
                   {message.role === 'assistant' ? (
