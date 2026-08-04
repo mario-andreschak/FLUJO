@@ -32,6 +32,7 @@ import {
   setActiveCanvasTab,
   closeCanvasApp,
   canvasEntries,
+  canvasKey,
   type CanvasState,
   type CanvasAppInput,
 } from './canvasState';
@@ -66,7 +67,12 @@ import Spinner from '@/frontend/components/shared/Spinner';
 import { v4 as uuidv4 } from 'uuid';
 import OpenAI, { OpenAIError, APIError } from 'openai'; // Import APIError
 import { flowService } from '@/frontend/services/flow';
-import { chatService, ChatApiError } from '@/frontend/services/chat';
+import {
+  chatService,
+  ChatApiError,
+  type SubflowRecoveryOptions,
+  type SubflowRecoveryScope,
+} from '@/frontend/services/chat';
 import { createLogger } from '@/utils/logger';
 // Correctly import SharedState here
 import {
@@ -92,6 +98,14 @@ import { useStorage } from '@/frontend/contexts/StorageContext';
 import { useAskFlujoPage } from '@/frontend/contexts/AskFlujoContext';
 import type { AskFlujoUiAction } from '@/frontend/types/askFlujo';
 import { highlightAskFlujoElement } from '@/frontend/utils/askFlujoActions';
+import {
+  latestMcpAppResultIdsByResource,
+  observeNewMcpAppResultIds,
+} from './mcpAppProjection';
+import {
+  readDismissedMcpAppKeys,
+  writeMcpAppDismissed,
+} from './mcpAppPreferences';
 
 const log = createLogger('frontend/components/Chat/index');
 
@@ -213,6 +227,8 @@ export interface Conversation {
   status?: 'running' | 'awaiting_tool_approval' | 'paused_debug' | 'completed' | 'error' | 'capped';
   /** Additive durable cancellation/interruption/failure metadata (issue #355). */
   recovery?: RecoveryRecord;
+  parentConversationId?: string | null;
+  rootConversationId?: string | null;
   /** Node where execution currently sits (server truth). May reference a node
    *  of a previously selected flow after a flow switch — validate before use. */
   currentNodeId?: string;
@@ -330,6 +346,28 @@ const Chat: React.FC = () => {
     null
   );
   const currentConversationIdRef = useRef<string | null>(currentConversationId);
+  const observedMcpAppResultIdsRef = useRef<Map<string, Set<string>>>(new Map());
+  const [autoOpenMcpAppResultIds, setAutoOpenMcpAppResultIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [mcpAppDismissalVersion, setMcpAppDismissalVersion] = useState(0);
+  const dismissedMcpAppKeys = useMemo<ReadonlySet<string>>(() => (
+    currentConversationId
+      ? new Set(readDismissedMcpAppKeys(currentConversationId))
+      : new Set<string>()
+  ), [currentConversationId, mcpAppDismissalVersion]);
+  const setMcpAppDismissed = useCallback((
+    conversationId: string,
+    appKey: string,
+    dismissed: boolean,
+  ) => {
+    writeMcpAppDismissed(conversationId, appKey, dismissed);
+    setMcpAppDismissalVersion((version) => version + 1);
+  }, []);
+  const handleMcpAppManualOpen = useCallback((appKey: string) => {
+    const owner = currentConversationIdRef.current;
+    if (owner) setMcpAppDismissed(owner, appKey, false);
+  }, [setMcpAppDismissed]);
   const canvasTeardownsRef = useRef<Map<string, () => Promise<void>>>(new Map());
   const conversationTransitionGenerationRef = useRef(0);
   /**
@@ -402,6 +440,8 @@ const Chat: React.FC = () => {
   // Guards the drain effect against re-entrancy (one dequeue per idle window).
   const drainingRef = useRef<boolean>(false);
   const [error, setError] = useState<string | null>(null); // General error display
+  const [subflowRecoveryOptions, setSubflowRecoveryOptions] = useState<SubflowRecoveryOptions | null>(null);
+  const [subflowRecoveryScope, setSubflowRecoveryScope] = useState<SubflowRecoveryScope | null>(null);
 
   // Other states
   const [flows, setFlows] = useState<Flow[]>([]); // Use the Flow type from shared types
@@ -1043,6 +1083,69 @@ const Chat: React.FC = () => {
       setDetailsError(null);
     }
   }, [currentConversationId, fetchDetailedConversation]); // Trigger fetch when selection changes
+
+  // Treat the first message snapshot for a conversation as passive hydration.
+  // Only result ids appended after that baseline are eligible for the default
+  // auto-open policy, so revisiting/reloading history cannot resurrect Apps.
+  useEffect(() => {
+    const conversationId = detailedConversation?.id;
+    if (!conversationId || conversationId !== currentConversationId) {
+      setAutoOpenMcpAppResultIds((current) => current.size === 0 ? current : new Set());
+      return;
+    }
+
+    const fresh = observeNewMcpAppResultIds(
+      observedMcpAppResultIdsRef.current,
+      conversationId,
+      detailedConversation.messages,
+    );
+    if (fresh.length === 0) return;
+    setAutoOpenMcpAppResultIds(new Set(latestMcpAppResultIdsByResource(
+      detailedConversation.messages,
+      fresh,
+    )));
+  }, [currentConversationId, detailedConversation?.id, detailedConversation?.messages]);
+
+  // The child latches the positive auto-launch command. Retire transient ids so
+  // a later render-window remount cannot replay the same historical launch.
+  useEffect(() => {
+    if (autoOpenMcpAppResultIds.size === 0) return undefined;
+    const timer = window.setTimeout(() => setAutoOpenMcpAppResultIds(new Set()), 1_500);
+    return () => window.clearTimeout(timer);
+  }, [autoOpenMcpAppResultIds]);
+
+  const recoveryParentSummary = detailedConversation?.parentConversationId
+    ? conversationList.find((conversation) => conversation.id === detailedConversation.parentConversationId)
+    : undefined;
+
+  useEffect(() => {
+    const conversationId = detailedConversation?.id;
+    const shouldLoad = Boolean(
+      conversationId &&
+      detailedConversation?.status === 'error',
+    );
+    if (!shouldLoad || !conversationId) {
+      setSubflowRecoveryOptions(null);
+      return;
+    }
+    let disposed = false;
+    void chatService.getSubflowRecoveryOptions(conversationId)
+      .then((options) => {
+        if (!disposed) setSubflowRecoveryOptions(options.hasRecoverableFamily ? options : null);
+      })
+      .catch((err) => {
+        log.warn('Could not load subflow recovery options', { conversationId, err });
+        if (!disposed) setSubflowRecoveryOptions(null);
+      });
+    return () => { disposed = true; };
+  }, [
+    detailedConversation?.id,
+    detailedConversation?.parentConversationId,
+    detailedConversation?.status,
+    recoveryParentSummary?.status,
+    recoveryParentSummary?.updatedAt,
+    recoveryParentSummary?.recovery?.updatedAt,
+  ]);
 
   // Reflect the viewed conversation's persisted "Require Tool Approval" setting in
   // the checkbox. Keyed on the conversation id so it only re-syncs on a switch, not
@@ -2827,20 +2930,26 @@ const Chat: React.FC = () => {
   // A View can enter the canvas only after its inline handshake declared pip
   // and either the View or user requested the transition.
   const handleOpenInCanvas = useCallback((info: CanvasLaunchInfo) => {
-    setCanvasStateOwnerId(currentConversationIdRef.current);
+    const owner = currentConversationIdRef.current;
+    if (!owner) return;
+    const key = canvasKey(info.serverName, info.uri);
+    if (info.automatic && readDismissedMcpAppKeys(owner).includes(key)) return;
+    if (!info.automatic) setMcpAppDismissed(owner, key, false);
+    setCanvasStateOwnerId(owner);
     setCanvasState((prev) => {
       // Temporarily permit one extra mounted host; the cap effect below awaits
       // the LRU victim's graceful teardown before removing it.
       const { state } = openCanvasApp(prev, info, Date.now(), Number.MAX_SAFE_INTEGER);
       return state;
     });
-  }, []);
+  }, [setMcpAppDismissed]);
   const handleSelectCanvasTab = useCallback((key: string) => {
     setCanvasState((prev) => setActiveCanvasTab(prev, key));
   }, []);
   const handleCloseCanvasTab = useCallback((key: string) => {
     const owner = appCallbackConversationId;
     if (!owner) return;
+    setMcpAppDismissed(owner, key, true);
     const registered = canvasTeardownsRef.current.get(`${owner}\u0000${key}`);
     const close = () => {
       if (currentConversationIdRef.current !== owner) return;
@@ -2848,7 +2957,7 @@ const Chat: React.FC = () => {
     };
     if (registered) void registered().finally(close);
     else close();
-  }, [appCallbackConversationId]);
+  }, [appCallbackConversationId, setMcpAppDismissed]);
 
   // Reset the canvas when switching conversations (per-conversation surface).
   useEffect(() => {
@@ -3450,6 +3559,35 @@ const Chat: React.FC = () => {
     }
   };
 
+  const handleSubflowRecovery = async (scope: SubflowRecoveryScope) => {
+    if (!currentConversationId || subflowRecoveryScope) return;
+    const conversationId = currentConversationId;
+    setSubflowRecoveryScope(scope);
+    setError(null);
+    try {
+      const result = await chatService.retrySubflowRecovery(conversationId, scope);
+      if (result.failed.length > 0) {
+        setError(result.failed.map((failure) => failure.error).join('\n'));
+      } else {
+        markConversationStopped(conversationId, false);
+      }
+      await Promise.all([
+        fetchDetailedConversation(conversationId),
+        fetchConversations(undefined, { silent: true }),
+      ]);
+      try {
+        setSubflowRecoveryOptions(await chatService.getSubflowRecoveryOptions(conversationId));
+      } catch {
+        setSubflowRecoveryOptions(null);
+      }
+    } catch (err) {
+      log.error('Subflow recovery failed', { conversationId, scope, err });
+      setError(err instanceof Error ? err.message : t('chat.page.recoveryFailed'));
+    } finally {
+      setSubflowRecoveryScope(null);
+    }
+  };
+
   // Manually dismiss the debugger panel. Hides the split view and clears the
   // local debug state, then cancels the paused run so the conversation is not
   // left stuck in 'paused_debug' on the backend.
@@ -3584,6 +3722,42 @@ const Chat: React.FC = () => {
       default: return reason;
     }
   };
+
+  const subflowRecoveryActions = subflowRecoveryOptions ? (
+    <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+      <Button
+        color="inherit"
+        size="small"
+        startIcon={subflowRecoveryScope === 'branch' ? <CircularProgress color="inherit" size={14} /> : <RefreshIcon />}
+        disabled={!!subflowRecoveryScope || !subflowRecoveryOptions.canRetryBranch}
+        onClick={() => void handleSubflowRecovery('branch')}
+      >
+        {t('chat.page.recoverBranch')}
+      </Button>
+      {subflowRecoveryOptions.canRetrySiblings && (
+        <Button
+          color="inherit"
+          size="small"
+          startIcon={subflowRecoveryScope === 'siblings' ? <CircularProgress color="inherit" size={14} /> : <AccountTreeOutlinedIcon />}
+          disabled={!!subflowRecoveryScope}
+          onClick={() => void handleSubflowRecovery('siblings')}
+        >
+          {t('chat.page.recoverLevel', { count: subflowRecoveryOptions.incompleteSiblingCount })}
+        </Button>
+      )}
+      {subflowRecoveryOptions.canRetryDeepest && subflowRecoveryOptions.deepestFailedCount > 1 && (
+        <Button
+          color="inherit"
+          size="small"
+          startIcon={subflowRecoveryScope === 'deepest' ? <CircularProgress color="inherit" size={14} /> : <AccountTreeIcon />}
+          disabled={!!subflowRecoveryScope}
+          onClick={() => void handleSubflowRecovery('deepest')}
+        >
+          {t('chat.page.recoverLeaves', { count: subflowRecoveryOptions.deepestFailedCount })}
+        </Button>
+      )}
+    </Box>
+  ) : null;
 
   const sidebarPanelContent = isLoadingHistory ? (
     <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', p: 2 }}>
@@ -3938,6 +4112,9 @@ const Chat: React.FC = () => {
                 onRegisterAppTeardown={handleRegisterInlineTeardown}
                 onOpenInCanvas={handleOpenInCanvas}
                 autoOpenMcpApps={autoOpenMcpApps}
+                autoOpenMcpAppResultIds={autoOpenMcpAppResultIds}
+                dismissedMcpAppKeys={dismissedMcpAppKeys}
+                onMcpAppManualOpen={handleMcpAppManualOpen}
                 queuedMessages={getMsgQueue(queuedMessages, detailedConversation.id)}
                 queueHoldReason={translateQueueHoldReason(drainHoldReason({
                   running: runningConvs.has(detailedConversation.id),
@@ -3978,7 +4155,7 @@ const Chat: React.FC = () => {
                     severity="info"
                     variant="outlined"
                     sx={{ borderRadius: 2, py: 0.5, alignItems: 'center' }}
-                    action={
+                    action={subflowRecoveryActions ?? (
                       <Button
                         color="inherit"
                         size="small"
@@ -3987,7 +4164,7 @@ const Chat: React.FC = () => {
                       >
                         {t('chat.page.resume')}
                       </Button>
-                    }
+                    )}
                   >
                     {t('chat.page.stopped')}
                   </Alert>
@@ -4044,7 +4221,7 @@ const Chat: React.FC = () => {
                     severity="error"
                     variant="filled"
                     sx={{ borderRadius: 2, py: 0.5, alignItems: 'center' }}
-                    action={
+                    action={subflowRecoveryActions ?? (
                       <Button
                         color="inherit"
                         size="small"
@@ -4057,7 +4234,7 @@ const Chat: React.FC = () => {
                       >
                         {t('chat.page.retry')}
                       </Button>
-                    }
+                    )}
                   >
                     {t('chat.page.endedError')}
                   </Alert>

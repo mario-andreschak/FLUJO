@@ -33,6 +33,14 @@ export interface RecoveryLaneIdentity {
   laneCount?: number;
   laneTitle?: string;
   conversationId?: string;
+  /** Durable Subflow-node visit that owns this lane. Unlike parentRunId, this
+   *  distinguishes two separate visits to the same node in one parent run. */
+  invocationId?: string;
+  /** Stable lane id inside invocationId. The child keeps this across retries so
+   *  a later successful continuation can satisfy the original parent join. */
+  laneId?: string;
+  /** Parent Subflow node parked at the join. */
+  parentNodeId?: string;
 }
 
 export type RecoveryCheckpointPhase =

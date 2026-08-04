@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "1.0",
+  "websiteUrl": "https://flujo.com.co",
+  "campaignInstructions": "create a promo video for flujo.com.co",
+  "evidenceRoot": "C:\\Users\\Moe\\Documents\\GitHub\\FLUJO\\website-evidence\\flujo-com-co-20260804",
+  "projectRoot": "C:\\Users\\Moe\\Documents\\GitHub\\FLUJO\\video-production\\flujo-com-co-20260804-promo",
+  "requestedDuration": null,
+  "requestedResolution": null,
+  "requestedFps": null,
+  "createdAt": "2026-08-04T00:00:00-05:00",
+  "status": "initialized"
+}

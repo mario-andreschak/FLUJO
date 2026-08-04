@@ -61,6 +61,10 @@ import { createLogger } from '@/utils/logger'; // Import the logger
 import type { McpAppModelContext } from '@/shared/types/chat';
 import { mediaDataUrl, type ModelMediaPart } from '@/shared/types/model/media';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import {
+  groupMcpAppOccurrences,
+  latestMcpAppResultIdsByResource,
+} from './mcpAppProjection';
 
 const log = createLogger('frontend/components/Chat/ChatMessages'); // Initialize logger
 
@@ -143,6 +147,12 @@ interface ChatMessagesProps {
   onOpenInCanvas?: (info: CanvasLaunchInfo) => void;
   /** Allowed MCP Apps reveal themselves unless the user opted into click-only launch. */
   autoOpenMcpApps?: boolean;
+  /** Result ids observed after initial conversation hydration and eligible for one auto-launch. */
+  autoOpenMcpAppResultIds?: ReadonlySet<string>;
+  /** Conversation-scoped App identities the user explicitly closed. */
+  dismissedMcpAppKeys?: ReadonlySet<string>;
+  /** Clear a persisted dismissal when the user explicitly opens a launcher. */
+  onMcpAppManualOpen?: (appKey: string) => void;
   /**
    * #221: messages the user submitted while a run was in flight (queued).
    * Rendered as dimmed pending bubbles after the last real message so the user
@@ -169,6 +179,10 @@ export interface CanvasLaunchInfo {
   cancelledReason?: string;
   /** Whether the tool invocation failed. */
   isError?: boolean;
+  /** Stable identity of the selected tool-result delivery. */
+  updateId?: string | number;
+  /** True when this handoff originated from the live-result auto-open policy. */
+  automatic?: boolean;
 }
 
 // Type guard to check if a message has tool_calls
@@ -489,7 +503,7 @@ function toolCallStatusIcon(status: ToolCallStatus): React.ReactElement {
  * local state; the component is keyed by the stable message id so the state
  * survives the parent list's re-renders.
  */
-const ToolCallTimeline: React.FC<{
+export const ToolCallTimeline: React.FC<{
   pairs: ToolCallPair<ChatMessage>[];
   messageId: string;
   conversationId?: string;
@@ -501,6 +515,11 @@ const ToolCallTimeline: React.FC<{
   onRegisterAppTeardown?: ChatMessagesProps['onRegisterAppTeardown'];
   onOpenInCanvas?: (info: CanvasLaunchInfo) => void;
   autoOpenMcpApps?: boolean;
+  autoOpenMcpAppResultIds?: ReadonlySet<string>;
+  dismissedMcpAppKeys?: ReadonlySet<string>;
+  onMcpAppManualOpen?: (appKey: string) => void;
+  /** Conversation-level ownership: only these latest results may host a live View. */
+  mcpAppHostResultIds?: ReadonlySet<string>;
 }> = ({
   pairs,
   messageId,
@@ -510,25 +529,17 @@ const ToolCallTimeline: React.FC<{
   onRegisterAppTeardown,
   onOpenInCanvas,
   autoOpenMcpApps = true,
+  autoOpenMcpAppResultIds,
+  dismissedMcpAppKeys,
+  onMcpAppManualOpen,
+  mcpAppHostResultIds,
 }) => {
   const { t, tp } = useI18n();
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [rawByKey, setRawByKey] = useState<Record<string, boolean>>({});
   const keyFor = (pair: ToolCallPair<ChatMessage>, index: number) =>
     pair.toolCall.id || `tc-${messageId}-${index}`;
-  const launchInfoFor = (pair: ToolCallPair<ChatMessage>): CanvasLaunchInfo | null => {
-    const ui = pair.result?.ui;
-    if (!ui?.uri || !ui.serverName) return null;
-    return {
-      serverName: ui.serverName,
-      uri: ui.uri,
-      toolName: ui.toolName ?? pair.toolCall.function.name,
-      toolArgs: ui.toolArgs ?? pair.toolCall.function.arguments,
-      resultContent: typeof pair.result?.content === 'string' ? pair.result.content : undefined,
-      cancelledReason: ui.cancelledReason,
-      isError: ui.isError,
-    };
-  };
+  const appGroups = useMemo(() => groupMcpAppOccurrences(pairs), [pairs]);
 
   return (
     <Box sx={{ mt: 1, pt: 1, borderTop: '1px solid', borderColor: 'divider' }}>
@@ -543,15 +554,33 @@ const ToolCallTimeline: React.FC<{
           collapse. Per-server MCP Apps permission is already enforced before a
           ui link reaches the transcript; the optional Settings restriction only
           decides whether the live View opens immediately or waits for one click. */}
-      {pairs.map((pair, index) => {
-        const launchInfo = launchInfoFor(pair);
-        if (!launchInfo) return null;
-        const key = keyFor(pair, index);
+      {appGroups.filter((group) => (
+        !mcpAppHostResultIds
+        || Boolean(group.latest.resultMessageId && mcpAppHostResultIds.has(group.latest.resultMessageId))
+      )).map((group) => {
+        const latest = group.latest;
+        const shouldAutoOpen = Boolean(
+          autoOpenMcpApps
+          && latest.resultMessageId
+          && autoOpenMcpAppResultIds?.has(latest.resultMessageId)
+          && !dismissedMcpAppKeys?.has(group.key),
+        );
+        const launchInfo: CanvasLaunchInfo = {
+          serverName: latest.serverName,
+          uri: latest.uri,
+          toolName: latest.toolName,
+          toolArgs: latest.toolArgs,
+          resultContent: latest.resultContent,
+          cancelledReason: latest.cancelledReason,
+          isError: latest.isError,
+          updateId: latest.updateId,
+          automatic: shouldAutoOpen,
+        };
         return (
           <McpAppFrame
-            key={`app-${key}`}
-            defaultExpanded={autoOpenMcpApps}
-            autoDock={autoOpenMcpApps}
+            key={`app-${group.key}`}
+            defaultExpanded={shouldAutoOpen}
+            autoDock={shouldAutoOpen}
             conversationId={conversationId}
             serverName={launchInfo.serverName}
             uri={launchInfo.uri}
@@ -560,10 +589,13 @@ const ToolCallTimeline: React.FC<{
             toolResultContent={launchInfo.resultContent}
             toolCancelledReason={launchInfo.cancelledReason}
             toolIsError={launchInfo.isError}
+            toolUpdateId={launchInfo.updateId}
+            linkedToolCallCount={group.occurrences.length}
             onAppMessage={onAppMessage}
             onUpdateModelContext={onUpdateModelContext}
             onRegisterTeardown={onRegisterAppTeardown}
-            teardownRegistrationKey={`${launchInfo.serverName}::${launchInfo.uri}::${key}`}
+            teardownRegistrationKey={`${group.key}::${messageId}`}
+            onUserOpen={() => onMcpAppManualOpen?.(group.key)}
             onRequestDock={onOpenInCanvas ? () => onOpenInCanvas(launchInfo) : undefined}
           />
         );
@@ -605,7 +637,13 @@ const ToolCallTimeline: React.FC<{
           formattedArgs = JSON.stringify(JSON.parse(pair.toolCall.function.arguments), null, 2);
         } catch (e) { /* keep the original string */ }
         const showRaw = !!rawByKey[key];
-        const launchInfo = launchInfoFor(pair);
+        const pairUi = pair.result?.ui;
+        const launchInfo = pairUi?.uri && pairUi.serverName ? {
+          serverName: pairUi.serverName,
+          uri: pairUi.uri,
+          toolName: pairUi.toolName ?? pair.toolCall.function.name,
+          toolArgs: pairUi.toolArgs ?? pair.toolCall.function.arguments,
+        } : null;
         const toolTesterDestination = launchInfo?.toolName
           ? { serverName: launchInfo.serverName, toolName: launchInfo.toolName }
           : pair.mcpDestination;
@@ -721,6 +759,10 @@ interface MessageBubbleProps {
   /** #216: route a tool app to the docked canvas (see ChatMessagesProps). */
   onOpenInCanvas?: (info: CanvasLaunchInfo) => void;
   autoOpenMcpApps?: boolean;
+  autoOpenMcpAppResultIds?: ReadonlySet<string>;
+  dismissedMcpAppKeys?: ReadonlySet<string>;
+  onMcpAppManualOpen?: (appKey: string) => void;
+  mcpAppHostResultIds?: ReadonlySet<string>;
   /**
    * #95 (follow-up): handoff tool calls hoisted from suppressed tool-call-only
    * messages in the same assistant run, rendered as slim markers on this anchor
@@ -752,6 +794,10 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
   onRegisterAppTeardown,
   onOpenInCanvas,
   autoOpenMcpApps,
+  autoOpenMcpAppResultIds,
+  dismissedMcpAppKeys,
+  onMcpAppManualOpen,
+  mcpAppHostResultIds,
   hoistedHandoffs,
   isBeingEdited,
   onMenuOpen,
@@ -989,6 +1035,10 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
             onRegisterAppTeardown={onRegisterAppTeardown}
             onOpenInCanvas={onOpenInCanvas}
             autoOpenMcpApps={autoOpenMcpApps}
+            autoOpenMcpAppResultIds={autoOpenMcpAppResultIds}
+            dismissedMcpAppKeys={dismissedMcpAppKeys}
+            onMcpAppManualOpen={onMcpAppManualOpen}
+            mcpAppHostResultIds={mcpAppHostResultIds}
           />
         )}
 
@@ -1374,6 +1424,9 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   onRegisterAppTeardown,
   onOpenInCanvas, // #216: route a tool app to the docked canvas
   autoOpenMcpApps = true,
+  autoOpenMcpAppResultIds,
+  dismissedMcpAppKeys,
+  onMcpAppManualOpen,
   queuedMessages = [], // #221: inline pending bubbles
   queueHoldReason = null,
 }) => {
@@ -1452,6 +1505,17 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   const [revertMessageId, setRevertMessageId] = React.useState<string | null>(null);
   // State to manage raw view toggle for each tool message
   const [showRawToolResult, setShowRawToolResult] = React.useState<Record<string, boolean>>({});
+  const mcpAppHostResultIds = useMemo<ReadonlySet<string>>(() => {
+    const candidates = messages
+      .filter((message) => (
+        message.role === 'tool'
+        && message.ui?.uri
+        && message.ui.serverName
+        && Boolean(message.id)
+      ))
+      .map((message) => message.id);
+    return new Set(latestMcpAppResultIdsByResource(messages, candidates));
+  }, [messages]);
 
   // Stable callbacks handed to every (memoized) bubble.
   const handleMenuOpen = useCallback((event: React.MouseEvent<HTMLElement>, messageId: string) => {
@@ -1571,6 +1635,10 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
             onRegisterAppTeardown={onRegisterAppTeardown}
             onOpenInCanvas={onOpenInCanvas}
             autoOpenMcpApps={autoOpenMcpApps}
+            autoOpenMcpAppResultIds={autoOpenMcpAppResultIds}
+            dismissedMcpAppKeys={dismissedMcpAppKeys}
+            onMcpAppManualOpen={onMcpAppManualOpen}
+            mcpAppHostResultIds={mcpAppHostResultIds}
             hoistedHandoffs={renderHandoffsById.get(message.id)}
             isBeingEdited={!!editingMessageId && message.id === editingMessageId}
             onMenuOpen={handleMenuOpen}

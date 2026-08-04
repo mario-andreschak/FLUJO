@@ -190,6 +190,8 @@ export async function GET(
         // Additive recovery metadata: precise cancellation/interruption/failure
         // classification, latest safe checkpoint, lane identity, and warnings.
         recovery: sharedState.recovery,
+        parentConversationId: sharedState.parentConversationId ?? null,
+        rootConversationId: sharedState.rootConversationId ?? null,
         // Where execution currently sits — powers the chat input's node pill
         // (the manual node picker). May reference a node of a previously
         // selected flow after a flow switch; the frontend validates it.

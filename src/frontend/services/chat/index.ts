@@ -56,6 +56,28 @@ export interface RevertPreview {
   truncated: boolean;
 }
 
+export interface SubflowRecoveryOptions {
+  conversationId: string;
+  parentConversationId?: string;
+  invocationId?: string;
+  laneId?: string;
+  hasRecoverableFamily: boolean;
+  incompleteSiblingCount: number;
+  deepestFailedCount: number;
+  canRetryBranch: boolean;
+  canRetrySiblings: boolean;
+  canRetryDeepest: boolean;
+}
+
+export type SubflowRecoveryScope = 'branch' | 'siblings' | 'deepest';
+
+export interface SubflowRecoveryResult {
+  scope: SubflowRecoveryScope;
+  startedConversationIds: string[];
+  completedConversationIds: string[];
+  failed: Array<{ conversationId: string; error: string }>;
+}
+
 const BASE = '/v1/chat/conversations';
 
 // Parse a fetch Response, throwing ChatApiError on non-2xx. For 204/empty
@@ -306,6 +328,23 @@ class ChatService {
       method: 'POST',
     });
     await parse<void>(response);
+  }
+
+  async getSubflowRecoveryOptions(id: string): Promise<SubflowRecoveryOptions> {
+    const response = await fetch(`${BASE}/${encodeURIComponent(id)}/recovery`);
+    return parse<SubflowRecoveryOptions>(response);
+  }
+
+  async retrySubflowRecovery(
+    id: string,
+    scope: SubflowRecoveryScope,
+  ): Promise<SubflowRecoveryResult> {
+    const response = await fetch(`${BASE}/${encodeURIComponent(id)}/recovery`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope }),
+    });
+    return parse<SubflowRecoveryResult>(response);
   }
 
   /**

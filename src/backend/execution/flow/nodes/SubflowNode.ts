@@ -7,6 +7,7 @@ import {
   SubflowNodeExecResult,
   SubflowLanePlan,
   SubflowLaneResult,
+  SubflowInvocation,
   FINAL_RESPONSE_ACTION,
   ERROR_ACTION,
   IMPLICIT_SUBFLOW_RETURN_ACTION,
@@ -25,6 +26,10 @@ import {
 } from '@/backend/services/runResources';
 import { isCancelledByAncestry } from '../cancellation';
 import { buildConversationTitle } from '@/utils/shared/conversationTitle';
+import {
+  persistSubflowParent,
+  syncLaneFromPersistedChild,
+} from '../subflowRecovery';
 
 const log = createLogger('backend/execution/flow/nodes/SubflowNode');
 
@@ -228,6 +233,133 @@ function splitItems(text: string, mode: 'json-array' | 'lines'): string[] {
  * Model-authored task queues are intentionally NOT capped by this value. */
 export const MAX_DYNAMIC_FANOUT_LANES = 32;
 
+function activeInvocationForNode(
+  sharedState: SharedState,
+  nodeId: string | undefined,
+): SubflowInvocation | undefined {
+  if (!nodeId) return undefined;
+  const invocationId = sharedState.activeSubflowInvocationByNode?.[nodeId];
+  if (!invocationId) return undefined;
+  const invocation = sharedState.subflowInvocations?.[invocationId];
+  if (!invocation || invocation.status === 'folded') {
+    delete sharedState.activeSubflowInvocationByNode?.[nodeId];
+    return undefined;
+  }
+  return invocation;
+}
+
+function prepFromInvocation(
+  sharedState: SharedState,
+  invocation: SubflowInvocation,
+): SubflowNodePrepResult {
+  const sharedInput = invocation.sharedInput;
+  return {
+    nodeId: invocation.parentNodeId,
+    nodeType: 'subflow',
+    subflowId: invocation.lanes[0]?.subflowId,
+    subflowName: invocation.subflowName,
+    nodeName: invocation.nodeName,
+    depth: invocation.depth,
+    chainDepth: invocation.chainDepth,
+    parentRunId: invocation.parentRunId ?? invocation.parentConversationId,
+    plannedExecutionId: invocation.plannedExecutionId,
+    showSteps: invocation.showSteps,
+    persistConversation: true,
+    emit: sharedState.emit,
+    invocationId: invocation.id,
+    ...(sharedInput && 'messages' in sharedInput ? { messages: structuredClone(sharedInput.messages) } : {}),
+    ...(sharedInput && 'prompt' in sharedInput ? { inputText: sharedInput.prompt } : {}),
+    lanes: invocation.lanes.map((lane) => ({
+      subflowId: lane.subflowId,
+      subflowName: lane.subflowName,
+      input: lane.input,
+      itemIndex: lane.itemIndex,
+      itemCount: lane.itemCount,
+      laneTitle: lane.laneTitle,
+      laneId: lane.id,
+      conversationId: lane.conversationId,
+    })),
+    concurrencyLimit: invocation.concurrencyLimit,
+    joinSeparator: invocation.joinSeparator,
+    errorStrategy: invocation.errorStrategy,
+  };
+}
+
+async function attachDurableInvocation(
+  sharedState: SharedState,
+  prepResult: SubflowNodePrepResult,
+): Promise<void> {
+  // A durable join is meaningful only when both parent and children are
+  // persisted. Ephemeral runs retain the existing in-request behavior.
+  if (
+    !sharedState.logicalRunId ||
+    !sharedState.conversationId ||
+    sharedState.ephemeral ||
+    !prepResult.persistConversation ||
+    !prepResult.nodeId ||
+    !prepResult.lanes?.length
+  ) {
+    return;
+  }
+
+  const now = Date.now();
+  const invocationId = crypto.randomUUID();
+  const sharedInput: SubflowRunInput = prepResult.messages
+    ? { messages: prepResult.messages }
+    : { prompt: prepResult.inputText ?? '' };
+  const cloneInput = (input: SubflowRunInput): SubflowRunInput => structuredClone(input);
+  const invocation: SubflowInvocation = {
+    version: 1,
+    id: invocationId,
+    parentConversationId: sharedState.conversationId,
+    parentNodeId: prepResult.nodeId,
+    parentRunId: prepResult.parentRunId,
+    status: 'running',
+    depth: prepResult.depth,
+    chainDepth: prepResult.chainDepth,
+    plannedExecutionId: prepResult.plannedExecutionId,
+    showSteps: prepResult.showSteps,
+    nodeName: prepResult.nodeName,
+    subflowName: prepResult.subflowName,
+    concurrencyLimit: Math.max(1, prepResult.concurrencyLimit ?? 4),
+    joinSeparator: prepResult.joinSeparator ?? '\n\n',
+    errorStrategy: prepResult.errorStrategy ?? 'collect-all',
+    sharedInput: cloneInput(sharedInput),
+    lanes: prepResult.lanes.map((lane, index, lanes) => ({
+      ...lane,
+      id: crypto.randomUUID(),
+      index,
+      count: lanes.length,
+      conversationId: crypto.randomUUID(),
+      ...(lane.input ? { input: cloneInput(lane.input) } : {}),
+      status: 'pending',
+      attempt: 0,
+      updatedAt: now,
+    })),
+    createdAt: now,
+    updatedAt: now,
+  };
+  sharedState.subflowInvocations = sharedState.subflowInvocations ?? {};
+  sharedState.subflowInvocations[invocationId] = invocation;
+  sharedState.activeSubflowInvocationByNode = sharedState.activeSubflowInvocationByNode ?? {};
+  sharedState.activeSubflowInvocationByNode[prepResult.nodeId] = invocationId;
+  prepResult.invocationId = invocationId;
+  prepResult.lanes = invocation.lanes.map((lane) => ({
+    subflowId: lane.subflowId,
+    subflowName: lane.subflowName,
+    input: lane.input,
+    itemIndex: lane.itemIndex,
+    itemCount: lane.itemCount,
+    laneTitle: lane.laneTitle,
+    laneId: lane.id,
+    conversationId: lane.conversationId,
+  }));
+
+  // Persist before the first worker starts. This closes the old recovery gap
+  // where a parent retry generated a brand-new set of child conversation ids.
+  await persistSubflowParent(sharedState);
+}
+
 /**
  * Resolve the dynamic fan-out target flow ids (issue #130) from a run-scoped
  * variable's raw value. The value is split with the SAME `itemSplit` semantics
@@ -354,6 +486,16 @@ function buildChildEmit(
 export class SubflowNode extends BaseNode {
   async prep(sharedState: SharedState, node_params?: SubflowNodeParams): Promise<SubflowNodePrepResult> {
     const subflowId = node_params?.properties?.subflowId;
+    const existingInvocation = activeInvocationForNode(sharedState, node_params?.id);
+    if (existingInvocation) {
+      log.info('Reusing durable Subflow invocation', {
+        invocationId: existingInvocation.id,
+        nodeId: node_params?.id,
+        laneCount: existingInvocation.lanes.length,
+        status: existingInvocation.status,
+      });
+      return prepFromInvocation(sharedState, existingInvocation);
+    }
     // Consume the single-shot, node-id-scoped handoff input ONCE here (issue #96
     // caller prompt + issue #130 Phase 4 caller-chosen fan-out set). Reading it
     // in one place — and clearing it only when it targets THIS node — means both
@@ -706,12 +848,15 @@ export class SubflowNode extends BaseNode {
       prepResult.errorStrategy = 'collect-all';
     }
 
+    await attachDurableInvocation(sharedState, prepResult);
+
     log.info('prep() completed', {
       subflowId,
       depth: prepResult.depth,
       mode: inputMode,
       historyCount: prepResult.messages?.length,
       laneCount: prepResult.lanes?.length,
+      invocationId: prepResult.invocationId,
       showSteps,
     });
     return prepResult;
@@ -829,6 +974,13 @@ export class SubflowNode extends BaseNode {
     const concurrencyLimit = Math.max(1, prepResult.concurrencyLimit ?? 4);
     const joinSeparator = prepResult.joinSeparator ?? '\n\n';
     const errorStrategy = prepResult.errorStrategy ?? 'collect-all';
+    const { FlowExecutor } = await import('../FlowExecutor');
+    const parentState = prepResult.parentRunId
+      ? FlowExecutor.conversationStates.get(prepResult.parentRunId)
+      : undefined;
+    const invocation = prepResult.invocationId && parentState
+      ? parentState.subflowInvocations?.[prepResult.invocationId]
+      : undefined;
 
     log.info('execCore() running queued subflow jobs', {
       laneCount,
@@ -846,7 +998,12 @@ export class SubflowNode extends BaseNode {
       // Pre-generate the lane's conversation id so the live view can deep-link
       // into the lane's sidebar conversation (issue #157). Safe: runFlow treats
       // a fresh caller-supplied id as memory-miss → storage-miss → create-new.
-      const laneConversationId = prepResult.persistConversation ? crypto.randomUUID() : undefined;
+      const durableLane = lane.laneId && invocation
+        ? invocation.lanes.find((candidate) => candidate.id === lane.laneId)
+        : undefined;
+      const laneConversationId = prepResult.persistConversation
+        ? (lane.conversationId ?? durableLane?.conversationId ?? crypto.randomUUID())
+        : undefined;
       // Jobs without a brief fall back to the child-flow name so live-view row
       // labels and sidebar titles agree (and are non-empty).
       const laneTitle = lane.laneTitle ?? lane.subflowName;
@@ -866,6 +1023,38 @@ export class SubflowNode extends BaseNode {
           conversationId: laneConversationId,
         },
       );
+
+      if (durableLane) {
+        const healed = durableLane.status !== 'completed'
+          ? await syncLaneFromPersistedChild(durableLane)
+          : false;
+        if (healed && parentState) {
+          invocation!.updatedAt = Date.now();
+          await persistSubflowParent(parentState);
+        }
+        if (durableLane.status === 'completed') {
+          // Replayed parent runs still receive a concise lane boundary, while
+          // the expensive child and any side effects are not executed again.
+          emit?.({ type: 'run:start', flowId: lane.subflowId });
+          emit?.({ type: 'run:done', status: 'completed' });
+          results[i] = {
+            subflowId: lane.subflowId,
+            success: true,
+            outputText: durableLane.outputText,
+            outputMedia: durableLane.outputMedia,
+            laneId: durableLane.id,
+            conversationId: durableLane.conversationId,
+          };
+          return;
+        }
+        durableLane.status = 'running';
+        durableLane.attempt += 1;
+        durableLane.error = undefined;
+        durableLane.updatedAt = Date.now();
+        invocation!.status = 'running';
+        invocation!.updatedAt = Date.now();
+        if (parentState) await persistSubflowParent(parentState);
+      }
       try {
         // Briefed jobs carry their own input. Unbriefed jobs fall back to the
         // Subflow node's configured shared input.
@@ -891,25 +1080,59 @@ export class SubflowNode extends BaseNode {
             laneCount: lane.itemCount ?? laneCount,
             ...(laneTitle ? { laneTitle } : {}),
             ...(laneConversationId ? { conversationId: laneConversationId } : {}),
+            ...(prepResult.invocationId ? { invocationId: prepResult.invocationId } : {}),
+            ...(lane.laneId ? { laneId: lane.laneId } : {}),
+            ...(prepResult.nodeId ? { parentNodeId: prepResult.nodeId } : {}),
           },
           ...(prepResult.plannedExecutionId ? { plannedExecutionId: prepResult.plannedExecutionId } : {}),
           ...(emit ? { emit } : {}),
         });
+        const cancelled = Boolean(
+          r.sharedState?.isCancelled || r.sharedState?.recovery?.classification === 'cancelled',
+        );
         results[i] =
           r.status === 'error'
-            ? { subflowId: lane.subflowId, success: false, error: r.error?.message || 'Subflow execution failed' }
+            ? {
+                subflowId: lane.subflowId,
+                success: false,
+                error: r.error?.message || 'Subflow execution failed',
+                laneId: lane.laneId,
+                conversationId: laneConversationId,
+              }
             : {
                 subflowId: lane.subflowId,
                 success: true,
                 outputText: r.outputText,
                 outputMedia: r.outputMedia,
+                laneId: lane.laneId,
+                conversationId: laneConversationId,
               };
+        if (durableLane) {
+          durableLane.status = r.status === 'error' ? (cancelled ? 'cancelled' : 'error') : 'completed';
+          durableLane.outputText = r.status === 'error' ? undefined : r.outputText;
+          durableLane.outputMedia = r.status === 'error' ? undefined : r.outputMedia;
+          durableLane.error = r.status === 'error' ? (r.error?.message || 'Subflow execution failed') : undefined;
+          durableLane.updatedAt = Date.now();
+          invocation!.updatedAt = Date.now();
+          if (parentState) await persistSubflowParent(parentState);
+        }
       } catch (err) {
         results[i] = {
           subflowId: lane.subflowId,
           success: false,
           error: err instanceof Error ? err.message : String(err),
+          laneId: lane.laneId,
+          conversationId: laneConversationId,
         };
+        if (durableLane) {
+          durableLane.status = 'error';
+          durableLane.outputText = undefined;
+          durableLane.outputMedia = undefined;
+          durableLane.error = err instanceof Error ? err.message : String(err);
+          durableLane.updatedAt = Date.now();
+          invocation!.updatedAt = Date.now();
+          if (parentState) await persistSubflowParent(parentState);
+        }
         // runFlow THREW (rather than returning status 'error'), so the child
         // never emitted run:done and no subflow:done reached the live view —
         // the lane's row would spin until run end and the partial-failure
@@ -926,7 +1149,6 @@ export class SubflowNode extends BaseNode {
     // ancestor) is cancelled, workers stop pulling NEW lanes. In-flight lanes
     // terminate at their own runFlow cancellation guard (each child walks the
     // same ancestor chain).
-    const { FlowExecutor } = await import('../FlowExecutor');
     const parentChainCancelled = (): boolean =>
       isCancelledByAncestry(prepResult.parentRunId, FlowExecutor.conversationStates);
 
@@ -951,12 +1173,38 @@ export class SubflowNode extends BaseNode {
     const succeeded = ordered.filter((r) => r.success);
     const failedLanes = ordered.filter((r) => !r.success);
     const anyFailed = failedLanes.length > 0;
+    // `collect-all` may fold ordinary lane errors into a partial result, but a
+    // cancellation is different: the user explicitly stopped work and expects
+    // the durable join to remain recoverable. Pending/running lanes also mean an
+    // ancestor cancellation stopped the pool before the batch was complete.
+    const hasCancelledOrIncompleteLane = Boolean(invocation?.lanes.some((lane) =>
+      lane.status === 'cancelled' || lane.status === 'pending' || lane.status === 'running',
+    ));
+
+    if (invocation && parentState) {
+      const blocksJoin =
+        (errorStrategy === 'fail-fast' && anyFailed) ||
+        hasCancelledOrIncompleteLane ||
+        invocation.lanes.every((lane) => lane.status !== 'completed');
+      invocation.status = blocksJoin ? 'blocked' : 'ready';
+      invocation.updatedAt = Date.now();
+      await persistSubflowParent(parentState);
+    }
 
     if (errorStrategy === 'fail-fast' && anyFailed) {
       const firstFailed = ordered.find((r) => !r.success);
       return {
         success: false,
         error: firstFailed?.error || 'A parallel subflow lane failed',
+        subStatus: 'error',
+        lanes: ordered,
+      };
+    }
+
+    if (hasCancelledOrIncompleteLane) {
+      return {
+        success: false,
+        error: 'Subflow execution was cancelled before every queued job completed',
         subStatus: 'error',
         lanes: ordered,
       };
@@ -994,6 +1242,9 @@ export class SubflowNode extends BaseNode {
     sharedState: SharedState,
     node_params?: SubflowNodeParams,
   ): Promise<string> {
+    const invocation = prepResult.invocationId
+      ? sharedState.subflowInvocations?.[prepResult.invocationId]
+      : undefined;
     if (FEATURES.ENABLE_EXECUTION_TRACKER && Array.isArray(sharedState.trackingInfo.nodeExecutionTracker)) {
       sharedState.trackingInfo.nodeExecutionTracker.push({
         nodeType: 'SubflowNode',
@@ -1005,12 +1256,28 @@ export class SubflowNode extends BaseNode {
 
     if (!execResult.success) {
       log.error('Subflow failed', { subflowId: prepResult.subflowId, error: execResult.error });
+      if (invocation) {
+        invocation.status = 'blocked';
+        invocation.updatedAt = Date.now();
+        await persistSubflowParent(sharedState);
+      }
       sharedState.lastResponse = {
         success: false,
         error: execResult.error || 'Subflow execution failed',
         errorDetails: execResult.errorDetails,
       };
       return ERROR_ACTION;
+    }
+
+    if (invocation?.foldedAt) {
+      // A concurrent/stale retry may finish after the winning attempt already
+      // folded this exact invocation. Continue graph control without duplicating
+      // the returned assistant message, captures, resources, or external writes.
+      log.info('Subflow invocation was already folded; skipping duplicate fold', {
+        invocationId: invocation.id,
+      });
+      sharedState.lastResponse = execResult.outputText ?? '';
+      return this.continuationAction(sharedState, node_params);
     }
 
     // Fold the subflow's text + generated media into the parent transcript as an
@@ -1120,6 +1387,22 @@ export class SubflowNode extends BaseNode {
         log.error('captureKv failed; continuing run', error);
       }
     }
+
+    if (invocation) {
+      const now = Date.now();
+      invocation.status = 'folded';
+      invocation.foldedAt = now;
+      invocation.updatedAt = now;
+      if (sharedState.activeSubflowInvocationByNode?.[invocation.parentNodeId] === invocation.id) {
+        delete sharedState.activeSubflowInvocationByNode[invocation.parentNodeId];
+      }
+      await persistSubflowParent(sharedState);
+    }
+
+    return this.continuationAction(sharedState, node_params);
+  }
+
+  private continuationAction(sharedState: SharedState, node_params?: SubflowNodeParams): string {
 
     // An explicit successor always wins. This is the sequence shape from the
     // canvas: Process -> Subflow -> next node, or an explicit bidirectional
