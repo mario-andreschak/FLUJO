@@ -49,6 +49,7 @@ export default function PageHeader({
   return (
     <Box
       component="header"
+      data-page-header
       sx={{
         position: 'relative',
         overflow: 'hidden',
@@ -70,6 +71,7 @@ export default function PageHeader({
       }}
     >
       <Box
+        data-page-header-content
         sx={{
           position: 'relative',
           zIndex: 1,
@@ -85,10 +87,17 @@ export default function PageHeader({
           gap: 2,
         }}
       >
-        <Stack direction="row" spacing={1.5} alignItems="center" sx={{ minWidth: 0 }}>
+        <Stack
+          data-page-header-heading
+          direction="row"
+          spacing={1.5}
+          alignItems="center"
+          sx={{ minWidth: 0 }}
+        >
           {leading}
           {Icon && (
             <Box
+              data-page-header-icon
               aria-hidden="true"
               sx={{
                 display: 'grid',
@@ -107,9 +116,15 @@ export default function PageHeader({
             </Box>
           )}
 
-          <Box sx={{ minWidth: 0 }}>
+          <Box data-page-header-title-block sx={{ minWidth: 0 }}>
             {(eyebrow || badge) && (
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.35 }}>
+              <Stack
+                data-page-header-meta
+                direction="row"
+                spacing={1}
+                alignItems="center"
+                sx={{ mb: 0.35 }}
+              >
           {resolvedEyebrow && (
                   <Typography
                     sx={{
@@ -127,6 +142,7 @@ export default function PageHeader({
               </Stack>
             )}
             <Typography
+              data-page-header-title
               component="h1"
               variant="h5"
               sx={{
@@ -140,6 +156,7 @@ export default function PageHeader({
             </Typography>
           {resolvedDescription && (
               <Typography
+                data-page-header-description
                 variant="body2"
                 color="text.secondary"
                 sx={{
@@ -156,6 +173,7 @@ export default function PageHeader({
 
         {actions && (
           <Box
+            data-page-header-actions
             sx={{
               display: 'flex',
               width: { xs: '100%', md: 'auto' },

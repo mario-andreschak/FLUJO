@@ -129,4 +129,20 @@ describe('Talk agent picker terminology', () => {
     fireEvent.click(openPicker);
     expect(screen.getByRole('dialog', { name: 'Select an agent' })).toHaveAttribute('data-full-screen', 'true');
   });
+
+  it('can keep the compact selector in a desktop-sized dialog', async () => {
+    mockLoadFlows.mockResolvedValue(agents);
+
+    render(
+      <FlowSelector
+        compact
+        fullScreenPicker={false}
+        selectedFlowId="flow-research"
+        onSelectFlow={() => undefined}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Research Agent' }));
+    expect(screen.getByRole('dialog', { name: 'Select an agent' })).toHaveAttribute('data-full-screen', 'false');
+  });
 });

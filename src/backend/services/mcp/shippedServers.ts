@@ -103,6 +103,7 @@ export function shippedServerEnv(
       'FLUJO_BROWSER_MAX_SESSIONS',
       'FLUJO_BROWSER_IDLE_TIMEOUT_MS',
       'FLUJO_BROWSER_MAX_REDIRECTS',
+      'FLUJO_BROWSER_SCREENSHOT_DIR',
       'PLAYWRIGHT_BROWSERS_PATH',
     ]) forwarded.add(key);
   }
@@ -124,12 +125,12 @@ export function createShippedServerConfig(
     name: descriptor.defaultName,
     transport: 'stdio',
     command: 'node',
-    args: [path.join('mcp-servers', descriptor.packageDirectory, 'dist', 'index.js')],
+    args: [path.join(appRoot, 'mcp-servers', descriptor.packageDirectory, 'dist', 'index.js')],
     env: shippedServerEnv(descriptor, env),
     cwd: appRoot,
     disabled: descriptor.disabledByDefault?.(env) ?? false,
     autoApprove: [],
-    rootPath: '',
+    rootPath: path.join(appRoot, 'mcp-servers', descriptor.packageDirectory),
     roots: [],
     _buildCommand: '',
     _installCommand: '',

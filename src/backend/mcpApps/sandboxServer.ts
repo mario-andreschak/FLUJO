@@ -343,27 +343,37 @@ export function buildSandboxCsp(csp?: ResourceCsp): string {
 }
 
 /**
- * Build the HTTP CSP for the trusted relay document itself.
+ * Build the HTTP CSP for the trusted relay document and the upper bound that
+ * its about:srcdoc child inherits.
  *
- * This policy intentionally has no app-controlled inputs. In particular,
- * `_meta.ui.csp.frameDomains` must never widen the proxy document: only the
- * inner View receives those declarations. `frame-src 'self'` permits the
- * mandatory about:srcdoc child, whose origin is inherited for CSP matching,
- * while the iframe's `sandbox` attribute still gives the View an opaque origin.
+ * Browsers enforce the relay response's CSP on the srcdoc View in addition to
+ * the View's own meta policy. The relay therefore has to permit the same
+ * sanitized sources as that inner policy; otherwise a stricter relay directive
+ * (for example `img-src 'none'`) silently blocks a View's allowed data images.
+ * The trusted relay contains no app-controlled DOM or resource references, and
+ * the inner meta policy still enforces the app's exact declaration.
  */
-export function buildSandboxProxyCsp(frameAncestor?: string): string {
+export function buildSandboxProxyCsp(
+  frameAncestor?: string,
+  csp?: ResourceCsp,
+): string {
+  const resourceDomains = sanitizeCspDomains(csp?.resourceDomains, ['https']).join(' ');
+  const connectDomains = sanitizeCspDomains(csp?.connectDomains, ['https', 'wss']).join(' ');
+  const frameDomains = sanitizeCspDomains(csp?.frameDomains, ['https']).join(' ');
+  const baseUriDomains = sanitizeCspDomains(csp?.baseUriDomains, ['https']).join(' ');
+
   return [
     "default-src 'none'",
-    "script-src 'unsafe-inline'",
-    "style-src 'unsafe-inline'",
-    "img-src 'none'",
-    "font-src 'none'",
-    "media-src 'none'",
-    "connect-src 'none'",
+    `script-src 'self' 'unsafe-inline'${resourceDomains ? ` ${resourceDomains}` : ''}`,
+    `style-src 'self' 'unsafe-inline'${resourceDomains ? ` ${resourceDomains}` : ''}`,
+    `img-src 'self' data:${resourceDomains ? ` ${resourceDomains}` : ''}`,
+    `font-src${resourceDomains ? ` ${resourceDomains}` : " 'none'"}`,
+    `media-src 'self' data:${resourceDomains ? ` ${resourceDomains}` : ''}`,
+    `connect-src${connectDomains ? ` ${connectDomains}` : " 'none'"}`,
     "worker-src 'none'",
-    "frame-src 'self'",
+    `frame-src 'self'${frameDomains ? ` ${frameDomains}` : ''}`,
     "object-src 'none'",
-    "base-uri 'none'",
+    `base-uri 'self'${baseUriDomains ? ` ${baseUriDomains}` : ''}`,
     "form-action 'none'",
     `frame-ancestors ${sanitizeFrameAncestor(frameAncestor)}`,
   ].join('; ');
@@ -588,7 +598,10 @@ export function startSandboxServer(): void {
 
     res.statusCode = 200;
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.setHeader('Content-Security-Policy', buildSandboxProxyCsp(getAllowedFrameAncestor(req)));
+    res.setHeader(
+      'Content-Security-Policy',
+      buildSandboxProxyCsp(getAllowedFrameAncestor(req), csp),
+    );
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');

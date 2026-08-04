@@ -2321,6 +2321,39 @@ export class MCPService {
     // a failure here must never block the config update.
     await this.ensureRemoteServerRootDir(updatedConfig);
 
+    if (isRename) {
+      // Flow nodes persist MCP bindings by server name (`properties.boundServer`).
+      // Once the config has been safely re-keyed, cascade the rename through every
+      // saved flow so those references do not become dangling. Keep this import lazy:
+      // the execution/flow layer already depends on MCPService, and a static import
+      // here would introduce a module-initialization cycle.
+      try {
+        const { flowService } = await import("@/backend/services/flow");
+        const migration = await flowService.migrateMcpServerReferences(
+          serverName,
+          updatedConfig.name,
+        );
+        if (!migration.success) {
+          log.warn(
+            `updateServerConfig: Server rename succeeded, but some flow references could not be migrated`,
+            migration,
+          );
+        } else if (migration.migratedReferences > 0) {
+          log.info(
+            `updateServerConfig: Migrated ${migration.migratedReferences} MCP reference(s) across ${migration.migratedFlows} flow(s)`,
+          );
+        }
+      } catch (error) {
+        // The config rename is already durable at this point. Do not report the
+        // entire rename as failed (which would make a retry address the vanished old
+        // name), but retain a high-signal log if flow persistence was unavailable.
+        log.warn(
+          `updateServerConfig: Server rename succeeded, but flow-reference migration failed`,
+          error,
+        );
+      }
+    }
+
     // Handle connection state based on config changes.
     if (isRename) {
       // The server now lives under a new name. Tear down everything still keyed by the

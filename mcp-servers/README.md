@@ -42,9 +42,11 @@ node mcp-servers/browser/dist/index.js
 
 The browser server is seeded disabled by default. Enable it in MCP Manager, or set `FLUJO_BROWSER_ENABLED=1` before first startup to seed it enabled. Its shipped record enables MCP Apps so the browser view is immediately available once the server is enabled; disabling the server still blocks both app resource access and tool calls. The browser package's npm `install` lifecycle runs `patchright install chromium`, so normal FLUJO, standalone package, and graphical-installer installations automatically download the version-matched managed browser. The Docker image also installs the required Linux libraries and uses a shared browser cache readable by its unprivileged runtime user. Installations that deliberately suppress npm lifecycle scripts with `--ignore-scripts` must run `npx patchright install chromium` themselves. Patchright supports current Windows, macOS, and Linux platforms covered by its Chromium distribution; failures to launch are returned as a stable `BROWSER_UNAVAILABLE` MCP error.
 
-Every session uses a new incognito context inside a lazily launched, shared Chromium process. Profiles are never taken from a host browser. Downloads are rejected, service workers are blocked, screenshots stay in MCP payloads, and Patchright's temporary/download root lives under an isolated OS temp directory that is removed at shutdown. Sessions are bounded, expire when idle, close on cancellation, and can be explicitly discarded with `browser_close`.
+Every session uses a new incognito context inside a lazily launched, shared Chromium process. Profiles are never taken from a host browser. Downloads are rejected and service workers are blocked. Each screenshot remains in the MCP payload and is also written to a bounded per-session `viewport.png` or `full-page.png`; the tool result always reports that artifact's absolute host path. Patchright's temporary/download root lives under an isolated OS temp directory that is removed at shutdown. Sessions are bounded, expire when idle, close on cancellation, and can be explicitly discarded with `browser_close`.
 
-Navigation permits only HTTP(S), rejects URL credentials, and blocks localhost/private-network destinations (including DNS resolutions) unless `FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS=1` is explicitly set. Set `FLUJO_BROWSER_ALLOWED_ORIGINS` to a comma-separated exact-origin allowlist for a narrower policy. The MCP App at `ui://browser/view` is self-contained, runs in FLUJO's existing separate-origin sandbox, and calls only the owning browser server's declared tools; browser actions remain server-side.
+`sessionId` is optional on every browser tool. When omitted, the server targets the most recently used live session. `browser_open` creates a new random session only when no live session exists; supplying an explicit id remains the way to select, reuse, or create a particular session.
+
+Navigation permits only HTTP(S), rejects URL credentials, and blocks localhost/private-network destinations (including DNS resolutions) unless `FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS=1` is explicitly set. Set `FLUJO_BROWSER_ALLOWED_ORIGINS` to a comma-separated exact-origin allowlist for a narrower policy. The MCP App at `ui://browser/view` is self-contained, runs in FLUJO's existing separate-origin sandbox, and calls only the owning browser server's declared tools; browser actions remain server-side. Its screenshot viewport supports direct pointer clicks, scrolling, focused typing, keyboard navigation, back/forward/reload, and fullscreen mode, with selector controls retained as a fallback.
 
 Browser controls:
 
@@ -55,8 +57,9 @@ Browser controls:
 - `FLUJO_BROWSER_MAX_SESSIONS`: concurrent isolated contexts, 1–32 (default 4).
 - `FLUJO_BROWSER_IDLE_TIMEOUT_MS`: idle cleanup interval, 10 seconds–24 hours (default 10 minutes).
 - `FLUJO_BROWSER_MAX_REDIRECTS`: per-navigation document redirect cap, 0–50 (default 10).
+- `FLUJO_BROWSER_SCREENSHOT_DIR`: optional screenshot artifact directory; defaults to `<FLUJO_DATA_DIR>/screenshots/browser`.
 
-The exposed contract is deliberately narrow: open, navigate, snapshot, selector click/fill, in-memory PNG screenshot, and close. It exposes no process execution, host filesystem access, cookies, storage dumps, raw profiles, or unrestricted downloads.
+The exposed contract is deliberately narrow: open, navigate/history/reload, snapshot, selector or coordinate click, focused or selector typing, key press, scroll, persisted PNG screenshot, and close. Apart from its own bounded screenshot artifact directory, it exposes no process execution, arbitrary host filesystem access, cookies, storage dumps, raw profiles, or unrestricted downloads.
 
 The Bash server publishes `ui://bash/terminal` as a self-contained MCP App and
 links it from `open_terminal`. The launcher is visible to the model and the app;

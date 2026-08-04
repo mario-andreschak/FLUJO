@@ -7,6 +7,7 @@ import RouteStage from './shared/RouteStage';
 import { createLogger } from '@/utils/logger';
 import { I18nProvider, useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n';
+import useCompactAppChrome from '@/frontend/hooks/useCompactAppChrome';
 
 const log = createLogger('frontend/components/AppWrapper');
 
@@ -170,6 +171,8 @@ export default function AppWrapper({ children }: AppWrapperProps) {
 
 function LocalizedAppShell({ children }: { children: React.ReactNode }) {
   const { t } = useI18n();
+  useCompactAppChrome();
+
   return (
     <div className="app-shell">
       <a className="skip-link" href="#main-content">{t('shell.skipToContent')}</a>

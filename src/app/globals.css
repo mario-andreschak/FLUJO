@@ -23,6 +23,93 @@
   --active-subnav-height: 0px;
 }
 
+/* Scroll-heavy workspaces trade their introductory chrome for working room
+   once the user has moved into the page. The route-aware scroll listener keeps
+   the controls available while reducing the persistent stack to two compact
+   rows (navigation + page title/actions). */
+:root.app-chrome-condensed {
+  --app-bar-height: 56px;
+  --subnav-height: 38px;
+}
+
+[data-app-navigation],
+[data-app-navigation-toolbar],
+[data-page-header-content],
+[data-page-header-icon],
+[data-page-header-title],
+.living-watershed-nav-link {
+  transition:
+    min-height 180ms ease,
+    height 180ms ease,
+    width 180ms ease,
+    padding 180ms ease,
+    gap 180ms ease,
+    font-size 180ms ease,
+    box-shadow 180ms ease;
+}
+
+:root.app-chrome-condensed [data-app-navigation] {
+  box-shadow: 0 8px 24px rgba(47, 52, 96, 0.1);
+}
+
+:root.app-chrome-condensed [data-app-navigation-toolbar] {
+  gap: 8px;
+}
+
+:root.app-chrome-condensed [data-app-brand-mark] {
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  box-shadow: 0 6px 18px rgba(102, 87, 245, 0.24);
+}
+
+:root.app-chrome-condensed [data-app-brand-copy],
+:root.app-chrome-condensed [data-app-private-chip] {
+  display: none;
+}
+
+:root.app-chrome-condensed .living-watershed-nav-link {
+  min-height: 36px;
+  padding-right: 9px;
+  padding-left: 9px;
+}
+
+:root.app-chrome-condensed [data-page-header-content] {
+  gap: 12px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+:root.app-chrome-condensed [data-page-header-icon] {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+}
+
+:root.app-chrome-condensed [data-page-header-meta],
+:root.app-chrome-condensed [data-page-header-description] {
+  display: none;
+}
+
+:root.app-chrome-condensed [data-page-header-title] {
+  font-size: 1.05rem;
+}
+
+:root.app-chrome-condensed [data-page-header-actions] {
+  gap: 6px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-app-navigation],
+  [data-app-navigation-toolbar],
+  [data-page-header-content],
+  [data-page-header-icon],
+  [data-page-header-title],
+  .living-watershed-nav-link {
+    transition: none;
+  }
+}
+
 :root.dark-theme {
   color-scheme: dark;
   --background: #070912;

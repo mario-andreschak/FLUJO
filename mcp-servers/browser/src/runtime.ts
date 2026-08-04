@@ -42,6 +42,7 @@ export type BrowserSession = {
 let browser: Browser | undefined;
 let browserPromise: Promise<Browser> | undefined;
 let runtimeRoot: string | undefined;
+let lastSessionId: string | undefined;
 const sessions = new Map<string, BrowserSession>();
 
 function integerEnv(name: string, fallback: number, min: number, max: number): number {
@@ -138,6 +139,32 @@ async function ensureRuntimeRoot(): Promise<string> {
   return runtimeRoot;
 }
 
+function screenshotRoot(): string {
+  const configured = process.env.FLUJO_BROWSER_SCREENSHOT_DIR?.trim();
+  if (configured) return path.resolve(configured);
+  const dataRoot = process.env.FLUJO_DATA_DIR?.trim() || process.cwd();
+  return path.resolve(dataRoot, 'screenshots', 'browser');
+}
+
+/** Persist the latest screenshot and return the absolute host path reported to MCP clients. */
+export async function writeScreenshotArtifact(
+  sessionId: string,
+  fullPage: boolean,
+  png: Buffer,
+): Promise<string> {
+  if (!SESSION_ID_PATTERN.test(sessionId)) {
+    throw new BrowserMcpError('INVALID_ARGUMENT', 'A valid sessionId is required for screenshot storage.');
+  }
+  const filePath = path.join(
+    screenshotRoot(),
+    sessionId,
+    fullPage ? 'full-page.png' : 'viewport.png',
+  );
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, png);
+  return path.resolve(filePath);
+}
+
 async function acquireBrowser(): Promise<Browser> {
   if (browser?.isConnected()) return browser;
   if (browserPromise) return browserPromise;
@@ -155,6 +182,7 @@ async function acquireBrowser(): Promise<Browser> {
       launched.once('disconnected', () => {
         if (browser === launched) browser = undefined;
         sessions.clear();
+        lastSessionId = undefined;
       });
       return launched;
     } catch {
@@ -177,22 +205,46 @@ function validateSessionId(value: unknown): string {
   return value;
 }
 
+function touchSession(session: BrowserSession): BrowserSession {
+  session.touchedAt = Date.now();
+  lastSessionId = session.id;
+  return session;
+}
+
+function lastLiveSession(): BrowserSession | undefined {
+  const remembered = lastSessionId ? sessions.get(lastSessionId) : undefined;
+  if (remembered && !remembered.page.isClosed()) return remembered;
+
+  let latest: BrowserSession | undefined;
+  for (const session of sessions.values()) {
+    if (session.page.isClosed()) {
+      sessions.delete(session.id);
+      continue;
+    }
+    if (!latest || session.touchedAt >= latest.touchedAt) latest = session;
+  }
+  lastSessionId = latest?.id;
+  return latest;
+}
+
 async function closeSessionInternal(id: string): Promise<boolean> {
   const session = sessions.get(id);
   if (!session) return false;
   sessions.delete(id);
+  if (lastSessionId === id) lastSessionId = undefined;
   await session.context.close().catch(() => undefined);
   return true;
 }
 
 export async function openSession(requestedId: unknown, signal: AbortSignal): Promise<BrowserSession> {
   if (signal.aborted) throw new BrowserMcpError('CANCELLED', 'The browser request was cancelled.');
+  if (requestedId === undefined || requestedId === '') {
+    const latest = lastLiveSession();
+    if (latest) return touchSession(latest);
+  }
   const id = validateSessionId(requestedId);
   const existing = sessions.get(id);
-  if (existing) {
-    existing.touchedAt = Date.now();
-    return existing;
-  }
+  if (existing) return touchSession(existing);
   const maxSessions = integerEnv('FLUJO_BROWSER_MAX_SESSIONS', DEFAULT_MAX_SESSIONS, 1, 32);
   if (sessions.size >= maxSessions) {
     throw new BrowserMcpError('SESSION_LIMIT', `The browser session limit (${maxSessions}) has been reached.`);
@@ -258,9 +310,12 @@ export async function openSession(requestedId: unknown, signal: AbortSignal): Pr
       throw new BrowserMcpError('CANCELLED', 'The browser request was cancelled.');
     }
     session.page.on('download', (download) => void download.cancel().catch(() => undefined));
-    session.page.on('close', () => sessions.delete(id));
+    session.page.on('close', () => {
+      sessions.delete(id);
+      if (lastSessionId === id) lastSessionId = undefined;
+    });
     sessions.set(id, session);
-    return session;
+    return touchSession(session);
   } catch (error) {
     await closeContext();
     if (cancelled || signal.aborted) {
@@ -273,6 +328,11 @@ export async function openSession(requestedId: unknown, signal: AbortSignal): Pr
 }
 
 export function getSession(value: unknown): BrowserSession {
+  if (value === undefined || value === '') {
+    const latest = lastLiveSession();
+    if (!latest) throw new BrowserMcpError('NOT_FOUND', 'No active browser session exists.');
+    return touchSession(latest);
+  }
   if (typeof value !== 'string' || !SESSION_ID_PATTERN.test(value)) {
     throw new BrowserMcpError('INVALID_ARGUMENT', 'A valid sessionId is required.');
   }
@@ -281,11 +341,15 @@ export function getSession(value: unknown): BrowserSession {
     sessions.delete(value);
     throw new BrowserMcpError('NOT_FOUND', 'The browser session does not exist or has expired.');
   }
-  session.touchedAt = Date.now();
-  return session;
+  return touchSession(session);
 }
 
 export async function closeSession(value: unknown): Promise<boolean> {
+  if (value === undefined || value === '') {
+    const latest = lastLiveSession();
+    if (!latest) return false;
+    return closeSessionInternal(latest.id);
+  }
   if (typeof value !== 'string' || !SESSION_ID_PATTERN.test(value)) {
     throw new BrowserMcpError('INVALID_ARGUMENT', 'A valid sessionId is required.');
   }
@@ -351,6 +415,7 @@ export async function shutdownBrowserRuntime(): Promise<void> {
   await Promise.all(ids.map((id) => closeSessionInternal(id)));
   const active = browser;
   browser = undefined;
+  lastSessionId = undefined;
   await active?.close().catch(() => undefined);
   if (runtimeRoot) {
     const root = runtimeRoot;

@@ -33,6 +33,12 @@ export interface ConvertProcessToSubflowResponse extends FlowServiceResponse {
   conflict?: boolean;
 }
 
+export interface MigrateMcpServerReferencesResponse extends FlowServiceResponse {
+  migratedFlows: number;
+  migratedReferences: number;
+  failedFlowIds?: string[];
+}
+
 /** Remove runtime/legacy data before a flow crosses the persistence boundary. */
 function stripNonPersistedProperties(flow: Flow): void {
   // Issue #339: unattended behavior is derived from the invocation source. A
@@ -272,6 +278,75 @@ export class FlowService { // Add export keyword here
         error: error instanceof Error ? error.message : 'Failed to save flow' 
       };
     }
+  }
+
+  /**
+   * Rewrite persisted node bindings after an MCP server is renamed.
+   *
+   * MCP servers are currently identified by name, so every node stores the
+   * server name directly in `properties.boundServer`. A config rename therefore
+   * has to cascade through saved flows or those bindings become dangling. Clone
+   * only affected flows/nodes so a failed save cannot mutate the shared cache
+   * before persistence succeeds.
+   */
+  async migrateMcpServerReferences(
+    oldName: string,
+    newName: string,
+  ): Promise<MigrateMcpServerReferencesResponse> {
+    if (!oldName || !newName || oldName === newName) {
+      return { success: true, migratedFlows: 0, migratedReferences: 0 };
+    }
+
+    const flows = await this.loadFlows();
+    let migratedFlows = 0;
+    let migratedReferences = 0;
+    const failedFlowIds: string[] = [];
+
+    for (const flow of flows) {
+      let referencesInFlow = 0;
+      const nodes = flow.nodes.map((node) => {
+        const properties = node.data?.properties;
+        if (!properties || properties.boundServer !== oldName) return node;
+
+        referencesInFlow += 1;
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            properties: {
+              ...properties,
+              boundServer: newName,
+            },
+          },
+        };
+      });
+
+      if (referencesInFlow === 0) continue;
+
+      const result = await this.saveFlow({ ...flow, nodes });
+      if (result.success) {
+        migratedFlows += 1;
+        migratedReferences += referencesInFlow;
+      } else {
+        failedFlowIds.push(flow.id);
+        log.warn(
+          `Failed to migrate MCP server references in flow ${flow.id}`,
+          result.error,
+        );
+      }
+    }
+
+    if (failedFlowIds.length > 0) {
+      return {
+        success: false,
+        error: `Failed to migrate MCP server references in ${failedFlowIds.length} flow(s)`,
+        migratedFlows,
+        migratedReferences,
+        failedFlowIds,
+      };
+    }
+
+    return { success: true, migratedFlows, migratedReferences };
   }
 
   /**

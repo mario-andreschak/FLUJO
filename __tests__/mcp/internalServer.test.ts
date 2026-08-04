@@ -120,9 +120,12 @@ describe('normal stdio delivery', () => {
       const config = createShippedServerConfig(descriptor);
       expect(config.command).toBe('node');
       expect(config.args).toEqual([
-        path.join('mcp-servers', descriptor.packageDirectory, 'dist', 'index.js'),
+        path.join(config.cwd!, 'mcp-servers', descriptor.packageDirectory, 'dist', 'index.js'),
       ]);
       expect(path.isAbsolute(config.cwd ?? '')).toBe(true);
+      expect(config.rootPath).toBe(path.join(config.cwd!, 'mcp-servers', descriptor.packageDirectory));
+      expect(path.isAbsolute(config.rootPath)).toBe(true);
+      expect(path.isAbsolute(config.args?.[0] ?? '')).toBe(true);
       expect(config.source).toEqual({ type: 'marketplace', id: descriptor.packageId });
       expect(config.icons).toEqual(descriptor.icons);
       expect(config.roots).toEqual([]);
@@ -134,7 +137,7 @@ describe('normal stdio delivery', () => {
     const descriptor = SHIPPED_MCP_SERVERS.find((item) => item.defaultName === 'flujo')!;
     const config = createShippedServerConfig(descriptor);
     const launch = resolveStdioLaunch(config);
-    expect(launch.cwd).toBe(config.cwd);
+    expect(launch.cwd).toBe(config.rootPath);
     expect(launch.args).toEqual(config.args);
   });
 
@@ -154,10 +157,12 @@ describe('normal stdio delivery', () => {
     const filesystem = SHIPPED_MCP_SERVERS.find((item) => item.defaultName === 'filesystem')!;
     const environment = {
       FLUJO_DATA_DIR: '/data',
+      FLUJO_BROWSER_SCREENSHOT_DIR: '/artifacts/browser',
       PLAYWRIGHT_BROWSERS_PATH: '/ms-playwright',
     };
 
     expect(shippedServerEnv(browser, environment)).toMatchObject({
+      FLUJO_BROWSER_SCREENSHOT_DIR: '/artifacts/browser',
       PLAYWRIGHT_BROWSERS_PATH: '/ms-playwright',
     });
     expect(shippedServerEnv(filesystem, environment)).not.toHaveProperty('PLAYWRIGHT_BROWSERS_PATH');

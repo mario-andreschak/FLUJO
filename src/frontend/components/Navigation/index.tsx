@@ -368,6 +368,7 @@ export default function Navigation() {
   return (
     <AppBar position="sticky" color="default" elevation={0} data-app-navigation>
       <Toolbar
+        data-app-navigation-toolbar
         sx={{
           gap: { xs: 1, sm: 1.5 },
           px: { xs: 1.5, sm: 2.5, xl: 3.5 },
@@ -402,6 +403,7 @@ export default function Navigation() {
         >
           <Box
             className="living-watershed-brand-mark"
+            data-app-brand-mark
             aria-hidden="true"
             sx={{
               position: 'relative',
@@ -427,7 +429,10 @@ export default function Navigation() {
           >
             <Box component="span" sx={{ zIndex: 1 }}>F</Box>
           </Box>
-          <Box sx={{ display: { xs: 'none', sm: 'block' }, lineHeight: 1 }}>
+          <Box
+            data-app-brand-copy
+            sx={{ display: { xs: 'none', sm: 'block' }, lineHeight: 1 }}
+          >
             <Typography sx={{ fontSize: '0.98rem', fontWeight: 810, letterSpacing: '-0.045em' }}>
               FLUJO
             </Typography>
@@ -462,6 +467,7 @@ export default function Navigation() {
         <Stack direction="row" spacing={0.7} alignItems="center">
           {!isCompact && (
             <Chip
+              data-app-private-chip
               size="small"
               label={t('nav.privateDevice')}
               icon={
@@ -510,6 +516,7 @@ export default function Navigation() {
 
       {activeNavGroup && (
         <Box
+          data-app-subnav
           sx={{
             display: { xs: 'none', md: 'flex' },
             justifyContent: 'center',

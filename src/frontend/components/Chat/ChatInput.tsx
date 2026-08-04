@@ -111,6 +111,8 @@ const ChatInput: React.FC<ChatInputProps> = ({
   const [recordingTime, setRecordingTime] = useState(0);
   const [recordingInterval, setRecordingInterval] = useState<NodeJS.Timeout | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dragDepthRef = useRef(0);
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   
   // For audio recording
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -316,6 +318,59 @@ const ChatInput: React.FC<ChatInputProps> = ({
     log.debug('File selection triggered');
     fileInputRef.current?.click();
   };
+
+  const isFileDrag = (dataTransfer: DataTransfer) =>
+    dataTransfer.files?.length > 0 || Array.from(dataTransfer.types ?? []).includes('Files');
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    if (!isFileDrag(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (disabled || isEditing) return;
+    dragDepthRef.current += 1;
+    setIsDraggingFiles(true);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    if (!isFileDrag(e.dataTransfer)) return;
+    // Without preventDefault, browsers treat files as navigation targets and
+    // never dispatch a usable drop event to the composer.
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = disabled || isEditing ? 'none' : 'copy';
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    if (!isFileDrag(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (disabled || isEditing) return;
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setIsDraggingFiles(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    if (!isFileDrag(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragDepthRef.current = 0;
+    setIsDraggingFiles(false);
+    if (disabled || isEditing) return;
+
+    const files = Array.from(e.dataTransfer.files ?? []);
+    if (files.length === 0) return;
+    log.debug('Adding dropped attachment(s)', { count: files.length });
+
+    const results = await Promise.allSettled(files.map(fileToAttachment));
+    const nextAttachments = results.flatMap((result, index) => {
+      if (result.status === 'fulfilled') return [result.value];
+      log.error(`Failed to read dropped file: ${files[index]?.name ?? 'unknown'}`, result.reason);
+      return [];
+    });
+    if (nextAttachments.length > 0) {
+      setAttachments(prev => [...prev, ...nextAttachments]);
+    }
+  };
   
   // Process selected file
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -372,7 +427,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
       const reader = new FileReader();
       
       reader.onload = (event) => {
-        if (event.target?.result) {
+        if (typeof event.target?.result === 'string') {
           resolve(event.target.result as string);
         } else {
           reject(new Error('Failed to read file'));
@@ -397,6 +452,33 @@ const ChatInput: React.FC<ChatInputProps> = ({
       reader.onerror = () => reject(new Error('Error reading file'));
       reader.readAsDataURL(file);
     });
+
+  const fileToAttachment = async (file: File): Promise<Attachment> => {
+    const mimeType = file.type || 'application/octet-stream';
+    const isText =
+      mimeType.startsWith('text/') ||
+      /\.(txt|md|json|csv|html?|xml|js|ts|jsx|tsx|css|scss)$/i.test(file.name);
+    const content = isText
+      ? await readFileAsText(file)
+      : await readFileAsDataUrl(file);
+    const type: Attachment['type'] = isText
+      ? 'document'
+      : mimeType.startsWith('image/')
+        ? 'image'
+        : mimeType.startsWith('audio/')
+          ? 'audio'
+          : mimeType.startsWith('video/')
+            ? 'video'
+            : 'document';
+
+    return {
+      id: uuidv4(),
+      type,
+      content,
+      originalName: file.name,
+      mimeType,
+    };
+  };
   
   // Start audio recording
   const startRecording = async () => {
@@ -557,6 +639,11 @@ const ChatInput: React.FC<ChatInputProps> = ({
     <>
       <Paper 
         elevation={0}
+        data-testid="chat-input-dropzone"
+        onDragEnter={handleDragEnter}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
         sx={{ 
           width: '100%',
           maxWidth: 'none',
@@ -570,8 +657,34 @@ const ChatInput: React.FC<ChatInputProps> = ({
           bgcolor: alpha(theme.palette.background.paper, theme.palette.mode === 'dark' ? 0.82 : 0.92),
           boxShadow: `0 22px 70px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.34 : 0.12)}, 0 0 0 1px ${alpha(theme.palette.common.white, 0.03)} inset`,
           backdropFilter: 'blur(24px) saturate(145%)',
+          position: 'relative',
+          transition: theme.transitions.create(['border-color', 'background-color', 'box-shadow']),
+          ...(isDraggingFiles && {
+            borderColor: theme.palette.primary.main,
+            bgcolor: alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.18 : 0.08),
+            boxShadow: `0 0 0 2px ${alpha(theme.palette.primary.main, 0.3)} inset, 0 22px 70px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.34 : 0.12)}`,
+          }),
         }}
       >
+        {isDraggingFiles && (
+          <Box
+            sx={{
+              position: 'absolute',
+              inset: 0,
+              zIndex: 2,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              pointerEvents: 'none',
+              bgcolor: alpha(theme.palette.background.paper, 0.72),
+              color: 'primary.main',
+              fontWeight: 700,
+              letterSpacing: '0.02em',
+            }}
+          >
+            {t('chat.input.dropFiles')}
+          </Box>
+        )}
         {/* Attachments display */}
         {attachments.length > 0 && (
           <Box sx={{ mb: 2, display: 'flex', flexWrap: 'wrap', gap: 1 }}>

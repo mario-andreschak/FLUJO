@@ -22,7 +22,7 @@ import ChatHistory from './ChatHistory';
 import ChatMessages from './ChatMessages';
 import type { CanvasLaunchInfo, PendingElicitation, PendingQuestion } from './ChatMessages';
 import ChatInput from './ChatInput';
-import DevCanvasDock from './DevCanvasDock'; // #216: docked MCP Apps canvas
+import DevCanvasDock, { type CanvasDockLayout } from './DevCanvasDock'; // #216: docked MCP Apps canvas
 import {
   DEFAULT_CANVAS_TAB_CAP,
   emptyCanvasState,
@@ -2736,6 +2736,17 @@ const Chat: React.FC = () => {
   const [canvasStateOwnerId, setCanvasStateOwnerId] = useState<string | null>(
     currentConversationId,
   );
+  const [canvasDockLayout, setCanvasDockLayout] = useState<CanvasDockLayout>({
+    placement: 'bottom',
+    reservedWidth: 0,
+  });
+  const handleCanvasLayoutChange = useCallback((next: CanvasDockLayout) => {
+    setCanvasDockLayout((current) => (
+      current.placement === next.placement && current.reservedWidth === next.reservedWidth
+        ? current
+        : next
+    ));
+  }, []);
   const pendingCanvasEvictionsRef = useRef<Set<string>>(new Set());
   const handleRegisterCanvasTeardown = useCallback((
     conversationId: string,
@@ -2788,6 +2799,7 @@ const Chat: React.FC = () => {
   useEffect(() => {
     setCanvasStateOwnerId(currentConversationId);
     setCanvasState(emptyCanvasState);
+    setCanvasDockLayout({ placement: 'bottom', reservedWidth: 0 });
   }, [currentConversationId]);
 
   // Later results replace an already-open canvas View. New apps remain inline
@@ -3668,15 +3680,29 @@ const Chat: React.FC = () => {
           debugger panel has a user-resizable pixel width (drag the divider). */}
       <Box sx={{ flex: 1, height: '100%', display: 'flex', minWidth: 0, minHeight: 0 }}>
         {/* Chat Area */}
-        <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', height: '100%' }}>
+        <Box sx={{
+          flex: 1,
+          minWidth: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          height: '100%',
+          position: 'relative',
+          boxSizing: 'border-box',
+          pl: canvasDockLayout.placement === 'left' && canvasDockLayout.reservedWidth > 0
+            ? `min(${canvasDockLayout.reservedWidth}px, calc(100% - 320px))`
+            : 0,
+          pr: canvasDockLayout.placement === 'right' && canvasDockLayout.reservedWidth > 0
+            ? `min(${canvasDockLayout.reservedWidth}px, calc(100% - 320px))`
+            : 0,
+        }}>
           {/* Conversation title header + inline rename (issue #134, item 2).
               Shown once a conversation is selected. Click the pencil (or the
               title) to edit; Enter/blur saves, Escape cancels. */}
           {currentConversationId && (
             <Box
               sx={{
-                px: { xs: 1, sm: 2, md: 3 },
-                py: { xs: 0.65, sm: 1.35 },
+                px: { xs: 1, sm: 1.5, md: 2 },
+                py: { xs: 0.5, sm: 0.75 },
                 display: 'flex',
                 alignItems: 'center',
                 gap: 1,
@@ -3711,7 +3737,7 @@ const Chat: React.FC = () => {
               ) : (
                 <>
                   <Typography
-                    variant={isPhoneLayout ? 'subtitle1' : 'h6'}
+                    variant="subtitle1"
                     noWrap
                     onClick={beginEditTitle}
                     title={detailedConversation?.title || currentConversationSummary?.title || ''}
@@ -3746,13 +3772,13 @@ const Chat: React.FC = () => {
           {currentConversationId && (
             <Box
               sx={{
-                px: { xs: 1, sm: 2, md: 3 },
-                py: { xs: 0.65, sm: 1.25 },
+                px: { xs: 1, sm: 1.5, md: 2 },
+                py: { xs: 0.5, sm: 0.75 },
                 borderBottom: 1,
                 borderColor: 'divider',
                 display: 'flex',
                 alignItems: 'center',
-                gap: 2,
+                gap: 1,
                 bgcolor: 'var(--surface-glass)',
                 backdropFilter: 'blur(16px)',
               }}
@@ -3764,14 +3790,15 @@ const Chat: React.FC = () => {
                   // flow dropdown (which would render blank).
                   <Chip color="primary" variant="outlined" icon={<BoltIcon />} label={t('chat.page.quickChat')} />
                 ) : (
-                  <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                     <FlowSelector
                       // Remove duplicate selectedFlowId prop
                       selectedFlowId={currentConversationSummary?.flowId || detailedConversation?.flowId || null} // Use summary first, fallback to detail
                       onSelectFlow={handleFlowSelect}
                       disabled={isDebugPaused} // Disable flow selection when debugging
-                      hideLabel={isPhoneLayout}
-                      compact={isPhoneLayout}
+                      hideLabel
+                      compact
+                      fullScreenPicker={isPhoneLayout}
                     />
                     {/* Keep the FlowBuilder shortcut beside the picker instead
                         of at the far edge of the flexible header row. */}
@@ -3782,10 +3809,11 @@ const Chat: React.FC = () => {
                       return (
                         <Tooltip title={t('chat.page.openAgent')}>
                           <IconButton
+                            size="small"
                             color="primary"
                             onClick={() => router.push(`/flows?flow=${encodeURIComponent(builderFlowId)}`)}
                           >
-                            <AccountTreeIcon />
+                            <AccountTreeIcon fontSize="small" />
                           </IconButton>
                         </Tooltip>
                       );
@@ -4126,6 +4154,7 @@ const Chat: React.FC = () => {
           onAppMessage={handleAppMessage}
           onUpdateModelContext={handleAppModelContext}
           onRegisterTeardown={handleRegisterCanvasTeardown}
+          onLayoutChange={handleCanvasLayoutChange}
         />}
 
         {/* On phones the live run becomes an opaque dock instead of a block in

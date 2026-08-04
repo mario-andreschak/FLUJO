@@ -217,6 +217,33 @@ async function runOrdinaryStdioMigration(): Promise<void> {
   await saveItem(StorageKey.MCP_SHIPPED_SERVERS_MIGRATION_V4, true);
 }
 
+/** Backfill the package directory for shipped records created with a blank server root. */
+async function runShippedServerRootsMigration(): Promise<void> {
+  const completed = await loadItem<boolean>(StorageKey.MCP_SHIPPED_SERVER_ROOTS_MIGRATION_V5, false);
+  if (completed === true) return;
+
+  const loaded = await loadItem<StoredServers>(StorageKey.MCP_SERVERS, {});
+  const nextServers = { ...(loaded && typeof loaded === 'object' ? loaded : {}) };
+  let changed = false;
+
+  for (const [recordName, stored] of Object.entries(nextServers)) {
+    const descriptor = SHIPPED_MCP_SERVERS.find((candidate) =>
+      isLegacyShippedRecord(stored, candidate)
+    );
+    if (!descriptor || (typeof stored.rootPath === 'string' && stored.rootPath.trim())) continue;
+    const expected = createShippedServerConfig(descriptor);
+    nextServers[recordName] = {
+      ...stored,
+      args: expected.args,
+      rootPath: expected.rootPath,
+    };
+    changed = true;
+  }
+
+  if (changed) await saveItem(StorageKey.MCP_SERVERS, nextServers);
+  await saveItem(StorageKey.MCP_SHIPPED_SERVER_ROOTS_MIGRATION_V5, true);
+}
+
 /** Provision and upgrade shipped packages without synthetic runtime injection. */
 export function migrateShippedMcpServers(): Promise<void> {
   if (migrationInFlight) return migrationInFlight;
@@ -225,6 +252,7 @@ export function migrateShippedMcpServers(): Promise<void> {
       await runLegacySeedMigration();
       await runBrowserSeedMigration();
       await runOrdinaryStdioMigration();
+      await runShippedServerRootsMigration();
     } finally {
       migrationInFlight = undefined;
     }

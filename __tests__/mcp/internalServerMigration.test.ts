@@ -3,6 +3,7 @@ jest.mock('@/utils/storage/backend', () => ({
   saveItem: jest.fn(),
 }));
 
+import path from 'node:path';
 import { migrateShippedMcpServers } from '@/backend/services/mcp/shippedServerMigration';
 import { SHIPPED_MCP_SERVERS } from '@/backend/services/mcp/shippedServers';
 import { StorageKey } from '@/shared/types/storage';
@@ -44,10 +45,12 @@ describe('shipped MCP package migration (#347)', () => {
         command: 'node',
         disabled: descriptor.defaultName === 'browser',
         exposeAsMcpServer: true,
-        enableMcpApps: false,
+        enableMcpApps: descriptor.enableMcpApps ?? false,
         roots: [],
         source: { type: 'marketplace', id: descriptor.packageId },
       });
+      expect(typeof servers[descriptor.defaultName].rootPath).toBe('string');
+      expect(path.isAbsolute(servers[descriptor.defaultName].rootPath as string)).toBe(true);
       expect(servers[descriptor.defaultName]).not.toHaveProperty('name');
       expect(servers[descriptor.defaultName]).not.toHaveProperty('builtIn');
       expect(servers[descriptor.defaultName]).not.toHaveProperty('internalPackage');
@@ -57,6 +60,7 @@ describe('shipped MCP package migration (#347)', () => {
     expect(storage.get(StorageKey.MCP_INTERNAL_SERVERS_MIGRATION_V1)).toBe(true);
     expect(storage.get(StorageKey.MCP_INTERNAL_BROWSER_MIGRATION_V3)).toBe(true);
     expect(storage.get(StorageKey.MCP_SHIPPED_SERVERS_MIGRATION_V4)).toBe(true);
+    expect(storage.get(StorageKey.MCP_SHIPPED_SERVER_ROOTS_MIGRATION_V5)).toBe(true);
   });
 
   it('preserves a user-owned same-name config and transfers all legacy override fields only to new records', async () => {
@@ -141,6 +145,40 @@ describe('shipped MCP package migration (#347)', () => {
       command: 'node',
       disabled: true,
       source: { type: 'marketplace', id: '@mario.andreschak/mcp-browser' },
+    });
+    expect(path.isAbsolute(servers.browser.rootPath as string)).toBe(true);
+  });
+
+  it('backfills blank shipped roots and absolute entrypoints without replacing custom roots', async () => {
+    storage.set(StorageKey.MCP_SERVERS, {
+      browser: {
+        transport: 'stdio',
+        command: 'node',
+        args: ['mcp-servers/browser/dist/index.js'],
+        rootPath: '',
+        source: { type: 'marketplace', id: '@mario.andreschak/mcp-browser' },
+      },
+      shell: {
+        transport: 'stdio',
+        command: 'node',
+        args: ['custom-entry.js'],
+        rootPath: 'C:/custom/shell-root',
+        source: { type: 'marketplace', id: '@mario.andreschak/mcp-bash' },
+      },
+    });
+    storage.set(StorageKey.MCP_INTERNAL_SERVERS_MIGRATION_V1, true);
+    storage.set(StorageKey.MCP_INTERNAL_BROWSER_MIGRATION_V3, true);
+    storage.set(StorageKey.MCP_SHIPPED_SERVERS_MIGRATION_V4, true);
+
+    await migrateShippedMcpServers();
+
+    const servers = storage.get(StorageKey.MCP_SERVERS) as Record<string, Record<string, unknown>>;
+    expect(path.isAbsolute(servers.browser.rootPath as string)).toBe(true);
+    expect(path.basename(servers.browser.rootPath as string)).toBe('browser');
+    expect(path.isAbsolute((servers.browser.args as string[])[0])).toBe(true);
+    expect(servers.shell).toMatchObject({
+      args: ['custom-entry.js'],
+      rootPath: 'C:/custom/shell-root',
     });
   });
 

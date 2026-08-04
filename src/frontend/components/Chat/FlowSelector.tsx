@@ -25,6 +25,8 @@ interface FlowSelectorProps {
   hideLabel?: boolean;
   /** Single-row phone treatment; the picker itself becomes full-screen. */
   compact?: boolean;
+  /** Override whether the picker dialog fills the viewport. */
+  fullScreenPicker?: boolean;
 }
 
 const FlowSelector: React.FC<FlowSelectorProps> = ({
@@ -33,6 +35,7 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
   disabled = false, // Default to false
   hideLabel = false,
   compact = false,
+  fullScreenPicker,
 }) => {
   const { t } = useI18n();
   const [flows, setFlows] = useState<Flow[]>([]);
@@ -165,7 +168,7 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
           <CardPickerDialog
             open={pickerOpen}
             onClose={() => setPickerOpen(false)}
-            fullScreen={compact}
+            fullScreen={fullScreenPicker ?? compact}
             title={t('chat.selector.title')}
             description={t('chat.selector.dialogHelp')}
             skeleton={<FlowCardSkeleton />}

@@ -41,6 +41,14 @@ import {
 } from '@/shared/utils/mcpApps';
 import { createLogger } from '@/utils/logger';
 import packageMetadata from '../../../../package.json';
+import {
+  constrainFloatingRect,
+  FloatingResizeHandles,
+  PointerDragShield,
+  resizeFloatingRect,
+  usePointerDrag,
+  type ResizeDirection,
+} from './floatingPanel';
 
 const log = createLogger('frontend/components/Chat/McpAppFrame');
 
@@ -771,6 +779,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   const [displayMode, setDisplayMode] = useState<McpUiDisplayMode>(docked ? 'pip' : 'inline');
   const [floatingRect, setFloatingRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [appDisplayModes, setAppDisplayModes] = useState<McpUiDisplayMode[]>([]);
+  const { activeCursor, startPointerDrag } = usePointerDrag();
   const effectiveDisplayMode = hostDisplayMode ?? displayMode;
   const hostDisplayModes = useMemo<McpUiDisplayMode[]>(
     () => docked
@@ -822,6 +831,24 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
     });
   }, [docked, effectiveDisplayMode]);
 
+  useEffect(() => {
+    if (docked || effectiveDisplayMode !== 'fullscreen' || typeof window === 'undefined') return undefined;
+    const constrainToViewport = () => {
+      const minimum = {
+        width: Math.min(480, window.innerWidth),
+        height: Math.min(320, window.innerHeight),
+      };
+      setFloatingRect((current) => current ? constrainFloatingRect(
+        current,
+        { width: window.innerWidth, height: window.innerHeight },
+        minimum,
+      ) : current);
+    };
+    constrainToViewport();
+    window.addEventListener('resize', constrainToViewport);
+    return () => window.removeEventListener('resize', constrainToViewport);
+  }, [docked, effectiveDisplayMode]);
+
   const startFullscreenDrag = useCallback((event: React.PointerEvent) => {
     if (effectiveDisplayMode !== 'fullscreen' || !frameRootRef.current) return;
     if ((event.target as HTMLElement).closest('button,[role="button"]')) return;
@@ -829,9 +856,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
     const rect = frameRootRef.current.getBoundingClientRect();
     const startX = event.clientX;
     const startY = event.clientY;
-    const previousUserSelect = document.body.style.userSelect;
-    document.body.style.userSelect = 'none';
-    const onMove = (move: PointerEvent) => {
+    startPointerDrag(event, 'move', (move) => {
       const maxX = Math.max(0, window.innerWidth - 120);
       const maxY = Math.max(0, window.innerHeight - 56);
       setFloatingRect({
@@ -840,15 +865,38 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
         width: rect.width,
         height: rect.height,
       });
+    });
+  }, [effectiveDisplayMode, startPointerDrag]);
+
+  const startFullscreenResize = useCallback((
+    event: React.PointerEvent<HTMLElement>,
+    direction: ResizeDirection,
+    cursor: React.CSSProperties['cursor'],
+  ) => {
+    if (effectiveDisplayMode !== 'fullscreen' || !frameRootRef.current) return;
+    const bounds = frameRootRef.current.getBoundingClientRect();
+    const start = {
+      x: bounds.left,
+      y: bounds.top,
+      width: bounds.width,
+      height: bounds.height,
     };
-    const onUp = () => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      document.body.style.userSelect = previousUserSelect;
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-  }, [effectiveDisplayMode]);
+    const startX = event.clientX;
+    const startY = event.clientY;
+    startPointerDrag(event, cursor, (move) => {
+      setFloatingRect(resizeFloatingRect(
+        start,
+        direction,
+        move.clientX - startX,
+        move.clientY - startY,
+        { width: window.innerWidth, height: window.innerHeight },
+        {
+          width: Math.min(480, window.innerWidth),
+          height: Math.min(320, window.innerHeight),
+        },
+      ));
+    });
+  }, [effectiveDisplayMode, startPointerDrag]);
   latestToolDeliveryRef.current = {
     args: toolArgs,
     resultContent: toolResultContent,
@@ -1537,6 +1585,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
     && Boolean(onRequestDock);
 
   return (
+    <>
     <Box
       ref={frameRootRef}
       sx={{
@@ -1552,20 +1601,25 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
               top: floatingRect?.y ?? 16,
               width: floatingRect?.width ?? 'calc(100vw - 32px)',
               height: floatingRect?.height ?? 'calc(100vh - 32px)',
-              minWidth: 480,
-              minHeight: 320,
+              minWidth: 'min(480px, 100vw)',
+              minHeight: 'min(320px, 100vh)',
               maxWidth: '100vw',
               maxHeight: '100vh',
               zIndex: 1300,
               bgcolor: 'background.paper',
               boxShadow: 6,
-              resize: 'both',
               display: 'flex',
               flexDirection: 'column',
             }
           : {}),
       }}
     >
+      {displayMode === 'fullscreen' && (
+        <FloatingResizeHandles
+          label={t('chat.canvas.resize')}
+          onResizeStart={startFullscreenResize}
+        />
+      )}
       <Box
         onPointerDown={startFullscreenDrag}
         sx={{
@@ -1657,6 +1711,8 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
         </Box>
       </Collapse>
     </Box>
+    <PointerDragShield cursor={activeCursor} />
+    </>
   );
 };
 

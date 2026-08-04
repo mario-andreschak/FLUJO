@@ -177,6 +177,7 @@ export const chatMessageRows = {
   'chat.input.message': ['Message', 'Mensaje', 'Nachricht', 'Message', 'Messaggio', 'Mensagem', '消息'],
   'chat.input.editPlaceholder': ['Edit message…', 'Editar mensaje…', 'Nachricht bearbeiten…', 'Modifier le message…', 'Modifica messaggio…', 'Editar mensagem…', '编辑消息…'],
   'chat.input.attach': ['Attach document', 'Adjuntar documento', 'Dokument anhängen', 'Joindre un document', 'Allega documento', 'Anexar documento', '附加文档'],
+  'chat.input.dropFiles': ['Drop files to attach', 'Suelta los archivos para adjuntarlos', 'Dateien zum Anhängen ablegen', 'Déposez les fichiers à joindre', 'Rilascia i file da allegare', 'Solte os arquivos para anexar', '拖放文件以添加附件'],
   'chat.input.stopRecording': ['Stop recording', 'Detener grabación', 'Aufnahme stoppen', 'Arrêter l’enregistrement', 'Interrompi registrazione', 'Parar gravação', '停止录音'],
   'chat.input.recordAudio': ['Record audio', 'Grabar audio', 'Audio aufnehmen', 'Enregistrer un audio', 'Registra audio', 'Gravar áudio', '录制音频'],
   'chat.input.saveEdit': ['Save edit', 'Guardar edición', 'Änderung speichern', 'Enregistrer la modification', 'Salva modifica', 'Salvar edição', '保存编辑'],

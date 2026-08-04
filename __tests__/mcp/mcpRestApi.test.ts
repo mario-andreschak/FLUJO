@@ -26,6 +26,15 @@
  */
 import type { MCPServerConfig, MCPStdioConfig } from '@/shared/types/mcp';
 
+const migrateMcpServerReferences = jest.fn(async () => ({
+  success: true,
+  migratedFlows: 0,
+  migratedReferences: 0,
+}));
+jest.mock('@/backend/services/flow', () => ({
+  flowService: { migrateMcpServerReferences },
+}));
+
 // In-memory storage so the backend service never touches disk.
 const store: Record<string, unknown> = {};
 jest.mock('@/utils/storage/backend', () => ({
@@ -68,6 +77,7 @@ const serverFixture = (over: Partial<MCPStdioConfig> = {}): MCPServerConfig => (
 
 beforeEach(() => {
   for (const k of Object.keys(store)) delete store[k];
+  migrateMcpServerReferences.mockClear();
 });
 
 describe('MCP REST API', () => {
@@ -238,6 +248,7 @@ describe('MCP REST API', () => {
     const renamed = await getServer(req(), ctx('new'));
     expect(renamed.status).toBe(200);
     await expect(renamed.json()).resolves.toMatchObject({ name: 'new', command: 'echo' });
+    expect(migrateMcpServerReferences).toHaveBeenCalledWith('old', 'new');
   });
 
   it('PUT rejects a rename onto an existing name (409) and keeps both servers intact', async () => {

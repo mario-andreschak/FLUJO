@@ -40,6 +40,8 @@ export enum StorageKey {
   // Converts previously provisioned package records to normal stdio launch fields
   // and removes the legacy internal-package metadata (issue #347).
   MCP_SHIPPED_SERVERS_MIGRATION_V4 = 'mcp_shipped_servers_migration_v4',
+  // Backfills the absolute package root omitted from earlier shipped-server records.
+  MCP_SHIPPED_SERVER_ROOTS_MIGRATION_V5 = 'mcp_shipped_server_roots_migration_v5',
   // Package installs ledger (issue #198): last install summary + the ids of the
   // entities each installed package created, so re-installs are idempotent and
   // the status endpoint can report the last outcome. Never stores secret values.
@@ -86,6 +88,7 @@ export const StorageKeys = {
   MCP_INTERNAL_CAPABILITIES_MIGRATION_V2: StorageKey.MCP_INTERNAL_CAPABILITIES_MIGRATION_V2,
   MCP_INTERNAL_BROWSER_MIGRATION_V3: StorageKey.MCP_INTERNAL_BROWSER_MIGRATION_V3,
   MCP_SHIPPED_SERVERS_MIGRATION_V4: StorageKey.MCP_SHIPPED_SERVERS_MIGRATION_V4,
+  MCP_SHIPPED_SERVER_ROOTS_MIGRATION_V5: StorageKey.MCP_SHIPPED_SERVER_ROOTS_MIGRATION_V5,
   PACKAGE_INSTALLS: StorageKey.PACKAGE_INSTALLS,
   EXPERIMENTAL_SETTINGS: StorageKey.EXPERIMENTAL_SETTINGS,
   REGISTRY_ACCOUNT: StorageKey.REGISTRY_ACCOUNT,

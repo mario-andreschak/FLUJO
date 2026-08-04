@@ -17,7 +17,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Typography, Tooltip, IconButton, Badge, useTheme } from '@mui/material';
+import { Box, Typography, Tooltip, IconButton, Badge, useMediaQuery, useTheme } from '@mui/material';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import WidgetsIcon from '@mui/icons-material/Widgets';
 import CloseIcon from '@mui/icons-material/Close';
@@ -35,6 +35,15 @@ import type {
 } from '@modelcontextprotocol/ext-apps/app-bridge';
 import McpAppFrame from './McpAppFrame';
 import type { CanvasAppEntry } from './canvasState';
+import {
+  constrainFloatingRect,
+  FloatingResizeHandles,
+  PointerDragShield,
+  resizeFloatingRect,
+  usePointerDrag,
+  type FloatingRect,
+  type ResizeDirection,
+} from './floatingPanel';
 
 interface DevCanvasDockProps {
   /** Conversation that owns every frame in this dock. */
@@ -60,10 +69,15 @@ interface DevCanvasDockProps {
     appKey: string,
     teardown: (() => Promise<void>) | null,
   ) => void;
+  /** Reports space that a side-docked canvas must reserve in the chat layout. */
+  onLayoutChange?: (layout: CanvasDockLayout) => void;
 }
 
-type DockPlacement = 'bottom' | 'left' | 'right';
-type FloatingRect = { x: number; y: number; width: number; height: number };
+export type DockPlacement = 'bottom' | 'left' | 'right';
+export interface CanvasDockLayout {
+  placement: DockPlacement;
+  reservedWidth: number;
+}
 
 const clamp = (value: number, min: number, max: number): number => (
   Math.min(Math.max(value, min), Math.max(min, max))
@@ -95,9 +109,11 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
   onAppMessage,
   onUpdateModelContext,
   onRegisterTeardown,
+  onLayoutChange,
 }) => {
   const { t } = useI18n();
   const theme = useTheme();
+  const compactDock = useMediaQuery(theme.breakpoints.down('md'));
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
@@ -118,6 +134,7 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
   });
   const [floatingRect, setFloatingRect] = useState<FloatingRect | null>(null);
   const [appModesByKey, setAppModesByKey] = useState<Record<string, McpUiDisplayMode[]>>({});
+  const { activeCursor, startPointerDrag } = usePointerDrag();
   // #216 owner decision #3: general N-up split grid. Keys currently pinned into
   // the split. Empty → only the active tab is shown.
   const [splitKeys, setSplitKeys] = useState<string[]>([]);
@@ -164,6 +181,32 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
     if (typeof window === 'undefined') return;
     window.localStorage.setItem('flujo-mcp-canvas-width', String(Math.round(dockWidth)));
   }, [dockWidth]);
+  useEffect(() => {
+    onLayoutChange?.({
+      placement,
+      reservedWidth: entries.length > 0 && !fullscreen && !collapsed && !compactDock && placement !== 'bottom'
+        ? dockWidth
+        : 0,
+    });
+  }, [collapsed, compactDock, dockWidth, entries.length, fullscreen, onLayoutChange, placement]);
+
+  useEffect(() => {
+    if (!fullscreen || typeof window === 'undefined') return undefined;
+    const constrainToViewport = () => {
+      const minimum = {
+        width: Math.min(480, window.innerWidth),
+        height: Math.min(320, window.innerHeight),
+      };
+      setFloatingRect((current) => current ? constrainFloatingRect(
+        current,
+        { width: window.innerWidth, height: window.innerHeight },
+        minimum,
+      ) : current);
+    };
+    constrainToViewport();
+    window.addEventListener('resize', constrainToViewport);
+    return () => window.removeEventListener('resize', constrainToViewport);
+  }, [fullscreen]);
 
   const enterFullscreen = useCallback(() => {
     if (typeof window !== 'undefined') {
@@ -187,29 +230,22 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
 
   const startDockResize = useCallback((event: React.PointerEvent) => {
     if (fullscreen || !rootRef.current) return;
-    event.preventDefault();
     const startX = event.clientX;
     const startY = event.clientY;
     const startRect = rootRef.current.getBoundingClientRect();
-    const previousUserSelect = document.body.style.userSelect;
-    document.body.style.userSelect = 'none';
-    const onMove = (move: PointerEvent) => {
+    const parentRect = rootRef.current.parentElement?.getBoundingClientRect();
+    const maxHeight = Math.max(240, (parentRect?.height ?? window.innerHeight) * 0.82);
+    const maxWidth = Math.max(320, (parentRect?.width ?? window.innerWidth) - 320);
+    startPointerDrag(event, placement === 'bottom' ? 'ns-resize' : 'ew-resize', (move) => {
       if (placement === 'bottom') {
-        setDockHeight(clamp(startRect.height + startY - move.clientY, 240, window.innerHeight * 0.82));
+        setDockHeight(clamp(startRect.height + startY - move.clientY, 240, maxHeight));
       } else if (placement === 'left') {
-        setDockWidth(clamp(startRect.width + move.clientX - startX, 320, window.innerWidth * 0.82));
+        setDockWidth(clamp(startRect.width + move.clientX - startX, 320, maxWidth));
       } else {
-        setDockWidth(clamp(startRect.width + startX - move.clientX, 320, window.innerWidth * 0.82));
+        setDockWidth(clamp(startRect.width + startX - move.clientX, 320, maxWidth));
       }
-    };
-    const onUp = () => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      document.body.style.userSelect = previousUserSelect;
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-  }, [fullscreen, placement]);
+    });
+  }, [fullscreen, placement, startPointerDrag]);
 
   const startFullscreenDrag = useCallback((event: React.PointerEvent) => {
     if (!fullscreen || !rootRef.current) return;
@@ -218,24 +254,45 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
     const rect = rootRef.current.getBoundingClientRect();
     const startX = event.clientX;
     const startY = event.clientY;
-    const previousUserSelect = document.body.style.userSelect;
-    document.body.style.userSelect = 'none';
-    const onMove = (move: PointerEvent) => {
+    startPointerDrag(event, 'move', (move) => {
       setFloatingRect({
         x: clamp(rect.left + move.clientX - startX, 0, window.innerWidth - 120),
         y: clamp(rect.top + move.clientY - startY, 0, window.innerHeight - 56),
         width: rect.width,
         height: rect.height,
       });
+    });
+  }, [fullscreen, startPointerDrag]);
+
+  const startFullscreenResize = useCallback((
+    event: React.PointerEvent<HTMLElement>,
+    direction: ResizeDirection,
+    cursor: React.CSSProperties['cursor'],
+  ) => {
+    if (!fullscreen || !rootRef.current) return;
+    const bounds = rootRef.current.getBoundingClientRect();
+    const start = {
+      x: bounds.left,
+      y: bounds.top,
+      width: bounds.width,
+      height: bounds.height,
     };
-    const onUp = () => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      document.body.style.userSelect = previousUserSelect;
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-  }, [fullscreen]);
+    const startX = event.clientX;
+    const startY = event.clientY;
+    startPointerDrag(event, cursor, (move) => {
+      setFloatingRect(resizeFloatingRect(
+        start,
+        direction,
+        move.clientX - startX,
+        move.clientY - startY,
+        { width: window.innerWidth, height: window.innerHeight },
+        {
+          width: Math.min(480, window.innerWidth),
+          height: Math.min(320, window.innerHeight),
+        },
+      ));
+    });
+  }, [fullscreen, startPointerDrag]);
 
   if (entries.length === 0) return null;
 
@@ -280,7 +337,10 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
     return current;
   };
 
+  const effectivePlacement = collapsed || compactDock ? 'bottom' : placement;
+
   return (
+    <>
     <Box
       ref={rootRef}
       data-testid="dev-canvas-dock"
@@ -299,16 +359,15 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
               top: floatingRect?.y ?? 16,
               width: floatingRect?.width ?? 'calc(100vw - 32px)',
               height: floatingRect?.height ?? 'calc(100vh - 32px)',
-              minWidth: 480,
-              minHeight: 320,
+              minWidth: 'min(480px, 100vw)',
+              minHeight: 'min(320px, 100vh)',
               maxWidth: '100vw',
               maxHeight: '100vh',
               zIndex: 1300,
               borderRadius: 1,
               boxShadow: 6,
-              resize: 'both',
             }
-          : placement === 'bottom'
+          : effectivePlacement === 'bottom'
             ? {
                 position: 'relative',
                 width: '100%',
@@ -319,16 +378,16 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
                 borderRight: 0,
               }
             : {
-                position: 'fixed',
-                top: 72,
-                bottom: 16,
-                [placement]: 16,
-                width: dockWidth,
-                maxWidth: '82vw',
-                height: collapsed ? 'auto' : 'calc(100vh - 88px)',
-                zIndex: 1200,
-                borderRadius: 1,
-                boxShadow: 6,
+                position: 'absolute',
+                top: 0,
+                bottom: 0,
+                [effectivePlacement]: 0,
+                width: `min(${dockWidth}px, calc(100% - 320px))`,
+                height: 'auto',
+                zIndex: 5,
+                borderRadius: 0,
+                boxShadow: 'none',
+                ...(effectivePlacement === 'left' ? { borderLeft: 0 } : { borderRight: 0 }),
               }),
       }}
     >
@@ -336,20 +395,26 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
         <Box
           role="separator"
           tabIndex={0}
-          aria-orientation={placement === 'bottom' ? 'horizontal' : 'vertical'}
+          aria-orientation={effectivePlacement === 'bottom' ? 'horizontal' : 'vertical'}
           aria-label={t('chat.canvas.resize')}
           onPointerDown={startDockResize}
           sx={{
             position: 'absolute',
             zIndex: 4,
-            ...(placement === 'bottom'
+            ...(effectivePlacement === 'bottom'
               ? { top: 0, left: 0, right: 0, height: 7, cursor: 'row-resize' }
-              : placement === 'left'
+              : effectivePlacement === 'left'
                 ? { right: 0, top: 0, bottom: 0, width: 7, cursor: 'col-resize' }
                 : { left: 0, top: 0, bottom: 0, width: 7, cursor: 'col-resize' }),
             '&:hover, &:focus-visible': { bgcolor: 'primary.main' },
             touchAction: 'none',
           }}
+        />
+      )}
+      {fullscreen && (
+        <FloatingResizeHandles
+          label={t('chat.canvas.resize')}
+          onResizeStart={startFullscreenResize}
         />
       )}
       {/* Tab strip + dock controls */}
@@ -426,7 +491,7 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
           })}
         </Box>
 
-        {!fullscreen && (
+        {!fullscreen && !collapsed && !compactDock && (
           <Box sx={{ display: 'flex', alignItems: 'center' }}>
             <Tooltip title={t('chat.canvas.dockLeft')}>
               <IconButton
@@ -479,18 +544,17 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
             </IconButton>
           </span>
         </Tooltip>
-        <Tooltip title={collapsed ? t('chat.canvas.expand') : t('chat.canvas.collapse')}>
-          <IconButton
-            size="small"
-            onClick={() => {
-              if (!collapsed && fullscreen) setFullscreen(false);
-              setCollapsed((value) => !value);
-            }}
-            aria-label={t('chat.canvas.toggleCollapse')}
-          >
-            {collapsed ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
-          </IconButton>
-        </Tooltip>
+        {!fullscreen && (
+          <Tooltip title={collapsed ? t('chat.canvas.expand') : t('chat.canvas.collapse')}>
+            <IconButton
+              size="small"
+              onClick={() => setCollapsed((value) => !value)}
+              aria-label={t('chat.canvas.toggleCollapse')}
+            >
+              {collapsed ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+            </IconButton>
+          </Tooltip>
+        )}
       </Box>
 
       {/* Body: persistent hosts. Collapse hides the body via CSS but keeps every
@@ -571,6 +635,8 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
         })}
       </Box>
     </Box>
+    <PointerDragShield cursor={activeCursor} />
+    </>
   );
 };
 

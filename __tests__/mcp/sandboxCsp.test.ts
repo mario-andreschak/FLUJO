@@ -109,31 +109,52 @@ describe('buildSandboxCsp', () => {
 });
 
 describe('buildSandboxProxyCsp', () => {
-  it('permits only the mandatory srcdoc child and pins the exact host ancestor', () => {
+  it('permits inline View media, the mandatory srcdoc child, and the exact host ancestor', () => {
     const csp = buildSandboxProxyCsp('http://127.0.0.1:4200');
     expect(csp).toContain("default-src 'none'");
-    expect(csp).toContain("script-src 'unsafe-inline'");
-    expect(csp).toContain("style-src 'unsafe-inline'");
+    expect(csp).toContain("script-src 'self' 'unsafe-inline'");
+    expect(csp).toContain("style-src 'self' 'unsafe-inline'");
+    expect(csp).toContain("img-src 'self' data:");
+    expect(csp).toContain("media-src 'self' data:");
     expect(csp).toContain("connect-src 'none'");
     expect(csp).toContain("frame-src 'self'");
-    expect(csp).toContain("base-uri 'none'");
+    expect(csp).toContain("base-uri 'self'");
     expect(csp).toContain('frame-ancestors http://127.0.0.1:4200');
+    expect(csp).not.toContain('blob:');
   });
 
-  it('does not inherit any app-requested network or nested-frame domains', () => {
-    const innerCsp = buildSandboxCsp({
+  it('uses sanitized app declarations as the inherited View policy upper bound', () => {
+    const requestedCsp = {
       connectDomains: ['https://api.example.com'],
       resourceDomains: ['https://cdn.example.com'],
       frameDomains: ['https://embed.example.com'],
-    });
-    const proxyCsp = buildSandboxProxyCsp('https://flujo.example.test');
+      baseUriDomains: ['https://base.example.com'],
+    };
+    const innerCsp = buildSandboxCsp(requestedCsp);
+    const proxyCsp = buildSandboxProxyCsp('https://flujo.example.test', requestedCsp);
 
     expect(innerCsp).toContain('api.example.com');
     expect(innerCsp).toContain('cdn.example.com');
     expect(innerCsp).toContain('embed.example.com');
-    expect(proxyCsp).not.toContain('api.example.com');
-    expect(proxyCsp).not.toContain('cdn.example.com');
-    expect(proxyCsp).not.toContain('embed.example.com');
+    expect(proxyCsp).toMatch(/connect-src https:\/\/api\.example\.com/);
+    expect(proxyCsp).toMatch(/img-src[^;]*https:\/\/cdn\.example\.com/);
+    expect(proxyCsp).toMatch(/frame-src 'self' https:\/\/embed\.example\.com/);
+    expect(proxyCsp).toMatch(/base-uri 'self' https:\/\/base\.example\.com/);
+  });
+
+  it('drops unsafe app declarations from the inherited View policy upper bound', () => {
+    const proxyCsp = buildSandboxProxyCsp('https://flujo.example.test', {
+      connectDomains: ["https://evil.example; img-src *", 'data:'],
+      resourceDomains: ['http://insecure.example.com', 'blob:'],
+      frameDomains: ['javascript:alert(1)'],
+    });
+
+    expect(proxyCsp).not.toContain('evil.example');
+    expect(proxyCsp).not.toContain('insecure.example.com');
+    expect(proxyCsp).not.toContain('javascript:');
+    expect(proxyCsp).not.toContain('blob:');
+    expect(proxyCsp).toContain("connect-src 'none'");
+    expect(proxyCsp).toContain("frame-src 'self'");
   });
 
   it('fails closed for a missing or non-HTTP frame ancestor', () => {
