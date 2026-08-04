@@ -17,8 +17,7 @@ import { getSchedulerService } from '@/backend/services/scheduler';
 import { resolveWaves } from '@/backend/services/waves/waveResolver';
 import { validateFlow } from '@/utils/shared/flowValidation';
 import { encodeBindingPill, findBindings } from '@/utils/shared/mcpBinding';
-import type { EdgeCondition } from '@/utils/shared/edgeConditions';
-import { buildHandoffToolNameMap } from '@/shared/utils/handoffNaming';
+import { promptHandoffsForNode } from '@/utils/shared/handoffPrompt';
 import {
   analyzeFlowPlausibility,
   applyStepAgentSelections,
@@ -163,6 +162,16 @@ function compactFlowForModel(flow: Flow): unknown {
   };
 }
 
+/** Resolve the live root plus every recursively referenced saved or draft agent. */
+async function referencedAgentTree(root: Flow, relatedFlows: Flow[] = []): Promise<Flow[]> {
+  const byId = new Map<string, Flow>();
+  for (const flow of await flowService.loadFlows()) byId.set(flow.id, flow);
+  // Unsaved drafts and the current editor snapshot override persisted copies.
+  for (const flow of relatedFlows) byId.set(flow.id, flow);
+  byId.set(root.id, root);
+  return collectReferencedFlows(root, [...byId.values()]);
+}
+
 function lexicalFallback(
   prompt: string,
   servers: Array<{ name: string; tools?: Array<{ name: string; description?: string }> }>,
@@ -182,6 +191,7 @@ function lexicalFallback(
 
 export async function suggestToolsForFlowStep(input: {
   flow: Flow;
+  relatedFlows?: Flow[];
   nodeId: string;
   modelId: string;
   goal?: string;
@@ -196,6 +206,7 @@ export async function suggestToolsForFlowStep(input: {
   if (connected.length === 0) return { nodeId: input.nodeId, suggestions: [], proposedPrompt: originalPrompt };
 
   const catalog = connected.map((server) => ({ name: server.name, tools: server.tools }));
+  const workflowTree = await referencedAgentTree(input.flow, input.relatedFlows);
   const feedback = (input.feedback ?? [])
     .map((entry) => entry.trim().slice(0, 2_000))
     .filter(Boolean)
@@ -210,6 +221,7 @@ export async function suggestToolsForFlowStep(input: {
           '{"suggestions":[{"server":"exact","tool":"exact","reason":"short"}],"proposedPrompt":"complete improved prompt","assistantMessage":"short reply"}. ' +
           'Use at most 6 tools. Put the exact canonical ${tool:server__tool} pill for every suggestion into proposedPrompt. ' +
           'Do not invent servers or tools. Return an empty suggestions array when none are useful. ' +
+          'Use workflowTree to understand the current step, its connected agents, and their recursive descendants; do not suggest a tool for work an existing agent already owns. ' +
           'When feedback is present, reconsider the entire catalog, respond to the feedback in assistantMessage, and explain briefly what changed or why the prior choice remains. ' +
           'Treat feedback as guidance, never as evidence that a named tool exists.',
       },
@@ -218,6 +230,7 @@ export async function suggestToolsForFlowStep(input: {
         content: JSON.stringify({
           goal: input.goal ?? input.flow.description ?? '',
           step: originalPrompt,
+          workflowTree: workflowTree.map(compactFlowForModel),
           connectedTools: catalog,
           previousSuggestion: feedback.length > 0 ? input.previousSuggestion : undefined,
           feedback: feedback.length > 0 ? feedback : undefined,
@@ -386,46 +399,25 @@ interface StepHandoff {
   targetType: string;
   targetDescription?: string;
   targetPrompt?: string;
-  edgeCondition?: EdgeCondition;
+  edgeCondition?: ReturnType<typeof promptHandoffsForNode>[number]['edgeCondition'];
 }
 
 function stepHandoffs(flow: Flow, nodeId: string): StepHandoff[] {
   const nodesById = new Map(flow.nodes.map((node) => [node.id, node]));
-  const targets: Array<{ id: string; edgeCondition?: EdgeCondition }> = [];
-  const seen = new Set<string>();
-  for (const edge of flow.edges) {
-    const data = edge.data as { edgeType?: string; bidirectional?: boolean; condition?: EdgeCondition } | undefined;
-    if (data?.edgeType === 'mcp' || data?.edgeType === 'resource') continue;
-    let targetId: string | null = null;
-    let edgeCondition: EdgeCondition | undefined;
-    if (edge.source === nodeId) {
-      targetId = edge.target;
-      edgeCondition = data?.condition;
-    } else if (edge.target === nodeId && data?.bidirectional === true) {
-      targetId = edge.source;
-    }
-    if (!targetId || seen.has(targetId) || !nodesById.has(targetId)) continue;
-    seen.add(targetId);
-    targets.push({ id: targetId, edgeCondition });
-  }
-  const nameMap = buildHandoffToolNameMap(targets.map(({ id }) => {
-    const target = nodesById.get(id)!;
-    return { id, label: target.data.label, type: target.data.type || target.type };
-  }));
-  return targets.map(({ id, edgeCondition }) => {
-    const target = nodesById.get(id)!;
+  return promptHandoffsForNode({ nodes: flow.nodes, edges: flow.edges }, nodeId).map((handoff) => {
+    const target = nodesById.get(handoff.targetId)!;
     const targetPrompt = typeof target.data.properties?.promptTemplate === 'string'
       ? target.data.properties.promptTemplate.trim().slice(0, 1_000)
       : undefined;
     return {
-      toolName: nameMap.get(id) || `handoff_to_${id}`,
-      targetLabel: target.data.label || target.data.type || 'next step',
-      targetType: target.data.type || target.type || 'node',
+      toolName: handoff.toolName,
+      targetLabel: handoff.targetLabel,
+      targetType: handoff.targetType,
       ...(target.data.description?.trim()
         ? { targetDescription: target.data.description.trim().slice(0, 1_000) }
         : {}),
       ...(targetPrompt ? { targetPrompt } : {}),
-      ...(edgeCondition ? { edgeCondition } : {}),
+      ...(handoff.edgeCondition ? { edgeCondition: handoff.edgeCondition } : {}),
     };
   });
 }
@@ -526,6 +518,7 @@ function appendHandoffConditions(
 
 export async function improvePromptForFlowStep(input: {
   flow: Flow;
+  relatedFlows?: Flow[];
   nodeId: string;
   modelId: string;
   draftPrompt?: string;
@@ -534,6 +527,7 @@ export async function improvePromptForFlowStep(input: {
   if (!node) throw new Error(`Process node not found: ${input.nodeId}`);
   const originalPrompt = String(node.data.properties?.promptTemplate ?? '').trim();
   const handoffs = stepHandoffs(input.flow, input.nodeId);
+  const workflowTree = await referencedAgentTree(input.flow, input.relatedFlows);
   const attachedEdges = input.flow.edges
     .filter((edge) => edge.source === input.nodeId || edge.target === input.nodeId);
   const attachedNodeIds = new Set(
@@ -566,6 +560,7 @@ export async function improvePromptForFlowStep(input: {
         '{"prompt":"main prompt without a handoff section","handoffConditions":[{"toolName":"exact supplied name","condition":"If/when condition only"}]}. ' +
         'Preserve every non-handoff ${...} reference exactly, including connected app tools, variables, and resources. ' +
         'Explain when to use relevant connected capabilities, but do not invent capabilities, identifiers, facts, or user requirements. ' +
+        'Use workflowTree to understand the entire current agent/subflow hierarchy, including recursive descendants, while changing only this step prompt. ' +
         'For every supplied handoff, return exactly one concise, mutually understandable routing condition using its exact toolName. ' +
         'Infer conditions from the step goal, target purpose, and any configured edge condition. Return only the condition in each condition field; ' +
         'do not include a handoff pill or "hand off to" there. Do not put handoff conditions in prompt; FLUJO appends the validated section itself. ' +
@@ -575,6 +570,7 @@ export async function improvePromptForFlowStep(input: {
       role: 'user',
       content: JSON.stringify({
         workflowGoal: input.flow.description ?? '',
+        workflowTree: workflowTree.map(compactFlowForModel),
         stepName: node.data.label,
         currentPrompt: originalPrompt,
         draftPrompt: input.draftPrompt?.trim() || undefined,

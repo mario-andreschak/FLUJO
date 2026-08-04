@@ -9,7 +9,7 @@ import { mcpService } from '@/backend/services/mcp';
 import { getRunResourceSettings } from '@/backend/services/runResources';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
 import {
-  resolveAdvertisedToolUiLink,
+  resolveInvokedToolUiLink,
   toolCancellationReason,
 } from '@/backend/mcpApps/toolUi';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
@@ -169,6 +169,7 @@ export class CodexAdapter implements CompletionAdapter {
       localToolExecutors,
       requestToolApproval,
       onTranscriptMessage,
+      consumeSteeringMessages,
       onModelDelta,
       signal,
       conversationId,
@@ -213,6 +214,12 @@ export class CodexAdapter implements CompletionAdapter {
       const full = { ...msg, id, timestamp: baseTs + txSeq++ } as FlujoChatMessage;
       transcript.push(full);
       onTranscriptMessage?.(full);
+    };
+    const recordSteeringMessage = (message: FlujoChatMessage): void => {
+      // Preserve the id chosen by the inject route so the durable/live copy
+      // reconciles the optimistic user bubble.
+      transcript.push(message);
+      onTranscriptMessage?.(message);
     };
     const recordToolCall = (ti: Pick<ToolInteraction, 'id' | 'name' | 'argsJson'>): void => {
       recordMessage({
@@ -384,10 +391,12 @@ export class CodexAdapter implements CompletionAdapter {
               readableName,
               args ?? {},
               async (reason) => {
-                const link = await resolveAdvertisedToolUiLink(
+                const link = await resolveInvokedToolUiLink(
                   server,
                   originalTool,
                   uiResourceUri,
+                  undefined,
+                  args ?? {},
                 );
                 return link
                   ? { ...link, cancelledReason: reason, isError: true }
@@ -452,11 +461,12 @@ export class CodexAdapter implements CompletionAdapter {
               resultContent = `Error: ${result.error ?? 'Unknown error'}`;
               callResult = { content: [{ type: 'text', text: resultContent }], isError: true };
             }
-            const uiLink = await resolveAdvertisedToolUiLink(
+            const uiLink = await resolveInvokedToolUiLink(
               server,
               originalTool,
               uiResourceUri,
               result.data,
+              args ?? {},
             );
             const cancelledReason = toolCancellationReason(result);
             const ui = uiLink
@@ -669,17 +679,33 @@ export class CodexAdapter implements CompletionAdapter {
       const continuationInput =
         'Continue the interrupted response from exactly where it stopped. Do not repeat content or tool calls already completed.';
 
-      // A network close can occur after the CLI has emitted useful partial
-      // output. Resume the same SDK thread once, preserving its tool state and
-      // appending only newly streamed assistant messages to the transcript.
-      const streamedAgentText = new Map<string, string>();
-      for (let attempt = 0; attempt < 2; attempt += 1) {
+      // Codex's SDK exposes one input per turn (unlike Claude's streamInput), so
+      // steering is implemented as an intentional turn restart on the SAME SDK
+      // thread. Completed tool work and transcript messages stay in that thread;
+      // the injected text becomes its next user turn. This is materially
+      // different from waiting for createCompletion to return, which allowed a
+      // long Codex agentic loop to ignore the intervention until it was over.
+      let nextTurnInput = initialInput;
+      let connectionRetryUsed = false;
+      let sdkTurnIndex = 0;
+      while (true) {
         let attemptFailure: Error | undefined;
+        let steeringMessages: FlujoChatMessage[] = [];
+        const streamedAgentText = new Map<string, string>();
+        const turnIndex = sdkTurnIndex++;
+        const streamId = (itemId: string) =>
+          turnIndex === 0
+            ? getStreamMessageId(itemId)
+            : getStreamMessageId(`turn_${turnIndex}_${itemId}`);
+        const turnAbortController = new AbortController();
+        const abortTurn = () => turnAbortController.abort();
+        if (abortController.signal.aborted) turnAbortController.abort();
+        else abortController.signal.addEventListener('abort', abortTurn, { once: true });
+
         try {
-          const { events } = await thread.runStreamed(
-            attempt === 0 ? initialInput : continuationInput,
-            { signal: abortController.signal },
-          );
+          const { events } = await thread.runStreamed(nextTurnInput, {
+            signal: turnAbortController.signal,
+          });
 
           for await (const event of events) {
             if (signal?.aborted) break;
@@ -706,7 +732,7 @@ export class CodexAdapter implements CompletionAdapter {
                 const delta = item.text.startsWith(prior) ? item.text.slice(prior.length) : item.text;
                 if (delta) {
                   onModelDelta?.({
-                    messageId: getStreamMessageId(item.id),
+                    messageId: streamId(item.id),
                     contentDelta: delta,
                   });
                 }
@@ -719,7 +745,7 @@ export class CodexAdapter implements CompletionAdapter {
               if (itemMedia.length > 0 && item.type !== 'agent_message') {
                 recordMessage(
                   { role: 'assistant', content: '', media: itemMedia },
-                  getStreamMessageId(item.id),
+                  streamId(item.id),
                 );
                 streamedText = true;
               } else if (item.type === 'agent_message') {
@@ -738,9 +764,10 @@ export class CodexAdapter implements CompletionAdapter {
                     role: 'assistant',
                     content: item.text,
                     ...(messageMedia.length ? { media: messageMedia } : {}),
-                  }, getStreamMessageId(item.id));
+                  }, streamId(item.id));
                   streamedText = true;
                 }
+                streamedAgentText.delete(item.id);
               } else if (item.type === 'command_execution') {
                 recordToolPair({
                   id: `call_${uuidv4()}`,
@@ -762,16 +789,56 @@ export class CodexAdapter implements CompletionAdapter {
                 (event as { error?: { message?: string } }).error?.message ?? 'unknown error',
               );
             }
+
+            // Poll after recording the current SDK event. If it carried the end
+            // of a tool/message, that durable boundary stays ahead of the user's
+            // correction in both the transcript and the resumed Codex thread.
+            if (handoffCalls.length === 0 && consumeSteeringMessages) {
+              steeringMessages = consumeSteeringMessages();
+              if (steeringMessages.length > 0) {
+                // Reconcile any live partial draft before aborting this turn; a
+                // draft without a terminal transcript message would otherwise
+                // remain as a ghost bubble in the UI.
+                for (const [itemId, text] of streamedAgentText) {
+                  if (text) recordMessage({ role: 'assistant', content: text }, streamId(itemId));
+                }
+                streamedAgentText.clear();
+                for (const message of steeringMessages) recordSteeringMessage(message);
+                turnAbortController.abort();
+                break;
+              }
+            }
           }
         } catch (err) {
           attemptFailure = err instanceof Error ? err : new Error(String(err));
+        } finally {
+          abortController.signal.removeEventListener('abort', abortTurn);
         }
 
         if (signal?.aborted && handoffCalls.length === 0) {
           throw new Error('Codex run cancelled by user.');
         }
+        if (steeringMessages.length > 0) {
+          nextTurnInput = steeringMessages
+            .map(message => typeof message.content === 'string'
+              ? message.content
+              : JSON.stringify(message.content))
+            .join('\n\n');
+          // The next answer, not the superseded pre-intervention draft, is the
+          // node's effective final output. The earlier prose remains in transcript.
+          resultText = '';
+          completedTurn = false;
+          connectionRetryUsed = false;
+          log.info('Restarting Codex SDK turn with mid-run steering message(s)', {
+            conversationId,
+            count: steeringMessages.length,
+          });
+          continue;
+        }
         if (!attemptFailure || handoffCalls.length > 0) break;
-        if (attempt === 0 && !abortController.signal.aborted && isRetryableCodexConnectionClose(attemptFailure)) {
+        if (!connectionRetryUsed && !abortController.signal.aborted && isRetryableCodexConnectionClose(attemptFailure)) {
+          connectionRetryUsed = true;
+          nextTurnInput = continuationInput;
           log.warn('Codex connection closed mid-response; continuing the same thread once');
           continue;
         }

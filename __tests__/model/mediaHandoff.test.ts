@@ -1,18 +1,40 @@
 import type OpenAI from 'openai';
+import type { FlujoChatMessage } from '@/shared/types/chat';
 
 const readRunResource = jest.fn();
+const getRunResourceLocalPath = jest.fn();
 jest.mock('@/backend/services/runResources', () => ({
+  getRunResourceLocalPath: (...args: unknown[]) => getRunResourceLocalPath(...args),
   readRunResource: (...args: unknown[]) => readRunResource(...args),
 }));
 
+import { toApiMessages } from '@/backend/execution/flow/buildNodeContext';
 import {
   filterUnsupportedMediaInputs,
   hydrateRunResourceMedia,
+  materializeRunResourceMediaPaths,
 } from '@/backend/services/model/mediaHandoff';
 
 describe('cross-provider media hydration', () => {
   beforeEach(() => {
     readRunResource.mockReset();
+    getRunResourceLocalPath.mockReset();
+  });
+
+  it('refreshes a persisted media path from its durable resource identity', async () => {
+    getRunResourceLocalPath.mockResolvedValue('C:\\current-data\\clip.mp4');
+    const original = [{
+      type: 'video' as const,
+      mimeType: 'video/mp4',
+      resourceUri: 'flujo://run/conv/video',
+      localPath: 'C:\\old-data\\clip.mp4',
+    }];
+
+    await expect(materializeRunResourceMediaPaths(original)).resolves.toEqual([{
+      ...original[0],
+      localPath: 'C:\\current-data\\clip.mp4',
+    }]);
+    expect(original[0].localPath).toBe('C:\\old-data\\clip.mp4');
   });
 
   it('hydrates image and video run resources into private data URLs at dispatch', async () => {
@@ -138,5 +160,34 @@ describe('cross-provider media hydration', () => {
         { type: 'video_url', video_url: { url: 'data:video/mp4;base64,VIDEO' } },
       ],
     }]);
+  });
+
+  it('keeps the local artifact path when a text-only model cannot consume the video bytes', () => {
+    const messages = [
+      {
+        role: 'assistant',
+        content: 'Generated the clip.',
+        media: [{
+          type: 'video',
+          mimeType: 'video/mp4',
+          resourceUri: 'flujo://run/conv/video',
+          localPath: 'C:\\artifacts\\clip.mp4',
+        }],
+        id: 'assistant-video',
+        timestamp: 1,
+      },
+      {
+        role: 'user',
+        content: 'Inspect it with the local tools.',
+        id: 'user-next',
+        timestamp: 2,
+      },
+    ] as FlujoChatMessage[];
+
+    const filtered = filterUnsupportedMediaInputs(toApiMessages(messages), ['text']);
+    expect(filtered).toHaveLength(2);
+    expect(JSON.stringify(filtered[1])).toContain('C:\\\\artifacts\\\\clip.mp4');
+    expect(JSON.stringify(filtered[1])).not.toContain('video_url');
+    expect(JSON.stringify(filtered[1])).not.toContain('flujo://run/conv/video');
   });
 });

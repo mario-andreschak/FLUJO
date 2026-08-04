@@ -43,11 +43,21 @@ async function cancelledUiForToolCall(
 ): Promise<FlujoChatMessage['ui']> {
   const decoded = decodeToolName(toolCall.function.name, sharedState.toolNameMap);
   if (!decoded) return undefined;
+  let invocationArgs: Record<string, unknown> | undefined;
+  try {
+    const parsed = JSON.parse(toolCall.function.arguments);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      invocationArgs = parsed as Record<string, unknown>;
+    }
+  } catch {
+    // A malformed call has no safe downstream forwarding identity.
+  }
   const link = await ModelHandler.resolveToolUiLink(
     decoded.server,
     decoded.tool,
     undefined,
     decoded.uiResourceUri,
+    invocationArgs,
   );
   return link ? { ...link, cancelledReason: reason, isError: true } : undefined;
 }

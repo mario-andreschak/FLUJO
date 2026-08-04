@@ -116,6 +116,24 @@ describe('assisted flow authoring service', () => {
   });
 
   it('reconsiders the connected catalog with the prior proposal and user feedback', async () => {
+    const root = processFlow('root', 'Export the notes');
+    root.nodes.push({
+      id: 'child-call',
+      type: 'subflow',
+      position: { x: 0, y: 100 },
+      data: { label: 'Writer', type: 'subflow', properties: { subflowId: 'child' } },
+    });
+    const child = processFlow('child', 'Fresh unsaved child prompt');
+    child.nodes.push({
+      id: 'grandchild-call',
+      type: 'subflow',
+      position: { x: 0, y: 100 },
+      data: { label: 'Researcher', type: 'subflow', properties: { subflowId: 'grandchild' } },
+    });
+    loadFlowsMock.mockResolvedValue([
+      processFlow('child', 'STALE child prompt'),
+      processFlow('grandchild', 'Research supporting facts'),
+    ]);
     const previousSuggestion = {
       nodeId: 'root-work',
       suggestions: [{ server: 'files', tool: 'read_file', reason: 'read notes' }],
@@ -130,7 +148,8 @@ describe('assisted flow authoring service', () => {
     });
 
     const result = await suggestToolsForFlowStep({
-      flow: processFlow('root', 'Export the notes'),
+      flow: root,
+      relatedFlows: [child],
       nodeId: 'root-work',
       modelId: 'model-1',
       feedback: ['There may be one tool that handles the whole export.'],
@@ -149,6 +168,9 @@ describe('assisted flow authoring service', () => {
       expect.objectContaining({ name: 'read_file' }),
       expect.objectContaining({ name: 'write_file' }),
     ]));
+    expect(userPayload.workflowTree.map((entry: { id: string }) => entry.id))
+      .toEqual(['root', 'child', 'grandchild']);
+    expect(userPayload.workflowTree[1].nodes[0].prompt).toBe('Fresh unsaved child prompt');
     expect(result.suggestions).toEqual([
       { server: 'files', tool: 'write_file', reason: 'exports the result' },
     ]);
@@ -191,18 +213,31 @@ describe('assisted flow authoring service', () => {
 
   it('preserves connected references when improving a prompt', async () => {
     const root = processFlow('root', 'Read with ${tool:files__read_file}.');
+    root.nodes.push({
+      id: 'child-call',
+      type: 'subflow',
+      position: { x: 0, y: 100 },
+      data: { label: 'Child', type: 'subflow', properties: { subflowId: 'child' } },
+    });
+    const child = processFlow('child', 'Handle the delegated work');
     completionMock.mockResolvedValueOnce({
       completion: { choices: [{ message: { content: '{"prompt":"Read the source carefully and summarize it."}' } }] },
     });
 
     const result = await improvePromptForFlowStep({
       flow: root,
+      relatedFlows: [child],
       nodeId: 'root-work',
       modelId: 'model-1',
     });
 
     expect(result.prompt).toContain('Read the source carefully');
     expect(result.prompt).toContain('${tool:files__read_file}');
+    const request = completionMock.mock.calls[0][0] as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const userPayload = JSON.parse(request.messages[1].content);
+    expect(userPayload.workflowTree.map((entry: { id: string }) => entry.id)).toEqual(['root', 'child']);
   });
 
   it('appends validated handoff conditions at the end of an improved prompt', async () => {

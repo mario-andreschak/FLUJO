@@ -170,6 +170,17 @@ export interface CompletionInput {
    */
   onTranscriptMessage?: (message: FlujoChatMessage) => void;
   /**
+   * Drain user interventions accepted while a self-orchestrating adapter is
+   * still inside one long provider call. Request/response adapters return to
+   * runFlow after every model turn and do not need this hook; Claude and Codex
+   * poll it at their own safe turn boundaries.
+   *
+   * A consumed message must be added to the adapter transcript and passed to
+   * `onTranscriptMessage` before it is sent to the provider. That makes the
+   * accepted intervention durable and reconciles the optimistic UI bubble by id.
+   */
+  consumeSteeringMessages?: () => FlujoChatMessage[];
+  /**
    * Live token/tool-argument sink. Request/response adapters use it while
    * consuming their native SDK stream; self-orchestrating adapters use it for
    * partial assistant events. The callback is live-only and is never persisted.

@@ -14,6 +14,9 @@
  *
  * Both settings propagate to every Node child process Next spawns (including the server),
  * because NODE_OPTIONS / NODE_EXTRA_CA_CERTS are read at process startup.
+ * The launcher also forces npm's `include=dev` config into that process tree. Production
+ * Next sets NODE_ENV=production, which otherwise makes a plain `npm install` omit the
+ * devDependencies that source-built MCP servers need (TypeScript, bundlers, etc.).
  *
  * The TLS/CA logic is exported as `buildLaunchEnv()` so the npm-package bin wrapper
  * (bin/flujo.mjs, issue #59) reuses it verbatim instead of duplicating it.
@@ -27,13 +30,23 @@ import { applyExposureRuntimeEnv, withExposureHostname } from './exposure-mode.m
 const require = createRequire(import.meta.url);
 
 /**
- * Return a copy of `baseEnv` with FLUJO's TLS/CA settings applied:
+ * Return a copy of `baseEnv` with FLUJO's child-process settings applied:
  *  - NODE_OPTIONS gains `--use-system-ca` on Node versions that support it.
  *  - FLUJO_EXTRA_CA_CERTS is mirrored to NODE_EXTRA_CA_CERTS.
+ *  - npm is configured to include devDependencies for source-built MCP servers.
  * Pure apart from a one-time informational log on older Node builds.
  */
 export function buildLaunchEnv(baseEnv = process.env) {
   const env = { ...baseEnv };
+
+  // npm reads configuration from npm_config_* environment variables. `include=dev`
+  // takes precedence over NODE_ENV=production's implicit `omit=dev`, making `npm start`
+  // behave like `npm run dev` when FLUJO installs/builds an MCP server. Remove all case
+  // variants first because Windows child-process environments are case-insensitive.
+  for (const key of Object.keys(env)) {
+    if (key.toLowerCase() === 'npm_config_include') delete env[key];
+  }
+  env.npm_config_include = 'dev';
 
   // Detect support empirically instead of sniffing the version number. This Set is the
   // authoritative list of flags THIS Node binary accepts inside NODE_OPTIONS, so it is

@@ -28,6 +28,12 @@ const model: Model = {
   baseUrl: 'https://api.openai.com/v1',
   reasoningEffort: 'high',
   serviceTier: 'priority',
+  supportsTools: true,
+  supportedParameters: ['tools', 'temperature'],
+  inputModalities: ['text', 'image'],
+  outputModalities: ['text'],
+  visionInputCapability: 'supported',
+  compactionThreshold: 96_000,
 };
 
 const flowMain: Flow = {
@@ -114,6 +120,12 @@ describe('serializePackage / parsePackage round-trip', () => {
       expect.objectContaining({
         reasoningEffort: 'high',
         serviceTier: 'priority',
+        supportsTools: true,
+        supportedParameters: ['tools', 'temperature'],
+        inputModalities: ['text', 'image'],
+        outputModalities: ['text'],
+        visionInputCapability: 'supported',
+        compactionThreshold: 96_000,
       }),
     );
   });

@@ -6,6 +6,7 @@ import simpleGit from 'simple-git';
 import { getDataDir } from '@/utils/paths';
 import { isSafeRepoUrl, isSafeBranchName } from '@/utils/git/validation';
 import { killProcessTree } from '@/utils/process/killProcessTree';
+import { withNpmDevDependencies } from '@/utils/mcp/npmEnvironment';
 import { mcpService } from '@/backend/services/mcp';
 import type { EnvVarValue, MCPServerConfig, MCPServerSource } from '@/shared/types/mcp';
 import type { McpArgTemplate } from '@/shared/types/package';
@@ -133,6 +134,9 @@ function run(
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: process.platform !== 'win32',
+        // A reviewed manifest may still contain a plain `npm install`. Keep its build
+        // toolchain available even though the production FLUJO process uses NODE_ENV=production.
+        env: withNpmDevDependencies(),
       });
     } catch (error) {
       reject(error);

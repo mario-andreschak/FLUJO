@@ -523,7 +523,7 @@ const ToolCallTimeline: React.FC<{
       serverName: ui.serverName,
       uri: ui.uri,
       toolName: ui.toolName ?? pair.toolCall.function.name,
-      toolArgs: pair.toolCall.function.arguments,
+      toolArgs: ui.toolArgs ?? pair.toolCall.function.arguments,
       resultContent: typeof pair.result?.content === 'string' ? pair.result.content : undefined,
       cancelledReason: ui.cancelledReason,
       isError: ui.isError,
@@ -605,16 +605,20 @@ const ToolCallTimeline: React.FC<{
           formattedArgs = JSON.stringify(JSON.parse(pair.toolCall.function.arguments), null, 2);
         } catch (e) { /* keep the original string */ }
         const showRaw = !!rawByKey[key];
-        const openInToolTester = pair.mcpDestination
+        const launchInfo = launchInfoFor(pair);
+        const toolTesterDestination = launchInfo?.toolName
+          ? { serverName: launchInfo.serverName, toolName: launchInfo.toolName }
+          : pair.mcpDestination;
+        const openInToolTester = toolTesterDestination
           ? () => {
               let args: Record<string, unknown> = {};
               try {
-                const parsed = JSON.parse(pair.toolCall.function.arguments);
+                const parsed = JSON.parse(launchInfo?.toolArgs ?? pair.toolCall.function.arguments);
                 if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) args = parsed;
               } catch { /* malformed arguments safely prefill as an empty object */ }
               const query = new URLSearchParams({
-                server: pair.mcpDestination!.serverName,
-                tool: pair.mcpDestination!.toolName,
+                server: toolTesterDestination!.serverName,
+                tool: toolTesterDestination!.toolName,
                 args: JSON.stringify(args),
               });
               window.location.assign(`/mcp?${query.toString()}`);

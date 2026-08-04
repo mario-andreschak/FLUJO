@@ -765,9 +765,18 @@ export class ProcessNode extends BaseNode {
     const wireForScan = prepResult.wireMessages ?? wireBase;
     // Retained for conversations RESUMED from before this change, whose history
     // already carries a URI but whose step might not match the conditions below.
-    const historyHasRunResourceUri = wireForScan.some(
-      (m) => JSON.stringify(m).includes(RUN_RESOURCE_SCHEME),
-    );
+    const historyHasRunResourceUri = wireForScan.some((message) => {
+      // A materialized media URI is transport metadata: the next model receives
+      // its localPath as an artifact descriptor and, when supported, the bytes
+      // are hydrated automatically. Only unresolved media still needs the
+      // read_resource escape hatch. Other URI markers in message/tool content
+      // remain model-visible and continue to arm the tool.
+      const { media, ...modelVisibleMessage } = message;
+      if (JSON.stringify(modelVisibleMessage).includes(RUN_RESOURCE_SCHEME)) return true;
+      return media?.some(
+        part => part.resourceUri?.startsWith(RUN_RESOURCE_SCHEME) && !part.localPath,
+      ) ?? false;
+    });
     const hasMcpTools = availableTools.some((t) => !!t.server);
     const hasWriteResource = availableTools.some((t) => t.name === WRITE_RESOURCE_TOOL_NAME);
     const hasResourceNodes = (node_params?.properties?.resourceNodes?.length ?? 0) > 0;

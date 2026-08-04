@@ -205,6 +205,7 @@ export default function FlowAssistanceDialog({
     setStage('suggesting');
     void flowService.suggestToolsForStep({
       flow,
+      relatedFlows,
       nodeId,
       modelId,
       goal: flow.description,
@@ -274,6 +275,7 @@ export default function FlowAssistanceDialog({
     try {
       const result = await flowService.suggestToolsForStep({
         flow: workingFlow,
+        relatedFlows,
         nodeId,
         modelId: chosenModelId,
         goal: workingFlow.description,
@@ -302,6 +304,7 @@ export default function FlowAssistanceDialog({
     try {
       const result = await flowService.suggestToolsForStep({
         flow: workingFlow,
+        relatedFlows,
         nodeId,
         modelId: suggestionModelId,
         goal: workingFlow.description,
@@ -355,6 +358,7 @@ export default function FlowAssistanceDialog({
     try {
       const result = await flowService.improvePromptForStep({
         flow: candidate,
+        relatedFlows,
         nodeId,
         modelId: promptModelId,
         ...(approvedAppPrompt ? { draftPrompt: approvedAppPrompt } : {}),
@@ -739,6 +743,15 @@ export default function FlowAssistanceDialog({
       </DialogContent>
       <DialogActions sx={{ flexWrap: 'wrap' }}>
         <Button onClick={onClose} disabled={busy}>{t('flows.assistance.close')}</Button>
+        {stage === 'improving' && (
+          <Button
+            variant="contained"
+            disabled
+            startIcon={<CircularProgress size={16} color="inherit" />}
+          >
+            {t('flows.inspector.improvingPrompt')}
+          </Button>
+        )}
         {stage === 'tools' && !suggestion && models.length > 0 && (
           <Button variant="contained" disabled={!chosenModelId} onClick={() => void suggestWithModel()}>
             {t('flows.assistance.suggest')}

@@ -2886,7 +2886,7 @@ const Chat: React.FC = () => {
           serverName: ui.serverName,
           uri: ui.uri,
           toolName: ui.toolName ?? (call?.type === 'function' ? call.function.name : undefined),
-          toolArgs: call?.type === 'function' ? call.function.arguments : undefined,
+          toolArgs: ui.toolArgs ?? (call?.type === 'function' ? call.function.arguments : undefined),
           resultContent: m.content,
           cancelledReason: ui.cancelledReason,
           isError: ui.isError,

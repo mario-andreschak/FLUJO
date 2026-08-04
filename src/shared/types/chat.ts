@@ -107,6 +107,11 @@ export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
     /** Original server-side tool name that instantiated the View. */
     toolName?: string;
     /**
+     * JSON arguments for the actual App-owning tool when the visible tool call
+     * was a forwarding wrapper such as FLUJO's call_mcp_tool.
+     */
+    toolArgs?: string;
+    /**
      * Present when this invocation ended through MCP cancellation. The host
      * sends tool-input followed by tool-cancelled instead of tool-result.
      */

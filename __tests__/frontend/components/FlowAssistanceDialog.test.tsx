@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import FlowAssistanceDialog from '@/frontend/components/Flow/FlowManager/FlowBuilder/FlowAssistanceDialog';
 import { flowService } from '@/frontend/services/flow';
 import type { Flow } from '@/shared/types/flow';
@@ -114,8 +114,49 @@ describe('FlowAssistanceDialog', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
     expect((flowService.suggestAgentsForStep as jest.Mock).mock.invocationCallOrder[0])
       .toBeLessThan((flowService.improvePromptForStep as jest.Mock).mock.invocationCallOrder[0]);
+    expect(flowService.improvePromptForStep).toHaveBeenCalledWith(expect.objectContaining({
+      relatedFlows: [child, unrelatedDraft],
+    }));
     expect((flowService.improvePromptForStep as jest.Mock).mock.invocationCallOrder[0])
       .toBeLessThan((flowService.checkPlausibility as jest.Mock).mock.invocationCallOrder[0]);
+  });
+
+  it('shows an inline spinner while the prompt improvement is pending', async () => {
+    const root = flow('root');
+    let finishImprovement!: (value: { nodeId: string; prompt: string }) => void;
+    (flowService.improvePromptForStep as jest.Mock).mockImplementationOnce(() =>
+      new Promise((resolve) => { finishImprovement = resolve; }),
+    );
+    (flowService.checkPlausibility as jest.Mock).mockResolvedValue({
+      contexts: [{ kind: 'chat', label: 'Chat / direct run' }],
+      issues: [],
+      patches: [],
+      repairedFlow: root,
+      repairedFlows: [root],
+    });
+
+    render(
+      <FlowAssistanceDialog
+        open
+        flow={root}
+        nodeId="root-work"
+        initialFocus="agents"
+        modelId="model-1"
+        models={[{ id: 'model-1', name: 'Helper' }]}
+        onApply={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Improve prompt and check flow' }));
+    const improving = await screen.findByRole('button', { name: 'Improving prompt…' });
+    expect(improving).toBeDisabled();
+    expect(improving.querySelector('[role="progressbar"]')).not.toBeNull();
+
+    await act(async () => {
+      finishImprovement({ nodeId: 'root-work', prompt: 'Improved prompt' });
+    });
+    expect(await screen.findByText('The flow is plausible in its current invocation context.')).toBeInTheDocument();
   });
 
   it('uses the chosen AI helper to fix only selected semantic findings', async () => {

@@ -101,6 +101,12 @@ const manifest = () => ({
     adapter: 'openai-responses',
     reasoningEffort: 'high',
     serviceTier: 'priority',
+    supportsTools: false,
+    supportedParameters: ['temperature', 'response_format'],
+    inputModalities: ['text', 'image'],
+    outputModalities: ['text'],
+    visionInputCapability: 'supported',
+    compactionThreshold: 96_000,
     apiKeyRef: { kind: 'secret', secret: 'API_KEY' },
   }],
   flows: [
@@ -162,6 +168,12 @@ describe('installPackage — happy path', () => {
       adapter: 'openai-responses',
       reasoningEffort: 'high',
       serviceTier: 'priority',
+      supportsTools: false,
+      supportedParameters: ['temperature', 'response_format'],
+      inputModalities: ['text', 'image'],
+      outputModalities: ['text'],
+      visionInputCapability: 'supported',
+      compactionThreshold: 96_000,
       folder: 'my-pkg',
     }));
 

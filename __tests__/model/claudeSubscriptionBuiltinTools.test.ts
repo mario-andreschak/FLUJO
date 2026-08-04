@@ -15,6 +15,7 @@
  */
 import type OpenAI from 'openai';
 import type { CompletionInput } from '@/backend/services/model/adapters/types';
+import type { FlujoChatMessage } from '@/shared/types/chat';
 
 // Capture the options the adapter passes to the Agent SDK's query().
 const queryMock = jest.fn();
@@ -100,6 +101,70 @@ beforeEach(() => {
   ]);
   sdkToolsMock = [];
   queryMock.mockImplementation(() => successStream());
+});
+
+describe('ClaudeSubscriptionAdapter — mid-run steering', () => {
+  it('streams an accepted intervention into the active SDK query and records it durably', async () => {
+    const streamedInputs: unknown[] = [];
+    const response = (async function* () {
+      // Any SDK event is a safe opportunity for the adapter to inspect FLUJO's
+      // steering inbox. The real SDK also emits partial stream events here.
+      yield { type: 'system', session_id: 'sess-1' };
+      yield {
+        type: 'assistant',
+        session_id: 'sess-1',
+        uuid: 'corrected-turn',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'corrected answer' }],
+          usage: { input_tokens: 2, output_tokens: 2 },
+        },
+      };
+      yield {
+        type: 'result',
+        subtype: 'success',
+        result: 'corrected answer',
+        session_id: 'sess-1',
+        usage: { input_tokens: 2, output_tokens: 2 },
+      };
+    })() as AsyncGenerator<unknown> & { streamInput: (input: AsyncIterable<unknown>) => Promise<void> };
+    response.streamInput = async (input) => {
+      for await (const message of input) streamedInputs.push(message);
+    };
+    queryMock.mockReturnValue(response);
+
+    const injected = {
+      id: 'steer-claude-1',
+      role: 'user',
+      content: 'change direction now',
+      timestamp: 123,
+      injected: true,
+    } as FlujoChatMessage;
+    const consumeSteeringMessages = jest
+      .fn<FlujoChatMessage[], []>()
+      .mockReturnValueOnce([injected])
+      .mockReturnValue([]);
+    const onTranscriptMessage = jest.fn();
+
+    const result = await new ClaudeSubscriptionAdapter().createCompletion(baseInput({
+      consumeSteeringMessages,
+      onTranscriptMessage,
+    }));
+
+    expect(streamedInputs).toEqual([
+      expect.objectContaining({
+        type: 'user',
+        message: { role: 'user', content: 'change direction now' },
+      }),
+    ]);
+    expect(result.transcript).toEqual([
+      expect.objectContaining({ id: 'steer-claude-1', role: 'user', content: 'change direction now' }),
+      expect.objectContaining({ role: 'assistant', content: 'corrected answer' }),
+    ]);
+    expect(onTranscriptMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'steer-claude-1' }),
+    );
+  });
 });
 
 describe('ClaudeSubscriptionAdapter — malformed tool-call prose quarantine (#298)', () => {

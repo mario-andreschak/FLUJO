@@ -102,6 +102,7 @@ import {
   configureGuidedSubagentNode,
   getGuidedSubagentLinks,
 } from '@/utils/shared/guidedSubagents';
+import { reconcileHandoffPromptForTopologyChange } from '@/utils/shared/handoffPrompt';
 import { resolveAutoNodeLabel } from '@/shared/utils/nodeLabel';
 import { useAskFlujoPage } from '@/frontend/contexts/AskFlujoContext';
 import type { AskFlujoUiAction } from '@/frontend/types/askFlujo';
@@ -168,6 +169,12 @@ const MainContent = styled(Box)(({ theme }) => ({
 
 interface FlowBuilderProps {
   initialFlow?: Flow;
+  /**
+   * Explicit view requested by the entry action. This takes precedence over
+   * automatic Expert detection for the initial render (for example, the AI
+   * generator's "Continue to simple builder" action).
+   */
+  initialAuthoringMode?: FlowAuthoringMode;
   /**
    * Resolves false when persistence failed. The builder only clears its dirty
    * state after this promise succeeds.
@@ -270,7 +277,7 @@ const analyzeGuidedGraph = (nodes: FlowNode[], edges: Edge[]) => {
   return { unsafe, orderedNodeIds, subagentNodeIds };
 };
 
-export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>(({ initialFlow, onSave, onDelete, onConversionCommitted, allFlows, relatedDraftFlows = [], onRelatedDraftFlowsChange, isDraft = false, onTry, onNavigateToFlow }, ref) => {
+export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>(({ initialFlow, initialAuthoringMode, onSave, onDelete, onConversionCommitted, allFlows, relatedDraftFlows = [], onRelatedDraftFlowsChange, isDraft = false, onTry, onNavigateToFlow }, ref) => {
   log.debug('FlowBuilder rendered with initialFlow:', initialFlow);
   const { t, tp, formatList } = useI18n();
   const theme = useTheme();
@@ -308,7 +315,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     'guided',
   );
   const [authoringMode, setLocalAuthoringMode] = useState<FlowAuthoringMode>(
-    () => initialFlowRequiresExpert ? 'advanced' : persistedAuthoringMode,
+    () => initialAuthoringMode ?? (initialFlowRequiresExpert ? 'advanced' : persistedAuthoringMode),
   );
   const setAuthoringMode = useCallback((mode: FlowAuthoringMode) => {
     setLocalAuthoringMode(mode);
@@ -506,14 +513,19 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       setPermissionRulesError(null);
 
       // Guided mode cannot safely author every graph shape or runtime option.
-      // Open those flows directly in Expert view, while still leaving the
-      // always-visible mode toggle available for a read-only/simple overview.
+      // Open those flows directly in Expert view unless the action that opened
+      // the builder explicitly requested a view. The guided composer can still
+      // present an advanced-feature warning without breaking that handoff.
       const requiresExpert = flowUsesAdvancedFeatures({
         nodes: rawNodes,
         edges: validEdges,
         permissionRules: initialFlow.permissionRules,
       }) || analyzeGuidedGraph(rawNodes, validEdges).unsafe;
-      if (requiresExpert) setAuthoringMode('advanced');
+      if (initialAuthoringMode) {
+        setAuthoringMode(initialAuthoringMode);
+      } else if (requiresExpert) {
+        setAuthoringMode('advanced');
+      }
 
       // Initialize history with initial state
       const initialState: HistoryEntry = {
@@ -545,7 +557,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   // The builder owns edits for the lifetime of a selected flow. Parent state may
   // receive a freshly saved object (including new timestamps) without resetting
   // undo history; only switching to a different flow reinitializes the canvas.
-  }, [initialFlow?.id, createPermissionRuleDraft, setAuthoringMode]);
+  }, [initialFlow?.id, initialAuthoringMode, createPermissionRuleDraft, setAuthoringMode]);
   
   // Keys that don't represent a real edit: selection/drag/measurement state
   // must create neither an undo step nor "unsaved changes".
@@ -1367,7 +1379,24 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       createEdgeFromConnection(intoTask, nextNodes),
       createEdgeFromConnection(intoFinish, nextNodes),
     ];
-    setNodes(nextNodes);
+    const reconciledNodes = source.data.type === 'process'
+      ? nextNodes.map((candidate) => candidate.id === source.id ? {
+          ...candidate,
+          data: {
+            ...candidate.data,
+            properties: {
+              ...(candidate.data.properties ?? {}),
+              promptTemplate: reconcileHandoffPromptForTopologyChange({
+                prompt: String(source.data.properties?.promptTemplate ?? ''),
+                nodeId: source.id,
+                previous: { nodes, edges },
+                next: { nodes: nextNodes, edges: nextEdges },
+              }),
+            },
+          },
+        } : candidate)
+      : nextNodes;
+    setNodes(reconciledNodes);
     setEdges(nextEdges);
 
     if (isFirstProcessStep && !flowDescription.trim()) {
@@ -1388,7 +1417,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
           // Naming follows the goal the user just submitted, even when this
           // draft inherited an older card description.
           description: prompt,
-          nodes: nextNodes,
+          nodes: reconciledNodes,
           edges: nextEdges,
         };
         void flowService.generateNameForFlow({
@@ -1839,9 +1868,25 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     const edge = configureGuidedSubagentEdge(
       createEdgeFromConnection(connection, [...nodes, subagentNode]),
     );
-
-    setNodes(current => [...current, subagentNode]);
-    setEdges(current => [...current, edge]);
+    const nextNodes = [...nodes, subagentNode];
+    const nextEdges = [...edges, edge];
+    const reconciledPrompt = reconcileHandoffPromptForTopologyChange({
+      prompt: String(processNode.data.properties?.promptTemplate ?? ''),
+      nodeId: processNodeId,
+      previous: { nodes, edges },
+      next: { nodes: nextNodes, edges: nextEdges },
+    });
+    setNodes(nextNodes.map((candidate) => candidate.id === processNodeId ? {
+      ...candidate,
+      data: {
+        ...candidate.data,
+        properties: {
+          ...(candidate.data.properties ?? {}),
+          promptTemplate: reconciledPrompt,
+        },
+      },
+    } : candidate));
+    setEdges(nextEdges);
     log.info(`Connected agent "${childFlow.name}" to process node ${processNodeId}`);
   }, [allFlows, edges, initialFlow?.id, nodes]);
 
@@ -1859,12 +1904,31 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     const subflowIsStillWired = remainingEdges.some(
       edge => edge.source === subflowNodeId || edge.target === subflowNodeId,
     );
+    const nextNodes = subflowIsStillWired
+      ? nodes
+      : nodes.filter(node => node.id !== subflowNodeId);
+    const processNode = nodes.find(node => node.id === processNodeId && node.data.type === 'process');
+    const reconciledPrompt = processNode
+      ? reconcileHandoffPromptForTopologyChange({
+          prompt: String(processNode.data.properties?.promptTemplate ?? ''),
+          nodeId: processNodeId,
+          previous: { nodes, edges },
+          next: { nodes: nextNodes, edges: remainingEdges },
+        })
+      : null;
     setEdges(remainingEdges);
-    if (!subflowIsStillWired) {
-      setNodes(current => current.filter(node => node.id !== subflowNodeId));
-    }
+    setNodes(nextNodes.map((candidate) => candidate.id === processNodeId && reconciledPrompt !== null ? {
+      ...candidate,
+      data: {
+        ...candidate.data,
+        properties: {
+          ...(candidate.data.properties ?? {}),
+          promptTemplate: reconciledPrompt,
+        },
+      },
+    } : candidate));
     log.info(`Removed agent node ${subflowNodeId} from process node ${processNodeId}`);
-  }, [edges]);
+  }, [edges, nodes]);
 
   const loadInspectorMcpServers = useCallback(async (): Promise<InspectorMcpServerOption[]> => {
     const result = await mcpService.loadServerConfigs();
@@ -2366,6 +2430,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
             };
             const result = await flowService.improvePromptForStep({
               flow: flowWithCommittedNode,
+              relatedFlows: relatedDraftFlows,
               nodeId: node.id,
               modelId: promptModelId,
             });
