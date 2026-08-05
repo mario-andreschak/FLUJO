@@ -17,6 +17,7 @@ jest.mock('@modelcontextprotocol/ext-apps/app-bridge', () => {
 });
 
 import {
+  allowLoopbackCspGrant,
   buildSandboxUrl,
   buildToolResult,
   canUseDisplayMode,
@@ -97,6 +98,42 @@ describe('MCP App resource validation', () => {
     [{ contents: [{ uri: URI, mimeType: MIME, blob: '%%%not-base64%%%' }] }],
   ])('rejects non-conforming resource content', (readResult) => {
     expect(() => extractAppResource(readResult, URI)).toThrow();
+  });
+});
+
+describe('loopback CSP grant mirror', () => {
+  it('gates the loopback allowance on a plain-HTTP loopback FLUJO origin', () => {
+    expect(allowLoopbackCspGrant({ protocol: 'http:', hostname: '127.0.0.1' })).toBe(true);
+    expect(allowLoopbackCspGrant({ protocol: 'http:', hostname: 'localhost' })).toBe(true);
+    expect(allowLoopbackCspGrant({ protocol: 'http:', hostname: '[::1]' })).toBe(true);
+    expect(allowLoopbackCspGrant({ protocol: 'https:', hostname: 'localhost' })).toBe(false);
+    expect(allowLoopbackCspGrant({ protocol: 'http:', hostname: 'flujo.example.test' })).toBe(false);
+    // jsdom serves the suite from http://localhost, so the browser default applies.
+    expect(allowLoopbackCspGrant()).toBe(true);
+  });
+
+  it('grants explicit-port loopback http/ws origins only when allowed', () => {
+    const requested = {
+      connectDomains: ['http://127.0.0.1:59503', 'ws://127.0.0.1:59503', 'http://insecure.example.com'],
+      resourceDomains: ['http://127.0.0.1:59503'],
+      frameDomains: ['http://127.0.0.1:59503', 'ws://127.0.0.1:59503'],
+      baseUriDomains: ['http://127.0.0.1'],
+    };
+
+    expect(sanitizeGrantedCsp(requested, true)).toEqual({
+      connectDomains: ['http://127.0.0.1:59503', 'ws://127.0.0.1:59503'],
+      resourceDomains: ['http://127.0.0.1:59503'],
+      // ws: never widens frame-src; portless loopback is rejected.
+      frameDomains: ['http://127.0.0.1:59503'],
+      baseUriDomains: [],
+    });
+
+    expect(sanitizeGrantedCsp(requested, false)).toEqual({
+      connectDomains: [],
+      resourceDomains: [],
+      frameDomains: [],
+      baseUriDomains: [],
+    });
   });
 });
 

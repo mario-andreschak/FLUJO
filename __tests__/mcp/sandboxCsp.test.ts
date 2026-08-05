@@ -108,6 +108,71 @@ describe('buildSandboxCsp', () => {
   });
 });
 
+describe('loopback CSP origins (localhost exposure mode)', () => {
+  const originalExposure = process.env.FLUJO_EXPOSURE_MODE;
+
+  afterEach(() => {
+    if (originalExposure === undefined) delete process.env.FLUJO_EXPOSURE_MODE;
+    else process.env.FLUJO_EXPOSURE_MODE = originalExposure;
+  });
+
+  const loopbackCsp = {
+    connectDomains: ['http://127.0.0.1:59503', 'ws://127.0.0.1:59503'],
+    resourceDomains: ['http://127.0.0.1:59503'],
+    frameDomains: ['http://127.0.0.1:59503'],
+    baseUriDomains: ['http://127.0.0.1:59503'],
+  };
+
+  it('admits explicit-port loopback http/ws origins into both policies', () => {
+    process.env.FLUJO_EXPOSURE_MODE = 'localhost';
+    for (const csp of [buildSandboxCsp(loopbackCsp), buildSandboxProxyCsp('http://127.0.0.1:4200', loopbackCsp)]) {
+      expect(csp).toMatch(/connect-src http:\/\/127\.0\.0\.1:59503 ws:\/\/127\.0\.0\.1:59503/);
+      expect(csp).toMatch(/frame-src[^;]*http:\/\/127\.0\.0\.1:59503/);
+      expect(csp).toMatch(/img-src[^;]*http:\/\/127\.0\.0\.1:59503/);
+      expect(csp).toMatch(/base-uri[^;]*http:\/\/127\.0\.0\.1:59503/);
+    }
+  });
+
+  it('accepts localhost and [::1] loopback spellings', () => {
+    process.env.FLUJO_EXPOSURE_MODE = 'localhost';
+    const csp = buildSandboxCsp({
+      connectDomains: ['ws://localhost:4300', 'http://[::1]:4300'],
+    });
+    expect(csp).toContain('ws://localhost:4300');
+    expect(csp).toContain('http://[::1]:4300');
+  });
+
+  it('keeps ws: out of non-connect directives and requires an explicit port', () => {
+    process.env.FLUJO_EXPOSURE_MODE = 'localhost';
+    const csp = buildSandboxCsp({
+      frameDomains: ['ws://127.0.0.1:59503', 'http://127.0.0.1'],
+      connectDomains: ['http://localhost'],
+    });
+    expect(csp).toContain("frame-src 'none'");
+    expect(csp).toContain("connect-src 'none'");
+  });
+
+  it('still rejects non-loopback http/ws hosts in localhost mode', () => {
+    process.env.FLUJO_EXPOSURE_MODE = 'localhost';
+    const csp = buildSandboxCsp({
+      connectDomains: ['http://insecure.example.com', 'ws://evil.test:4300', 'http://127.0.0.1.evil.test:4300'],
+    });
+    expect(csp).toContain("connect-src 'none'");
+  });
+
+  it('drops loopback http/ws origins outside the localhost exposure mode', () => {
+    for (const mode of ['network', 'public']) {
+      process.env.FLUJO_EXPOSURE_MODE = mode;
+      const csp = buildSandboxCsp(loopbackCsp);
+      expect(csp).toContain("connect-src 'none'");
+      expect(csp).toContain("frame-src 'none'");
+      expect(csp).not.toContain('127.0.0.1:59503');
+      const proxyCsp = buildSandboxProxyCsp('https://flujo.example.test', loopbackCsp);
+      expect(proxyCsp).not.toContain('127.0.0.1:59503');
+    }
+  });
+});
+
 describe('buildSandboxProxyCsp', () => {
   it('permits inline View media, the mandatory srcdoc child, and the exact host ancestor', () => {
     const csp = buildSandboxProxyCsp('http://127.0.0.1:4200');

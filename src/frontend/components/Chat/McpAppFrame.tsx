@@ -37,6 +37,7 @@ import { mcpService } from '@/frontend/services/mcp';
 import {
   MAX_UI_RESOURCE_BYTES,
   extractUiResourceUri,
+  isLoopbackCspOrigin,
   isMcpAppMimeType,
 } from '@/shared/utils/mcpApps';
 import { createLogger } from '@/utils/logger';
@@ -398,13 +399,11 @@ function decodeBase64Utf8(blob: string): string {
 function sanitizeCspOrigins(
   values: string[] | undefined,
   schemes: Array<'https' | 'wss'>,
+  allowLoopback = false,
 ): string[] {
-  const sanitized: string[] = [];
-  const seen = new Set<string>();
-  for (const value of values ?? []) {
-    if (value.length === 0 || value.length > 2_048 || /[^\x21-\x7e]/.test(value)) continue;
+  const isSecureOrigin = (value: string): boolean => {
     const match = /^(https|wss):\/\/(\*\.)?([^/:?#]+)(?::(\d{1,5}))?$/i.exec(value);
-    if (!match || !schemes.includes(match[1].toLowerCase() as 'https' | 'wss')) continue;
+    if (!match || !schemes.includes(match[1].toLowerCase() as 'https' | 'wss')) return false;
     const labels = match[3].split('.');
     if (
       match[3].length > 253
@@ -413,9 +412,18 @@ function sanitizeCspOrigins(
         || label.length > 63
         || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(label)
       ))
-    ) continue;
+    ) return false;
     const port = match[4] ? Number(match[4]) : undefined;
-    if (port !== undefined && (!Number.isInteger(port) || port < 1 || port > 65_535)) continue;
+    return port === undefined || (Number.isInteger(port) && port >= 1 && port <= 65_535);
+  };
+  const sanitized: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values ?? []) {
+    if (value.length === 0 || value.length > 2_048 || /[^\x21-\x7e]/.test(value)) continue;
+    // ws: may widen only connect-style directives, mirroring wss:.
+    const loopbackOk = allowLoopback
+      && isLoopbackCspOrigin(value, schemes.includes('wss') ? ['http', 'ws'] : ['http']);
+    if (!loopbackOk && !isSecureOrigin(value)) continue;
     const dedupeKey = value.toLowerCase();
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
@@ -426,15 +434,37 @@ function sanitizeCspOrigins(
 }
 
 /**
+ * Mirror of the sandbox server's loopback allowance gate
+ * (allowLoopbackCspOrigins in backend/mcpApps/sandboxServer.ts, which admits
+ * loopback HTTP/WS CSP origins only in the `localhost` exposure mode). The
+ * browser cannot read the server's exposure setting directly, so the closest
+ * faithful signal is used: FLUJO itself being browsed from a plain-HTTP
+ * loopback origin, which only exists in that mode. HTTPS/hosted deployments
+ * therefore keep the strict secure-origin-only grant here too, and any
+ * divergence still fails closed at the sandbox server's enforcer.
+ */
+export function allowLoopbackCspGrant(
+  location: { protocol: string; hostname: string } | undefined
+    = typeof window === 'undefined' ? undefined : window.location,
+): boolean {
+  if (!location) return false;
+  return location.protocol === 'http:'
+    && ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(location.hostname.toLowerCase());
+}
+
+/**
  * Mirror the sandbox server's fail-closed CSP grant so ui/initialize advertises
  * the policy actually applied, not the app's broader untrusted request.
  */
-export function sanitizeGrantedCsp(csp: McpUiResourceCsp): McpUiResourceCsp {
+export function sanitizeGrantedCsp(
+  csp: McpUiResourceCsp,
+  allowLoopback: boolean = allowLoopbackCspGrant(),
+): McpUiResourceCsp {
   return {
-    connectDomains: sanitizeCspOrigins(csp.connectDomains, ['https', 'wss']),
-    resourceDomains: sanitizeCspOrigins(csp.resourceDomains, ['https']),
-    frameDomains: sanitizeCspOrigins(csp.frameDomains, ['https']),
-    baseUriDomains: sanitizeCspOrigins(csp.baseUriDomains, ['https']),
+    connectDomains: sanitizeCspOrigins(csp.connectDomains, ['https', 'wss'], allowLoopback),
+    resourceDomains: sanitizeCspOrigins(csp.resourceDomains, ['https'], allowLoopback),
+    frameDomains: sanitizeCspOrigins(csp.frameDomains, ['https'], allowLoopback),
+    baseUriDomains: sanitizeCspOrigins(csp.baseUriDomains, ['https'], allowLoopback),
   };
 }
 

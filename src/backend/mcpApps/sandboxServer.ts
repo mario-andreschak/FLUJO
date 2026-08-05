@@ -27,6 +27,7 @@ import http from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createLogger } from '@/utils/logger';
 import { getExposureMode } from '@/utils/http/exposureMode';
+import { isLoopbackCspOrigin } from '@/shared/utils/mcpApps';
 
 const log = createLogger('backend/mcpApps/sandboxServer');
 
@@ -235,6 +236,24 @@ const MAX_CSP_SOURCES_PER_DIRECTIVE = 64;
 const MAX_CSP_SOURCE_LENGTH = 2048;
 
 /**
+ * Local MCP App servers (IDE gateways and similar) legitimately serve their
+ * embedded UI over plain HTTP/WS on loopback (`http://127.0.0.1:<port>`,
+ * `ws://127.0.0.1:<port>`). Those origins are only reachable — and only safe
+ * to admit into a CSP grant — when FLUJO itself runs in the `localhost`
+ * exposure mode. Network/public deployments keep the strict secure-origin-only
+ * policy. (Compare sanitizeFrameAncestor below, which already tolerates the
+ * loopback-HTTP host origin.)
+ */
+function allowLoopbackCspOrigins(): boolean {
+  return getExposureMode() === 'localhost';
+}
+
+/** Map a directive's secure schemes to their loopback-only counterparts. */
+function loopbackSchemesFor(allowedSchemes: readonly CspScheme[]): Array<'http' | 'ws'> {
+  return allowedSchemes.includes('wss') ? ['http', 'ws'] : ['http'];
+}
+
+/**
  * Validate one server-declared CSP origin.
  *
  * The metadata fields contain origins, not arbitrary CSP source expressions.
@@ -243,8 +262,18 @@ const MAX_CSP_SOURCE_LENGTH = 2048;
  * support only secure origins from the stable spec examples:
  * `https://host[:port]`, `https://*.host[:port]`, and (for connect-src only)
  * `wss://...`.
+ *
+ * `allowLoopback` (gated on the `localhost` exposure mode) additionally admits
+ * explicit-port loopback `http://`/`ws://` origins via isLoopbackCspOrigin.
  */
-function isValidCspOrigin(source: unknown, allowedSchemes: readonly CspScheme[]): source is string {
+function isValidCspOrigin(
+  source: unknown,
+  allowedSchemes: readonly CspScheme[],
+  allowLoopback = false,
+): source is string {
+  if (allowLoopback && isLoopbackCspOrigin(source, loopbackSchemesFor(allowedSchemes))) {
+    return true;
+  }
   if (
     typeof source !== 'string' ||
     source.length === 0 ||
@@ -281,13 +310,14 @@ function isValidCspOrigin(source: unknown, allowedSchemes: readonly CspScheme[])
  */
 function sanitizeCspDomains(
   domains: unknown,
-  allowedSchemes: readonly CspScheme[]
+  allowedSchemes: readonly CspScheme[],
+  allowLoopback = false,
 ): string[] {
   if (!Array.isArray(domains)) return [];
   const seen = new Set<string>();
   const clean: string[] = [];
   for (const source of domains) {
-    if (!isValidCspOrigin(source, allowedSchemes)) continue;
+    if (!isValidCspOrigin(source, allowedSchemes, allowLoopback)) continue;
     const key = source.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
@@ -320,10 +350,11 @@ function sanitizeFrameAncestor(origin?: string): string {
  * outer proxy's separate HTTP policy is built by `buildSandboxProxyCsp`.
  */
 export function buildSandboxCsp(csp?: ResourceCsp): string {
-  const resourceDomains = sanitizeCspDomains(csp?.resourceDomains, ['https']).join(' ');
-  const connectDomains = sanitizeCspDomains(csp?.connectDomains, ['https', 'wss']).join(' ');
-  const frameDomains = sanitizeCspDomains(csp?.frameDomains, ['https']).join(' ');
-  const baseUriDomains = sanitizeCspDomains(csp?.baseUriDomains, ['https']).join(' ');
+  const allowLoopback = allowLoopbackCspOrigins();
+  const resourceDomains = sanitizeCspDomains(csp?.resourceDomains, ['https'], allowLoopback).join(' ');
+  const connectDomains = sanitizeCspDomains(csp?.connectDomains, ['https', 'wss'], allowLoopback).join(' ');
+  const frameDomains = sanitizeCspDomains(csp?.frameDomains, ['https'], allowLoopback).join(' ');
+  const baseUriDomains = sanitizeCspDomains(csp?.baseUriDomains, ['https'], allowLoopback).join(' ');
 
   const directives = [
     "default-src 'none'",
@@ -357,10 +388,11 @@ export function buildSandboxProxyCsp(
   frameAncestor?: string,
   csp?: ResourceCsp,
 ): string {
-  const resourceDomains = sanitizeCspDomains(csp?.resourceDomains, ['https']).join(' ');
-  const connectDomains = sanitizeCspDomains(csp?.connectDomains, ['https', 'wss']).join(' ');
-  const frameDomains = sanitizeCspDomains(csp?.frameDomains, ['https']).join(' ');
-  const baseUriDomains = sanitizeCspDomains(csp?.baseUriDomains, ['https']).join(' ');
+  const allowLoopback = allowLoopbackCspOrigins();
+  const resourceDomains = sanitizeCspDomains(csp?.resourceDomains, ['https'], allowLoopback).join(' ');
+  const connectDomains = sanitizeCspDomains(csp?.connectDomains, ['https', 'wss'], allowLoopback).join(' ');
+  const frameDomains = sanitizeCspDomains(csp?.frameDomains, ['https'], allowLoopback).join(' ');
+  const baseUriDomains = sanitizeCspDomains(csp?.baseUriDomains, ['https'], allowLoopback).join(' ');
 
   return [
     "default-src 'none'",

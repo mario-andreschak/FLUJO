@@ -8,6 +8,7 @@ import {
   buildAppCsp,
   buildAppSrcDoc,
   extractAppHtml,
+  isLoopbackCspOrigin,
   isValidCspSourceToken,
 } from '@/shared/utils/mcpApps';
 
@@ -159,6 +160,63 @@ describe('buildAppCsp', () => {
     const csp = buildAppCsp({ connectDomains: ['wss://realtime.example.com:8443'] });
     expect(csp).toContain('connect-src wss://realtime.example.com:8443');
   });
+
+  it('admits loopback http/ws origins only with the explicit allowLoopback opt-in', () => {
+    const meta = {
+      connectDomains: ['http://127.0.0.1:59503', 'ws://127.0.0.1:59503'],
+      frameDomains: ['http://127.0.0.1:59503'],
+      resourceDomains: ['http://localhost:59503'],
+    };
+    const strict = buildAppCsp(meta);
+    expect(strict).toContain("connect-src 'none'");
+    expect(strict).toContain("frame-src 'none'");
+    expect(strict).not.toContain('127.0.0.1');
+
+    const loopback = buildAppCsp(meta, { allowLoopback: true });
+    expect(loopback).toContain('connect-src http://127.0.0.1:59503 ws://127.0.0.1:59503');
+    expect(loopback).toContain('frame-src http://127.0.0.1:59503');
+    expect(loopback).toMatch(/img-src[^;]*http:\/\/localhost:59503/);
+  });
+
+  it('keeps ws: out of non-connect directives and non-loopback http out entirely, even with allowLoopback', () => {
+    const csp = buildAppCsp({
+      frameDomains: ['ws://127.0.0.1:59503'],
+      connectDomains: ['http://insecure.example.com', 'http://127.0.0.1'],
+    }, { allowLoopback: true });
+    expect(csp).toContain("frame-src 'none'");
+    expect(csp).toContain("connect-src 'none'");
+  });
+});
+
+describe('isLoopbackCspOrigin', () => {
+  it('accepts explicit-port http/ws loopback origins', () => {
+    expect(isLoopbackCspOrigin('http://127.0.0.1:59503')).toBe(true);
+    expect(isLoopbackCspOrigin('ws://127.0.0.1:59503')).toBe(true);
+    expect(isLoopbackCspOrigin('http://localhost:4300')).toBe(true);
+    expect(isLoopbackCspOrigin('HTTP://LOCALHOST:4300')).toBe(true);
+    expect(isLoopbackCspOrigin('http://[::1]:4300')).toBe(true);
+  });
+
+  it('honors the per-directive scheme restriction', () => {
+    expect(isLoopbackCspOrigin('ws://127.0.0.1:59503', ['http'])).toBe(false);
+    expect(isLoopbackCspOrigin('http://127.0.0.1:59503', ['http'])).toBe(true);
+  });
+
+  it('rejects missing ports, non-loopback hosts, secure schemes, and injection payloads', () => {
+    expect(isLoopbackCspOrigin('http://127.0.0.1')).toBe(false);
+    expect(isLoopbackCspOrigin('http://localhost')).toBe(false);
+    expect(isLoopbackCspOrigin('http://127.0.0.1:0')).toBe(false);
+    expect(isLoopbackCspOrigin('http://127.0.0.1:99999')).toBe(false);
+    expect(isLoopbackCspOrigin('http://insecure.example.com:80')).toBe(false);
+    expect(isLoopbackCspOrigin('http://127.0.0.1.evil.test:80')).toBe(false);
+    expect(isLoopbackCspOrigin('http://127.0.0.2:80')).toBe(false);
+    expect(isLoopbackCspOrigin('https://127.0.0.1:4300')).toBe(false);
+    expect(isLoopbackCspOrigin('http://127.0.0.1:4300/path')).toBe(false);
+    expect(isLoopbackCspOrigin('http://127.0.0.1:4300; frame-src *')).toBe(false);
+    expect(isLoopbackCspOrigin('http://user:pass@127.0.0.1:4300')).toBe(false);
+    expect(isLoopbackCspOrigin(undefined)).toBe(false);
+    expect(isLoopbackCspOrigin(42 as unknown as string)).toBe(false);
+  });
 });
 
 describe('buildAppSrcDoc', () => {
@@ -214,6 +272,15 @@ describe('isValidCspSourceToken', () => {
     expect(isValidCspSourceToken('https://exa mple.com')).toBe(false);
     expect(isValidCspSourceToken(undefined)).toBe(false);
     expect(isValidCspSourceToken(42)).toBe(false);
+  });
+
+  it('accepts loopback http/ws origins only via the explicit opt-in', () => {
+    expect(isValidCspSourceToken('http://127.0.0.1:59503')).toBe(false);
+    expect(isValidCspSourceToken('http://127.0.0.1:59503', { allowLoopback: true })).toBe(true);
+    expect(isValidCspSourceToken('ws://localhost:4300', { allowLoopback: true })).toBe(true);
+    // Non-loopback and portless tokens stay rejected even with the opt-in.
+    expect(isValidCspSourceToken('http://insecure.example.com', { allowLoopback: true })).toBe(false);
+    expect(isValidCspSourceToken('http://127.0.0.1', { allowLoopback: true })).toBe(false);
   });
 });
 

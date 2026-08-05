@@ -135,12 +135,21 @@ export function extractUiResourceUri(meta: unknown): string | undefined {
  *     is 1–5 digits.
  *
  * Everything else — bare `*`, `'unsafe-inline'`, `'unsafe-eval'`, `data:`,
- * `blob:`, `http:`/`ws:` (incl. localhost), URLs with credentials/paths/queries
- * — is rejected. Invalid tokens are dropped SILENTLY; this module is
- * deliberately framework-free and side-effect-free (no logging), and a rejected
- * token is NEVER replaced by a wildcard.
+ * `blob:`, non-loopback `http:`/`ws:`, URLs with credentials/paths/queries
+ * — is rejected. Plain-HTTP/WS LOOPBACK origins (`http://127.0.0.1:<port>`,
+ * `ws://localhost:<port>`, `http://[::1]:<port>` — explicit port required) are
+ * accepted ONLY when the caller explicitly opts in via
+ * `options.allowLoopback`; callers must gate that on FLUJO's `localhost`
+ * exposure mode (this module stays framework-free, so the exposure decision is
+ * threaded in as a parameter). Invalid tokens are dropped SILENTLY; this module
+ * is deliberately framework-free and side-effect-free (no logging), and a
+ * rejected token is NEVER replaced by a wildcard.
  */
-export function isValidCspSourceToken(token: unknown): boolean {
+export function isValidCspSourceToken(
+  token: unknown,
+  options?: { allowLoopback?: boolean },
+): boolean {
+  if (options?.allowLoopback === true && isLoopbackCspOrigin(token)) return true;
   if (typeof token !== 'string') return false;
   // Defence-in-depth: reject any control char or CSP-special char outright.
   // (control chars, space, DEL and any non-ASCII are caught by the printable
@@ -162,6 +171,31 @@ export function isValidCspSourceToken(token: unknown): boolean {
 }
 
 /**
+ * Strict validator for a plain-HTTP/WS LOOPBACK origin declared by a local MCP
+ * App server (e.g. an IDE gateway on `http://127.0.0.1:<port>` with its bridge
+ * on `ws://127.0.0.1:<port>`). Accepted shape: `http://` or `ws://`, host
+ * exactly `127.0.0.1`, `localhost`, or `[::1]`, and a REQUIRED explicit port —
+ * so the token stays one unambiguous, non-routable origin. `[::1]` is handled
+ * here explicitly because the secure-origin grammar's hostname class excludes
+ * the bracketed-colon form.
+ *
+ * This is an opt-in exception: callers must gate it on FLUJO's `localhost`
+ * exposure mode. Public/hosted deployments keep the secure-origin-only policy.
+ */
+export function isLoopbackCspOrigin(
+  token: unknown,
+  allowedSchemes: ReadonlyArray<'http' | 'ws'> = ['http', 'ws'],
+): boolean {
+  if (typeof token !== 'string' || token.length === 0 || token.length > 2_048) return false;
+  // Same defence-in-depth as isValidCspSourceToken: no CSP-special characters.
+  if (/[^\x21-\x7e]/.test(token) || /[;,'"`$<>\\()]/.test(token)) return false;
+  const match = /^(http|ws):\/\/(127\.0\.0\.1|localhost|\[::1\]):(\d{1,5})$/i.exec(token);
+  if (!match || !allowedSchemes.includes(match[1].toLowerCase() as 'http' | 'ws')) return false;
+  const port = Number(match[3]);
+  return Number.isInteger(port) && port >= 1 && port <= 65_535;
+}
+
+/**
  * Build the Content-Security-Policy string for the sandboxed app iframe from a
  * resource's `_meta.ui` block. Default-deny: with no domains declared the app
  * gets `default-src 'none'` plus inline scripts/styles (needed for a self-
@@ -170,25 +204,36 @@ export function isValidCspSourceToken(token: unknown): boolean {
  * Declared domains widen only the specific directive they map to. This string
  * is injected as a `<meta http-equiv="Content-Security-Policy">` inside the
  * iframe document (belt-and-suspenders alongside the `sandbox` attribute).
+ *
+ * `options.allowLoopback` additionally admits loopback `http://`/`ws://`
+ * origins (see isLoopbackCspOrigin); the scheme→directive mapping mirrors the
+ * secure one: `ws:` may widen only `connect-src`, `http:` the others.
  */
-export function buildAppCsp(meta?: UIResourceCsp | null): string {
+export function buildAppCsp(
+  meta?: UIResourceCsp | null,
+  options?: { allowLoopback?: boolean },
+): string {
+  const allowLoopback = options?.allowLoopback === true;
   const cleanDomains = (
     domains: string[] | undefined,
-    allowedSchemes: Array<'https' | 'wss'>,
+    allowedSchemes: Array<'https' | 'wss' | 'http' | 'ws'>,
   ): string =>
     (domains || [])
       .map((d) => (typeof d === 'string' ? d.trim() : ''))
       .filter((d) => (
         d !== ''
-        && isValidCspSourceToken(d)
+        && isValidCspSourceToken(d, { allowLoopback })
         && allowedSchemes.some((scheme) => d.toLowerCase().startsWith(`${scheme}://`))
       ))
       .join(' ');
 
-  const connect = cleanDomains(meta?.connectDomains, ['https', 'wss']);
-  const resource = cleanDomains(meta?.resourceDomains, ['https']);
-  const frame = cleanDomains(meta?.frameDomains, ['https']);
-  const baseUri = cleanDomains(meta?.baseUriDomains, ['https']);
+  const connect = cleanDomains(
+    meta?.connectDomains,
+    allowLoopback ? ['https', 'wss', 'http', 'ws'] : ['https', 'wss'],
+  );
+  const resource = cleanDomains(meta?.resourceDomains, allowLoopback ? ['https', 'http'] : ['https']);
+  const frame = cleanDomains(meta?.frameDomains, allowLoopback ? ['https', 'http'] : ['https']);
+  const baseUri = cleanDomains(meta?.baseUriDomains, allowLoopback ? ['https', 'http'] : ['https']);
 
   const directives: string[] = [
     "default-src 'none'",
