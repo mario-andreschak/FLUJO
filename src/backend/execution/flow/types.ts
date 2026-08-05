@@ -1,7 +1,7 @@
 import { NodeType, Flow } from '@/shared/types/flow/flow';
 import { NodeExecutionTrackerEntry } from '@/shared/types/flow/response';
 import { FlujoChatMessage, type McpAppModelContextMap } from '@/shared/types/chat';
-import { EmitFn, RecoveryRecord, UsageTotals } from '@/shared/types/execution/events';
+import { EmitFn, RecoveryLaneIdentity, RecoveryRecord, UsageTotals } from '@/shared/types/execution/events';
 import { EdgeCondition } from '@/utils/shared/edgeConditions';
 import { PermissionRule, SavedPermissionRule } from '@/shared/types/permissions';
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
@@ -468,6 +468,11 @@ export interface SubflowLanePlan {
      *  derived from the lane's brief/item so saved spawn lanes are tellable
      *  apart. Only used when the node persists lane conversations. */
     laneTitle?: string;
+    /** Stable durable lane identity when this queue belongs to a recoverable
+     *  persisted Subflow invocation. */
+    laneId?: string;
+    /** Stable child conversation id reused by every recovery attempt. */
+    conversationId?: string;
 }
 
 /** The outcome of one queued child job, kept in request order. */
@@ -478,6 +483,62 @@ export interface SubflowLaneResult {
     /** Generated media returned by this lane, in child-message order. */
     outputMedia?: ModelMediaPart[];
     error?: string;
+    laneId?: string;
+    conversationId?: string;
+}
+
+export type SubflowInvocationLaneStatus =
+    | 'pending'
+    | 'running'
+    | 'completed'
+    | 'error'
+    | 'cancelled';
+
+/** One durable child job belonging to a specific visit of a Subflow node. The
+ *  resolved input is frozen here because a caller-created task queue is consumed
+ *  before the node runs and cannot be reconstructed safely on a later retry. */
+export interface SubflowInvocationLane extends SubflowLanePlan {
+    id: string;
+    index: number;
+    count: number;
+    conversationId: string;
+    status: SubflowInvocationLaneStatus;
+    attempt: number;
+    outputText?: string;
+    outputMedia?: ModelMediaPart[];
+    error?: string;
+    updatedAt: number;
+}
+
+export type SubflowInvocationStatus = 'running' | 'blocked' | 'ready' | 'folded';
+
+/** Durable join record for one visit to a Subflow node. It is stored on the
+ *  parent SharedState, making lane reuse and child-to-parent completion work
+ *  across HTTP requests and process restarts without preserving a JS call stack. */
+export interface SubflowInvocation {
+    version: 1;
+    id: string;
+    parentConversationId: string;
+    parentNodeId: string;
+    parentRunId?: string;
+    status: SubflowInvocationStatus;
+    depth: number;
+    chainDepth?: number;
+    plannedExecutionId?: string;
+    showSteps: boolean;
+    nodeName?: string;
+    subflowName?: string;
+    concurrencyLimit: number;
+    joinSeparator: string;
+    errorStrategy: 'fail-fast' | 'collect-all';
+    /** Shared node input stored once for fan-out lanes. Per-lane briefs/items
+     *  remain on the lane itself, avoiding N copies of a full chat transcript. */
+    sharedInput?: { prompt: string } | { messages: FlujoChatMessage[] };
+    lanes: SubflowInvocationLane[];
+    createdAt: number;
+    updatedAt: number;
+    foldedAt?: number;
+    resumeRequestedAt?: number;
 }
 
 // Type-specific node params
@@ -607,6 +668,14 @@ export interface SharedState {
      * precise cancellation/interruption/failure classification and safe boundary.
      */
     recovery?: RecoveryRecord;
+    /** Recoverable Subflow-node visits owned by this parent conversation. */
+    subflowInvocations?: Record<string, SubflowInvocation>;
+    /** Unfolded invocation per Subflow node. A completed/folded visit clears its
+     *  entry so a later graph loop creates a genuinely new batch. */
+    activeSubflowInvocationByNode?: Record<string, string>;
+    /** On a persisted child conversation, identifies the exact parent lane that
+     *  this conversation must satisfy after a retry or continued turn. */
+    subflowLane?: RecoveryLaneIdentity;
     /** UTC epoch used to measure the logical run across pause/resume boundaries. */
     statisticsRunStartedAt?: number;
     /** Prevents a resumed approval/debug request from emitting a second start. */
@@ -1155,6 +1224,8 @@ export interface SubflowNodePrepResult extends BasePrepResult {
     joinSeparator?: string;
     /** Error handling strategy for parallel mode (default 'collect-all'). */
     errorStrategy?: 'fail-fast' | 'collect-all';
+    /** Durable parent join record backing this execution, when recoverable. */
+    invocationId?: string;
 }
 
 // Union type for all prep results

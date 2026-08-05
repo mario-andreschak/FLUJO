@@ -524,7 +524,7 @@ const ReferenceServersTab: React.FC<TabProps> = ({
         command = server.command || 'npx -y @modelcontextprotocol/server-' + server.name;
         args = [];
         buildCommand = server.buildCommand || 'npm run build';
-        installCommand = server.installCommand || 'npm install';
+        installCommand = server.installCommand || 'npm install --include=dev';
       }
       
       // Create a configuration for the selected server with the full server directory path

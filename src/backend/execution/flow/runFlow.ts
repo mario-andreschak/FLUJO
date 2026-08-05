@@ -56,6 +56,8 @@ import {
   markDanglingToolEffectsUnknown,
   reconcileInterruptedRecovery,
 } from '@/backend/execution/flow/recoveryCheckpoint';
+import { queueSubflowRunOutcome } from '@/backend/execution/flow/subflowRecovery';
+import { hydrateLazyToolPayloads } from '@/backend/execution/flow/lazyToolPayloads';
 
 const log = createLogger('backend/execution/flow/runFlow');
 
@@ -632,7 +634,8 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   sharedState.logicalRunId = logicalRunId;
   sharedState.statisticsRunStartedAt ??= Date.now();
   initializeRecovery(sharedState, logicalRunId);
-  if (input.lane) sharedState.recovery!.lane = input.lane;
+  if (input.lane) sharedState.subflowLane = input.lane;
+  if (sharedState.subflowLane) sharedState.recovery!.lane = sharedState.subflowLane;
   const flowSnapshot = () => ({
     id: sharedState.flowId || input.flowId || input.flowDefinition?.id || input.modelName || 'unknown',
     name: sharedState.statisticsFlowName ?? sharedState.flowSnapshot?.name ?? input.flowDefinition?.name,
@@ -695,7 +698,9 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       }));
       sharedState.statisticsRunFinished = true;
     }
-    return { ...result, runId: logicalRunId };
+    const finalized = { ...result, runId: logicalRunId };
+    queueSubflowRunOutcome(finalized);
+    return finalized;
   };
 
   if (sharedState.runDepth > MAX_SUBFLOW_DEPTH) {
@@ -710,6 +715,17 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       finalAction: ERROR_ACTION,
       sharedState,
     });
+  }
+
+  // Conversation GET responses may carry short display previews for large tool
+  // bodies. Restore those references before the client history can replace the
+  // canonical transcript (also covers a split copied into a new conversation).
+  if (data.messages?.length) {
+    data.messages = await hydrateLazyToolPayloads(
+      data.messages,
+      sharedState.messages ?? [],
+      effectiveConvId,
+    );
   }
 
   // Snapshot the pre-turn messages for the log reconcile below: the incoming

@@ -8,7 +8,7 @@
  *      so nothing is written into the read-only package install dir.
  *   2. Marks the install mode as 'npm' (FLUJO_NPM=1) so the update route/UI show
  *      "reinstall the package" instead of a broken git-pull button.
- *   3. Applies the exact same TLS/CA env handling as `npm start` by reusing
+ *   3. Applies the exact same child-process env handling as `npm start` by reusing
  *      buildLaunchEnv() from scripts/launch-next.mjs (single source of truth).
  *   4. Starts Next's own `next start` from the package's bundled node_modules,
  *      with cwd = package root so the packaged `.next` build is found.
@@ -69,7 +69,7 @@ if (!process.env.FLUJO_BASE_URL || process.env.FLUJO_BASE_URL.trim().length === 
   process.env.FLUJO_BASE_URL = `http://127.0.0.1:${port}`;
 }
 
-// --- build env (TLS/CA), reusing the launcher's single source of truth ------
+// --- build child-process env, reusing the launcher's single source of truth -
 const { buildLaunchEnv } = await import(pathToFileURL(path.join(packageRoot, 'scripts', 'launch-next.mjs')).href);
 const { applyExposureRuntimeEnv, withExposureHostname } = await import(
   pathToFileURL(path.join(packageRoot, 'scripts', 'exposure-mode.mjs')).href

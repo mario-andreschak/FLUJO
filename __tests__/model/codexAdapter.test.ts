@@ -58,10 +58,12 @@ jest.mock('@/backend/services/model/adapters/codexToolBridge', () => ({
 
 const callToolMock = jest.fn();
 const loadServerConfigsMock = jest.fn();
+const listServerToolsMock = jest.fn();
 jest.mock('@/backend/services/mcp', () => ({
   mcpService: {
     callTool: (...a: unknown[]) => callToolMock(...(a as [])),
     loadServerConfigs: (...a: unknown[]) => loadServerConfigsMock(...(a as [])),
+    listServerTools: (...a: unknown[]) => listServerToolsMock(...(a as [])),
     isMcpAppAccessEnabled: async (serverName: string) => {
       const configs = await loadServerConfigsMock();
       return Array.isArray(configs)
@@ -123,9 +125,11 @@ beforeEach(() => {
   runStreamedMock.mockReset();
   callToolMock.mockReset();
   loadServerConfigsMock.mockReset();
+  listServerToolsMock.mockReset();
   loadServerConfigsMock.mockResolvedValue([
     { name: 'my-server', enableMcpApps: true },
   ]);
+  listServerToolsMock.mockResolvedValue({ tools: [] });
   bridgeCloseMock.mockClear();
   capturedBridgeTools = [];
   capturedBridgeInstructions = undefined;
@@ -242,6 +246,49 @@ describe('CodexAdapter — transcript & usage', () => {
     expect(transcript).toHaveLength(1);
     expect(streamed).toHaveLength(1);
     expect((transcript![0] as { content?: string }).content).toBe('hello from codex');
+  });
+
+  it('restarts the same SDK thread with a mid-run user intervention and persists it', async () => {
+    runStreamedMock
+      .mockImplementationOnce(async () => ({
+        events: eventStream([
+          { type: 'item.updated', item: { id: 'draft', type: 'agent_message', text: 'going the wrong way' } },
+          agentMessage('this must not finish'),
+        ])(),
+      }))
+      .mockImplementationOnce(async () => ({
+        events: eventStream([
+          agentMessage('corrected answer'),
+          turnCompleted({ input_tokens: 2, cached_input_tokens: 0, output_tokens: 2 }),
+        ])(),
+      }));
+    const injected = {
+      id: 'steer-1',
+      role: 'user',
+      content: 'stop and use the other approach',
+      timestamp: 123,
+      injected: true,
+    } as FlujoChatMessage;
+    const consumeSteeringMessages = jest
+      .fn<FlujoChatMessage[], []>()
+      .mockReturnValueOnce([injected])
+      .mockReturnValue([]);
+    const streamed: FlujoChatMessage[] = [];
+
+    const { completion, transcript } = await new CodexAdapter().createCompletion(baseInput({
+      consumeSteeringMessages,
+      onTranscriptMessage: message => streamed.push(message),
+    }));
+
+    expect(runStreamedMock).toHaveBeenCalledTimes(2);
+    expect(runStreamedMock.mock.calls[1][0]).toBe('stop and use the other approach');
+    expect(transcript).toEqual([
+      expect.objectContaining({ role: 'assistant', content: 'going the wrong way' }),
+      expect.objectContaining({ id: 'steer-1', role: 'user', content: 'stop and use the other approach' }),
+      expect.objectContaining({ role: 'assistant', content: 'corrected answer' }),
+    ]);
+    expect(streamed).toEqual(transcript);
+    expect(completion.choices[0].message.content).toBe('corrected answer');
   });
 
   it('emits item.updated text as append-only deltas and reconciles the transcript id', async () => {
@@ -545,6 +592,59 @@ describe('CodexAdapter — tool bridging', () => {
       uri: 'ui://advertised-dashboard',
       serverName: 'my-server',
       toolName: 'list_things',
+    });
+  });
+
+  it('renders the downstream MCP App when the trusted FLUJO control tool forwards the call', async () => {
+    loadServerConfigsMock.mockResolvedValue([
+      {
+        name: 'control-plane',
+        source: { type: 'marketplace', id: '@mario.andreschak/mcp-flujo' },
+        enableMcpApps: false,
+      },
+      { name: 'mcp-cad-studio', enableMcpApps: true },
+    ]);
+    listServerToolsMock.mockResolvedValue({
+      tools: [{
+        name: 'studio_ui',
+        _meta: { ui: { resourceUri: 'ui://cad-studio/main' } },
+      }],
+    });
+    callToolMock.mockResolvedValueOnce({
+      success: true,
+      data: { content: [{ type: 'text', text: 'Opened CAD Studio with Pipe 2.' }] },
+    });
+    runStreamedMock.mockImplementationOnce(async () => ({
+      events: (async function* () {
+        await capturedBridgeTools[0].handler({
+          server: 'mcp-cad-studio',
+          tool: 'studio_ui',
+          args: { pipe: 2 },
+        });
+        yield agentMessage('done');
+        yield turnCompleted({ input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 });
+      })(),
+    }));
+
+    const { transcript } = await new CodexAdapter().createCompletion(
+      baseInput({
+        tools: [mcpTool],
+        toolNameMap: {
+          mcp_hashed_name: {
+            server: 'control-plane',
+            tool: 'call_mcp_tool',
+          },
+        },
+      }),
+    );
+
+    expect(listServerToolsMock).toHaveBeenCalledWith('mcp-cad-studio', 'model');
+    const toolMsg = transcript!.find(m => m.role === 'tool');
+    expect(toolMsg?.ui).toEqual({
+      uri: 'ui://cad-studio/main',
+      serverName: 'mcp-cad-studio',
+      toolName: 'studio_ui',
+      toolArgs: '{"pipe":2}',
     });
   });
 

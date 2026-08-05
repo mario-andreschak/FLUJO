@@ -1,4 +1,5 @@
 import { createLogger, LOG_LEVEL } from '@/utils/logger';
+import { takeSteeringMessages } from '@/backend/execution/flow/steeringInbox';
 import {
   ModelCallInput,
   ModelCallResult,
@@ -17,6 +18,7 @@ import { modelService } from '@/backend/services/model';
 import {
   filterUnsupportedMediaInputs,
   hydrateRunResourceMedia,
+  materializeRunResourceMediaPaths,
 } from '@/backend/services/model/mediaHandoff';
 import { resolveEffectiveMaxTurns } from './maxTurns';
 import { resolveEffectiveMaxTokens } from './maxTokens';
@@ -33,7 +35,7 @@ import { mcpService } from '@/backend/services/mcp';
 import { runWithConcurrency } from '@/backend/services/mcp/utils/boundedConcurrency';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { extractUiResourceUri } from '@/shared/utils/mcpApps';
-import { resolveAdvertisedToolUiLink } from '@/backend/mcpApps/toolUi';
+import { resolveInvokedToolUiLink } from '@/backend/mcpApps/toolUi';
 import {
   getRunResourceSettings,
   writeRunResource,
@@ -208,7 +210,8 @@ export class ModelHandler {
     toolName: string,
     resultData: unknown,
     advertisedUri?: string,
-  ): Promise<{ uri: string; serverName: string; toolName: string } | undefined> {
+    invocationArgs?: Record<string, unknown>,
+  ): Promise<{ uri: string; serverName: string; toolName: string; toolArgs?: string } | undefined> {
     // New conversations carry the advertised URI in their tool identity map.
     // Older persisted maps do not, so re-read the model-visible definition as a
     // compatibility fallback. Never select a URI solely from the call result.
@@ -222,7 +225,13 @@ export class ModelHandler {
         log.warn(`resolveToolUiLink: failed to list tools for ${serverName}`, error);
       }
     }
-    return resolveAdvertisedToolUiLink(serverName, toolName, uri, resultData);
+    return resolveInvokedToolUiLink(
+      serverName,
+      toolName,
+      uri,
+      resultData,
+      invocationArgs,
+    );
   }
 
   /**
@@ -1071,6 +1080,23 @@ export class ModelHandler {
         }
       : undefined;
 
+    // Self-orchestrating SDK adapters own several model/tool turns inside one
+    // createCompletion call, so runFlow cannot reach its between-step steering
+    // drain while they are active. Let those adapters consume the same inbox at
+    // their internal safe boundaries. They immediately record every consumed
+    // message through onTranscriptMessage, which updates live state and the
+    // append-only conversation log before the provider sees it.
+    const consumeSteeringMessages = conversationId &&
+      (modelAdapter === 'claude-cli' || modelAdapter === 'codex-cli')
+      ? () => {
+          const pending = takeSteeringMessages(conversationId);
+          for (const message of pending) {
+            if (!message.processNodeId && nodeId) message.processNodeId = nodeId;
+          }
+          return pending;
+        }
+      : undefined;
+
     // Cancellation watch for the in-flight provider call: pressing Stop sets the
     // conversation's isCancelled flag (own or an ancestor's, for subflow
     // children); generateCompletion polls this and aborts the call mid-stream
@@ -1204,6 +1230,7 @@ export class ModelHandler {
       maxTokens: effectiveMaxTokens,
       requestToolApproval,
       onTranscriptMessage,
+      consumeSteeringMessages,
       onModelDelta,
       shouldAbort,
       conversationId,
@@ -1420,6 +1447,7 @@ export class ModelHandler {
         args: Record<string, unknown>;
       }) => Promise<{ approved: boolean; feedback?: string }>;
       onTranscriptMessage?: (message: FlujoChatMessage) => void;
+      consumeSteeringMessages?: () => FlujoChatMessage[];
       onModelDelta?: (delta: ModelStreamDelta) => void;
       /** Polled while the provider call is in flight; true aborts it (Stop). */
       shouldAbort?: () => boolean;
@@ -1510,8 +1538,13 @@ export class ModelHandler {
       // its result, the synthetic "Continue") from the WIRE view only — the threaded
       // history kept in SharedState is untouched. So a node handed off to sees a
       // clean conversation. See ~/.claude/plans/execution-core-v2.md.
+      const messagesWithMaterializedMedia = await Promise.all(messages.map(async (message) => {
+        if (!message.media?.length) return message;
+        const media = await materializeRunResourceMediaPaths(message.media);
+        return media === message.media ? message : { ...message, media };
+      }));
       let apiMessages: OpenAI.ChatCompletionMessageParam[] = filterUnsupportedMediaInputs(
-        toApiMessages(messages),
+        toApiMessages(messagesWithMaterializedMedia),
         model.inputModalities,
       );
       let effectiveTools: OpenAI.ChatCompletionFunctionTool[] | undefined = tools;
@@ -1862,6 +1895,7 @@ export class ModelHandler {
               maxTurns: opts?.maxTurns,
               requestToolApproval: opts?.requestToolApproval,
               onTranscriptMessage,
+              consumeSteeringMessages: opts?.consumeSteeringMessages,
               onModelDelta: opts?.onModelDelta,
               signal: abortController.signal,
               conversationId: opts?.conversationId,
@@ -2204,6 +2238,15 @@ export class ModelHandler {
         const toolCall = toolCalls[callIndex];
         const { id, function: { name, arguments: argsString } } = toolCall;
         const decodedForUi = decodeToolName(name, toolNameMap);
+        let invocationArgsForUi: Record<string, unknown> | undefined;
+        try {
+          const parsed = JSON.parse(argsString);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            invocationArgsForUi = parsed as Record<string, unknown>;
+          }
+        } catch {
+          // The normal parsing path below will surface malformed tool args.
+        }
 
         const toolCallMessages: FlujoChatMessage[] = [];
         const processedToolCalls: ProcessedToolCall[] = [];
@@ -2223,6 +2266,7 @@ export class ModelHandler {
                   decodedForUi.tool,
                   undefined,
                   decodedForUi.uiResourceUri,
+                  invocationArgsForUi,
                 )
               : undefined;
             toolCallMessages.push({
@@ -2425,6 +2469,7 @@ export class ModelHandler {
               decoded.tool,
               undefined,
               decoded.uiResourceUri,
+              invocationArgsForUi,
             );
             toolCallMessages.push({
               id: uuidv4(),
@@ -2465,6 +2510,7 @@ export class ModelHandler {
                 toolName,
                 undefined,
                 decoded.uiResourceUri,
+                invocationArgsForUi,
               );
               toolCallMessages.push({
                 id: uuidv4(),
@@ -2517,6 +2563,7 @@ export class ModelHandler {
                 data: { text: argsString },
                 producedBy: {
                   source: 'tool-args',
+                  payloadRole: 'tool-arguments',
                   nodeId: node?.nodeId,
                   server: serverName,
                   toolName,
@@ -2617,6 +2664,63 @@ export class ModelHandler {
             ? JSON.stringify(effectiveData)
             : `Error: ${result.error}`;
 
+          // Keep an exact transcript-level copy of medium-large results for the
+          // browser's expansion-time loader. Results over the context boundary
+          // are captured by boundToolResult below instead, avoiding duplicates.
+          if (
+            result.success
+            && conversationId
+            && runResourceSettings?.autoCaptureEnabled
+            && resultContent.length >= runResourceSettings.textThresholdChars
+          ) {
+            const resultBytes = Buffer.byteLength(resultContent, 'utf8');
+            const maxBytes = runResourceSettings.toolResultMaxBytes ?? 50 * 1024;
+            const maxLines = runResourceSettings.toolResultMaxLines ?? 2000;
+            const overBytes = maxBytes > 0 && resultBytes > maxBytes;
+            let overLines = false;
+            if (maxLines > 0) {
+              let lines = 1;
+              for (let index = 0; index < resultContent.length && lines <= maxLines; index++) {
+                if (resultContent.charCodeAt(index) === 10) lines++;
+              }
+              overLines = lines > maxLines;
+            }
+            if (!overBytes && !overLines) {
+              try {
+                const writtenResult = await writeRunResource({
+                  conversationId,
+                  mimeType: 'application/json',
+                  kind: 'text',
+                  data: { text: resultContent },
+                  producedBy: {
+                    source: 'tool-result',
+                    payloadRole: 'tool-message',
+                    nodeId: node?.nodeId,
+                    server: serverName,
+                    toolName,
+                    toolCallId: id,
+                  },
+                });
+                if (!('skipped' in writtenResult)) {
+                  emit?.({
+                    type: 'resource:write',
+                    node,
+                    server: 'flujo',
+                    uri: writtenResult.uri,
+                    mimeType: writtenResult.mimeType,
+                    size: writtenResult.size,
+                    source: 'tool-result',
+                    toolCallId: id,
+                  });
+                }
+              } catch (error) {
+                log.error('Tool-result display capture failed; keeping inline result', {
+                  errorClass: classifyStatisticsError(error),
+                });
+              }
+            }
+          }
+
           // Tier-boundary bound (#251): every oversized tool result is truncated
           // to a head+tail preview and the full content spilled UNCONDITIONALLY
           // to a run resource on THIS turn — so a 5 MB result never reaches the
@@ -2684,6 +2788,7 @@ export class ModelHandler {
             toolName,
             result.data,
             decoded.uiResourceUri,
+            invocationArgsForUi,
           );
 
             // Add tool result message with timestamp and ID
@@ -2724,6 +2829,7 @@ export class ModelHandler {
                 decodedForUi.tool,
                 undefined,
                 decodedForUi.uiResourceUri,
+                invocationArgsForUi,
               )
             : undefined;
           // Add error message for this specific tool call with timestamp and ID

@@ -151,7 +151,7 @@ describe('empty stopped completion guard (#288)', () => {
           type: 'image',
           mimeType: 'image/jpeg',
           resourceUri: expect.stringMatching(/^flujo:\/\/run\/conv-image\//),
-          localPath: expect.stringMatching(/[\\/]conv-image[\\/].+\.dat$/),
+          localPath: expect.stringMatching(/[\\/]conv-image[\\/].+\.jpg$/),
           url: expect.stringContaining('/v1/chat/conversations/conv-image/resources/'),
         }),
       ]);

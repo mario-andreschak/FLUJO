@@ -76,6 +76,7 @@ class FlowService {
 
   async suggestToolsForStep(payload: {
     flow: Flow;
+    relatedFlows?: Flow[];
     nodeId: string;
     modelId: string;
     goal?: string;
@@ -158,6 +159,7 @@ class FlowService {
 
   async improvePromptForStep(payload: {
     flow: Flow;
+    relatedFlows?: Flow[];
     nodeId: string;
     modelId: string;
     draftPrompt?: string;

@@ -12,6 +12,7 @@ import { isSafeRepoUrl, isSafeBranchName, buildRepoCommand } from '@/utils/git/v
 import { getAppDir, getDataDir } from '@/utils/paths';
 import { createNdjsonStreamResponse } from '@/backend/utils/ndjsonStream';
 import { killProcessTree } from '@/utils/process/killProcessTree';
+import { withNpmDevDependencies } from '@/utils/mcp/npmEnvironment';
 
 const log = createLogger('app/api/git/route');
 
@@ -225,10 +226,10 @@ async function executeCommandInRepo({ savePath, command, args, actionName, reque
           cwd: savePath,
           stdio: 'pipe' as const, // Capture output instead of inheriting
           encoding: 'utf8', // Specify encoding to get string output directly
-          env: {
-            ...process.env,
-            ...env
-          }
+          // Install/build commands can contain a plain or compound `npm install`.
+          // Force devDependencies at the execution boundary so production mode cannot
+          // silently prune the compiler/bundler required by an MCP server build.
+          env: withNpmDevDependencies(process.env, env),
         };
         
         // Add timeout for "Run" action
@@ -377,7 +378,7 @@ function streamCommandInRepo(
       const child = spawn(finalCommand, {
         cwd: savePath,
         shell: true,
-        env: { ...process.env, ...env },
+        env: withNpmDevDependencies(process.env, env),
         detached: process.platform !== 'win32',
       });
 

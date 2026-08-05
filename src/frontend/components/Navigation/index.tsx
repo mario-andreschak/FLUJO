@@ -435,7 +435,7 @@ export default function Navigation() {
             sx={{ display: { xs: 'none', sm: 'block' }, lineHeight: 1 }}
           >
             <Typography sx={{ fontSize: '0.98rem', fontWeight: 810, letterSpacing: '-0.045em' }}>
-              FLUJO
+              FLUJO.COM.CO
             </Typography>
             <Typography sx={{ mt: 0.4, color: 'text.secondary', fontSize: '0.59rem', fontWeight: 700, letterSpacing: '0.13em', textTransform: 'uppercase' }}>
               {t('nav.tagline')}
@@ -605,7 +605,7 @@ export default function Navigation() {
               F
             </Box>
             <Box>
-              <Typography sx={{ fontWeight: 800, lineHeight: 1 }}>FLUJO</Typography>
+              <Typography sx={{ fontWeight: 800, lineHeight: 1 }}>FLUJO.COM.CO</Typography>
               <Typography variant="caption" color="text.secondary">{t('nav.tagline')}</Typography>
             </Box>
           </Box>

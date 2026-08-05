@@ -32,6 +32,7 @@ import {
   setActiveCanvasTab,
   closeCanvasApp,
   canvasEntries,
+  canvasKey,
   type CanvasState,
   type CanvasAppInput,
 } from './canvasState';
@@ -66,7 +67,12 @@ import Spinner from '@/frontend/components/shared/Spinner';
 import { v4 as uuidv4 } from 'uuid';
 import OpenAI, { OpenAIError, APIError } from 'openai'; // Import APIError
 import { flowService } from '@/frontend/services/flow';
-import { chatService, ChatApiError } from '@/frontend/services/chat';
+import {
+  chatService,
+  ChatApiError,
+  type SubflowRecoveryOptions,
+  type SubflowRecoveryScope,
+} from '@/frontend/services/chat';
 import { createLogger } from '@/utils/logger';
 // Correctly import SharedState here
 import {
@@ -92,6 +98,14 @@ import { useStorage } from '@/frontend/contexts/StorageContext';
 import { useAskFlujoPage } from '@/frontend/contexts/AskFlujoContext';
 import type { AskFlujoUiAction } from '@/frontend/types/askFlujo';
 import { highlightAskFlujoElement } from '@/frontend/utils/askFlujoActions';
+import {
+  latestMcpAppResultIdsByResource,
+  observeNewMcpAppResultIds,
+} from './mcpAppProjection';
+import {
+  readDismissedMcpAppKeys,
+  writeMcpAppDismissed,
+} from './mcpAppPreferences';
 
 const log = createLogger('frontend/components/Chat/index');
 
@@ -213,6 +227,8 @@ export interface Conversation {
   status?: 'running' | 'awaiting_tool_approval' | 'paused_debug' | 'completed' | 'error' | 'capped';
   /** Additive durable cancellation/interruption/failure metadata (issue #355). */
   recovery?: RecoveryRecord;
+  parentConversationId?: string | null;
+  rootConversationId?: string | null;
   /** Node where execution currently sits (server truth). May reference a node
    *  of a previously selected flow after a flow switch — validate before use. */
   currentNodeId?: string;
@@ -297,6 +313,8 @@ const sameConversationLists = (a: ConversationListItem[], b: ConversationListIte
  *  message "Execution cancelled by user." (mapped to a 500 by the OpenAI-shaped
  *  route). Recognise it from any error shape the SDK/REST layers throw so a
  *  deliberate Stop is never surfaced as a provider failure. */
+const SIDEBAR_PAGE_SIZE = 50;
+
 const CANCELLED_MESSAGE_RE = /cancelled by user|execution cancelled/i;
 const isCancellationError = (err: unknown): boolean => {
   const anyErr = err as { code?: unknown; error?: { code?: unknown }; message?: unknown; body?: { error?: unknown } };
@@ -317,7 +335,19 @@ const Chat: React.FC = () => {
   // List of conversation summaries for the sidebar, fetched from backend
   const [conversationList, setConversationList] = useState<ConversationListItem[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState<boolean>(true);
+  const [isLoadingMoreHistory, setIsLoadingMoreHistory] = useState<boolean>(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [conversationPagination, setConversationPagination] = useState<{
+    total: number;
+    hasMore: boolean;
+    nextCursor?: string;
+  }>({ total: 0, hasMore: false });
+  const conversationPaginationRef = useRef(conversationPagination);
+  const loadedServerConversationCountRef = useRef(0);
+  const updateConversationPagination = useCallback((next: typeof conversationPagination) => {
+    conversationPaginationRef.current = next;
+    setConversationPagination(next);
+  }, []);
 
   // Full details of the currently selected conversation, fetched when selected
   const [detailedConversation, setDetailedConversation] = useState<Conversation | null>(null);
@@ -330,6 +360,28 @@ const Chat: React.FC = () => {
     null
   );
   const currentConversationIdRef = useRef<string | null>(currentConversationId);
+  const observedMcpAppResultIdsRef = useRef<Map<string, Set<string>>>(new Map());
+  const [autoOpenMcpAppResultIds, setAutoOpenMcpAppResultIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [mcpAppDismissalVersion, setMcpAppDismissalVersion] = useState(0);
+  const dismissedMcpAppKeys = useMemo<ReadonlySet<string>>(() => (
+    currentConversationId
+      ? new Set(readDismissedMcpAppKeys(currentConversationId))
+      : new Set<string>()
+  ), [currentConversationId, mcpAppDismissalVersion]);
+  const setMcpAppDismissed = useCallback((
+    conversationId: string,
+    appKey: string,
+    dismissed: boolean,
+  ) => {
+    writeMcpAppDismissed(conversationId, appKey, dismissed);
+    setMcpAppDismissalVersion((version) => version + 1);
+  }, []);
+  const handleMcpAppManualOpen = useCallback((appKey: string) => {
+    const owner = currentConversationIdRef.current;
+    if (owner) setMcpAppDismissed(owner, appKey, false);
+  }, [setMcpAppDismissed]);
   const canvasTeardownsRef = useRef<Map<string, () => Promise<void>>>(new Map());
   const conversationTransitionGenerationRef = useRef(0);
   /**
@@ -402,6 +454,8 @@ const Chat: React.FC = () => {
   // Guards the drain effect against re-entrancy (one dequeue per idle window).
   const drainingRef = useRef<boolean>(false);
   const [error, setError] = useState<string | null>(null); // General error display
+  const [subflowRecoveryOptions, setSubflowRecoveryOptions] = useState<SubflowRecoveryOptions | null>(null);
+  const [subflowRecoveryScope, setSubflowRecoveryScope] = useState<SubflowRecoveryScope | null>(null);
 
   // Other states
   const [flows, setFlows] = useState<Flow[]>([]); // Use the Flow type from shared types
@@ -764,19 +818,46 @@ const Chat: React.FC = () => {
       let fetchedList: ConversationListItem[] = [];
       let fetchFailed = false;
       try {
-        fetchedList = (await chatService.listConversations())
+        const targetCount = silent
+          ? Math.max(SIDEBAR_PAGE_SIZE, loadedServerConversationCountRef.current)
+          : SIDEBAR_PAGE_SIZE;
+        let page = await chatService.listConversationPage({
+          limit: Math.min(200, targetCount),
+        });
+        const serverItems = [...page.items];
+        while (serverItems.length < targetCount && page.nextCursor) {
+          page = await chatService.listConversationPage({
+            limit: Math.min(200, targetCount - serverItems.length),
+            cursor: page.nextCursor,
+          });
+          serverItems.push(...page.items);
+        }
+        fetchedList = serverItems
           // Never re-add a conversation whose DELETE is still in flight.
           .filter(c => !pendingDeleteIdsRef.current.has(c.id))
           .sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt));
+        loadedServerConversationCountRef.current = fetchedList.length;
+        updateConversationPagination({
+          total: page.total,
+          hasMore: page.hasMore,
+          nextCursor: page.nextCursor,
+        });
         // Anything the backend returns is no longer client-only.
         for (const c of fetchedList) localOnlyConversationIdsRef.current.delete(c.id);
         setConversationList(prev => {
           // Preserve client-only conversations (an unsent split) — the server
           // list can't contain them yet.
           const localOnly = prev.filter(c => localOnlyConversationIdsRef.current.has(c.id));
-          const next = localOnly.length > 0
-            ? [...localOnly, ...fetchedList].sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt))
-            : fetchedList;
+          // A selected older row can be displaced from the refreshed prefix by
+          // new conversations. Keep it reachable until the user changes pages;
+          // a later page merge deduplicates it by id.
+          const selected = prev.find(c =>
+            c.id === currentConversationIdRef.current
+            && !localOnlyConversationIdsRef.current.has(c.id)
+            && !fetchedList.some(item => item.id === c.id)
+          );
+          const next = [...localOnly, ...fetchedList, ...(selected ? [selected] : [])]
+            .sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt));
           // Keep the previous array identity when nothing changed, so a silent
           // refresh doesn't re-render the sidebar for no reason.
           return sameConversationLists(prev, next) ? prev : next;
@@ -788,6 +869,8 @@ const Chat: React.FC = () => {
         if (!silent) {
           setHistoryError(t('chat.page.historyLoadFailed'));
           setConversationList([]); // Clear list on error
+          loadedServerConversationCountRef.current = 0;
+          updateConversationPagination({ total: 0, hasMore: false });
         }
       } finally {
         if (!silent) setIsLoadingHistory(false);
@@ -806,7 +889,7 @@ const Chat: React.FC = () => {
         // Client-only conversations (unsent splits) count as existing too.
         const idExists = (id: string) =>
           fetchedList.some(c => c.id === id) || localOnlyConversationIdsRef.current.has(id);
-        if (idToSelect && idExists(idToSelect)) {
+        if (idToSelect && (idExists(idToSelect) || selectIdAfterFetch === undefined)) {
            // If the intended ID exists in the new list, ensure it's selected
            if (idToSelect !== liveSelection) {
               log.debug(`Setting currentConversationId to ${idToSelect} after fetch/operation.`);
@@ -850,7 +933,53 @@ const Chat: React.FC = () => {
     });
     silentListRefreshInFlightRef.current = trackedRequest;
     return trackedRequest;
-  }, [setCurrentConversationId, t]); // Include dependencies that affect auto-selection logic if needed
+  }, [setCurrentConversationId, t, updateConversationPagination]); // Include dependencies that affect auto-selection logic if needed
+
+  const loadMoreConversations = useCallback(async (): Promise<void> => {
+    const cursor = conversationPaginationRef.current.nextCursor;
+    if (!cursor || isLoadingMoreHistory) return;
+    setIsLoadingMoreHistory(true);
+    try {
+      const page = await chatService.listConversationPage({
+        limit: SIDEBAR_PAGE_SIZE,
+        cursor,
+      });
+      const incoming = page.items.filter(c => !pendingDeleteIdsRef.current.has(c.id));
+      setConversationList(prev => {
+        const byId = new Map(prev.map(item => [item.id, item]));
+        for (const item of incoming) byId.set(item.id, item);
+        const next = [...byId.values()]
+          .sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt));
+        return sameConversationLists(prev, next) ? prev : next;
+      });
+      loadedServerConversationCountRef.current += incoming.filter(
+        item => !localOnlyConversationIdsRef.current.has(item.id),
+      ).length;
+      updateConversationPagination({
+        total: page.total,
+        hasMore: page.hasMore,
+        nextCursor: page.nextCursor,
+      });
+    } catch (error) {
+      log.error('Could not load the next conversation page', error);
+      setHistoryError(t('chat.page.historyLoadFailed'));
+    } finally {
+      setIsLoadingMoreHistory(false);
+    }
+  }, [isLoadingMoreHistory, t, updateConversationPagination]);
+
+  const loadAllConversations = useCallback(async (): Promise<ConversationListItem[]> => {
+    const fetched = (await chatService.listAllConversationPages())
+      .filter(c => !pendingDeleteIdsRef.current.has(c.id))
+      .sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt));
+    loadedServerConversationCountRef.current = fetched.length;
+    updateConversationPagination({ total: fetched.length, hasMore: false });
+    const localOnly = conversationList.filter(c => localOnlyConversationIdsRef.current.has(c.id));
+    const merged = [...localOnly, ...fetched]
+      .sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt));
+    setConversationList(prev => sameConversationLists(prev, merged) ? prev : merged);
+    return merged;
+  }, [conversationList, updateConversationPagination]);
 
   useEffect(() => {
     // Fetch initial list on mount
@@ -1043,6 +1172,69 @@ const Chat: React.FC = () => {
       setDetailsError(null);
     }
   }, [currentConversationId, fetchDetailedConversation]); // Trigger fetch when selection changes
+
+  // Treat the first message snapshot for a conversation as passive hydration.
+  // Only result ids appended after that baseline are eligible for the default
+  // auto-open policy, so revisiting/reloading history cannot resurrect Apps.
+  useEffect(() => {
+    const conversationId = detailedConversation?.id;
+    if (!conversationId || conversationId !== currentConversationId) {
+      setAutoOpenMcpAppResultIds((current) => current.size === 0 ? current : new Set());
+      return;
+    }
+
+    const fresh = observeNewMcpAppResultIds(
+      observedMcpAppResultIdsRef.current,
+      conversationId,
+      detailedConversation.messages,
+    );
+    if (fresh.length === 0) return;
+    setAutoOpenMcpAppResultIds(new Set(latestMcpAppResultIdsByResource(
+      detailedConversation.messages,
+      fresh,
+    )));
+  }, [currentConversationId, detailedConversation?.id, detailedConversation?.messages]);
+
+  // The child latches the positive auto-launch command. Retire transient ids so
+  // a later render-window remount cannot replay the same historical launch.
+  useEffect(() => {
+    if (autoOpenMcpAppResultIds.size === 0) return undefined;
+    const timer = window.setTimeout(() => setAutoOpenMcpAppResultIds(new Set()), 1_500);
+    return () => window.clearTimeout(timer);
+  }, [autoOpenMcpAppResultIds]);
+
+  const recoveryParentSummary = detailedConversation?.parentConversationId
+    ? conversationList.find((conversation) => conversation.id === detailedConversation.parentConversationId)
+    : undefined;
+
+  useEffect(() => {
+    const conversationId = detailedConversation?.id;
+    const shouldLoad = Boolean(
+      conversationId &&
+      detailedConversation?.status === 'error',
+    );
+    if (!shouldLoad || !conversationId) {
+      setSubflowRecoveryOptions(null);
+      return;
+    }
+    let disposed = false;
+    void chatService.getSubflowRecoveryOptions(conversationId)
+      .then((options) => {
+        if (!disposed) setSubflowRecoveryOptions(options.hasRecoverableFamily ? options : null);
+      })
+      .catch((err) => {
+        log.warn('Could not load subflow recovery options', { conversationId, err });
+        if (!disposed) setSubflowRecoveryOptions(null);
+      });
+    return () => { disposed = true; };
+  }, [
+    detailedConversation?.id,
+    detailedConversation?.parentConversationId,
+    detailedConversation?.status,
+    recoveryParentSummary?.status,
+    recoveryParentSummary?.updatedAt,
+    recoveryParentSummary?.recovery?.updatedAt,
+  ]);
 
   // Reflect the viewed conversation's persisted "Require Tool Approval" setting in
   // the checkbox. Keyed on the conversation id so it only re-syncs on a switch, not
@@ -1882,6 +2074,16 @@ const Chat: React.FC = () => {
     try {
       await chatService.deleteConversation(conversationId);
       log.info('Successfully deleted conversation on backend', { conversationId });
+      if (!wasLocalOnly) {
+        loadedServerConversationCountRef.current = Math.max(
+          0,
+          loadedServerConversationCountRef.current - 1,
+        );
+        updateConversationPagination({
+          ...conversationPaginationRef.current,
+          total: Math.max(0, conversationPaginationRef.current.total - 1),
+        });
+      }
       // No need to refetch here, optimistic update is sufficient
       // Selection is handled above
 
@@ -1909,8 +2111,15 @@ const Chat: React.FC = () => {
     const idSet = new Set(ids);
     const previousList = conversationList;
     const previousSelectionId = currentConversationId;
+    const localOnlyIds = new Set(
+      ids.filter((id) => localOnlyConversationIdsRef.current.has(id)),
+    );
+    const loadedPersistedDeleted = previousList.filter(
+      (conversation) => idSet.has(conversation.id) && !localOnlyIds.has(conversation.id),
+    ).length;
 
     ids.forEach((id) => pendingDeleteIdsRef.current.add(id));
+    ids.forEach((id) => localOnlyConversationIdsRef.current.delete(id));
 
     // If the currently viewed conversation is among the deleted set, drop this
     // client's live tracking of it (stream, loading indicator).
@@ -1936,11 +2145,24 @@ const Chat: React.FC = () => {
     try {
       const result = await chatService.deleteConversations(ids);
       log.info('Bulk delete succeeded', { requested: ids.length, ...result });
+      loadedServerConversationCountRef.current = Math.max(
+        0,
+        loadedServerConversationCountRef.current - loadedPersistedDeleted,
+      );
+      const persistedRequested = ids.length - localOnlyIds.size;
+      updateConversationPagination({
+        ...conversationPaginationRef.current,
+        total: Math.max(
+          0,
+          conversationPaginationRef.current.total - Math.min(result.deleted, persistedRequested),
+        ),
+      });
     } catch (err) {
       log.error('Bulk delete failed', { err });
       setError(t('chat.page.bulkDeleteFailed'));
       // Revert the optimistic update and shields, then re-sync from the server.
       ids.forEach((id) => pendingDeleteIdsRef.current.delete(id));
+      localOnlyIds.forEach((id) => localOnlyConversationIdsRef.current.add(id));
       setConversationList(previousList);
       setCurrentConversationId(previousSelectionId);
     }
@@ -2564,6 +2786,7 @@ const Chat: React.FC = () => {
               role: 'assistant',
               content,
               tool_calls: msg.tool_calls,
+              toolPayloads: msg.toolPayloads,
               ...identity,
               processNodeId // Include processNodeId if it exists
             } as OpenAI.ChatCompletionAssistantMessageParam & { id?: string; timestamp?: number; processNodeId?: string };
@@ -2589,6 +2812,7 @@ const Chat: React.FC = () => {
               role: 'tool',
               content,
               tool_call_id: msg.tool_call_id,
+              toolPayloads: msg.toolPayloads,
               ...identity,
               processNodeId // Include processNodeId if it exists
             } as OpenAI.ChatCompletionToolMessageParam & { id?: string; timestamp?: number; processNodeId?: string };
@@ -2614,6 +2838,7 @@ const Chat: React.FC = () => {
                 requireApproval: requireApproval ? "true" : undefined,
                 flujodebug: executeInDebugger ? "true" : undefined, // Add flujodebug flag
                 conversationId: conversation.id, // Pass the correct ID
+                compactToolPayloads: "true",
                 // Undefined means "retain backend state"; only a hydrated or
                 // explicitly updated map is sent. This prevents navigation from
                 // accidentally clearing a conversation with `{}`.
@@ -2627,6 +2852,7 @@ const Chat: React.FC = () => {
             if (meta.requireApproval) filteredMeta.requireApproval = meta.requireApproval;
             if (meta.flujodebug) filteredMeta.flujodebug = meta.flujodebug; // Include flujodebug
             if (meta.conversationId) filteredMeta.conversationId = meta.conversationId;
+            if (meta.compactToolPayloads) filteredMeta.compactToolPayloads = meta.compactToolPayloads;
             if (meta.mcpAppContexts !== undefined) {
               filteredMeta.mcpAppContexts = meta.mcpAppContexts;
             }
@@ -2827,20 +3053,26 @@ const Chat: React.FC = () => {
   // A View can enter the canvas only after its inline handshake declared pip
   // and either the View or user requested the transition.
   const handleOpenInCanvas = useCallback((info: CanvasLaunchInfo) => {
-    setCanvasStateOwnerId(currentConversationIdRef.current);
+    const owner = currentConversationIdRef.current;
+    if (!owner) return;
+    const key = canvasKey(info.serverName, info.uri);
+    if (info.automatic && readDismissedMcpAppKeys(owner).includes(key)) return;
+    if (!info.automatic) setMcpAppDismissed(owner, key, false);
+    setCanvasStateOwnerId(owner);
     setCanvasState((prev) => {
       // Temporarily permit one extra mounted host; the cap effect below awaits
       // the LRU victim's graceful teardown before removing it.
       const { state } = openCanvasApp(prev, info, Date.now(), Number.MAX_SAFE_INTEGER);
       return state;
     });
-  }, []);
+  }, [setMcpAppDismissed]);
   const handleSelectCanvasTab = useCallback((key: string) => {
     setCanvasState((prev) => setActiveCanvasTab(prev, key));
   }, []);
   const handleCloseCanvasTab = useCallback((key: string) => {
     const owner = appCallbackConversationId;
     if (!owner) return;
+    setMcpAppDismissed(owner, key, true);
     const registered = canvasTeardownsRef.current.get(`${owner}\u0000${key}`);
     const close = () => {
       if (currentConversationIdRef.current !== owner) return;
@@ -2848,7 +3080,7 @@ const Chat: React.FC = () => {
     };
     if (registered) void registered().finally(close);
     else close();
-  }, [appCallbackConversationId]);
+  }, [appCallbackConversationId, setMcpAppDismissed]);
 
   // Reset the canvas when switching conversations (per-conversation surface).
   useEffect(() => {
@@ -2886,7 +3118,7 @@ const Chat: React.FC = () => {
           serverName: ui.serverName,
           uri: ui.uri,
           toolName: ui.toolName ?? (call?.type === 'function' ? call.function.name : undefined),
-          toolArgs: call?.type === 'function' ? call.function.arguments : undefined,
+          toolArgs: ui.toolArgs ?? (call?.type === 'function' ? call.function.arguments : undefined),
           resultContent: m.content,
           cancelledReason: ui.cancelledReason,
           isError: ui.isError,
@@ -3027,11 +3259,15 @@ const Chat: React.FC = () => {
             const identity = { id: msg.id, timestamp: msg.timestamp, processNodeId: msg.processNodeId };
             // Create properly typed message based on role
             if (msg.role === 'user') return { role: 'user', content, ...identity } as OpenAI.ChatCompletionUserMessageParam;
-            if (msg.role === 'assistant') return { role: 'assistant', content, tool_calls: msg.tool_calls, ...identity } as OpenAI.ChatCompletionAssistantMessageParam;
+            if (msg.role === 'assistant') return {
+              role: 'assistant', content, tool_calls: msg.tool_calls, toolPayloads: msg.toolPayloads, ...identity,
+            } as OpenAI.ChatCompletionAssistantMessageParam;
             if (msg.role === 'system') return { role: 'system', content, ...identity } as OpenAI.ChatCompletionSystemMessageParam;
             if (msg.role === 'tool') {
               if (!msg.tool_call_id) return { role: 'user', content: typeof content === 'string' ? `Tool result: ${content}` : content, ...identity } as OpenAI.ChatCompletionUserMessageParam;
-              return { role: 'tool', content, tool_call_id: msg.tool_call_id, ...identity } as OpenAI.ChatCompletionToolMessageParam;
+              return {
+                role: 'tool', content, tool_call_id: msg.tool_call_id, toolPayloads: msg.toolPayloads, ...identity,
+              } as OpenAI.ChatCompletionToolMessageParam;
             }
             return { role: 'user', content, ...identity } as OpenAI.ChatCompletionUserMessageParam; // Fallback
           });
@@ -3048,6 +3284,7 @@ const Chat: React.FC = () => {
             if (metadata.requireApproval) filteredMeta.requireApproval = metadata.requireApproval;
             if (metadata.flujodebug) filteredMeta.flujodebug = metadata.flujodebug;
             if (metadata.conversationId) filteredMeta.conversationId = metadata.conversationId;
+            filteredMeta.compactToolPayloads = 'true';
             if (metadata.processNodeId) filteredMeta.processNodeId = metadata.processNodeId;
             if (metadata.mcpAppContexts !== undefined) {
               filteredMeta.mcpAppContexts = metadata.mcpAppContexts;
@@ -3450,6 +3687,35 @@ const Chat: React.FC = () => {
     }
   };
 
+  const handleSubflowRecovery = async (scope: SubflowRecoveryScope) => {
+    if (!currentConversationId || subflowRecoveryScope) return;
+    const conversationId = currentConversationId;
+    setSubflowRecoveryScope(scope);
+    setError(null);
+    try {
+      const result = await chatService.retrySubflowRecovery(conversationId, scope);
+      if (result.failed.length > 0) {
+        setError(result.failed.map((failure) => failure.error).join('\n'));
+      } else {
+        markConversationStopped(conversationId, false);
+      }
+      await Promise.all([
+        fetchDetailedConversation(conversationId),
+        fetchConversations(undefined, { silent: true }),
+      ]);
+      try {
+        setSubflowRecoveryOptions(await chatService.getSubflowRecoveryOptions(conversationId));
+      } catch {
+        setSubflowRecoveryOptions(null);
+      }
+    } catch (err) {
+      log.error('Subflow recovery failed', { conversationId, scope, err });
+      setError(err instanceof Error ? err.message : t('chat.page.recoveryFailed'));
+    } finally {
+      setSubflowRecoveryScope(null);
+    }
+  };
+
   // Manually dismiss the debugger panel. Hides the split view and clears the
   // local debug state, then cancels the paused run so the conversation is not
   // left stuck in 'paused_debug' on the backend.
@@ -3585,6 +3851,42 @@ const Chat: React.FC = () => {
     }
   };
 
+  const subflowRecoveryActions = subflowRecoveryOptions ? (
+    <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+      <Button
+        color="inherit"
+        size="small"
+        startIcon={subflowRecoveryScope === 'branch' ? <CircularProgress color="inherit" size={14} /> : <RefreshIcon />}
+        disabled={!!subflowRecoveryScope || !subflowRecoveryOptions.canRetryBranch}
+        onClick={() => void handleSubflowRecovery('branch')}
+      >
+        {t('chat.page.recoverBranch')}
+      </Button>
+      {subflowRecoveryOptions.canRetrySiblings && (
+        <Button
+          color="inherit"
+          size="small"
+          startIcon={subflowRecoveryScope === 'siblings' ? <CircularProgress color="inherit" size={14} /> : <AccountTreeOutlinedIcon />}
+          disabled={!!subflowRecoveryScope}
+          onClick={() => void handleSubflowRecovery('siblings')}
+        >
+          {t('chat.page.recoverLevel', { count: subflowRecoveryOptions.incompleteSiblingCount })}
+        </Button>
+      )}
+      {subflowRecoveryOptions.canRetryDeepest && subflowRecoveryOptions.deepestFailedCount > 1 && (
+        <Button
+          color="inherit"
+          size="small"
+          startIcon={subflowRecoveryScope === 'deepest' ? <CircularProgress color="inherit" size={14} /> : <AccountTreeIcon />}
+          disabled={!!subflowRecoveryScope}
+          onClick={() => void handleSubflowRecovery('deepest')}
+        >
+          {t('chat.page.recoverLeaves', { count: subflowRecoveryOptions.deepestFailedCount })}
+        </Button>
+      )}
+    </Box>
+  ) : null;
+
   const sidebarPanelContent = isLoadingHistory ? (
     <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', p: 2 }}>
       <Spinner size="medium" color="primary" />
@@ -3594,6 +3896,11 @@ const Chat: React.FC = () => {
   ) : (
     <ChatHistory
       conversations={conversationList}
+      totalConversations={conversationPagination.total + localOnlyConversationIdsRef.current.size}
+      hasMoreConversations={conversationPagination.hasMore}
+      isLoadingMore={isLoadingMoreHistory}
+      onLoadMore={loadMoreConversations}
+      onLoadAll={loadAllConversations}
       flowNames={flowNames}
       currentConversationId={currentConversationId}
       onSelectConversation={selectSidebarConversation}
@@ -3938,6 +4245,9 @@ const Chat: React.FC = () => {
                 onRegisterAppTeardown={handleRegisterInlineTeardown}
                 onOpenInCanvas={handleOpenInCanvas}
                 autoOpenMcpApps={autoOpenMcpApps}
+                autoOpenMcpAppResultIds={autoOpenMcpAppResultIds}
+                dismissedMcpAppKeys={dismissedMcpAppKeys}
+                onMcpAppManualOpen={handleMcpAppManualOpen}
                 queuedMessages={getMsgQueue(queuedMessages, detailedConversation.id)}
                 queueHoldReason={translateQueueHoldReason(drainHoldReason({
                   running: runningConvs.has(detailedConversation.id),
@@ -3978,7 +4288,7 @@ const Chat: React.FC = () => {
                     severity="info"
                     variant="outlined"
                     sx={{ borderRadius: 2, py: 0.5, alignItems: 'center' }}
-                    action={
+                    action={subflowRecoveryActions ?? (
                       <Button
                         color="inherit"
                         size="small"
@@ -3987,7 +4297,7 @@ const Chat: React.FC = () => {
                       >
                         {t('chat.page.resume')}
                       </Button>
-                    }
+                    )}
                   >
                     {t('chat.page.stopped')}
                   </Alert>
@@ -4044,7 +4354,7 @@ const Chat: React.FC = () => {
                     severity="error"
                     variant="filled"
                     sx={{ borderRadius: 2, py: 0.5, alignItems: 'center' }}
-                    action={
+                    action={subflowRecoveryActions ?? (
                       <Button
                         color="inherit"
                         size="small"
@@ -4057,7 +4367,7 @@ const Chat: React.FC = () => {
                       >
                         {t('chat.page.retry')}
                       </Button>
-                    }
+                    )}
                   >
                     {t('chat.page.endedError')}
                   </Alert>

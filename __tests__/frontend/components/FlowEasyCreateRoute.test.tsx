@@ -24,10 +24,14 @@ jest.mock('@/frontend/components/Flow/FlowManager/FlowBuilder', () => {
   return {
     __esModule: true,
     default: React.forwardRef(function MockFlowBuilder(
-      props: { initialFlow?: { name?: string } },
+      props: { initialFlow?: { name?: string }; initialAuthoringMode?: string },
       _ref: React.ForwardedRef<unknown>,
     ) {
-      return <div data-testid="flow-builder">{props.initialFlow?.name}</div>;
+      return (
+        <div data-testid="flow-builder" data-authoring-mode={props.initialAuthoringMode}>
+          {props.initialFlow?.name}
+        </div>
+      );
     }),
   };
 });
@@ -39,7 +43,43 @@ jest.mock('@/frontend/components/Flow/FlowDashboard', () => ({
 
 jest.mock('@/frontend/components/Flow/FlowManager/GenerateFlowDialog', () => ({
   __esModule: true,
-  default: ({ open }: { open: boolean }) => <div data-testid="ai-generator">{String(open)}</div>,
+  default: ({
+    open,
+    onGenerated,
+  }: {
+    open: boolean;
+    onGenerated: (result: Record<string, unknown>) => void;
+  }) => (
+    <div data-testid="ai-generator">
+      {String(open)}
+      {open && (
+        <button
+          type="button"
+          onClick={() => onGenerated({
+            flow: {
+              id: 'generated-flow',
+              name: 'Generated agent',
+              nodes: [{
+                id: 'trigger',
+                type: 'trigger',
+                position: { x: 0, y: 0 },
+                data: { label: 'Schedule', type: 'trigger' },
+              }],
+              edges: [],
+            },
+            flows: [],
+            rootFlowId: 'generated-flow',
+            errorCount: 0,
+            warningCount: 0,
+            attempts: 1,
+            installedServers: [],
+          })}
+        >
+          Continue to simple builder
+        </button>
+      )}
+    </div>
+  ),
 }));
 
 jest.mock('@/frontend/components/shared/PageHeader', () => ({
@@ -61,6 +101,10 @@ jest.mock('@/utils/logger', () => ({
     warn: jest.fn(),
     error: jest.fn(),
   }),
+}));
+
+jest.mock('@/frontend/contexts/AskFlujoContext', () => ({
+  useAskFlujoPage: jest.fn(),
 }));
 
 import FlowsPage from '@/app/flows/page';
@@ -104,5 +148,16 @@ describe('easy agent creation deep link', () => {
 
     expect(await screen.findByTestId('flow-builder')).toHaveTextContent('Untitled agent');
     expect(window.localStorage.getItem('flujo-ui:flow-builder:mode')).toBe(JSON.stringify('advanced'));
+  });
+
+  it('opens an AI-generated draft in the simple builder even when it has expert features', async () => {
+    window.history.replaceState({}, '', '/flows');
+    render(<FlowsPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Create with AI' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to simple builder' }));
+
+    expect(await screen.findByTestId('flow-builder')).toHaveTextContent('Generated agent');
+    expect(screen.getByTestId('flow-builder')).toHaveAttribute('data-authoring-mode', 'guided');
   });
 });

@@ -1,7 +1,33 @@
 import OpenAI from 'openai';
-import { readRunResource } from '@/backend/services/runResources';
+import {
+  getRunResourceLocalPath,
+  readRunResource,
+} from '@/backend/services/runResources';
+import type { ModelMediaPart } from '@/shared/types/model/media';
 
 type WirePart = Record<string, any>;
+
+/**
+ * Refresh the host-local projection of persisted media before building model
+ * context. `resourceUri` remains the durable identity, while `localPath` is the
+ * directly useful reference for filesystem-backed tools. Resolving here also
+ * repairs conversations written before local paths were added or after the
+ * FLUJO data directory was relocated.
+ */
+export async function materializeRunResourceMediaPaths(
+  parts: ModelMediaPart[],
+): Promise<ModelMediaPart[]> {
+  let changed = false;
+  const resolved = await Promise.all(parts.map(async (part) => {
+    if (!part.resourceUri?.startsWith('flujo://run/')) return part;
+    const localPath = await getRunResourceLocalPath(part.resourceUri);
+    if (localPath === part.localPath) return part;
+    changed = true;
+    const { localPath: _stalePath, ...withoutPath } = part;
+    return localPath ? { ...withoutPath, localPath } : withoutPath;
+  }));
+  return changed ? resolved : parts;
+}
 
 function partInputModality(part: WirePart): string | undefined {
   if (part.type === 'image_url' || part.type === 'input_image') return 'image';

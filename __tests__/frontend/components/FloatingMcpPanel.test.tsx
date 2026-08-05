@@ -134,6 +134,43 @@ describe('MCP App canvas docking', () => {
     await waitFor(() => expect(layouts.at(-1)).toEqual({ placement: 'left', reservedWidth: 320 }));
   });
 
+  it('restores a conversation canvas in its persisted collapsed state', async () => {
+    const firstLayouts: CanvasDockLayout[] = [];
+    const first = render(
+      <ThemeProvider theme={createTheme()}>
+        <DevCanvasDock
+          conversationId="conversation-persisted"
+          entries={[entry]}
+          activeKey={entry.key}
+          onSelectTab={() => undefined}
+          onCloseTab={() => undefined}
+          onLayoutChange={(layout) => firstLayouts.push(layout)}
+        />
+      </ThemeProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle canvas panel' }));
+    await waitFor(() => expect(firstLayouts.at(-1)?.reservedWidth).toBe(0));
+    first.unmount();
+
+    const restoredLayouts: CanvasDockLayout[] = [];
+    render(
+      <ThemeProvider theme={createTheme()}>
+        <DevCanvasDock
+          conversationId="conversation-persisted"
+          entries={[entry]}
+          activeKey={entry.key}
+          onSelectTab={() => undefined}
+          onCloseTab={() => undefined}
+          onLayoutChange={(layout) => restoredLayouts.push(layout)}
+        />
+      </ThemeProvider>,
+    );
+
+    await waitFor(() => expect(restoredLayouts.at(-1)?.reservedWidth).toBe(0));
+    expect(screen.queryByRole('separator', { name: 'Resize app canvas' })).not.toBeInTheDocument();
+  });
+
   it('does not offer collapse while the canvas is fullscreen', async () => {
     render(
       <ThemeProvider theme={createTheme()}>

@@ -396,6 +396,27 @@ function mediaReferencePart(part: ModelMediaPart): Record<string, unknown> | und
   };
 }
 
+/**
+ * Describe generated media to the next model independently of whether that
+ * model can consume the bytes. Same-host tools need the materialized path;
+ * video/image-capable providers additionally receive the binary attachment
+ * below. The run-resource URI is only model-facing when no host path could be
+ * materialized and `read_resource` is genuinely required.
+ */
+function mediaArtifactSummary(media: ModelMediaPart[]): string {
+  const lines = media.map((part, index) => {
+    const label = part.name?.trim() || `${part.type} ${index + 1}`;
+    const mime = part.mimeType ? ` (${part.mimeType})` : '';
+    if (part.localPath) return `- ${label}${mime}: ${part.localPath}`;
+    if (part.resourceUri) {
+      return `- ${label}${mime}: ${part.resourceUri} (use read_resource to obtain a host-local path)`;
+    }
+    if (part.url && !part.url.startsWith('data:')) return `- ${label}${mime}: ${part.url}`;
+    return `- ${label}${mime}: attached media`;
+  });
+  return ['[Available generated artifacts]', ...lines].join('\n');
+}
+
 function userContentWithMedia(
   content: OpenAI.ChatCompletionUserMessageParam['content'],
   media: ModelMediaPart[],
@@ -407,6 +428,16 @@ function userContentWithMedia(
     const nested = part.image_url ?? part.audio_url ?? part.video_url ?? part.file;
     return `${String(part.type ?? '')}|${JSON.stringify(nested ?? '')}`;
   }));
+  const artifactSummary = mediaArtifactSummary(media);
+  const existingText = [...parts].reverse().find(
+    part => part.type === 'text' && typeof part.text === 'string',
+  );
+  const existingTextValue = typeof existingText?.text === 'string' ? existingText.text : undefined;
+  if (existingText && existingTextValue && !existingTextValue.includes(artifactSummary)) {
+    existingText.text = `${existingTextValue}\n\n${artifactSummary}`;
+  } else if (!existingText) {
+    parts.push({ type: 'text', text: artifactSummary });
+  }
   for (const item of media) {
     const reference = mediaReferencePart(item);
     if (!reference) continue;

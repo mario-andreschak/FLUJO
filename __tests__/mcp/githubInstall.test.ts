@@ -160,7 +160,9 @@ describe('installGithubServer', () => {
       'pnpm run compile',
       expect.objectContaining({ shell: true }),
     );
-    expect(spawnMock.mock.calls[0][1]).not.toHaveProperty('env');
+    expect(spawnMock.mock.calls[0][1]).toEqual(expect.objectContaining({
+      env: expect.objectContaining({ npm_config_include: 'dev' }),
+    }));
 
     expect(updateServerConfigMock).toHaveBeenCalledWith(
       'server',

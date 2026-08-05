@@ -65,4 +65,21 @@ describe('OpenAI SDK 7 compatibility boundary', () => {
       code: 'unsupported_tool_type',
     });
   });
+
+  it('extracts the UI-only compact tool payload response flag from metadata', async () => {
+    const request = new NextRequest('http://localhost/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'flow-test',
+        messages: [{ role: 'user', content: 'hello' }],
+        metadata: { flujo: 'true', compactToolPayloads: 'true' },
+      }),
+    });
+
+    await expect(parseRequestParameters(request)).resolves.toMatchObject({
+      flujo: true,
+      compactToolPayloads: true,
+    });
+  });
 });

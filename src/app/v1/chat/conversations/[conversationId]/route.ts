@@ -25,6 +25,7 @@ import {
   deleteConversationSummary,
   persistConversationSummary,
 } from '@/backend/execution/flow/conversationSummaryStore';
+import { projectLazyToolPayloads } from '@/backend/execution/flow/lazyToolPayloads';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/route');
 
@@ -171,7 +172,9 @@ export async function GET(
             }));
         }
       }
-      const messagesWithIds = displayedMessages;
+      const messagesWithIds = request.nextUrl.searchParams.get('compactToolPayloads') === '1'
+        ? await projectLazyToolPayloads(displayedMessages, conversationId)
+        : displayedMessages;
 
       // Use variable for logging
       log.info(`Returning conversation state`, { requestId, conversationId, stateSource, messageCount: messagesWithIds.length, status: sharedState.status });
@@ -190,6 +193,8 @@ export async function GET(
         // Additive recovery metadata: precise cancellation/interruption/failure
         // classification, latest safe checkpoint, lane identity, and warnings.
         recovery: sharedState.recovery,
+        parentConversationId: sharedState.parentConversationId ?? null,
+        rootConversationId: sharedState.rootConversationId ?? null,
         // Where execution currently sits — powers the chat input's node pill
         // (the manual node picker). May reference a node of a previously
         // selected flow after a flow switch; the frontend validates it.

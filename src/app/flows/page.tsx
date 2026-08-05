@@ -62,6 +62,10 @@ const FlowsPage = () => {
   // persisted just before the root on first save, so every subflowId resolves. Discarding
   // the draft discards these too.
   const [draftDescendants, setDraftDescendants] = useState<Flow[]>([]);
+  // Some creation actions promise a specific first view. Keep that intent
+  // separate from the persisted preference so advanced-feature detection does
+  // not override an explicit "Continue to simple builder" handoff.
+  const [builderEntryMode, setBuilderEntryMode] = useState<FlowAuthoringMode | undefined>();
   const [generateDialogOpen, setGenerateDialogOpen] = useState(false);
   const createAssistantHandled = useRef(false);
 
@@ -132,6 +136,7 @@ const FlowsPage = () => {
   // Handle flow selection
   const handleSelectFlow = useCallback((flowId: string) => {
     log.debug('Flow selected', { flowId });
+    setBuilderEntryMode(undefined);
     setSelectedFlow(flowId);
     setIsEditing(true); // Auto-enter edit mode when a flow is selected
   }, []);
@@ -196,6 +201,7 @@ const FlowsPage = () => {
     log.debug('Returning to dashboard');
     const leave = () => {
       setIsEditing(false);
+      setBuilderEntryMode(undefined);
       // Leaving a generated draft without saving discards it — the root AND any
       // auto-generated subflow descendants (the dashboard only shows saved flows, so a
       // lingering draft would be unreachable anyway).
@@ -471,6 +477,7 @@ const FlowsPage = () => {
     
     // Select the new flow
     log.debug('Selecting newly copied flow');
+    setBuilderEntryMode(undefined);
     setSelectedFlow(newFlow.id);
     setIsEditing(true);
     showSnackbar(t('flows.page.copyCreated', { name: newFlowName }), 'success');
@@ -498,6 +505,7 @@ const FlowsPage = () => {
     const descendants = (result.flows ?? []).filter(f => f.id !== result.rootFlowId);
     setDraftFlow(result.flow);
     setDraftDescendants(descendants);
+    setBuilderEntryMode('guided');
     setSelectedFlow(result.flow.id);
     setIsEditing(true);
     const freshInstalls = result.installedServers?.filter(s => !s.alreadyExisted) ?? [];
@@ -540,6 +548,7 @@ const FlowsPage = () => {
     // Set the requested view before the builder mounts, avoiding a flash of the
     // previously used editor when starting explicitly in Easy or Expert mode.
     writeUiPreference('flujo-ui:flow-builder:mode', authoringMode);
+    setBuilderEntryMode(authoringMode);
 
     // Keep manual creations as drafts too. Abandoning the editor no longer
     // leaves an empty flow card behind; the first successful Save persists it.
@@ -601,6 +610,7 @@ const FlowsPage = () => {
               key={selectedFlow}
               ref={flowBuilderRef}
               initialFlow={selectedFlowData}
+              initialAuthoringMode={builderEntryMode}
               onSave={handleSaveFlow}
               onDelete={handleDeleteFlow}
               onConversionCommitted={handleConversionCommitted}

@@ -413,6 +413,37 @@ describe('buildManifestFromEntities', () => {
     expect(result.package!.secrets.some((s) => s.name === (pkgModel.apiKeyRef as { secret: string }).secret)).toBe(true);
   });
 
+  it('exports models with provider capability metadata', () => {
+    const capableModel = {
+      ...model('m1', 'Capable'),
+      supportsTools: false,
+      supportedParameters: ['temperature', 'response_format'],
+      inputModalities: ['text', 'image'],
+      outputModalities: ['text', 'image'],
+      visionInputCapability: 'supported' as const,
+      compactionThreshold: 96_000,
+    };
+    const ents: PackageEntities = {
+      flows: [flow('f', 'F', [processNode('m1')])],
+      models: [capableModel],
+      mcpServers: [],
+      plannedExecutions: [],
+    };
+    const resolved = resolveDependencies({ flowIds: ['f'] }, ents);
+    const result = buildManifestFromEntities(resolved, ents, metadata);
+
+    expect(result.ok).toBe(true);
+    expect(result.errors).toEqual([]);
+    expect(result.package!.models[0]).toEqual(expect.objectContaining({
+      supportsTools: false,
+      supportedParameters: ['temperature', 'response_format'],
+      inputModalities: ['text', 'image'],
+      outputModalities: ['text', 'image'],
+      visionInputCapability: 'supported',
+      compactionThreshold: 96_000,
+    }));
+  });
+
   it('preserves globals used in packaged flows and declares them as package globals', () => {
     const flowWithGlobals = flow('f', 'F', [
       {

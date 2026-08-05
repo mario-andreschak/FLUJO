@@ -99,6 +99,9 @@ jest.mock('@/frontend/services/model', () => ({
 jest.mock('@/utils/shared/flowAutoRepair', () => ({
   autoRepairFlow: jest.fn((flow) => ({ flow, changes: [] })),
 }));
+jest.mock('@/frontend/contexts/AskFlujoContext', () => ({
+  useAskFlujoPage: jest.fn(),
+}));
 
 const initialFlow: any = {
   id: 'flow-1',
@@ -200,6 +203,36 @@ describe('FlowBuilder toolbar', () => {
 
     expect(screen.getByRole('checkbox', { name: 'Expert view' })).toBeChecked();
     expect(screen.getByTestId('canvas')).toBeInTheDocument();
+  });
+
+  it('honors an explicit simple-builder handoff for flows with expert features', () => {
+    window.localStorage.setItem('flujo-ui:flow-builder:mode', JSON.stringify('advanced'));
+    const expertFlow = {
+      ...initialFlow,
+      nodes: [
+        ...initialFlow.nodes,
+        {
+          id: 'trigger',
+          type: 'trigger',
+          position: { x: 0, y: -100 },
+          data: { label: 'Schedule', type: 'trigger' },
+        },
+      ],
+    };
+
+    render(
+      <FlowBuilder
+        initialFlow={expertFlow as any}
+        initialAuthoringMode="guided"
+        onSave={() => {}}
+        onDelete={() => {}}
+        allFlows={[expertFlow as any]}
+      />,
+    );
+
+    expect(screen.getByRole('checkbox', { name: 'Expert view' })).not.toBeChecked();
+    expect(screen.getByLabelText('Guided agent builder')).toBeInTheDocument();
+    expect(window.localStorage.getItem('flujo-ui:flow-builder:mode')).toBe(JSON.stringify('guided'));
   });
 
   it('retains both automatic and AI repair paths', () => {

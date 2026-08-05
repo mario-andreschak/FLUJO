@@ -10,7 +10,7 @@ import { mcpService } from '@/backend/services/mcp';
 import { getRunResourceSettings } from '@/backend/services/runResources';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
 import {
-  resolveAdvertisedToolUiLink,
+  resolveInvokedToolUiLink,
   toolCancellationReason,
 } from '@/backend/mcpApps/toolUi';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
@@ -285,6 +285,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     maxTurns,
     requestToolApproval,
     onTranscriptMessage,
+    consumeSteeringMessages,
     onModelDelta,
     signal,
     conversationId,
@@ -414,6 +415,12 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       const full = { ...msg, id, timestamp: baseTs + txSeq++ } as FlujoChatMessage;
       transcript.push(full);
       onTranscriptMessage?.(full);
+    };
+    const recordSteeringMessage = (message: FlujoChatMessage): void => {
+      // Keep the route-supplied id/timestamp so the canonical message reconciles
+      // the optimistic chat bubble instead of creating a duplicate.
+      transcript.push(message);
+      onTranscriptMessage?.(message);
     };
     const recordToolCall = (
       ti: Pick<ToolInteraction, 'id' | 'name' | 'argsJson'>,
@@ -642,11 +649,12 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             resultContent = `Error: ${result.error ?? 'Unknown error'}`;
             callResult = { content: [{ type: 'text', text: resultContent }], isError: true };
           }
-          const uiLink = await resolveAdvertisedToolUiLink(
+          const uiLink = await resolveInvokedToolUiLink(
             server,
             originalTool,
             uiResourceUri,
             result.data,
+            args ?? {},
           );
           const cancelledReason = toolCancellationReason(result);
           const ui = uiLink
@@ -773,10 +781,12 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             }
             const linkedTool = mcpToolUiByReadableName.get(readableName);
             const uiLink = linkedTool
-              ? await resolveAdvertisedToolUiLink(
+              ? await resolveInvokedToolUiLink(
                   linkedTool.serverName,
                   linkedTool.toolName,
                   linkedTool.advertisedUri,
+                  undefined,
+                  args,
                 )
               : undefined;
             // On rejection the SDK never calls the tool handler, so record the
@@ -801,6 +811,52 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         },
       },
     });
+
+    // Streaming input is the Agent SDK's native mid-session steering seam. The
+    // original implementation completed promptStream after its first yield and
+    // then waited for the entire agentic loop, leaving accepted interventions in
+    // FLUJO's inbox until the model was already done. Poll at SDK message
+    // boundaries and feed pending user messages into the SAME query/session.
+    // streamInput queues them safely when the current assistant/tool turn has not
+    // quite settled yet.
+    let steeringDrain: Promise<boolean> | undefined;
+    const forwardSteeringMessages = async (): Promise<boolean> => {
+      if (!consumeSteeringMessages || typeof response.streamInput !== 'function') return false;
+      if (steeringDrain) return steeringDrain;
+
+      steeringDrain = (async () => {
+        const pending = consumeSteeringMessages();
+        if (pending.length === 0) return false;
+
+        for (const message of pending) recordSteeringMessage(message);
+        async function* steeringStream(): AsyncGenerator<SDKUserMessage> {
+          for (const message of pending) {
+            yield {
+              type: 'user',
+              parent_tool_use_id: null,
+              message: {
+                role: 'user',
+                content: typeof message.content === 'string'
+                  ? message.content
+                  : JSON.stringify(message.content),
+              },
+            };
+          }
+        }
+        await response.streamInput(steeringStream());
+        log.info('Forwarded mid-run steering message(s) into Claude Agent SDK session', {
+          conversationId,
+          count: pending.length,
+        });
+        return true;
+      })();
+
+      try {
+        return await steeringDrain;
+      } finally {
+        steeringDrain = undefined;
+      }
+    };
 
     let resultText = '';
     let accumulatedText = '';
@@ -830,6 +886,9 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // waiting out the subprocess teardown.
     const messageLoop = async (): Promise<void> => {
       for await (const message of response) {
+        // This also runs for partial stream events, so a correction does not
+        // wait for a long agentic SDK call to finish before reaching Claude.
+        await forwardSteeringMessages();
         // Capture the SDK session id (present on system/assistant/result
         // messages) for the #154 session registry, before any early break.
         const sid = (message as { session_id?: unknown }).session_id;

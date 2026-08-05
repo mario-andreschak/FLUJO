@@ -32,6 +32,8 @@ export interface ChatCompletionRequest {
   processNodeId?: string;
   /** Validated, future-turn-only context supplied by mounted MCP Apps. */
   mcpAppContexts?: McpAppModelContextMap;
+  /** Parsed internal response-shaping flag; public callers should use metadata. */
+  compactToolPayloads?: boolean;
 }
 
 // Define a new interface for the parsed result including the extracted flags
@@ -41,6 +43,7 @@ export interface ParsedChatCompletionRequest extends Omit<ChatCompletionRequest,
   requireApproval: boolean;
   flujodebug: boolean; // Add flujodebug here
   processNodeId?: string; // Add processNodeId for message edits
+  compactToolPayloads: boolean;
 }
 
 // Parse request parameters from either query string or body
@@ -91,7 +94,8 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
       // Add flags for GET requests (always false as metadata isn't supported)
       flujo: false,
       requireApproval: false, // Always false for GET
-      flujodebug: false // Always false for GET
+      flujodebug: false, // Always false for GET
+      compactToolPayloads: false,
     };
 
     const duration = Date.now() - startTime;
@@ -128,6 +132,7 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
       const conversationId = data.metadata?.conversationId || data.conversation_id;
       const requireApproval = data.metadata?.requireApproval === "true";
       const flujodebug = data.metadata?.flujodebug === "true"; // Extract flujodebug
+      const compactToolPayloads = data.metadata?.compactToolPayloads === "true";
       const parsedAppContexts = parseMcpAppModelContexts(data.metadata?.mcpAppContexts);
       if (parsedAppContexts.error) {
         log.warn('Ignoring invalid MCP App model context metadata', {
@@ -161,6 +166,7 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
         conversation_id: conversationId, 
         requireApproval, 
         flujodebug,
+        compactToolPayloads,
         mcpAppContexts: parsedAppContexts.contexts,
         processNodeId: data.processNodeId // Pass through processNodeId if provided
       };

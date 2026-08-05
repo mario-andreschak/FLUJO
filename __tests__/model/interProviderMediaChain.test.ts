@@ -73,6 +73,7 @@ describe('image → OpenRouter video → Gemini recognition chain', () => {
         media: [{
           type: 'image',
           resourceUri: 'flujo://run/conv/generated-image',
+          localPath: 'C:\\artifacts\\generated-image.png',
           url: '/v1/chat/resources/generated-image/content',
           mimeType: 'image/png',
         }],
@@ -126,6 +127,7 @@ describe('image → OpenRouter video → Gemini recognition chain', () => {
         media: [{
           type: 'video',
           resourceUri: 'flujo://run/conv/generated-video',
+          localPath: 'C:\\artifacts\\generated-video.mp4',
           url: '/v1/chat/resources/generated-video/content',
           mimeType: 'video/mp4',
         }],
@@ -148,7 +150,11 @@ describe('image → OpenRouter video → Gemini recognition chain', () => {
     );
 
     expect(gemini.contents[1].parts).toEqual([
-      { text: 'Describe the motion and composition.' },
+      {
+        text:
+          'Describe the motion and composition.\n\n' +
+          '[Available generated artifacts]\n- video 1 (video/mp4): C:\\artifacts\\generated-video.mp4',
+      },
       {
         inlineData: {
           mimeType: 'video/mp4',

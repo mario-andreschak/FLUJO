@@ -57,8 +57,14 @@ export interface PackagedModel {
   serviceTier?: string;
   functionCallingSchema?: string;
   contextWindow?: number;
+  supportsTools?: boolean;
+  supportedParameters?: string[];
+  inputModalities?: string[];
+  outputModalities?: string[];
+  visionInputCapability?: 'supported' | 'unsupported' | 'unknown';
   maxTurns?: number;
   maxTokens?: number;
+  compactionThreshold?: number;
   folder?: string;
   favorite?: boolean;
   apiKeyRef: PackageApiKeyRef;

@@ -39,6 +39,9 @@ export interface ChatCompletionMetadata {
    * wire contexts (never as a visible chat message).
    */
   mcpAppContexts?: string;
+
+  /** FLUJO UI extension: return large tool bodies as expansion-time references. */
+  compactToolPayloads?: "true";
 }
 
 import OpenAI from 'openai';
@@ -53,6 +56,24 @@ export interface McpAppModelContext {
 
 /** Context keyed by the host-owned app identity (`serverName::ui://…`). */
 export type McpAppModelContextMap = Record<string, McpAppModelContext>;
+
+/**
+ * Browser-facing reference to a large tool payload kept in the run-resource
+ * store. The conversation API returns a short inline preview plus this
+ * display-only reference; the chat fetches the exact body only when its tool
+ * panel is expanded.
+ */
+export interface LazyToolPayloadRef {
+  uri: string;
+  href: string;
+  size: number;
+  mimeType?: string;
+}
+
+export interface LazyToolCallPayloads {
+  arguments?: LazyToolPayloadRef;
+  result?: LazyToolPayloadRef;
+}
 
 /**
  * Extends OpenAI's chat completion message parameter type to include additional fields
@@ -83,6 +104,9 @@ export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
     toolName: string;
   }>;
 
+  /** Display/transport metadata; stripped and hydrated before model execution. */
+  toolPayloads?: Record<string, LazyToolCallPayloads>;
+
   /**
    * Subflow nesting depth for display. Absent/0 = a top-level message of this
    * conversation; >0 = a step of a nested subflow run, folded into the parent
@@ -106,6 +130,11 @@ export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
     serverName: string;
     /** Original server-side tool name that instantiated the View. */
     toolName?: string;
+    /**
+     * JSON arguments for the actual App-owning tool when the visible tool call
+     * was a forwarding wrapper such as FLUJO's call_mcp_tool.
+     */
+    toolArgs?: string;
     /**
      * Present when this invocation ended through MCP cancellation. The host
      * sends tool-input followed by tool-cancelled instead of tool-result.

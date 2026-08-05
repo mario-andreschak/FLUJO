@@ -75,6 +75,7 @@ jest.mock('@/backend/execution/flow/conversationLog', () => ({
   reconcileConversationLog: jest.fn(async () => undefined),
   recoverMessagesFromLog: jest.fn(async () => undefined),
   repairDanglingToolCalls: jest.fn(() => []),
+  flushConversationLog: jest.fn(async () => undefined),
   appendRawForState: jest.fn(async (_state: any, raws: any[]) => {
     for (const raw of raws) if (raw?.message) loggedMessages.push(raw.message);
   }),

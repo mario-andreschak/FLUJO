@@ -33,6 +33,7 @@ import type {
   McpUiDisplayMode,
   McpUiUpdateModelContextRequest,
 } from '@modelcontextprotocol/ext-apps/app-bridge';
+import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 import McpAppFrame from './McpAppFrame';
 import type { CanvasAppEntry } from './canvasState';
 import {
@@ -115,7 +116,10 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
   const theme = useTheme();
   const compactDock = useMediaQuery(theme.breakpoints.down('md'));
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useUiPreference<boolean>(
+    `flujo-ui:mcp-canvas:collapsed:${conversationId}`,
+    false,
+  );
   const [fullscreen, setFullscreen] = useState(false);
   const [placement, setPlacement] = useState<DockPlacement>(() => {
     if (typeof window === 'undefined') return 'bottom';

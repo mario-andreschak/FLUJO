@@ -33,6 +33,26 @@ function toolTurn(callId: string, resultLen: number, prose = ''): Msg[] {
 }
 
 describe('compactForWire', () => {
+  it('does not arm read_resource for media URIs that are auto-hydrated before dispatch', () => {
+    const mediaOnly = [{
+      role: 'user',
+      content: [{
+        type: 'video_url',
+        video_url: { url: 'flujo://run/conv-1/video-1' },
+      }],
+    }] as unknown as Msg[];
+    expect(wireHasRunResourceUri(mediaOnly)).toBe(false);
+
+    const readableMarker = [{
+      role: 'user',
+      content: [{
+        type: 'text',
+        text: 'Fallback resource: flujo://run/conv-1/video-1',
+      }],
+    }] as unknown as Msg[];
+    expect(wireHasRunResourceUri(readableMarker)).toBe(true);
+  });
+
   it('returns the input untouched when nothing is old enough to compact', () => {
     const msgs: Msg[] = [
       { role: 'system', content: 'sys' },

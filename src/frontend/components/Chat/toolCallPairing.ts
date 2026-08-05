@@ -16,7 +16,7 @@
  */
 
 import type OpenAI from 'openai';
-import type { FlujoChatMessage } from '@/shared/types/chat';
+import type { FlujoChatMessage, LazyToolPayloadRef } from '@/shared/types/chat';
 import { HANDOFF_TOOL_PREFIX } from '@/shared/utils/handoffNaming';
 
 /** A single assistant tool call paired with the tool result that answered it (if any yet). */
@@ -26,6 +26,9 @@ export interface ToolCallPair<TMessage extends FlujoChatMessage = FlujoChatMessa
   result?: TMessage;
   /** Resolved MCP Tool Tester destination, present only for persisted MCP calls. */
   mcpDestination?: { serverName: string; toolName: string };
+  /** Exact parameters/result fetched only when this pair is expanded. */
+  argumentPayload?: LazyToolPayloadRef;
+  resultPayload?: LazyToolPayloadRef;
 }
 
 export interface ToolCallPairing<TMessage extends FlujoChatMessage = FlujoChatMessage> {
@@ -133,7 +136,13 @@ export function pairToolCallsWithResults<TMessage extends FlujoChatMessage>(
       const id = toolCall.id;
       const result = id ? resultByToolCallId.get(id) : undefined;
       if (id) consumedToolCallIds.add(id);
-      pairs.push({ toolCall, result, mcpDestination: id ? message.mcpToolCalls?.[id] : undefined });
+      pairs.push({
+        toolCall,
+        result,
+        mcpDestination: id ? message.mcpToolCalls?.[id] : undefined,
+        argumentPayload: id ? message.toolPayloads?.[id]?.arguments : undefined,
+        resultPayload: id ? result?.toolPayloads?.[id]?.result : undefined,
+      });
     }
 
     if (pairs.length > 0) {
@@ -282,7 +291,13 @@ export function groupToolCallsByAnchor<TMessage extends FlujoChatMessage>(
       const id = toolCall.id;
       const result = id ? resultByToolCallId.get(id) : undefined;
       if (id) consumedToolCallIds.add(id);
-      pairs.push({ toolCall, result, mcpDestination: id ? message.mcpToolCalls?.[id] : undefined });
+      pairs.push({
+        toolCall,
+        result,
+        mcpDestination: id ? message.mcpToolCalls?.[id] : undefined,
+        argumentPayload: id ? message.toolPayloads?.[id]?.arguments : undefined,
+        resultPayload: id ? result?.toolPayloads?.[id]?.result : undefined,
+      });
     }
 
     const hasText = hasMeaningfulTextContent(message);

@@ -56,11 +56,16 @@ import OpenAI from 'openai'; // Import OpenAI types for tool calls
 import { displayToolName } from '@/utils/shared/common'; // Friendly tool-name decode
 import { HANDOFF_TOOL_PREFIX, slugifyHandoffTarget } from '@/shared/utils/handoffNaming';
 import { type ToolCallPair, groupToolCallsByAnchor, collectHandoffToolCallIds } from './toolCallPairing'; // #95: merge tool call + result onto the narration anchor
+import type { FlujoFunctionToolCall } from '@/shared/types/openai';
 import McpAppFrame from './McpAppFrame'; // #97: read-only, sandboxed MCP App (ui:// resource) renderer
 import { createLogger } from '@/utils/logger'; // Import the logger
-import type { McpAppModelContext } from '@/shared/types/chat';
+import type { LazyToolPayloadRef, McpAppModelContext } from '@/shared/types/chat';
 import { mediaDataUrl, type ModelMediaPart } from '@/shared/types/model/media';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import {
+  groupMcpAppOccurrences,
+  latestMcpAppResultIdsByResource,
+} from './mcpAppProjection';
 
 const log = createLogger('frontend/components/Chat/ChatMessages'); // Initialize logger
 
@@ -143,6 +148,12 @@ interface ChatMessagesProps {
   onOpenInCanvas?: (info: CanvasLaunchInfo) => void;
   /** Allowed MCP Apps reveal themselves unless the user opted into click-only launch. */
   autoOpenMcpApps?: boolean;
+  /** Result ids observed after initial conversation hydration and eligible for one auto-launch. */
+  autoOpenMcpAppResultIds?: ReadonlySet<string>;
+  /** Conversation-scoped App identities the user explicitly closed. */
+  dismissedMcpAppKeys?: ReadonlySet<string>;
+  /** Clear a persisted dismissal when the user explicitly opens a launcher. */
+  onMcpAppManualOpen?: (appKey: string) => void;
   /**
    * #221: messages the user submitted while a run was in flight (queued).
    * Rendered as dimmed pending bubbles after the last real message so the user
@@ -169,10 +180,14 @@ export interface CanvasLaunchInfo {
   cancelledReason?: string;
   /** Whether the tool invocation failed. */
   isError?: boolean;
+  /** Stable identity of the selected tool-result delivery. */
+  updateId?: string | number;
+  /** True when this handoff originated from the live-result auto-open policy. */
+  automatic?: boolean;
 }
 
 // Type guard to check if a message has tool_calls
-function hasToolCalls(message: ChatMessage): message is ChatMessage & { tool_calls: OpenAI.ChatCompletionMessageFunctionToolCall[] } {
+function hasToolCalls(message: ChatMessage): message is ChatMessage & { tool_calls: FlujoFunctionToolCall[] } {
   return message.role === 'assistant' && 'tool_calls' in message && Array.isArray(message.tool_calls);
 }
 
@@ -479,6 +494,178 @@ function toolCallStatusIcon(status: ToolCallStatus): React.ReactElement {
   return <CheckCircleOutlineIcon fontSize="small" />;
 }
 
+const toolPayloadRequestCache = new Map<string, Promise<string>>();
+
+function requestToolPayload(payload: LazyToolPayloadRef): Promise<string> {
+  let request = toolPayloadRequestCache.get(payload.uri);
+  if (!request) {
+    request = fetch(payload.href).then(async (response) => {
+      if (!response.ok) throw new Error(`Tool payload request failed (${response.status})`);
+      return response.text();
+    });
+    toolPayloadRequestCache.set(payload.uri, request);
+    // Deduplicate only concurrent reads. Retaining resolved multi-megabyte
+    // strings here would turn expansion into a new long-lived memory cache;
+    // the mounted panel owns the value and the browser HTTP cache handles a
+    // later reopen.
+    request.then(
+      () => { if (toolPayloadRequestCache.get(payload.uri) === request) toolPayloadRequestCache.delete(payload.uri); },
+      () => { if (toolPayloadRequestCache.get(payload.uri) === request) toolPayloadRequestCache.delete(payload.uri); },
+    );
+  }
+  return request;
+}
+
+function useLazyToolPayload(payload: LazyToolPayloadRef | undefined, fallback: string): {
+  value: string;
+  loading: boolean;
+  error: boolean;
+} {
+  const [state, setState] = useState({
+    value: fallback,
+    loading: Boolean(payload),
+    error: false,
+  });
+  useEffect(() => {
+    let active = true;
+    setState({ value: fallback, loading: Boolean(payload), error: false });
+    if (!payload) return () => { active = false; };
+    requestToolPayload(payload).then(
+      (value) => { if (active) setState({ value, loading: false, error: false }); },
+      () => { if (active) setState({ value: fallback, loading: false, error: true }); },
+    );
+    return () => { active = false; };
+  }, [fallback, payload]);
+  return state;
+}
+
+const DeferredToolResultView: React.FC<{
+  content: unknown;
+  payload?: LazyToolPayloadRef;
+  showRaw: boolean;
+}> = ({ content, payload, showRaw }) => {
+  const { t } = useI18n();
+  const fallback = typeof content === 'string' ? content : '[Invalid tool content]';
+  const loaded = useLazyToolPayload(payload, fallback);
+  if (loaded.loading) {
+    return (
+      <Typography variant="body2" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <CircularProgress size={14} thickness={6} /> {t('chat.messages.loadingPayload')}
+      </Typography>
+    );
+  }
+  return (
+    <Box>
+      {loaded.error && (
+        <Typography variant="caption" color="error" sx={{ display: 'block', mb: 0.5 }}>
+          {t('chat.messages.payloadLoadFailed')}
+        </Typography>
+      )}
+      <ToolResultView content={loaded.value} showRaw={showRaw} />
+    </Box>
+  );
+};
+
+const ToolCallDetails: React.FC<{
+  pair: ToolCallPair<ChatMessage>;
+  showRaw: boolean;
+  onRawChange: (showRaw: boolean) => void;
+}> = ({ pair, showRaw, onRawChange }) => {
+  const { t } = useI18n();
+  const args = useLazyToolPayload(pair.argumentPayload, pair.toolCall.function.arguments);
+  const pairUi = pair.result?.ui;
+  const launchInfo = pairUi?.uri && pairUi.serverName ? {
+    serverName: pairUi.serverName,
+    uri: pairUi.uri,
+    toolName: pairUi.toolName ?? pair.toolCall.function.name,
+    toolArgs: pairUi.toolArgs ?? args.value,
+  } : null;
+  const toolTesterDestination = launchInfo?.toolName
+    ? { serverName: launchInfo.serverName, toolName: launchInfo.toolName }
+    : pair.mcpDestination;
+  const openInToolTester = toolTesterDestination && !args.loading
+    ? () => {
+        let parsedArgs: Record<string, unknown> = {};
+        try {
+          const parsed = JSON.parse(launchInfo?.toolArgs ?? args.value);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) parsedArgs = parsed;
+        } catch { /* malformed arguments safely prefill as an empty object */ }
+        const query = new URLSearchParams({
+          server: toolTesterDestination.serverName,
+          tool: toolTesterDestination.toolName,
+          args: JSON.stringify(parsedArgs),
+        });
+        window.location.assign(`/mcp?${query.toString()}`);
+      }
+    : undefined;
+  const formattedArgs = useMemo(() => {
+    try {
+      return JSON.stringify(JSON.parse(args.value), null, 2);
+    } catch {
+      return args.value;
+    }
+  }, [args.value]);
+
+  return (
+    <Box sx={{ mt: 1, p: 1, borderRadius: 1, bgcolor: 'rgba(0, 0, 0, 0.03)' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
+        <HandymanIcon fontSize="small" sx={{ mr: 0.5, color: 'primary.main' }} />
+        <Typography variant="caption" sx={{ fontWeight: 'bold' }}>{t('chat.messages.parameters')}</Typography>
+        <Chip
+          label={`ID: ${pair.toolCall.id ? pair.toolCall.id.substring(0, 8) : 'N/A'}...`}
+          size="small" color="default" variant="outlined"
+          sx={{ ml: 1, height: 20, fontSize: '0.7rem' }}
+        />
+      </Box>
+      {args.loading ? (
+        <Typography variant="body2" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 1, my: 1 }}>
+          <CircularProgress size={14} thickness={6} /> {t('chat.messages.loadingPayload')}
+        </Typography>
+      ) : (
+        <>
+          {args.error && (
+            <Typography variant="caption" color="error">{t('chat.messages.payloadLoadFailed')}</Typography>
+          )}
+          <Box component="pre" sx={{
+            bgcolor: 'action.hover', p: 1, borderRadius: '4px', overflowX: 'auto', fontFamily: 'monospace',
+            fontSize: '0.75rem', my: 0.5, maxHeight: '150px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+          }}>
+            {formattedArgs}
+          </Box>
+        </>
+      )}
+      {openInToolTester && (
+        <Button size="small" variant="outlined" startIcon={<PlayArrowIcon />} onClick={openInToolTester} sx={{ mt: 0.5 }}>
+          {t('chat.messages.toolTester')}
+        </Button>
+      )}
+
+      <Box sx={{ display: 'flex', alignItems: 'center', mt: 1, mb: 0.5 }}>
+        <TerminalIcon fontSize="small" sx={{ mr: 0.5, color: 'text.secondary' }} />
+        <Typography variant="caption" sx={{ fontWeight: 'bold' }}>{t('chat.messages.result')}</Typography>
+        {pair.result && (
+          <FormControlLabel
+            control={<Switch size="small" checked={showRaw} onChange={(event) => onRawChange(event.target.checked)} />}
+            label={t('chat.messages.raw')}
+            sx={{ ml: 'auto', mr: 0, '& .MuiTypography-root': { fontSize: '0.75rem' } }}
+          />
+        )}
+      </Box>
+      {pair.result ? (
+        <DeferredToolResultView
+          content={pair.result.content}
+          payload={pair.resultPayload}
+          showRaw={showRaw}
+        />
+      ) : (
+        <Typography variant="body2" fontStyle="italic" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <CircularProgress size={14} thickness={6} /> {t('chat.messages.waitingTool')}
+        </Typography>
+      )}
+    </Box>
+  );
+};
+
 /**
  * Merged tool-call view (#95): a horizontal, wrapping timeline of the assistant
  * turn's (non-handoff) tool calls, rendered at the bottom of its bubble. Each
@@ -489,7 +676,7 @@ function toolCallStatusIcon(status: ToolCallStatus): React.ReactElement {
  * local state; the component is keyed by the stable message id so the state
  * survives the parent list's re-renders.
  */
-const ToolCallTimeline: React.FC<{
+export const ToolCallTimeline: React.FC<{
   pairs: ToolCallPair<ChatMessage>[];
   messageId: string;
   conversationId?: string;
@@ -501,6 +688,11 @@ const ToolCallTimeline: React.FC<{
   onRegisterAppTeardown?: ChatMessagesProps['onRegisterAppTeardown'];
   onOpenInCanvas?: (info: CanvasLaunchInfo) => void;
   autoOpenMcpApps?: boolean;
+  autoOpenMcpAppResultIds?: ReadonlySet<string>;
+  dismissedMcpAppKeys?: ReadonlySet<string>;
+  onMcpAppManualOpen?: (appKey: string) => void;
+  /** Conversation-level ownership: only these latest results may host a live View. */
+  mcpAppHostResultIds?: ReadonlySet<string>;
 }> = ({
   pairs,
   messageId,
@@ -510,25 +702,19 @@ const ToolCallTimeline: React.FC<{
   onRegisterAppTeardown,
   onOpenInCanvas,
   autoOpenMcpApps = true,
+  autoOpenMcpAppResultIds,
+  dismissedMcpAppKeys,
+  onMcpAppManualOpen,
+  mcpAppHostResultIds,
 }) => {
   const { t, tp } = useI18n();
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [rawByKey, setRawByKey] = useState<Record<string, boolean>>({});
   const keyFor = (pair: ToolCallPair<ChatMessage>, index: number) =>
     pair.toolCall.id || `tc-${messageId}-${index}`;
-  const launchInfoFor = (pair: ToolCallPair<ChatMessage>): CanvasLaunchInfo | null => {
-    const ui = pair.result?.ui;
-    if (!ui?.uri || !ui.serverName) return null;
-    return {
-      serverName: ui.serverName,
-      uri: ui.uri,
-      toolName: ui.toolName ?? pair.toolCall.function.name,
-      toolArgs: pair.toolCall.function.arguments,
-      resultContent: typeof pair.result?.content === 'string' ? pair.result.content : undefined,
-      cancelledReason: ui.cancelledReason,
-      isError: ui.isError,
-    };
-  };
+  const appGroups = useMemo(() => groupMcpAppOccurrences(pairs), [pairs]);
+  const expandedPairIndex = pairs.findIndex((pair, index) => keyFor(pair, index) === expandedKey);
+  const expandedPair = expandedPairIndex >= 0 ? pairs[expandedPairIndex] : undefined;
 
   return (
     <Box sx={{ mt: 1, pt: 1, borderTop: '1px solid', borderColor: 'divider' }}>
@@ -543,15 +729,33 @@ const ToolCallTimeline: React.FC<{
           collapse. Per-server MCP Apps permission is already enforced before a
           ui link reaches the transcript; the optional Settings restriction only
           decides whether the live View opens immediately or waits for one click. */}
-      {pairs.map((pair, index) => {
-        const launchInfo = launchInfoFor(pair);
-        if (!launchInfo) return null;
-        const key = keyFor(pair, index);
+      {appGroups.filter((group) => (
+        !mcpAppHostResultIds
+        || Boolean(group.latest.resultMessageId && mcpAppHostResultIds.has(group.latest.resultMessageId))
+      )).map((group) => {
+        const latest = group.latest;
+        const shouldAutoOpen = Boolean(
+          autoOpenMcpApps
+          && latest.resultMessageId
+          && autoOpenMcpAppResultIds?.has(latest.resultMessageId)
+          && !dismissedMcpAppKeys?.has(group.key),
+        );
+        const launchInfo: CanvasLaunchInfo = {
+          serverName: latest.serverName,
+          uri: latest.uri,
+          toolName: latest.toolName,
+          toolArgs: latest.toolArgs,
+          resultContent: latest.resultContent,
+          cancelledReason: latest.cancelledReason,
+          isError: latest.isError,
+          updateId: latest.updateId,
+          automatic: shouldAutoOpen,
+        };
         return (
           <McpAppFrame
-            key={`app-${key}`}
-            defaultExpanded={autoOpenMcpApps}
-            autoDock={autoOpenMcpApps}
+            key={`app-${group.key}`}
+            defaultExpanded={shouldAutoOpen}
+            autoDock={shouldAutoOpen}
             conversationId={conversationId}
             serverName={launchInfo.serverName}
             uri={launchInfo.uri}
@@ -560,10 +764,13 @@ const ToolCallTimeline: React.FC<{
             toolResultContent={launchInfo.resultContent}
             toolCancelledReason={launchInfo.cancelledReason}
             toolIsError={launchInfo.isError}
+            toolUpdateId={launchInfo.updateId}
+            linkedToolCallCount={group.occurrences.length}
             onAppMessage={onAppMessage}
             onUpdateModelContext={onUpdateModelContext}
             onRegisterTeardown={onRegisterAppTeardown}
-            teardownRegistrationKey={`${launchInfo.serverName}::${launchInfo.uri}::${key}`}
+            teardownRegistrationKey={`${group.key}::${messageId}`}
+            onUserOpen={() => onMcpAppManualOpen?.(group.key)}
             onRequestDock={onOpenInCanvas ? () => onOpenInCanvas(launchInfo) : undefined}
           />
         );
@@ -597,96 +804,19 @@ const ToolCallTimeline: React.FC<{
         })}
       </Box>
 
-      {/* One expandable panel per node (single-open model). */}
-      {pairs.map((pair, index) => {
-        const key = keyFor(pair, index);
-        let formattedArgs = pair.toolCall.function.arguments;
-        try {
-          formattedArgs = JSON.stringify(JSON.parse(pair.toolCall.function.arguments), null, 2);
-        } catch (e) { /* keep the original string */ }
-        const showRaw = !!rawByKey[key];
-        const openInToolTester = pair.mcpDestination
-          ? () => {
-              let args: Record<string, unknown> = {};
-              try {
-                const parsed = JSON.parse(pair.toolCall.function.arguments);
-                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) args = parsed;
-              } catch { /* malformed arguments safely prefill as an empty object */ }
-              const query = new URLSearchParams({
-                server: pair.mcpDestination!.serverName,
-                tool: pair.mcpDestination!.toolName,
-                args: JSON.stringify(args),
-              });
-              window.location.assign(`/mcp?${query.toString()}`);
-            }
-          : undefined;
-
-        return (
-          <Collapse key={key} in={expandedKey === key}>
-            <Box sx={{ mt: 1, p: 1, borderRadius: 1, bgcolor: 'rgba(0, 0, 0, 0.03)' }}>
-              {/* Call parameters */}
-              <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
-                <HandymanIcon fontSize="small" sx={{ mr: 0.5, color: 'primary.main' }} />
-                <Typography variant="caption" sx={{ fontWeight: 'bold' }}>{t('chat.messages.parameters')}</Typography>
-                <Chip
-                  label={`ID: ${pair.toolCall.id ? pair.toolCall.id.substring(0, 8) : 'N/A'}...`}
-                  size="small" color="default" variant="outlined"
-                  sx={{ ml: 1, height: 20, fontSize: '0.7rem' }}
-                />
-              </Box>
-              <Box component="pre" sx={{
-                bgcolor: 'action.hover', p: 1, borderRadius: '4px', overflowX: 'auto', fontFamily: 'monospace',
-                fontSize: '0.75rem', my: 0.5, maxHeight: '150px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-              }}>
-                {formattedArgs}
-              </Box>
-              {openInToolTester && (
-                <Button
-                  size="small"
-                  variant="outlined"
-                  startIcon={<PlayArrowIcon />}
-                  onClick={openInToolTester}
-                  sx={{ mt: 0.5 }}
-                >
-                  {t('chat.messages.toolTester')}
-                </Button>
-              )}
-
-              {/* Matching result (or a pending placeholder) */}
-              <Box sx={{ display: 'flex', alignItems: 'center', mt: 1, mb: 0.5 }}>
-                <TerminalIcon fontSize="small" sx={{ mr: 0.5, color: 'text.secondary' }} />
-                <Typography variant="caption" sx={{ fontWeight: 'bold' }}>{t('chat.messages.result')}</Typography>
-                {pair.result && (
-                  <FormControlLabel
-                    control={
-                      <Switch
-                        size="small"
-                        checked={showRaw}
-                        onChange={(e) => setRawByKey((prev) => ({ ...prev, [key]: e.target.checked }))}
-                      />
-                    }
-                    label={t('chat.messages.raw')}
-                    sx={{ ml: 'auto', mr: 0, '& .MuiTypography-root': { fontSize: '0.75rem' } }}
-                  />
-                )}
-              </Box>
-              {pair.result ? (
-                <ToolResultView content={pair.result.content} showRaw={showRaw} />
-              ) : (
-                <Typography
-                  variant="body2"
-                  fontStyle="italic"
-                  color="text.secondary"
-                  sx={{ display: 'flex', alignItems: 'center', gap: 1 }}
-                >
-                   <CircularProgress size={14} thickness={6} /> {t('chat.messages.waitingTool')}
-                </Typography>
-              )}
-
-            </Box>
-          </Collapse>
-        );
-      })}
+      {/* Only the open node mounts/parses/fetches its payload. */}
+      <Collapse in={Boolean(expandedPair)} unmountOnExit>
+        {expandedPair && (
+          <ToolCallDetails
+            key={expandedKey}
+            pair={expandedPair}
+            showRaw={Boolean(expandedKey && rawByKey[expandedKey])}
+            onRawChange={(showRaw) => {
+              if (expandedKey) setRawByKey((prev) => ({ ...prev, [expandedKey]: showRaw }));
+            }}
+          />
+        )}
+      </Collapse>
     </Box>
   );
 };
@@ -717,6 +847,10 @@ interface MessageBubbleProps {
   /** #216: route a tool app to the docked canvas (see ChatMessagesProps). */
   onOpenInCanvas?: (info: CanvasLaunchInfo) => void;
   autoOpenMcpApps?: boolean;
+  autoOpenMcpAppResultIds?: ReadonlySet<string>;
+  dismissedMcpAppKeys?: ReadonlySet<string>;
+  onMcpAppManualOpen?: (appKey: string) => void;
+  mcpAppHostResultIds?: ReadonlySet<string>;
   /**
    * #95 (follow-up): handoff tool calls hoisted from suppressed tool-call-only
    * messages in the same assistant run, rendered as slim markers on this anchor
@@ -748,12 +882,17 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
   onRegisterAppTeardown,
   onOpenInCanvas,
   autoOpenMcpApps,
+  autoOpenMcpAppResultIds,
+  dismissedMcpAppKeys,
+  onMcpAppManualOpen,
+  mcpAppHostResultIds,
   hoistedHandoffs,
   isBeingEdited,
   onMenuOpen,
   onToggleRaw,
 }) {
   const { t, formatDate: formatLocalizedDate, formatNumber } = useI18n();
+  const [orphanToolExpanded, setOrphanToolExpanded] = useState(false);
   // Subflow steps (depth > 0) render nested: indented per level, marked with a
   // guide line + chip. They are display-only (never sent back as history).
   const depth = message.depth ?? 0;
@@ -947,7 +1086,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
             own bubble was folded away still shows its routing on the anchor. */}
         {(() => {
           const ownHandoffs = hasToolCalls(message)
-            ? message.tool_calls.filter((tc) => isHandoffToolName(tc.function.name))
+            ? (message.tool_calls as FlujoFunctionToolCall[]).filter((tc) => isHandoffToolName(tc.function.name))
             : [];
           const allHandoffs = [...ownHandoffs, ...(hoistedHandoffs ?? [])];
           // Restyled (issue #134): a proper outlined chip instead of small grey
@@ -985,6 +1124,10 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
             onRegisterAppTeardown={onRegisterAppTeardown}
             onOpenInCanvas={onOpenInCanvas}
             autoOpenMcpApps={autoOpenMcpApps}
+            autoOpenMcpAppResultIds={autoOpenMcpAppResultIds}
+            dismissedMcpAppKeys={dismissedMcpAppKeys}
+            onMcpAppManualOpen={onMcpAppManualOpen}
+            mcpAppHostResultIds={mcpAppHostResultIds}
           />
         )}
 
@@ -998,7 +1141,8 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
             </Typography>
 
             <Accordion
-              defaultExpanded={false} // dont Auto-expand the tool result
+              expanded={orphanToolExpanded}
+              onChange={(_event, expanded) => setOrphanToolExpanded(expanded)}
               sx={{ mb: 0.5, '&:before': { display: 'none' }, boxShadow: 'none', bgcolor: 'rgba(0, 0, 0, 0.02)' }}
             >
               <AccordionSummary expandIcon={<ExpandMoreIcon />}>
@@ -1026,10 +1170,15 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
                   />
                 </Box>
               </AccordionSummary>
-              <AccordionDetails sx={{ pt: 0, pb: 1, overflow: 'hidden' }}>
-                {/* #95: rendering shared with the merged timeline via ToolResultView. */}
-                <ToolResultView content={message.content} showRaw={showRaw} />
-              </AccordionDetails>
+              {orphanToolExpanded && (
+                <AccordionDetails sx={{ pt: 0, pb: 1, overflow: 'hidden' }}>
+                  <DeferredToolResultView
+                    content={message.content}
+                    payload={message.toolPayloads?.[message.tool_call_id]?.result}
+                    showRaw={showRaw}
+                  />
+                </AccordionDetails>
+              )}
             </Accordion>
           </Box>
         )}
@@ -1370,6 +1519,9 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   onRegisterAppTeardown,
   onOpenInCanvas, // #216: route a tool app to the docked canvas
   autoOpenMcpApps = true,
+  autoOpenMcpAppResultIds,
+  dismissedMcpAppKeys,
+  onMcpAppManualOpen,
   queuedMessages = [], // #221: inline pending bubbles
   queueHoldReason = null,
 }) => {
@@ -1448,6 +1600,17 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   const [revertMessageId, setRevertMessageId] = React.useState<string | null>(null);
   // State to manage raw view toggle for each tool message
   const [showRawToolResult, setShowRawToolResult] = React.useState<Record<string, boolean>>({});
+  const mcpAppHostResultIds = useMemo<ReadonlySet<string>>(() => {
+    const candidates = messages
+      .filter((message) => (
+        message.role === 'tool'
+        && message.ui?.uri
+        && message.ui.serverName
+        && Boolean(message.id)
+      ))
+      .map((message) => message.id);
+    return new Set(latestMcpAppResultIdsByResource(messages, candidates));
+  }, [messages]);
 
   // Stable callbacks handed to every (memoized) bubble.
   const handleMenuOpen = useCallback((event: React.MouseEvent<HTMLElement>, messageId: string) => {
@@ -1567,6 +1730,10 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
             onRegisterAppTeardown={onRegisterAppTeardown}
             onOpenInCanvas={onOpenInCanvas}
             autoOpenMcpApps={autoOpenMcpApps}
+            autoOpenMcpAppResultIds={autoOpenMcpAppResultIds}
+            dismissedMcpAppKeys={dismissedMcpAppKeys}
+            onMcpAppManualOpen={onMcpAppManualOpen}
+            mcpAppHostResultIds={mcpAppHostResultIds}
             hoistedHandoffs={renderHandoffsById.get(message.id)}
             isBeingEdited={!!editingMessageId && message.id === editingMessageId}
             onMenuOpen={handleMenuOpen}

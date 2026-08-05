@@ -70,6 +70,7 @@ export async function POST(request: NextRequest) {
       }
       return json(await suggestToolsForFlowStep({
         flow: body.flow,
+        relatedFlows: Array.isArray(body.relatedFlows) ? body.relatedFlows.filter(isFlow) : undefined,
         nodeId: body.nodeId,
         modelId: body.modelId,
         goal: typeof body.goal === 'string' ? body.goal : undefined,
@@ -120,6 +121,7 @@ export async function POST(request: NextRequest) {
       }
       return json(await improvePromptForFlowStep({
         flow: body.flow,
+        relatedFlows: Array.isArray(body.relatedFlows) ? body.relatedFlows.filter(isFlow) : undefined,
         nodeId: body.nodeId,
         modelId: body.modelId,
         draftPrompt: typeof body.draftPrompt === 'string' ? body.draftPrompt : undefined,

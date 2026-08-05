@@ -101,9 +101,37 @@ export function couldCompact(
   return messages.length > keep;
 }
 
-/** True when any message on the wire references a run-resource URI (arms read_resource). */
+const AUTO_HYDRATED_MEDIA_PARTS = new Set([
+  'image_url',
+  'audio_url',
+  'video_url',
+  'file',
+  'input_image',
+  'input_audio',
+  'input_video',
+  'input_file',
+]);
+
+/**
+ * Find a run-resource URI the model can actually see and pass to
+ * `read_resource`. Structured media references are transport handles that are
+ * hydrated into provider-native bytes before dispatch, so arming a tool for
+ * those alone is both unnecessary and misleading.
+ */
+function hasModelReadableRunResourceUri(value: unknown): boolean {
+  if (typeof value === 'string') return value.includes(RUN_RESOURCE_SCHEME);
+  if (Array.isArray(value)) return value.some(hasModelReadableRunResourceUri);
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  if (typeof record.type === 'string' && AUTO_HYDRATED_MEDIA_PARTS.has(record.type)) {
+    return false;
+  }
+  return Object.values(record).some(hasModelReadableRunResourceUri);
+}
+
+/** True when any model-readable message field references a run-resource URI. */
 export function wireHasRunResourceUri(messages: OpenAI.ChatCompletionMessageParam[]): boolean {
-  return messages.some((m) => JSON.stringify(m).includes(RUN_RESOURCE_SCHEME));
+  return messages.some(hasModelReadableRunResourceUri);
 }
 
 export function compactForWire(

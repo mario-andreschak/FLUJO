@@ -31,7 +31,7 @@ permissions:
 
 jobs:
   artifact-smoke:
-    name: Packed MCP process boundary (Windows)
+    name: MCP artifact validation (Windows)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -50,6 +50,13 @@ jobs:
         run: |
           npm run test:mcp-process-boundary
           npm run validate:mcp-release
+
+      # A clean consumer install is intentionally expensive on hosted Windows.
+      # Keep it as a release/manual gate instead of paying that cost on every
+      # pull request and push to main.
+      - name: Exercise packed consumer artifacts
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        run: |
           npm run smoke:mcp-artifacts
 
   powershell-tests:

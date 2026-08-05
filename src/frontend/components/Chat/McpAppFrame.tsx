@@ -163,6 +163,10 @@ export interface McpAppFrameProps {
   defaultExpanded?: boolean;
   /** Promote a revealed app to the persistent canvas as soon as it declares pip support. */
   autoDock?: boolean;
+  /** Number of tool invocations represented by this resource-centric launcher. */
+  linkedToolCallCount?: number;
+  /** Fired only for an explicit user expansion, never for automatic reveal. */
+  onUserOpen?: () => void;
 }
 
 /**
@@ -763,6 +767,8 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   visible = true,
   defaultExpanded = false,
   autoDock = false,
+  linkedToolCallCount = 1,
+  onUserOpen,
 }) => {
   const { t } = useI18n();
   const theme = useTheme();
@@ -779,6 +785,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   const [displayMode, setDisplayMode] = useState<McpUiDisplayMode>(docked ? 'pip' : 'inline');
   const [floatingRect, setFloatingRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [appDisplayModes, setAppDisplayModes] = useState<McpUiDisplayMode[]>([]);
+  const previousDefaultExpandedRef = useRef(defaultExpanded);
   const { activeCursor, startPointerDrag } = usePointerDrag();
   const effectiveDisplayMode = hostDisplayMode ?? displayMode;
   const hostDisplayModes = useMemo<McpUiDisplayMode[]>(
@@ -912,7 +919,12 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   const onRequestDockRef = useRef(onRequestDock);
   useEffect(() => { onRequestDockRef.current = onRequestDock; }, [onRequestDock]);
   const autoDockRef = useRef(autoDock);
-  useEffect(() => { autoDockRef.current = autoDock; }, [autoDock]);
+  // A live-result auto-launch is a one-shot command, not continuously controlled
+  // state. Latch the positive edge so clearing the transient parent signal while
+  // the sandbox handshake is in flight cannot cancel the eventual canvas handoff.
+  useEffect(() => {
+    if (autoDock) autoDockRef.current = true;
+  }, [autoDock]);
   const onDockableRef = useRef(onDockable);
   useEffect(() => { onDockableRef.current = onDockable; }, [onDockable]);
   const onAvailableDisplayModesRef = useRef(onAvailableDisplayModes);
@@ -1414,12 +1426,22 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       setDisplayMode('inline');
       void bridgeRef.current?.sendHostContextChange({ displayMode: 'inline' });
     }
+    if (next) onUserOpen?.();
     setExpanded(next);
     if (next) {
       // Mount after the Collapse has rendered its container.
       setTimeout(() => { void mount(); }, 0);
     }
-  }, [expanded, mount]);
+  }, [expanded, mount, onUserOpen]);
+
+  // Existing transcript launchers normally hydrate collapsed. When a newly
+  // completed live result is later marked eligible for auto-launch, react to the
+  // false -> true command without requiring the launcher to remount.
+  useEffect(() => {
+    const previous = previousDefaultExpandedRef.current;
+    previousDefaultExpandedRef.current = defaultExpanded;
+    if (!docked && defaultExpanded && !previous && !expanded) setExpanded(true);
+  }, [defaultExpanded, docked, expanded]);
 
   // #216: a docked host auto-mounts after the upstream trust/consent decision
   // and then stays mounted for the life of the tab — visibility is CSS-only,
@@ -1638,6 +1660,11 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
         <Typography variant="body2" sx={{ fontWeight: 500 }}>
           {t('chat.app.fromServer', { server: serverName })}
         </Typography>
+        {linkedToolCallCount > 1 && (
+          <Typography variant="caption" color="text.secondary">
+            ×{linkedToolCallCount}
+          </Typography>
+        )}
         <Tooltip title={t('chat.app.sandboxHelp')}>
           <ShieldOutlinedIcon fontSize="small" color="action" />
         </Tooltip>

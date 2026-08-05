@@ -13,6 +13,7 @@ import { ExecutionEvent } from '@/shared/types/execution/events';
 import { modelService } from '@/backend/services/model';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { requireFunctionToolCalls } from '@/shared/types/openai';
+import { projectLazyToolPayloads } from '@/backend/execution/flow/lazyToolPayloads';
 
 const log = createLogger('app/v1/chat/completions/chatCompletionService');
 
@@ -89,10 +90,16 @@ async function processChatCompletionInternal(
   // --- Paused debug → custom structure with the full debug state ---
   if (result.status === 'paused_debug') {
     log.info(`Returning paused debug state for conv ${result.conversationId}`);
+    const debugState = data.compactToolPayloads
+      ? {
+          ...result.sharedState,
+          messages: await projectLazyToolPayloads(result.sharedState.messages, result.conversationId),
+        }
+      : result.sharedState;
     return NextResponse.json({
       status: 'paused_debug',
       conversation_id: result.conversationId,
-      debugState: result.sharedState,
+      debugState,
     });
   }
 
@@ -147,6 +154,9 @@ async function processChatCompletionInternal(
     total_tokens: promptTokens + completionTokens,
   };
 
+  const responseMessages = data.compactToolPayloads
+    ? await projectLazyToolPayloads(result.messages, result.conversationId)
+    : result.messages;
   const responseData = {
     id: `chatcmpl-${Date.now()}`,
     object: 'chat.completion',
@@ -158,7 +168,7 @@ async function processChatCompletionInternal(
       finish_reason,
     }],
     usage,
-    messages: result.messages as FlujoChatMessage[],
+    messages: responseMessages as FlujoChatMessage[],
     conversation_id: result.conversationId,
     status: result.sharedState.status || (result.finalAction === FINAL_RESPONSE_ACTION ? 'completed' : 'running'),
     pendingToolCalls: result.sharedState.pendingToolCalls,
