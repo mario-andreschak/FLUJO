@@ -41,6 +41,7 @@ export const DEFAULT_SANDBOX_PORT = 4201;
 export const SANDBOX_AUTH_QUERY_PARAM = 'token';
 export const SANDBOX_PUBLIC_URL_ENV = 'FLUJO_MCP_APP_SANDBOX_PUBLIC_URL';
 export const SANDBOX_HOST_ORIGINS_ENV = 'FLUJO_MCP_APP_HOST_ORIGINS';
+export const SANDBOX_BIND_HOST_ENV = 'FLUJO_MCP_APP_SANDBOX_HOST';
 
 const MAX_CONFIGURED_HOST_ORIGINS = 16;
 
@@ -110,6 +111,10 @@ export function getSandboxPort(): number {
 
 /** The sandbox follows the same single exposure mode as the main server. */
 function getSandboxBindHost(): string {
+  // Explicit override wins: orchestrators (e.g. Fly.io 6PN, which is
+  // IPv6-only) may need a bind host other than the container default.
+  const configured = process.env[SANDBOX_BIND_HOST_ENV]?.trim();
+  if (configured) return configured;
   // A container must listen on its bridge interface even when Docker publishes
   // that port to host loopback only (the docker-compose secure default).
   if (process.env.FLUJO_CONTAINER) return '0.0.0.0';
