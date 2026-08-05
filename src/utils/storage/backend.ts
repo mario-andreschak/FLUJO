@@ -102,7 +102,24 @@ export async function writeFileAtomic(filePath: string, data: string): Promise<v
   const tmpPath = `${filePath}.tmp.${process.pid}.${++tmpCounter}`;
   try {
     await fs.writeFile(tmpPath, data);
-    await fs.rename(tmpPath, filePath);
+    // Windows: a concurrent reader, indexer, or antivirus scan can hold the
+    // target open, making the rename fail TRANSIENTLY with EPERM/EBUSY/EACCES.
+    // Retry briefly with linear backoff before surfacing the error, so a
+    // conversation save isn't lost to a momentary file lock.
+    const RETRYABLE_RENAME_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
+    const MAX_RENAME_ATTEMPTS = 5;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await fs.rename(tmpPath, filePath);
+        break;
+      } catch (renameError) {
+        const code = (renameError as NodeJS.ErrnoException).code;
+        if (attempt >= MAX_RENAME_ATTEMPTS || !code || !RETRYABLE_RENAME_CODES.has(code)) {
+          throw renameError;
+        }
+        await new Promise(resolve => setTimeout(resolve, 25 * attempt));
+      }
+    }
   } catch (error) {
     // Best-effort cleanup so a failed write doesn't leave temp files behind.
     try { await fs.unlink(tmpPath); } catch { /* temp file may not exist */ }

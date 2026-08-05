@@ -302,6 +302,96 @@ describe('ClaudeSubscriptionAdapter — built-in tool suppression (#166)', () =>
     });
   });
 
+  it('merges an aborted assistant frame with its continuation into ONE message id', async () => {
+    // SDK >= 0.3.220: an interrupted/max-output-tokens turn arrives as an
+    // assistant frame with wrapper-level `aborted: true` whose content ends
+    // mid-word; the SDK continues the SAME prose in a follow-up assistant
+    // frame with a NEW uuid. The adapter must reconcile both onto one stable
+    // message id — otherwise the UI shows a mid-word bubble split
+    // ("Toolchain conf" / "irmed. Now building…").
+    queryMock.mockImplementation(() => (async function* () {
+      yield {
+        type: 'stream_event',
+        uuid: 'frame-a',
+        session_id: 'sess-1',
+        parent_tool_use_id: null,
+        event: {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text: 'Toolchain conf' },
+        },
+      };
+      yield {
+        type: 'assistant',
+        uuid: 'frame-a',
+        session_id: 'sess-1',
+        aborted: true,
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Toolchain conf' }],
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      };
+      yield {
+        type: 'stream_event',
+        uuid: 'frame-b',
+        session_id: 'sess-1',
+        parent_tool_use_id: null,
+        event: {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text: 'irmed.' },
+        },
+      };
+      yield {
+        type: 'assistant',
+        uuid: 'frame-b',
+        session_id: 'sess-1',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'irmed.' }],
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      };
+      yield {
+        type: 'result',
+        subtype: 'success',
+        result: 'Toolchain confirmed.',
+        session_id: 'sess-1',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    })());
+
+    const deltas: Array<{ messageId: string; contentDelta?: string }> = [];
+    const streamed: FlujoChatMessage[] = [];
+    const { transcript } = await new ClaudeSubscriptionAdapter().createCompletion(
+      baseInput({
+        onModelDelta: (delta: { messageId: string; contentDelta?: string }) => deltas.push(delta),
+        onTranscriptMessage: (message: FlujoChatMessage) => streamed.push(message),
+      } as Partial<CompletionInput>),
+    );
+
+    // Continuation deltas keep the FIRST frame's stable id, so the live view
+    // appends into the same bubble instead of opening a new draft.
+    expect(deltas).toEqual([
+      expect.objectContaining({ messageId: 'stream_claude_frame-a', contentDelta: 'Toolchain conf' }),
+      expect.objectContaining({ messageId: 'stream_claude_frame-a', contentDelta: 'irmed.' }),
+    ]);
+    // Exactly ONE durable assistant prose message, holding the merged text.
+    const prose = (transcript ?? []).filter(m => m.role === 'assistant');
+    expect(prose).toHaveLength(1);
+    expect(prose[0]).toMatchObject({
+      id: 'stream_claude_frame-a',
+      role: 'assistant',
+      content: 'Toolchain confirmed.',
+    });
+    // The merged continuation was re-emitted live under the SAME id, so the
+    // frontend's id-keyed upsert replaces the truncated bubble in place.
+    const liveUnderStableId = streamed.filter(m => m.id === 'stream_claude_frame-a');
+    expect(liveUnderStableId.length).toBeGreaterThanOrEqual(2);
+    expect(liveUnderStableId[liveUnderStableId.length - 1].content).toBe('Toolchain confirmed.');
+  });
+
   it('canUseTool DENIES an arbitrary built-in tool with the #166 message', async () => {
     const adapter = new ClaudeSubscriptionAdapter();
     await adapter.createCompletion(baseInput({ tools: [] }));

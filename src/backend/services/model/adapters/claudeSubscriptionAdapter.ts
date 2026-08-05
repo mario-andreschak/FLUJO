@@ -876,6 +876,17 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // concatenated text at the end (it would duplicate in the UI).
     let streamedText = false;
     const partialToolBlocks = new Map<string, { messageId: string; toolUseId: string }>();
+    // Aborted-frame reconciliation (Agent SDK >= 0.3.220): an assistant frame
+    // can arrive with wrapper-level `aborted: true` — the stream was cut
+    // mid-word (e.g. max-output-tokens recovery, interrupt) and the SDK then
+    // CONTINUES the same prose in a follow-up assistant frame with a NEW uuid.
+    // Without merging, the draft bubble keyed to the first uuid survives as one
+    // message ("Toolchain conf") and the continuation becomes a second one
+    // ("irmed. Now building…"). Track the open aborted prose so both its live
+    // deltas and its durable continuation reconcile onto ONE stable message id.
+    let pendingAbortedProse:
+      | { messageId: string; content: string; media: ReturnType<typeof extractNativeMediaParts> }
+      | undefined;
 
     // The message loop, extracted so an external cancellation can race it: the
     // SDK does NOT reliably throw when its abortController fires mid-turn — the
@@ -928,7 +939,10 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           } else if (event.type === 'content_block_delta') {
             if (event.delta.type === 'text_delta' && event.delta.text) {
               onModelDelta?.({
-                messageId: `stream_claude_${partial.uuid}`,
+                // Continuation deltas of an aborted turn keep the FIRST frame's
+                // id so the UI appends into the same bubble instead of opening
+                // a second mid-word draft under the continuation's new uuid.
+                messageId: pendingAbortedProse?.messageId ?? `stream_claude_${partial.uuid}`,
                 contentDelta: event.delta.text,
               });
             } else if (event.delta.type === 'input_json_delta' && event.delta.partial_json) {
@@ -980,24 +994,58 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
               // later prompt replay while the terminal SDK result still follows
               // the adapter's existing success/error path.
               log.warn('Quarantined malformed Claude tool-call prose (#298)');
+              pendingAbortedProse = undefined;
             } else {
               accumulatedText += turnText;
-              // Stream THIS turn's narration live as its own assistant message, so
-              // the UI shows Claude's step-by-step reasoning interleaved with the
-              // tool calls (which already stream via recordToolPair) instead of
-              // arriving as one block after the whole (possibly long) run. Text
-              // blocks precede tool_use within a turn, so this lands in the right
-              // order: turn text -> tool pair -> next turn text -> ...
-              recordMessage(
-                {
-                  role: 'assistant',
-                  content: turnText,
-                  ...(turnMedia.length ? { media: turnMedia } : {}),
-                },
-                `stream_claude_${message.uuid}`,
-              );
+              // Wrapper-level truncation flag: this frame's prose was cut
+              // mid-stream and the SDK will continue it in the next assistant
+              // frame (new uuid). See pendingAbortedProse above.
+              const frameAborted = (message as { aborted?: boolean }).aborted === true;
+              if (pendingAbortedProse) {
+                // Continuation of an aborted frame: fold this frame's text and
+                // media into the SAME transcript message (same id) and re-emit
+                // it, so live view and persistence reconcile to one bubble
+                // instead of a mid-word split.
+                pendingAbortedProse.content += turnText;
+                if (turnMedia.length) pendingAbortedProse.media = [...pendingAbortedProse.media, ...turnMedia];
+                const mergeIndex = transcript.findIndex(m => m.id === pendingAbortedProse!.messageId);
+                if (mergeIndex >= 0) {
+                  const merged = {
+                    ...transcript[mergeIndex],
+                    content: pendingAbortedProse.content,
+                    ...(pendingAbortedProse.media.length ? { media: pendingAbortedProse.media } : {}),
+                  } as FlujoChatMessage;
+                  transcript[mergeIndex] = merged;
+                  onTranscriptMessage?.(merged);
+                }
+                if (!frameAborted) pendingAbortedProse = undefined;
+              } else {
+                // Stream THIS turn's narration live as its own assistant message, so
+                // the UI shows Claude's step-by-step reasoning interleaved with the
+                // tool calls (which already stream via recordToolPair) instead of
+                // arriving as one block after the whole (possibly long) run. Text
+                // blocks precede tool_use within a turn, so this lands in the right
+                // order: turn text -> tool pair -> next turn text -> ...
+                const messageId = `stream_claude_${message.uuid}`;
+                recordMessage(
+                  {
+                    role: 'assistant',
+                    content: turnText,
+                    ...(turnMedia.length ? { media: turnMedia } : {}),
+                  },
+                  messageId,
+                );
+                if (frameAborted) {
+                  pendingAbortedProse = { messageId, content: turnText, media: [...turnMedia] };
+                }
+              }
               streamedText = true;
             }
+          } else if (pendingAbortedProse) {
+            // A text-less frame (e.g. pure tool_use turn) closes any open
+            // aborted prose — later text belongs to a NEW message, not the
+            // truncated one.
+            pendingAbortedProse = undefined;
           }
           if (assistant?.usage) {
             lastTurnUsage = assistant.usage;
