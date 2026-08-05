@@ -24,6 +24,7 @@ import {
   DialogContent,
   DialogContentText,
   DialogActions,
+  CircularProgress,
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
@@ -68,9 +69,17 @@ import {
   conversationStatusColor,
 } from './conversationCardPalette';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { chatService } from '@/frontend/services/chat';
 
 interface ChatHistoryProps {
   conversations: ConversationListItem[]; // Use ConversationListItem[]
+  /** Total persisted rows matching the unfiltered sidebar, including unloaded pages. */
+  totalConversations?: number;
+  hasMoreConversations?: boolean;
+  isLoadingMore?: boolean;
+  onLoadMore?: () => Promise<void>;
+  /** Explicitly materialize all pages for complete bulk-action semantics. */
+  onLoadAll?: () => Promise<ConversationListItem[]>;
   currentConversationId: string | null;
   onSelectConversation: (id: string) => void;
   onDeleteConversation: (id: string) => void;
@@ -125,6 +134,11 @@ const ORIGIN_ICONS: Record<ConversationOriginKey, React.ElementType> = {
 
 const ChatHistory: React.FC<ChatHistoryProps> = ({
   conversations,
+  totalConversations = conversations.length,
+  hasMoreConversations = false,
+  isLoadingMore = false,
+  onLoadMore,
+  onLoadAll,
   currentConversationId,
   onSelectConversation,
   onDeleteConversation,
@@ -146,6 +160,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   const [bulkDeleteDialog, setBulkDeleteDialog] = React.useState<{
     open: boolean; ids: string[]; label: string;
   }>({ open: false, ids: [], label: '' });
+  const [bulkResolving, setBulkResolving] = React.useState(false);
   // Search dimension (issue #182): 'title' filters client-side over titles+flow
   // (Phase 1); 'content' resolves matches server-side against message bodies
   // (which aren't all resident on the client). Persisted so the choice sticks.
@@ -153,10 +168,10 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     PREF.searchDim,
     'title',
   );
-  // Ids the backend content-search matched; null while a request is in flight
-  // (or when content search is inactive) so `filtered` shows nothing until the
-  // result lands rather than flashing the whole list.
-  const [contentMatchIds, setContentMatchIds] = React.useState<Set<string> | null>(null);
+  // Search must span unloaded pages. While a query is active, this complete
+  // server-backed result set temporarily replaces the incrementally-loaded
+  // browse pages. null means the debounced request is still in flight.
+  const [searchResults, setSearchResults] = React.useState<ConversationListItem[] | null>(null);
   const [groupMode, setGroupMode] = useUiPreference<GroupMode>(PREF.group, 'none');
   const [statusFilter, setStatusFilter] = useUiPreference<StatusFilter>(PREF.status, 'all');
   const [flowFilter, setFlowFilter] = useUiPreference<string>(PREF.flow, 'all');
@@ -165,6 +180,9 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     PREF.collapsed,
     {},
   );
+  const sourceConversations = search.trim().length > 0
+    ? (searchResults ?? [])
+    : conversations;
 
   // Wave grouping (issue #181): the wave graph is only needed while grouping by
   // wave, so fetch it lazily and refresh it when wave membership changes.
@@ -172,10 +190,10 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   // silently — grouping just falls back to the Ad-hoc / Archived buckets.
   const [waves, setWaves] = React.useState<WavesResponse | null>(null);
   const waveMembershipKey = useMemo(
-    () => conversations
+    () => sourceConversations
       .map((conversation) => `${conversation.id}:${conversation.plannedExecutionId ?? ''}`)
       .join('\u0000'),
-    [conversations],
+    [sourceConversations],
   );
   React.useEffect(() => {
     if (groupMode !== 'wave') return;
@@ -189,26 +207,27 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
 
   const waveLookup = useMemo(() => buildWaveLookup(waves), [waves]);
 
-  // Content search (issue #182): when the search dimension is 'content', message
-  // bodies must be matched server-side (they aren't all resident here). Debounce
-  // the request so a scan doesn't fire on every keystroke, and ignore stale
-  // responses. Non-content mode clears the id set so `filtered` falls back to
-  // the client-side title filter.
+  // Search spans the complete paged collection rather than only loaded browse
+  // rows. Content matching remains server-side; title mode loads lightweight
+  // summaries and keeps the existing title/flow/origin matching semantics.
   React.useEffect(() => {
     const q = search.trim();
-    if (searchDimension !== 'content' || q.length === 0) {
-      setContentMatchIds(null);
+    if (q.length === 0) {
+      setSearchResults(null);
       return;
     }
     let cancelled = false;
+    setSearchResults(null);
     const timer = setTimeout(() => {
-      fetch(`/v1/chat/conversations?search=${encodeURIComponent(q)}&dimension=content`)
-        .then((r) => (r.ok ? r.json() : []))
-        .then((data: ConversationListItem[]) => {
+      chatService.listAllConversationPages({
+        ...(searchDimension === 'content' ? { search: q } : {}),
+        dimension: searchDimension,
+      })
+        .then((data) => {
           if (cancelled) return;
-          setContentMatchIds(new Set(Array.isArray(data) ? data.map((c) => c.id) : []));
+          setSearchResults(data);
         })
-        .catch(() => { if (!cancelled) setContentMatchIds(new Set()); });
+        .catch(() => { if (!cancelled) setSearchResults([]); });
     }, 300);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [search, searchDimension]);
@@ -288,18 +307,18 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   // actually present (deduped by grouping key), sorted A–Z by label.
   const flowOptions = useMemo(() => {
     const map = new Map<string, string>();
-    for (const c of conversations) {
+    for (const c of sourceConversations) {
       const meta = flowMeta(c.flowId);
       if (!map.has(meta.key)) map.set(meta.key, meta.label);
     }
     return Array.from(map.entries())
       .map(([key, label]) => ({ key, label }))
       .sort((a, b) => a.label.localeCompare(b.label));
-  }, [conversations, flowMeta]);
+  }, [sourceConversations, flowMeta]);
 
   // Apply search + filters, then sort most-recent-first. Memoized so SSE-driven
   // re-renders of the parent don't re-run the whole pipeline needlessly.
-  const filtered = useMemo(() => {
+  const filterConversations = React.useCallback((source: ConversationListItem[]) => {
     const q = search.trim().toLowerCase();
     const now = Date.now();
     const DAY = 24 * 60 * 60 * 1000;
@@ -309,17 +328,14 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
       : dateFilter === '30d' ? now - 30 * DAY
       : 0;
 
-    return conversations
+    return source
       .filter((c) => {
         if (statusFilter !== 'all' && c.status !== statusFilter) return false;
         if (flowFilter !== 'all' && flowMeta(c.flowId).key !== flowFilter) return false;
         if (dateCutoff && c.updatedAt < dateCutoff) return false;
         if (q) {
           if (searchDimension === 'content') {
-            // Content search is resolved server-side (issue #182). While the
-            // debounced request is in flight (contentMatchIds === null) show no
-            // matches yet; otherwise keep only the ids the backend matched.
-            if (!contentMatchIds || !contentMatchIds.has(c.id)) return false;
+            // Content search is already resolved server-side.
           } else {
             const origin = getConversationOrigin(c);
             const haystack = `${c.title} ${flowMeta(c.flowId).label} ${originLabel(origin.key)}`.toLowerCase();
@@ -329,7 +345,12 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
         return true;
       })
       .sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt));
-  }, [conversations, search, searchDimension, contentMatchIds, statusFilter, flowFilter, dateFilter, flowMeta, originLabel]);
+  }, [search, searchDimension, statusFilter, flowFilter, dateFilter, flowMeta, originLabel]);
+
+  const filtered = useMemo(
+    () => filterConversations(sourceConversations),
+    [filterConversations, sourceConversations],
+  );
 
   // Build the (optionally grouped) sections to render.
   const groups: CardGroup<ConversationListItem>[] = useMemo(() => {
@@ -652,8 +673,39 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     );
   };
 
-  const totalCount = conversations.length;
+  const totalCount = search.trim() ? sourceConversations.length : totalConversations;
   const matchCount = filtered.length;
+
+  const openDeleteAllDialog = async () => {
+    setBulkResolving(true);
+    try {
+      const all = onLoadAll ? await onLoadAll() : conversations;
+      setBulkDeleteDialog({
+        open: true,
+        ids: all.map(c => c.id),
+        label: tp('chat.history.deleteAllQuestion', all.length),
+      });
+    } finally {
+      setBulkResolving(false);
+    }
+  };
+
+  const openDeleteVisibleDialog = async () => {
+    setBulkResolving(true);
+    try {
+      const completeSource = search.trim()
+        ? sourceConversations
+        : (onLoadAll ? await onLoadAll() : conversations);
+      const visible = filterConversations(completeSource);
+      setBulkDeleteDialog({
+        open: true,
+        ids: visible.map(c => c.id),
+        label: tp('chat.history.deleteVisibleQuestion', visible.length),
+      });
+    } finally {
+      setBulkResolving(false);
+    }
+  };
 
   return (
     <>
@@ -682,36 +734,30 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
           </Typography>
           <Typography variant="h6" noWrap>{t('chat.history.title')}</Typography>
         </Box>
-        {conversations.length > 0 && (
+        {totalConversations > 0 && (
           <Tooltip title={t('chat.history.deleteAll')}>
             <span>{/* span wrapper needed for Tooltip on (potentially) disabled buttons */}
               <IconButton
                 size="small"
                 color="error"
                 aria-label={t('chat.history.deleteAll')}
-                onClick={() => setBulkDeleteDialog({
-                  open: true,
-                  ids: conversations.map(c => c.id),
-                  label: tp('chat.history.deleteAllQuestion', conversations.length),
-                })}
+                disabled={bulkResolving}
+                onClick={() => void openDeleteAllDialog()}
               >
                 <DeleteForeverIcon fontSize="small" />
               </IconButton>
             </span>
           </Tooltip>
         )}
-        {filtered.length > 0 && filtered.length < conversations.length && (
+        {filtered.length > 0 && (search.trim().length > 0 || activeFilterCount > 0) && (
           <Tooltip title={t('chat.history.deleteVisible')}>
             <span>
               <IconButton
                 size="small"
                 color="error"
                 aria-label={t('chat.history.deleteVisible')}
-                onClick={() => setBulkDeleteDialog({
-                  open: true,
-                  ids: filtered.map(c => c.id),
-                  label: tp('chat.history.deleteVisibleQuestion', filtered.length),
-                })}
+                disabled={bulkResolving}
+                onClick={() => void openDeleteVisibleDialog()}
               >
                 <DeleteSweepIcon fontSize="small" />
               </IconButton>
@@ -934,6 +980,19 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
               </Box>
             );
           })
+        )}
+        {!search.trim() && hasMoreConversations && onLoadMore && (
+          <Box sx={{ display: 'flex', justifyContent: 'center', py: 1.5 }}>
+            <Button
+              size="small"
+              variant="outlined"
+              disabled={isLoadingMore}
+              startIcon={isLoadingMore ? <CircularProgress size={14} /> : undefined}
+              onClick={() => void onLoadMore()}
+            >
+              {t('chat.history.loadMore')}
+            </Button>
+          </Box>
         )}
       </List>
 

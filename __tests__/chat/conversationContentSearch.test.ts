@@ -66,6 +66,19 @@ describe('GET /v1/chat/conversations content search (issue #182)', () => {
     expect(body).toEqual({ count: 1 });
   });
 
+  it('preserves the paged and presence response shapes before the data directory exists', async () => {
+    await fs.rm(convDir, { recursive: true, force: true });
+
+    await expect(getJson('?paged=1')).resolves.toMatchObject({
+      status: 200,
+      body: { items: [], total: 0, hasMore: false },
+    });
+    await expect(getJson('?presence=1')).resolves.toMatchObject({
+      status: 200,
+      body: { count: 0 },
+    });
+  });
+
   it('matches against message content and returns only matching ids', async () => {
     await writeConv('hit', { title: 'Alpha', messages: [{ role: 'user', content: 'a needle in the haystack' }] });
     await writeConv('miss', { title: 'Beta', messages: [{ role: 'user', content: 'nothing relevant here' }] });
@@ -99,6 +112,34 @@ describe('GET /v1/chat/conversations content search (issue #182)', () => {
     // client does title filtering itself.
     const { body } = await getJson('?search=needle');
     expect(body.map((c: any) => c.id).sort()).toEqual(['a', 'b']);
+  });
+
+  it('returns stable cursor-paged lightweight summaries for the sidebar', async () => {
+    await writeConv('old', {
+      title: 'Old', source: 'chat', updatedAt: 10, lastUserMessageAt: 10, messages: [],
+    });
+    await writeConv('middle', {
+      title: 'Middle', source: 'subflow', updatedAt: 20, lastUserMessageAt: 20, messages: [],
+    });
+    await writeConv('new', {
+      title: 'New', source: 'schedule', updatedAt: 30, lastUserMessageAt: 30, messages: [],
+    });
+
+    const first = await getJson('?paged=1&limit=2');
+    expect(first.status).toBe(200);
+    expect(first.body.items.map((c: any) => c.id)).toEqual(['new', 'middle']);
+    expect(first.body).toMatchObject({ total: 3, hasMore: true });
+    expect(first.body.items.map((c: any) => c.source)).toEqual(['schedule', 'subflow']);
+
+    const second = await getJson(`?paged=1&limit=2&cursor=${encodeURIComponent(first.body.nextCursor)}`);
+    expect(second.body.items.map((c: any) => c.id)).toEqual(['old']);
+    expect(second.body).toMatchObject({ total: 3, hasMore: false });
+  });
+
+  it('returns 400 for an invalid paging cursor or limit', async () => {
+    await writeConv('a', { title: 'A', messages: [] });
+    await expect(getJson('?paged=1&limit=0')).resolves.toMatchObject({ status: 400 });
+    await expect(getJson('?paged=1&cursor=broken')).resolves.toMatchObject({ status: 400 });
   });
 
   it('rejects an over-long search term with 400', async () => {

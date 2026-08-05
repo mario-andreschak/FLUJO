@@ -313,6 +313,8 @@ const sameConversationLists = (a: ConversationListItem[], b: ConversationListIte
  *  message "Execution cancelled by user." (mapped to a 500 by the OpenAI-shaped
  *  route). Recognise it from any error shape the SDK/REST layers throw so a
  *  deliberate Stop is never surfaced as a provider failure. */
+const SIDEBAR_PAGE_SIZE = 50;
+
 const CANCELLED_MESSAGE_RE = /cancelled by user|execution cancelled/i;
 const isCancellationError = (err: unknown): boolean => {
   const anyErr = err as { code?: unknown; error?: { code?: unknown }; message?: unknown; body?: { error?: unknown } };
@@ -333,7 +335,19 @@ const Chat: React.FC = () => {
   // List of conversation summaries for the sidebar, fetched from backend
   const [conversationList, setConversationList] = useState<ConversationListItem[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState<boolean>(true);
+  const [isLoadingMoreHistory, setIsLoadingMoreHistory] = useState<boolean>(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [conversationPagination, setConversationPagination] = useState<{
+    total: number;
+    hasMore: boolean;
+    nextCursor?: string;
+  }>({ total: 0, hasMore: false });
+  const conversationPaginationRef = useRef(conversationPagination);
+  const loadedServerConversationCountRef = useRef(0);
+  const updateConversationPagination = useCallback((next: typeof conversationPagination) => {
+    conversationPaginationRef.current = next;
+    setConversationPagination(next);
+  }, []);
 
   // Full details of the currently selected conversation, fetched when selected
   const [detailedConversation, setDetailedConversation] = useState<Conversation | null>(null);
@@ -804,19 +818,46 @@ const Chat: React.FC = () => {
       let fetchedList: ConversationListItem[] = [];
       let fetchFailed = false;
       try {
-        fetchedList = (await chatService.listConversations())
+        const targetCount = silent
+          ? Math.max(SIDEBAR_PAGE_SIZE, loadedServerConversationCountRef.current)
+          : SIDEBAR_PAGE_SIZE;
+        let page = await chatService.listConversationPage({
+          limit: Math.min(200, targetCount),
+        });
+        const serverItems = [...page.items];
+        while (serverItems.length < targetCount && page.nextCursor) {
+          page = await chatService.listConversationPage({
+            limit: Math.min(200, targetCount - serverItems.length),
+            cursor: page.nextCursor,
+          });
+          serverItems.push(...page.items);
+        }
+        fetchedList = serverItems
           // Never re-add a conversation whose DELETE is still in flight.
           .filter(c => !pendingDeleteIdsRef.current.has(c.id))
           .sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt));
+        loadedServerConversationCountRef.current = fetchedList.length;
+        updateConversationPagination({
+          total: page.total,
+          hasMore: page.hasMore,
+          nextCursor: page.nextCursor,
+        });
         // Anything the backend returns is no longer client-only.
         for (const c of fetchedList) localOnlyConversationIdsRef.current.delete(c.id);
         setConversationList(prev => {
           // Preserve client-only conversations (an unsent split) — the server
           // list can't contain them yet.
           const localOnly = prev.filter(c => localOnlyConversationIdsRef.current.has(c.id));
-          const next = localOnly.length > 0
-            ? [...localOnly, ...fetchedList].sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt))
-            : fetchedList;
+          // A selected older row can be displaced from the refreshed prefix by
+          // new conversations. Keep it reachable until the user changes pages;
+          // a later page merge deduplicates it by id.
+          const selected = prev.find(c =>
+            c.id === currentConversationIdRef.current
+            && !localOnlyConversationIdsRef.current.has(c.id)
+            && !fetchedList.some(item => item.id === c.id)
+          );
+          const next = [...localOnly, ...fetchedList, ...(selected ? [selected] : [])]
+            .sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt));
           // Keep the previous array identity when nothing changed, so a silent
           // refresh doesn't re-render the sidebar for no reason.
           return sameConversationLists(prev, next) ? prev : next;
@@ -828,6 +869,8 @@ const Chat: React.FC = () => {
         if (!silent) {
           setHistoryError(t('chat.page.historyLoadFailed'));
           setConversationList([]); // Clear list on error
+          loadedServerConversationCountRef.current = 0;
+          updateConversationPagination({ total: 0, hasMore: false });
         }
       } finally {
         if (!silent) setIsLoadingHistory(false);
@@ -846,7 +889,7 @@ const Chat: React.FC = () => {
         // Client-only conversations (unsent splits) count as existing too.
         const idExists = (id: string) =>
           fetchedList.some(c => c.id === id) || localOnlyConversationIdsRef.current.has(id);
-        if (idToSelect && idExists(idToSelect)) {
+        if (idToSelect && (idExists(idToSelect) || selectIdAfterFetch === undefined)) {
            // If the intended ID exists in the new list, ensure it's selected
            if (idToSelect !== liveSelection) {
               log.debug(`Setting currentConversationId to ${idToSelect} after fetch/operation.`);
@@ -890,7 +933,53 @@ const Chat: React.FC = () => {
     });
     silentListRefreshInFlightRef.current = trackedRequest;
     return trackedRequest;
-  }, [setCurrentConversationId, t]); // Include dependencies that affect auto-selection logic if needed
+  }, [setCurrentConversationId, t, updateConversationPagination]); // Include dependencies that affect auto-selection logic if needed
+
+  const loadMoreConversations = useCallback(async (): Promise<void> => {
+    const cursor = conversationPaginationRef.current.nextCursor;
+    if (!cursor || isLoadingMoreHistory) return;
+    setIsLoadingMoreHistory(true);
+    try {
+      const page = await chatService.listConversationPage({
+        limit: SIDEBAR_PAGE_SIZE,
+        cursor,
+      });
+      const incoming = page.items.filter(c => !pendingDeleteIdsRef.current.has(c.id));
+      setConversationList(prev => {
+        const byId = new Map(prev.map(item => [item.id, item]));
+        for (const item of incoming) byId.set(item.id, item);
+        const next = [...byId.values()]
+          .sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt));
+        return sameConversationLists(prev, next) ? prev : next;
+      });
+      loadedServerConversationCountRef.current += incoming.filter(
+        item => !localOnlyConversationIdsRef.current.has(item.id),
+      ).length;
+      updateConversationPagination({
+        total: page.total,
+        hasMore: page.hasMore,
+        nextCursor: page.nextCursor,
+      });
+    } catch (error) {
+      log.error('Could not load the next conversation page', error);
+      setHistoryError(t('chat.page.historyLoadFailed'));
+    } finally {
+      setIsLoadingMoreHistory(false);
+    }
+  }, [isLoadingMoreHistory, t, updateConversationPagination]);
+
+  const loadAllConversations = useCallback(async (): Promise<ConversationListItem[]> => {
+    const fetched = (await chatService.listAllConversationPages())
+      .filter(c => !pendingDeleteIdsRef.current.has(c.id))
+      .sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt));
+    loadedServerConversationCountRef.current = fetched.length;
+    updateConversationPagination({ total: fetched.length, hasMore: false });
+    const localOnly = conversationList.filter(c => localOnlyConversationIdsRef.current.has(c.id));
+    const merged = [...localOnly, ...fetched]
+      .sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt));
+    setConversationList(prev => sameConversationLists(prev, merged) ? prev : merged);
+    return merged;
+  }, [conversationList, updateConversationPagination]);
 
   useEffect(() => {
     // Fetch initial list on mount
@@ -1985,6 +2074,16 @@ const Chat: React.FC = () => {
     try {
       await chatService.deleteConversation(conversationId);
       log.info('Successfully deleted conversation on backend', { conversationId });
+      if (!wasLocalOnly) {
+        loadedServerConversationCountRef.current = Math.max(
+          0,
+          loadedServerConversationCountRef.current - 1,
+        );
+        updateConversationPagination({
+          ...conversationPaginationRef.current,
+          total: Math.max(0, conversationPaginationRef.current.total - 1),
+        });
+      }
       // No need to refetch here, optimistic update is sufficient
       // Selection is handled above
 
@@ -2012,8 +2111,15 @@ const Chat: React.FC = () => {
     const idSet = new Set(ids);
     const previousList = conversationList;
     const previousSelectionId = currentConversationId;
+    const localOnlyIds = new Set(
+      ids.filter((id) => localOnlyConversationIdsRef.current.has(id)),
+    );
+    const loadedPersistedDeleted = previousList.filter(
+      (conversation) => idSet.has(conversation.id) && !localOnlyIds.has(conversation.id),
+    ).length;
 
     ids.forEach((id) => pendingDeleteIdsRef.current.add(id));
+    ids.forEach((id) => localOnlyConversationIdsRef.current.delete(id));
 
     // If the currently viewed conversation is among the deleted set, drop this
     // client's live tracking of it (stream, loading indicator).
@@ -2039,11 +2145,24 @@ const Chat: React.FC = () => {
     try {
       const result = await chatService.deleteConversations(ids);
       log.info('Bulk delete succeeded', { requested: ids.length, ...result });
+      loadedServerConversationCountRef.current = Math.max(
+        0,
+        loadedServerConversationCountRef.current - loadedPersistedDeleted,
+      );
+      const persistedRequested = ids.length - localOnlyIds.size;
+      updateConversationPagination({
+        ...conversationPaginationRef.current,
+        total: Math.max(
+          0,
+          conversationPaginationRef.current.total - Math.min(result.deleted, persistedRequested),
+        ),
+      });
     } catch (err) {
       log.error('Bulk delete failed', { err });
       setError(t('chat.page.bulkDeleteFailed'));
       // Revert the optimistic update and shields, then re-sync from the server.
       ids.forEach((id) => pendingDeleteIdsRef.current.delete(id));
+      localOnlyIds.forEach((id) => localOnlyConversationIdsRef.current.add(id));
       setConversationList(previousList);
       setCurrentConversationId(previousSelectionId);
     }
@@ -2667,6 +2786,7 @@ const Chat: React.FC = () => {
               role: 'assistant',
               content,
               tool_calls: msg.tool_calls,
+              toolPayloads: msg.toolPayloads,
               ...identity,
               processNodeId // Include processNodeId if it exists
             } as OpenAI.ChatCompletionAssistantMessageParam & { id?: string; timestamp?: number; processNodeId?: string };
@@ -2692,6 +2812,7 @@ const Chat: React.FC = () => {
               role: 'tool',
               content,
               tool_call_id: msg.tool_call_id,
+              toolPayloads: msg.toolPayloads,
               ...identity,
               processNodeId // Include processNodeId if it exists
             } as OpenAI.ChatCompletionToolMessageParam & { id?: string; timestamp?: number; processNodeId?: string };
@@ -2717,6 +2838,7 @@ const Chat: React.FC = () => {
                 requireApproval: requireApproval ? "true" : undefined,
                 flujodebug: executeInDebugger ? "true" : undefined, // Add flujodebug flag
                 conversationId: conversation.id, // Pass the correct ID
+                compactToolPayloads: "true",
                 // Undefined means "retain backend state"; only a hydrated or
                 // explicitly updated map is sent. This prevents navigation from
                 // accidentally clearing a conversation with `{}`.
@@ -2730,6 +2852,7 @@ const Chat: React.FC = () => {
             if (meta.requireApproval) filteredMeta.requireApproval = meta.requireApproval;
             if (meta.flujodebug) filteredMeta.flujodebug = meta.flujodebug; // Include flujodebug
             if (meta.conversationId) filteredMeta.conversationId = meta.conversationId;
+            if (meta.compactToolPayloads) filteredMeta.compactToolPayloads = meta.compactToolPayloads;
             if (meta.mcpAppContexts !== undefined) {
               filteredMeta.mcpAppContexts = meta.mcpAppContexts;
             }
@@ -3136,11 +3259,15 @@ const Chat: React.FC = () => {
             const identity = { id: msg.id, timestamp: msg.timestamp, processNodeId: msg.processNodeId };
             // Create properly typed message based on role
             if (msg.role === 'user') return { role: 'user', content, ...identity } as OpenAI.ChatCompletionUserMessageParam;
-            if (msg.role === 'assistant') return { role: 'assistant', content, tool_calls: msg.tool_calls, ...identity } as OpenAI.ChatCompletionAssistantMessageParam;
+            if (msg.role === 'assistant') return {
+              role: 'assistant', content, tool_calls: msg.tool_calls, toolPayloads: msg.toolPayloads, ...identity,
+            } as OpenAI.ChatCompletionAssistantMessageParam;
             if (msg.role === 'system') return { role: 'system', content, ...identity } as OpenAI.ChatCompletionSystemMessageParam;
             if (msg.role === 'tool') {
               if (!msg.tool_call_id) return { role: 'user', content: typeof content === 'string' ? `Tool result: ${content}` : content, ...identity } as OpenAI.ChatCompletionUserMessageParam;
-              return { role: 'tool', content, tool_call_id: msg.tool_call_id, ...identity } as OpenAI.ChatCompletionToolMessageParam;
+              return {
+                role: 'tool', content, tool_call_id: msg.tool_call_id, toolPayloads: msg.toolPayloads, ...identity,
+              } as OpenAI.ChatCompletionToolMessageParam;
             }
             return { role: 'user', content, ...identity } as OpenAI.ChatCompletionUserMessageParam; // Fallback
           });
@@ -3157,6 +3284,7 @@ const Chat: React.FC = () => {
             if (metadata.requireApproval) filteredMeta.requireApproval = metadata.requireApproval;
             if (metadata.flujodebug) filteredMeta.flujodebug = metadata.flujodebug;
             if (metadata.conversationId) filteredMeta.conversationId = metadata.conversationId;
+            filteredMeta.compactToolPayloads = 'true';
             if (metadata.processNodeId) filteredMeta.processNodeId = metadata.processNodeId;
             if (metadata.mcpAppContexts !== undefined) {
               filteredMeta.mcpAppContexts = metadata.mcpAppContexts;
@@ -3768,6 +3896,11 @@ const Chat: React.FC = () => {
   ) : (
     <ChatHistory
       conversations={conversationList}
+      totalConversations={conversationPagination.total + localOnlyConversationIdsRef.current.size}
+      hasMoreConversations={conversationPagination.hasMore}
+      isLoadingMore={isLoadingMoreHistory}
+      onLoadMore={loadMoreConversations}
+      onLoadAll={loadAllConversations}
       flowNames={flowNames}
       currentConversationId={currentConversationId}
       onSelectConversation={selectSidebarConversation}

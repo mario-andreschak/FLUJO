@@ -25,6 +25,7 @@ import {
   deleteConversationSummary,
   persistConversationSummary,
 } from '@/backend/execution/flow/conversationSummaryStore';
+import { projectLazyToolPayloads } from '@/backend/execution/flow/lazyToolPayloads';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/route');
 
@@ -171,7 +172,9 @@ export async function GET(
             }));
         }
       }
-      const messagesWithIds = displayedMessages;
+      const messagesWithIds = request.nextUrl.searchParams.get('compactToolPayloads') === '1'
+        ? await projectLazyToolPayloads(displayedMessages, conversationId)
+        : displayedMessages;
 
       // Use variable for logging
       log.info(`Returning conversation state`, { requestId, conversationId, stateSource, messageCount: messagesWithIds.length, status: sharedState.status });

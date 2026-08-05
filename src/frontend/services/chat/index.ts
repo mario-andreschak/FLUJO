@@ -56,6 +56,20 @@ export interface RevertPreview {
   truncated: boolean;
 }
 
+export interface ConversationPage {
+  items: ConversationListItem[];
+  total: number;
+  hasMore: boolean;
+  nextCursor?: string;
+}
+
+export interface ConversationPageQuery {
+  limit?: number;
+  cursor?: string;
+  search?: string;
+  dimension?: 'title' | 'content';
+}
+
 export interface SubflowRecoveryOptions {
   conversationId: string;
   parentConversationId?: string;
@@ -131,7 +145,7 @@ class ChatService {
   /** GET /v1/chat/conversations/{id} — full conversation (messages included). */
   async getConversation(id: string): Promise<Conversation> {
     log.debug('getConversation: Entering method', { conversationId: id });
-    const response = await fetch(`${BASE}/${encodeURIComponent(id)}`);
+    const response = await fetch(`${BASE}/${encodeURIComponent(id)}?compactToolPayloads=1`);
     return parse<Conversation>(response);
   }
 
@@ -328,6 +342,31 @@ class ChatService {
       method: 'POST',
     });
     await parse<void>(response);
+  }
+
+  /** Cursor-paged summaries for the chat sidebar. */
+  async listConversationPage(query: ConversationPageQuery = {}): Promise<ConversationPage> {
+    const params = new URLSearchParams({
+      paged: '1',
+      limit: String(query.limit ?? 50),
+    });
+    if (query.cursor) params.set('cursor', query.cursor);
+    if (query.search?.trim()) params.set('search', query.search.trim());
+    if (query.dimension) params.set('dimension', query.dimension);
+    const response = await fetch(`${BASE}?${params.toString()}`);
+    return parse<ConversationPage>(response);
+  }
+
+  /** Explicit all-pages read used only by complete search and destructive bulk actions. */
+  async listAllConversationPages(query: Omit<ConversationPageQuery, 'cursor' | 'limit'> = {}): Promise<ConversationListItem[]> {
+    const items: ConversationListItem[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await this.listConversationPage({ ...query, limit: 200, cursor });
+      items.push(...page.items);
+      cursor = page.nextCursor;
+    } while (cursor);
+    return items;
   }
 
   async getSubflowRecoveryOptions(id: string): Promise<SubflowRecoveryOptions> {

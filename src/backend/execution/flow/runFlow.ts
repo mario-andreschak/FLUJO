@@ -57,6 +57,7 @@ import {
   reconcileInterruptedRecovery,
 } from '@/backend/execution/flow/recoveryCheckpoint';
 import { queueSubflowRunOutcome } from '@/backend/execution/flow/subflowRecovery';
+import { hydrateLazyToolPayloads } from '@/backend/execution/flow/lazyToolPayloads';
 
 const log = createLogger('backend/execution/flow/runFlow');
 
@@ -714,6 +715,17 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       finalAction: ERROR_ACTION,
       sharedState,
     });
+  }
+
+  // Conversation GET responses may carry short display previews for large tool
+  // bodies. Restore those references before the client history can replace the
+  // canonical transcript (also covers a split copied into a new conversation).
+  if (data.messages?.length) {
+    data.messages = await hydrateLazyToolPayloads(
+      data.messages,
+      sharedState.messages ?? [],
+      effectiveConvId,
+    );
   }
 
   // Snapshot the pre-turn messages for the log reconcile below: the incoming

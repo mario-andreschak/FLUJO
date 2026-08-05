@@ -10,7 +10,7 @@ import {
 import type { SharedState } from './types';
 
 const log = createLogger('backend/execution/flow/conversationSummaryStore');
-const SUMMARY_VERSION = 1;
+const SUMMARY_VERSION = 2;
 const SUMMARY_READ_CONCURRENCY = 32;
 
 export type ConversationStatus = NonNullable<SharedState['status']>;
@@ -27,6 +27,8 @@ export interface ConversationSummary {
   parentConversationId?: string | null;
   rootConversationId?: string | null;
   recovery?: SharedState['recovery'];
+  /** Durable invocation origin used by the chat sidebar's origin filter/chip. */
+  source?: SharedState['source'] | null;
 }
 
 interface IndexedConversationSummary extends ConversationSummary {
@@ -64,6 +66,7 @@ export function summarizeConversation(state: SharedState, fallbackId: string): C
     ...(state.parentConversationId !== undefined ? { parentConversationId: state.parentConversationId } : {}),
     ...(state.rootConversationId !== undefined ? { rootConversationId: state.rootConversationId } : {}),
     ...(state.recovery ? { recovery: state.recovery } : {}),
+    ...(state.source !== undefined ? { source: state.source } : {}),
   };
 }
 

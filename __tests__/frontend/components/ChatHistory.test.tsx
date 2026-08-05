@@ -7,6 +7,28 @@ jest.mock('@/frontend/contexts/ThemeContext', () => ({
 }));
 
 describe('ChatHistory', () => {
+  it('offers another page when unloaded conversations remain', () => {
+    const onLoadMore = jest.fn(async () => undefined);
+    render(
+      <ThemeProvider theme={createTheme()}>
+        <ChatHistory
+          conversations={[]}
+          totalConversations={51}
+          hasMoreConversations
+          onLoadMore={onLoadMore}
+          currentConversationId={null}
+          onSelectConversation={jest.fn()}
+          onDeleteConversation={jest.fn()}
+          onBulkDelete={jest.fn(async () => undefined)}
+          onNewConversation={jest.fn()}
+        />
+      </ThemeProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load more conversations' }));
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the delete action above the full-row conversation button', () => {
     const onDeleteConversation = jest.fn();
     const onSelectConversation = jest.fn();

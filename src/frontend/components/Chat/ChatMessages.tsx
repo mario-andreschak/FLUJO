@@ -56,9 +56,10 @@ import OpenAI from 'openai'; // Import OpenAI types for tool calls
 import { displayToolName } from '@/utils/shared/common'; // Friendly tool-name decode
 import { HANDOFF_TOOL_PREFIX, slugifyHandoffTarget } from '@/shared/utils/handoffNaming';
 import { type ToolCallPair, groupToolCallsByAnchor, collectHandoffToolCallIds } from './toolCallPairing'; // #95: merge tool call + result onto the narration anchor
+import type { FlujoFunctionToolCall } from '@/shared/types/openai';
 import McpAppFrame from './McpAppFrame'; // #97: read-only, sandboxed MCP App (ui:// resource) renderer
 import { createLogger } from '@/utils/logger'; // Import the logger
-import type { McpAppModelContext } from '@/shared/types/chat';
+import type { LazyToolPayloadRef, McpAppModelContext } from '@/shared/types/chat';
 import { mediaDataUrl, type ModelMediaPart } from '@/shared/types/model/media';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import {
@@ -186,7 +187,7 @@ export interface CanvasLaunchInfo {
 }
 
 // Type guard to check if a message has tool_calls
-function hasToolCalls(message: ChatMessage): message is ChatMessage & { tool_calls: OpenAI.ChatCompletionMessageFunctionToolCall[] } {
+function hasToolCalls(message: ChatMessage): message is ChatMessage & { tool_calls: FlujoFunctionToolCall[] } {
   return message.role === 'assistant' && 'tool_calls' in message && Array.isArray(message.tool_calls);
 }
 
@@ -493,6 +494,178 @@ function toolCallStatusIcon(status: ToolCallStatus): React.ReactElement {
   return <CheckCircleOutlineIcon fontSize="small" />;
 }
 
+const toolPayloadRequestCache = new Map<string, Promise<string>>();
+
+function requestToolPayload(payload: LazyToolPayloadRef): Promise<string> {
+  let request = toolPayloadRequestCache.get(payload.uri);
+  if (!request) {
+    request = fetch(payload.href).then(async (response) => {
+      if (!response.ok) throw new Error(`Tool payload request failed (${response.status})`);
+      return response.text();
+    });
+    toolPayloadRequestCache.set(payload.uri, request);
+    // Deduplicate only concurrent reads. Retaining resolved multi-megabyte
+    // strings here would turn expansion into a new long-lived memory cache;
+    // the mounted panel owns the value and the browser HTTP cache handles a
+    // later reopen.
+    request.then(
+      () => { if (toolPayloadRequestCache.get(payload.uri) === request) toolPayloadRequestCache.delete(payload.uri); },
+      () => { if (toolPayloadRequestCache.get(payload.uri) === request) toolPayloadRequestCache.delete(payload.uri); },
+    );
+  }
+  return request;
+}
+
+function useLazyToolPayload(payload: LazyToolPayloadRef | undefined, fallback: string): {
+  value: string;
+  loading: boolean;
+  error: boolean;
+} {
+  const [state, setState] = useState({
+    value: fallback,
+    loading: Boolean(payload),
+    error: false,
+  });
+  useEffect(() => {
+    let active = true;
+    setState({ value: fallback, loading: Boolean(payload), error: false });
+    if (!payload) return () => { active = false; };
+    requestToolPayload(payload).then(
+      (value) => { if (active) setState({ value, loading: false, error: false }); },
+      () => { if (active) setState({ value: fallback, loading: false, error: true }); },
+    );
+    return () => { active = false; };
+  }, [fallback, payload]);
+  return state;
+}
+
+const DeferredToolResultView: React.FC<{
+  content: unknown;
+  payload?: LazyToolPayloadRef;
+  showRaw: boolean;
+}> = ({ content, payload, showRaw }) => {
+  const { t } = useI18n();
+  const fallback = typeof content === 'string' ? content : '[Invalid tool content]';
+  const loaded = useLazyToolPayload(payload, fallback);
+  if (loaded.loading) {
+    return (
+      <Typography variant="body2" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <CircularProgress size={14} thickness={6} /> {t('chat.messages.loadingPayload')}
+      </Typography>
+    );
+  }
+  return (
+    <Box>
+      {loaded.error && (
+        <Typography variant="caption" color="error" sx={{ display: 'block', mb: 0.5 }}>
+          {t('chat.messages.payloadLoadFailed')}
+        </Typography>
+      )}
+      <ToolResultView content={loaded.value} showRaw={showRaw} />
+    </Box>
+  );
+};
+
+const ToolCallDetails: React.FC<{
+  pair: ToolCallPair<ChatMessage>;
+  showRaw: boolean;
+  onRawChange: (showRaw: boolean) => void;
+}> = ({ pair, showRaw, onRawChange }) => {
+  const { t } = useI18n();
+  const args = useLazyToolPayload(pair.argumentPayload, pair.toolCall.function.arguments);
+  const pairUi = pair.result?.ui;
+  const launchInfo = pairUi?.uri && pairUi.serverName ? {
+    serverName: pairUi.serverName,
+    uri: pairUi.uri,
+    toolName: pairUi.toolName ?? pair.toolCall.function.name,
+    toolArgs: pairUi.toolArgs ?? args.value,
+  } : null;
+  const toolTesterDestination = launchInfo?.toolName
+    ? { serverName: launchInfo.serverName, toolName: launchInfo.toolName }
+    : pair.mcpDestination;
+  const openInToolTester = toolTesterDestination && !args.loading
+    ? () => {
+        let parsedArgs: Record<string, unknown> = {};
+        try {
+          const parsed = JSON.parse(launchInfo?.toolArgs ?? args.value);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) parsedArgs = parsed;
+        } catch { /* malformed arguments safely prefill as an empty object */ }
+        const query = new URLSearchParams({
+          server: toolTesterDestination.serverName,
+          tool: toolTesterDestination.toolName,
+          args: JSON.stringify(parsedArgs),
+        });
+        window.location.assign(`/mcp?${query.toString()}`);
+      }
+    : undefined;
+  const formattedArgs = useMemo(() => {
+    try {
+      return JSON.stringify(JSON.parse(args.value), null, 2);
+    } catch {
+      return args.value;
+    }
+  }, [args.value]);
+
+  return (
+    <Box sx={{ mt: 1, p: 1, borderRadius: 1, bgcolor: 'rgba(0, 0, 0, 0.03)' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
+        <HandymanIcon fontSize="small" sx={{ mr: 0.5, color: 'primary.main' }} />
+        <Typography variant="caption" sx={{ fontWeight: 'bold' }}>{t('chat.messages.parameters')}</Typography>
+        <Chip
+          label={`ID: ${pair.toolCall.id ? pair.toolCall.id.substring(0, 8) : 'N/A'}...`}
+          size="small" color="default" variant="outlined"
+          sx={{ ml: 1, height: 20, fontSize: '0.7rem' }}
+        />
+      </Box>
+      {args.loading ? (
+        <Typography variant="body2" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 1, my: 1 }}>
+          <CircularProgress size={14} thickness={6} /> {t('chat.messages.loadingPayload')}
+        </Typography>
+      ) : (
+        <>
+          {args.error && (
+            <Typography variant="caption" color="error">{t('chat.messages.payloadLoadFailed')}</Typography>
+          )}
+          <Box component="pre" sx={{
+            bgcolor: 'action.hover', p: 1, borderRadius: '4px', overflowX: 'auto', fontFamily: 'monospace',
+            fontSize: '0.75rem', my: 0.5, maxHeight: '150px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+          }}>
+            {formattedArgs}
+          </Box>
+        </>
+      )}
+      {openInToolTester && (
+        <Button size="small" variant="outlined" startIcon={<PlayArrowIcon />} onClick={openInToolTester} sx={{ mt: 0.5 }}>
+          {t('chat.messages.toolTester')}
+        </Button>
+      )}
+
+      <Box sx={{ display: 'flex', alignItems: 'center', mt: 1, mb: 0.5 }}>
+        <TerminalIcon fontSize="small" sx={{ mr: 0.5, color: 'text.secondary' }} />
+        <Typography variant="caption" sx={{ fontWeight: 'bold' }}>{t('chat.messages.result')}</Typography>
+        {pair.result && (
+          <FormControlLabel
+            control={<Switch size="small" checked={showRaw} onChange={(event) => onRawChange(event.target.checked)} />}
+            label={t('chat.messages.raw')}
+            sx={{ ml: 'auto', mr: 0, '& .MuiTypography-root': { fontSize: '0.75rem' } }}
+          />
+        )}
+      </Box>
+      {pair.result ? (
+        <DeferredToolResultView
+          content={pair.result.content}
+          payload={pair.resultPayload}
+          showRaw={showRaw}
+        />
+      ) : (
+        <Typography variant="body2" fontStyle="italic" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <CircularProgress size={14} thickness={6} /> {t('chat.messages.waitingTool')}
+        </Typography>
+      )}
+    </Box>
+  );
+};
+
 /**
  * Merged tool-call view (#95): a horizontal, wrapping timeline of the assistant
  * turn's (non-handoff) tool calls, rendered at the bottom of its bubble. Each
@@ -540,6 +713,8 @@ export const ToolCallTimeline: React.FC<{
   const keyFor = (pair: ToolCallPair<ChatMessage>, index: number) =>
     pair.toolCall.id || `tc-${messageId}-${index}`;
   const appGroups = useMemo(() => groupMcpAppOccurrences(pairs), [pairs]);
+  const expandedPairIndex = pairs.findIndex((pair, index) => keyFor(pair, index) === expandedKey);
+  const expandedPair = expandedPairIndex >= 0 ? pairs[expandedPairIndex] : undefined;
 
   return (
     <Box sx={{ mt: 1, pt: 1, borderTop: '1px solid', borderColor: 'divider' }}>
@@ -629,106 +804,19 @@ export const ToolCallTimeline: React.FC<{
         })}
       </Box>
 
-      {/* One expandable panel per node (single-open model). */}
-      {pairs.map((pair, index) => {
-        const key = keyFor(pair, index);
-        let formattedArgs = pair.toolCall.function.arguments;
-        try {
-          formattedArgs = JSON.stringify(JSON.parse(pair.toolCall.function.arguments), null, 2);
-        } catch (e) { /* keep the original string */ }
-        const showRaw = !!rawByKey[key];
-        const pairUi = pair.result?.ui;
-        const launchInfo = pairUi?.uri && pairUi.serverName ? {
-          serverName: pairUi.serverName,
-          uri: pairUi.uri,
-          toolName: pairUi.toolName ?? pair.toolCall.function.name,
-          toolArgs: pairUi.toolArgs ?? pair.toolCall.function.arguments,
-        } : null;
-        const toolTesterDestination = launchInfo?.toolName
-          ? { serverName: launchInfo.serverName, toolName: launchInfo.toolName }
-          : pair.mcpDestination;
-        const openInToolTester = toolTesterDestination
-          ? () => {
-              let args: Record<string, unknown> = {};
-              try {
-                const parsed = JSON.parse(launchInfo?.toolArgs ?? pair.toolCall.function.arguments);
-                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) args = parsed;
-              } catch { /* malformed arguments safely prefill as an empty object */ }
-              const query = new URLSearchParams({
-                server: toolTesterDestination!.serverName,
-                tool: toolTesterDestination!.toolName,
-                args: JSON.stringify(args),
-              });
-              window.location.assign(`/mcp?${query.toString()}`);
-            }
-          : undefined;
-
-        return (
-          <Collapse key={key} in={expandedKey === key}>
-            <Box sx={{ mt: 1, p: 1, borderRadius: 1, bgcolor: 'rgba(0, 0, 0, 0.03)' }}>
-              {/* Call parameters */}
-              <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
-                <HandymanIcon fontSize="small" sx={{ mr: 0.5, color: 'primary.main' }} />
-                <Typography variant="caption" sx={{ fontWeight: 'bold' }}>{t('chat.messages.parameters')}</Typography>
-                <Chip
-                  label={`ID: ${pair.toolCall.id ? pair.toolCall.id.substring(0, 8) : 'N/A'}...`}
-                  size="small" color="default" variant="outlined"
-                  sx={{ ml: 1, height: 20, fontSize: '0.7rem' }}
-                />
-              </Box>
-              <Box component="pre" sx={{
-                bgcolor: 'action.hover', p: 1, borderRadius: '4px', overflowX: 'auto', fontFamily: 'monospace',
-                fontSize: '0.75rem', my: 0.5, maxHeight: '150px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-              }}>
-                {formattedArgs}
-              </Box>
-              {openInToolTester && (
-                <Button
-                  size="small"
-                  variant="outlined"
-                  startIcon={<PlayArrowIcon />}
-                  onClick={openInToolTester}
-                  sx={{ mt: 0.5 }}
-                >
-                  {t('chat.messages.toolTester')}
-                </Button>
-              )}
-
-              {/* Matching result (or a pending placeholder) */}
-              <Box sx={{ display: 'flex', alignItems: 'center', mt: 1, mb: 0.5 }}>
-                <TerminalIcon fontSize="small" sx={{ mr: 0.5, color: 'text.secondary' }} />
-                <Typography variant="caption" sx={{ fontWeight: 'bold' }}>{t('chat.messages.result')}</Typography>
-                {pair.result && (
-                  <FormControlLabel
-                    control={
-                      <Switch
-                        size="small"
-                        checked={showRaw}
-                        onChange={(e) => setRawByKey((prev) => ({ ...prev, [key]: e.target.checked }))}
-                      />
-                    }
-                    label={t('chat.messages.raw')}
-                    sx={{ ml: 'auto', mr: 0, '& .MuiTypography-root': { fontSize: '0.75rem' } }}
-                  />
-                )}
-              </Box>
-              {pair.result ? (
-                <ToolResultView content={pair.result.content} showRaw={showRaw} />
-              ) : (
-                <Typography
-                  variant="body2"
-                  fontStyle="italic"
-                  color="text.secondary"
-                  sx={{ display: 'flex', alignItems: 'center', gap: 1 }}
-                >
-                   <CircularProgress size={14} thickness={6} /> {t('chat.messages.waitingTool')}
-                </Typography>
-              )}
-
-            </Box>
-          </Collapse>
-        );
-      })}
+      {/* Only the open node mounts/parses/fetches its payload. */}
+      <Collapse in={Boolean(expandedPair)} unmountOnExit>
+        {expandedPair && (
+          <ToolCallDetails
+            key={expandedKey}
+            pair={expandedPair}
+            showRaw={Boolean(expandedKey && rawByKey[expandedKey])}
+            onRawChange={(showRaw) => {
+              if (expandedKey) setRawByKey((prev) => ({ ...prev, [expandedKey]: showRaw }));
+            }}
+          />
+        )}
+      </Collapse>
     </Box>
   );
 };
@@ -804,6 +892,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
   onToggleRaw,
 }) {
   const { t, formatDate: formatLocalizedDate, formatNumber } = useI18n();
+  const [orphanToolExpanded, setOrphanToolExpanded] = useState(false);
   // Subflow steps (depth > 0) render nested: indented per level, marked with a
   // guide line + chip. They are display-only (never sent back as history).
   const depth = message.depth ?? 0;
@@ -997,7 +1086,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
             own bubble was folded away still shows its routing on the anchor. */}
         {(() => {
           const ownHandoffs = hasToolCalls(message)
-            ? message.tool_calls.filter((tc) => isHandoffToolName(tc.function.name))
+            ? (message.tool_calls as FlujoFunctionToolCall[]).filter((tc) => isHandoffToolName(tc.function.name))
             : [];
           const allHandoffs = [...ownHandoffs, ...(hoistedHandoffs ?? [])];
           // Restyled (issue #134): a proper outlined chip instead of small grey
@@ -1052,7 +1141,8 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
             </Typography>
 
             <Accordion
-              defaultExpanded={false} // dont Auto-expand the tool result
+              expanded={orphanToolExpanded}
+              onChange={(_event, expanded) => setOrphanToolExpanded(expanded)}
               sx={{ mb: 0.5, '&:before': { display: 'none' }, boxShadow: 'none', bgcolor: 'rgba(0, 0, 0, 0.02)' }}
             >
               <AccordionSummary expandIcon={<ExpandMoreIcon />}>
@@ -1080,10 +1170,15 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
                   />
                 </Box>
               </AccordionSummary>
-              <AccordionDetails sx={{ pt: 0, pb: 1, overflow: 'hidden' }}>
-                {/* #95: rendering shared with the merged timeline via ToolResultView. */}
-                <ToolResultView content={message.content} showRaw={showRaw} />
-              </AccordionDetails>
+              {orphanToolExpanded && (
+                <AccordionDetails sx={{ pt: 0, pb: 1, overflow: 'hidden' }}>
+                  <DeferredToolResultView
+                    content={message.content}
+                    payload={message.toolPayloads?.[message.tool_call_id]?.result}
+                    showRaw={showRaw}
+                  />
+                </AccordionDetails>
+              )}
             </Accordion>
           </Box>
         )}

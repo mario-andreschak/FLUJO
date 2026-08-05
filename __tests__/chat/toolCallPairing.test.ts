@@ -70,6 +70,23 @@ describe('pairToolCallsWithResults', () => {
     expect(consumedToolCallIds.has('call_1')).toBe(true);
   });
 
+  it('carries lazy argument and result references onto the render pair', () => {
+    const assistant = assistantWithToolCalls([{ id: 'call_lazy', name: 'search' }], {
+      toolPayloads: {
+        call_lazy: { arguments: { uri: 'flujo://run/c/a', href: '/args', size: 9000 } },
+      },
+    });
+    const result = toolResult('call_lazy');
+    result.toolPayloads = {
+      call_lazy: { result: { uri: 'flujo://run/c/r', href: '/result', size: 12000 } },
+    };
+
+    const pair = pairToolCallsWithResults([assistant, result]).pairsByMessageId.get(assistant.id)![0];
+
+    expect(pair.argumentPayload?.href).toBe('/args');
+    expect(pair.resultPayload?.href).toBe('/result');
+  });
+
   it('handles multiple tool calls in one assistant turn', () => {
     const assistant = assistantWithToolCalls([
       { id: 'call_a', name: 'read' },

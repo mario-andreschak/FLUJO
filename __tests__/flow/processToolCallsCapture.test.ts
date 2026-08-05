@@ -147,6 +147,31 @@ describe('processToolCalls auto-capture', () => {
     expect(captureToolResultMock).not.toHaveBeenCalled();
   });
 
+  it('captures an exact transcript-level result for expansion-time loading', async () => {
+    const largeText = 'x'.repeat(DEFAULT_RUN_RESOURCE_SETTINGS.textThresholdChars + 10);
+    const data = { content: [{ type: 'text', text: largeText }] };
+    callToolMock.mockResolvedValue({ success: true, data });
+    captureToolResultMock.mockResolvedValue({ result: data, captured: [] });
+
+    const result = await ModelHandler.processToolCalls({
+      toolCalls: [toolCall('call1', 'mcp_srv_abc123', {})],
+      toolNameMap,
+      conversationId: 'conv-1',
+      node: { nodeId: 'node-9' },
+    });
+
+    expect(result.success).toBe(true);
+    expect(writeRunResourceMock).toHaveBeenCalledWith(expect.objectContaining({
+      conversationId: 'conv-1',
+      kind: 'text',
+      producedBy: expect.objectContaining({
+        source: 'tool-result',
+        payloadRole: 'tool-message',
+        toolCallId: 'call1',
+      }),
+    }));
+  });
+
   it('keeps the original result when the capture layer throws', async () => {
     captureToolResultMock.mockRejectedValue(new Error('store exploded'));
     const result = await ModelHandler.processToolCalls({

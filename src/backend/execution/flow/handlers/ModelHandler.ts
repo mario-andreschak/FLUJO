@@ -2563,6 +2563,7 @@ export class ModelHandler {
                 data: { text: argsString },
                 producedBy: {
                   source: 'tool-args',
+                  payloadRole: 'tool-arguments',
                   nodeId: node?.nodeId,
                   server: serverName,
                   toolName,
@@ -2662,6 +2663,63 @@ export class ModelHandler {
           let resultContent = result.success
             ? JSON.stringify(effectiveData)
             : `Error: ${result.error}`;
+
+          // Keep an exact transcript-level copy of medium-large results for the
+          // browser's expansion-time loader. Results over the context boundary
+          // are captured by boundToolResult below instead, avoiding duplicates.
+          if (
+            result.success
+            && conversationId
+            && runResourceSettings?.autoCaptureEnabled
+            && resultContent.length >= runResourceSettings.textThresholdChars
+          ) {
+            const resultBytes = Buffer.byteLength(resultContent, 'utf8');
+            const maxBytes = runResourceSettings.toolResultMaxBytes ?? 50 * 1024;
+            const maxLines = runResourceSettings.toolResultMaxLines ?? 2000;
+            const overBytes = maxBytes > 0 && resultBytes > maxBytes;
+            let overLines = false;
+            if (maxLines > 0) {
+              let lines = 1;
+              for (let index = 0; index < resultContent.length && lines <= maxLines; index++) {
+                if (resultContent.charCodeAt(index) === 10) lines++;
+              }
+              overLines = lines > maxLines;
+            }
+            if (!overBytes && !overLines) {
+              try {
+                const writtenResult = await writeRunResource({
+                  conversationId,
+                  mimeType: 'application/json',
+                  kind: 'text',
+                  data: { text: resultContent },
+                  producedBy: {
+                    source: 'tool-result',
+                    payloadRole: 'tool-message',
+                    nodeId: node?.nodeId,
+                    server: serverName,
+                    toolName,
+                    toolCallId: id,
+                  },
+                });
+                if (!('skipped' in writtenResult)) {
+                  emit?.({
+                    type: 'resource:write',
+                    node,
+                    server: 'flujo',
+                    uri: writtenResult.uri,
+                    mimeType: writtenResult.mimeType,
+                    size: writtenResult.size,
+                    source: 'tool-result',
+                    toolCallId: id,
+                  });
+                }
+              } catch (error) {
+                log.error('Tool-result display capture failed; keeping inline result', {
+                  errorClass: classifyStatisticsError(error),
+                });
+              }
+            }
+          }
 
           // Tier-boundary bound (#251): every oversized tool result is truncated
           // to a head+tail preview and the full content spilled UNCONDITIONALLY

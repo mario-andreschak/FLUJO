@@ -42,6 +42,8 @@ export type RunResourceSource =
 
 export interface RunResourceProducer {
   source: RunResourceSource;
+  /** Exact transcript payload represented by this resource, when applicable. */
+  payloadRole?: 'tool-arguments' | 'tool-message';
   /** Flow node that was executing when the resource was produced. */
   nodeId?: string;
   nodeName?: string;

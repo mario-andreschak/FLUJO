@@ -16,7 +16,15 @@ import { quickChatFlowId } from '@/utils/shared/quickChat';
 import { deleteConversationLog } from '@/backend/execution/flow/conversationLog';
 import { reconcileInterruptedRecovery } from '@/backend/execution/flow/recoveryCheckpoint';
 import type { StorageKey } from '@/shared/types/storage';
-import { persistConversationSummary } from '@/backend/execution/flow/conversationSummaryStore';
+import {
+  deleteConversationSummary,
+  listConversationSummaries,
+  persistConversationSummary,
+} from '@/backend/execution/flow/conversationSummaryStore';
+import {
+  ConversationCursorError,
+  paginateConversationSummaries,
+} from '@/backend/execution/flow/conversationListPage';
 // Use frontend type for response structure, maybe rename for clarity?
 import { ConversationListItem as FrontendConversationListItem } from '@/frontend/components/Chat';
 
@@ -103,6 +111,9 @@ export async function GET(request: NextRequest) {
   const rawSearch = (url.searchParams.get('search') ?? '').trim();
   const dimension = url.searchParams.get('dimension') ?? 'title';
   const presenceOnly = url.searchParams.get('presence') === '1';
+  const paged = url.searchParams.get('paged') === '1';
+  const rawLimit = url.searchParams.get('limit');
+  const cursor = url.searchParams.get('cursor') ?? undefined;
   if (rawSearch.length > MAX_SEARCH_TERM_LEN) {
     return NextResponse.json(
       { error: `search term too long (max ${MAX_SEARCH_TERM_LEN} chars)` },
@@ -110,6 +121,14 @@ export async function GET(request: NextRequest) {
   }
   const contentSearch = dimension === 'content' && rawSearch.length > 0;
   const contentQuery = rawSearch.toLowerCase();
+  let pageLimit = 50;
+  if (rawLimit !== null) {
+    const parsed = Number(rawLimit);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 200) {
+      return NextResponse.json({ error: 'limit must be an integer between 1 and 200' }, { status: 400 });
+    }
+    pageLimit = parsed;
+  }
 
   const conversationsDir = path.join(getDataDir(), 'db', 'conversations');
   log.debug('Conversations directory path', { requestId, path: conversationsDir });
@@ -125,6 +144,50 @@ export async function GET(request: NextRequest) {
     // and projecting every conversation file for that lightweight status check.
     if (presenceOnly) {
       return NextResponse.json({ count: jsonFiles.length });
+    }
+
+    // The paged sidebar reads tiny durable summary sidecars instead of parsing
+    // the full message-bearing snapshots. Content search is the one exception:
+    // it intentionally scans message bodies and therefore follows the legacy
+    // snapshot path below before applying the same keyset pagination.
+    if (paged && !contentSearch) {
+      const summaries = await listConversationSummaries();
+      const query = rawSearch.toLocaleLowerCase();
+      const visible = summaries
+        .filter((summary) => {
+          if (!query) return true;
+          return `${summary.id} ${summary.title} ${summary.flowId ?? ''} ${summary.source ?? ''}`
+            .toLocaleLowerCase()
+            .includes(query);
+        })
+        .map((summary): ConversationListItem => {
+          const live = FlowExecutor.conversationStates.get(summary.id);
+          let status = live?.status ?? summary.status;
+          if (status === 'running' && executionEventBus.currentSeq(summary.id) === 0) {
+            status = 'error';
+          }
+          return {
+            ...summary,
+            title: live?.title ?? summary.title,
+            flowId: live?.flowId ?? summary.flowId,
+            status,
+            updatedAt: live?.updatedAt ?? summary.updatedAt,
+            lastUserMessageAt: live?.lastUserMessageAt ?? summary.lastUserMessageAt ?? null,
+            source: live?.source ?? summary.source ?? null,
+            plannedExecutionId: live?.plannedExecutionId ?? summary.plannedExecutionId ?? null,
+            parentConversationId: live?.parentConversationId ?? summary.parentConversationId ?? null,
+            rootConversationId: live?.rootConversationId ?? summary.rootConversationId ?? null,
+            recovery: live?.recovery ?? summary.recovery,
+          };
+        });
+      try {
+        return NextResponse.json(paginateConversationSummaries(visible, pageLimit, cursor));
+      } catch (error) {
+        if (error instanceof ConversationCursorError) {
+          return NextResponse.json({ error: error.message }, { status: 400 });
+        }
+        throw error;
+      }
     }
 
     const conversationPromises = jsonFiles.map(async (file): Promise<ConversationListItem | null> => {
@@ -270,6 +333,16 @@ export async function GET(request: NextRequest) {
     const duration = Date.now() - startTime;
     log.info(`Successfully retrieved conversation list`, { requestId, count: validConversations.length, duration: `${duration}ms` });
 
+    if (paged) {
+      try {
+        return NextResponse.json(paginateConversationSummaries(validConversations, pageLimit, cursor));
+      } catch (error) {
+        if (error instanceof ConversationCursorError) {
+          return NextResponse.json({ error: error.message }, { status: 400 });
+        }
+        throw error;
+      }
+    }
     return NextResponse.json(validConversations);
 
   } catch (error: any) {
@@ -283,7 +356,9 @@ export async function GET(request: NextRequest) {
     // Check if the error is because the directory doesn't exist
     if (error.code === 'ENOENT') {
       log.warn('Conversations directory does not exist, returning empty list.', { requestId, path: conversationsDir });
-      return NextResponse.json([]); // Return empty list if directory not found
+      if (presenceOnly) return NextResponse.json({ count: 0 });
+      if (paged) return NextResponse.json({ items: [], total: 0, hasMore: false });
+      return NextResponse.json([]); // Legacy unpaged contract
     }
 
     return NextResponse.json({ error: 'Failed to list conversations' }, { status: 500 });
@@ -474,6 +549,7 @@ export async function DELETE(req: NextRequest) {
       await deleteCollectionItem('conversations', id);
       await deleteConversationLog(id);
       await deleteRunResources(id);
+      await deleteConversationSummary(id);
       FlowExecutor.clearFlowCache(quickChatFlowId(id));
       deleted++;
     } catch (err) {

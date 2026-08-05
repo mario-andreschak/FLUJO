@@ -39,6 +39,9 @@ export interface ChatCompletionMetadata {
    * wire contexts (never as a visible chat message).
    */
   mcpAppContexts?: string;
+
+  /** FLUJO UI extension: return large tool bodies as expansion-time references. */
+  compactToolPayloads?: "true";
 }
 
 import OpenAI from 'openai';
@@ -53,6 +56,24 @@ export interface McpAppModelContext {
 
 /** Context keyed by the host-owned app identity (`serverName::ui://…`). */
 export type McpAppModelContextMap = Record<string, McpAppModelContext>;
+
+/**
+ * Browser-facing reference to a large tool payload kept in the run-resource
+ * store. The conversation API returns a short inline preview plus this
+ * display-only reference; the chat fetches the exact body only when its tool
+ * panel is expanded.
+ */
+export interface LazyToolPayloadRef {
+  uri: string;
+  href: string;
+  size: number;
+  mimeType?: string;
+}
+
+export interface LazyToolCallPayloads {
+  arguments?: LazyToolPayloadRef;
+  result?: LazyToolPayloadRef;
+}
 
 /**
  * Extends OpenAI's chat completion message parameter type to include additional fields
@@ -82,6 +103,9 @@ export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
     serverName: string;
     toolName: string;
   }>;
+
+  /** Display/transport metadata; stripped and hydrated before model execution. */
+  toolPayloads?: Record<string, LazyToolCallPayloads>;
 
   /**
    * Subflow nesting depth for display. Absent/0 = a top-level message of this

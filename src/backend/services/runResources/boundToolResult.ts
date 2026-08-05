@@ -129,7 +129,14 @@ export async function boundToolResult(input: BoundToolResultInput): Promise<Boun
       mimeType: 'text/plain',
       kind: 'text',
       data: { text: content },
-      producedBy: { source: 'tool-result', nodeId, server, toolName, toolCallId },
+      producedBy: {
+        source: 'tool-result',
+        payloadRole: 'tool-message',
+        nodeId,
+        server,
+        toolName,
+        toolCallId,
+      },
     });
     if (!('skipped' in written)) {
       uri = written.uri;

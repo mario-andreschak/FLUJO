@@ -48,6 +48,46 @@ describe('chatService REST methods', () => {
     expect(result).toEqual(list);
   });
 
+  it('listConversationPage: sends the cursor paging contract', async () => {
+    const page = {
+      items: [{ id: 'a', title: 'A', flowId: null, createdAt: 1, updatedAt: 2 }],
+      total: 3,
+      hasMore: true,
+      nextCursor: 'next page',
+    };
+    fetchMock.mockResolvedValueOnce(makeResponse(200, page));
+
+    const result = await chatService.listConversationPage({
+      limit: 25,
+      cursor: 'previous page',
+      search: 'needle',
+      dimension: 'content',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/v1/chat/conversations?paged=1&limit=25&cursor=previous+page&search=needle&dimension=content',
+    );
+    expect(result).toEqual(page);
+  });
+
+  it('listAllConversationPages: follows cursors until the collection is complete', async () => {
+    fetchMock
+      .mockResolvedValueOnce(makeResponse(200, {
+        items: [{ id: 'a' }], total: 2, hasMore: true, nextCursor: 'cursor-2',
+      }))
+      .mockResolvedValueOnce(makeResponse(200, {
+        items: [{ id: 'b' }], total: 2, hasMore: false,
+      }));
+
+    const result = await chatService.listAllConversationPages();
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      '/v1/chat/conversations?paged=1&limit=200',
+      '/v1/chat/conversations?paged=1&limit=200&cursor=cursor-2',
+    ]);
+    expect(result).toEqual([{ id: 'a' }, { id: 'b' }]);
+  });
+
   it('subscribeToSidebarEvents: uses the filtered global lifecycle stream', () => {
     const source = {
       onopen: null as ((event: Event) => void) | null,
@@ -84,7 +124,7 @@ describe('chatService REST methods', () => {
 
     const result = await chatService.getConversation('x/y');
 
-    expect(fetchMock).toHaveBeenCalledWith('/v1/chat/conversations/x%2Fy');
+    expect(fetchMock).toHaveBeenCalledWith('/v1/chat/conversations/x%2Fy?compactToolPayloads=1');
     expect(result).toEqual(conv);
   });
 

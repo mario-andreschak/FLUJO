@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type OpenAI from 'openai';
 import ChatMessages, { ToolCallTimeline } from '@/frontend/components/Chat/ChatMessages';
 import type { ToolCallPair } from '@/frontend/components/Chat/toolCallPairing';
@@ -57,6 +57,46 @@ function appPair(id: string, resultId: string): ToolCallPair<FlujoChatMessage> {
 }
 
 describe('Chat MCP App grouping', () => {
+  it('does not fetch or parse a lazy tool payload until its timeline node is expanded', async () => {
+    const fetchMock = jest.fn(async (url: string) => ({
+      ok: true,
+      text: async () => url.includes('args')
+        ? JSON.stringify({ query: 'full-argument-value' })
+        : JSON.stringify({ output: 'full-result-value' }),
+    }));
+    (global as any).fetch = fetchMock;
+    const pair: ToolCallPair<FlujoChatMessage> = {
+      toolCall: {
+        id: 'lazy-call',
+        type: 'function',
+        function: { name: 'lazy_tool', arguments: 'argument preview' },
+      },
+      result: {
+        id: 'lazy-result',
+        timestamp: 2,
+        role: 'tool',
+        tool_call_id: 'lazy-call',
+        content: 'result preview',
+      },
+      argumentPayload: {
+        uri: 'flujo://run/conversation/lazy-args', href: '/payload/args', size: 9000,
+      },
+      resultPayload: {
+        uri: 'flujo://run/conversation/lazy-result', href: '/payload/result', size: 12000,
+      },
+    };
+
+    render(<ToolCallTimeline pairs={[pair]} messageId="assistant-lazy" />);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.queryByText(/full-argument-value/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show call and result' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText(/full-argument-value/)).toBeInTheDocument();
+    expect(await screen.findByText(/full-result-value/)).toBeInTheDocument();
+  });
+
   it('renders one collapsed App frame for many historical calls sharing a resource', () => {
     render(
       <ToolCallTimeline
