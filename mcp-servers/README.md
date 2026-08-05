@@ -8,6 +8,7 @@ This workspace contains the stdio MCP processes managed by FLUJO:
 | `@mario.andreschak/mcp-filesystem` | `flujo-mcp-filesystem` | Confined filesystem tools, MCP Apps HTML resources, and the bounded touched-file resource registry. |
 | `@mario.andreschak/mcp-bash` | `flujo-mcp-bash` | Cross-platform foreground/background shell execution plus a PTY-backed MCP Apps terminal with process-tree cleanup. |
 | `@mario.andreschak/mcp-browser` | `flujo-mcp-browser` | Isolated server-side Patchright browser automation with an MCP Apps browser view. |
+| `@mario.andreschak/mcp-youcom` | `flujo-mcp-youcom` | You.com web search integration with AI-powered answers, research capabilities, and content extraction. |
 
 Each package builds to `dist/index.js`, uses `StdioServerTransport`, and reserves stdout for MCP protocol frames. Diagnostics are written to stderr. FLUJO persists portable `npx --no-install <executable>` configurations and resolves them from the runtime-only `FLUJO_APP_ROOT`; no checkout or install path is stored in user data. Connection, restart, roots notifications, and shutdown use the same client lifecycle as external MCP servers.
 
@@ -34,7 +35,7 @@ node mcp-servers/browser/dist/index.js
 
 ## Release synchronization
 
-`flujo-ai`, `@mario.andreschak/mcp-flujo`, `@mario.andreschak/mcp-filesystem`, `@mario.andreschak/mcp-bash`, and `@mario.andreschak/mcp-browser` always share one version. `npm version` runs `scripts/sync-version.mjs`, which updates the package manifests, the exact production dependency pins, and the lockfile. `npm run release` builds and validates all packed binaries, publishes the four MCP packages first, publishes `flujo-ai` last, and only then pushes the release commit/tag. Do not publish one package independently.
+`flujo-ai`, `@mario.andreschak/mcp-flujo`, `@mario.andreschak/mcp-filesystem`, `@mario.andreschak/mcp-bash`, `@mario.andreschak/mcp-browser`, and `@mario.andreschak/mcp-youcom` always share one version. `npm version` runs `scripts/sync-version.mjs`, which updates the package manifests, the exact production dependency pins, and the lockfile. `npm run release` builds and validates all packed binaries, publishes the five MCP packages first, publishes `flujo-ai` last, and only then pushes the release commit/tag. Do not publish one package independently.
 
 `npm run validate:mcp-release` rejects version drift, non-exact root pins, missing executable output, or an npm tarball that omits a required manifest/binary. The Docker publishing workflow runs the same validation before building the image.
 
@@ -95,3 +96,43 @@ If a built-in server cannot connect:
 2. Check the MCP server stderr log; protocol output must never be written to stdout.
 3. Confirm configured roots fall within the operator ceiling.
 4. For `mcp-flujo`, confirm `FLUJO_BASE_URL` points at the running local FLUJO instance.
+
+## You.com server
+
+The You.com MCP server provides web search, research, and content extraction capabilities through You.com's API. It supports both keyless (free tier with rate limits) and authenticated (API key) access modes.
+
+Available tools:
+- `you_search`: Basic web search with AI-powered instant answers
+- `you_research`: Enhanced research with detailed citations and comprehensive analysis  
+- `you_contents`: Extract and summarize content from specific URLs
+
+### Configuration
+
+Set `YDC_API_KEY` environment variable to use authenticated access with higher rate limits and enhanced features:
+
+```bash
+export YDC_API_KEY="your-youcom-api-key-here"
+```
+
+Without an API key, the server operates in keyless mode with basic functionality and standard rate limits.
+
+The server automatically handles:
+- Request timeout (30 seconds)
+- Error recovery with helpful fallback suggestions
+- Output truncation for large responses
+- Progress notifications for long operations
+
+### Usage in FLUJO
+
+The You.com MCP server integrates seamlessly with FLUJO's visual flow builder and chat interface. Add it through the MCP Marketplace or configure it manually as a custom MCP server:
+
+**Server Configuration:**
+- **Name:** You.com Search
+- **Command:** `flujo-mcp-youcom` (or `npx @mario.andreschak/mcp-youcom`)
+- **Environment:** `YDC_API_KEY=your-api-key` (optional)
+
+**Example Workflow Usage:**
+1. Add a Process node with the You.com MCP server tools enabled
+2. Use `you_search` for quick web searches with AI answers
+3. Use `you_research` for comprehensive research with citations
+4. Use `you_contents` to analyze specific web pages or documents

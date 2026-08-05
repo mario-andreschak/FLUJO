@@ -79,6 +79,7 @@ FLUJO is powered by the [PocketFlow Framework](https://the-pocket-world.github.i
 ### 🔌 MCP Server Integration
 
 - **Install from anywhere**: the **Marketplace** tab searches the official [MCP Registry](https://registry.modelcontextprotocol.io) and installs with one click; **Spotlight** curates servers verified to work well with FLUJO; or install manually from a GitHub repo / local folder
+- **Built-in MCP servers**: FLUJO includes pre-configured MCP servers for filesystem operations, shell execution, browser automation, and You.com web search — ready to use out of the box
 - **Full MCP capability support**: tools, resources, prompts, roots (workspace folders), and sampling (let a server borrow one of your models under a trust policy you control)
 - **Tool inspection & testing**: browse and call a server's tools, resources, and prompts straight from its detail view
 - **FLUJO as an MCP proxy**: re-expose any server you've configured in FLUJO to other MCP clients (Claude Desktop, Cursor, Cline, …) over Streamable HTTP — configure a server once, use it everywhere
