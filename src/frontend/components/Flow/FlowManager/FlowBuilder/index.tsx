@@ -2454,6 +2454,9 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
           onConnectAgent={handleConnectGuidedAgent}
           onRemoveAgent={handleRemoveGuidedAgent}
           models={guidedModels}
+          onNavigateToFlow={onNavigateToFlow
+            ? (targetFlowId) => requestNavigation(() => onNavigateToFlow(targetFlowId))
+            : undefined}
         />
       )}
       

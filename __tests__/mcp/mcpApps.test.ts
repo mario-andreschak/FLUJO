@@ -1,6 +1,7 @@
 import {
   UI_RESOURCE_SCHEME,
   MCP_APP_IFRAME_SANDBOX,
+  MCP_APP_IFRAME_SANDBOX_ALLOWED_TOKENS,
   MAX_UI_RESOURCE_BYTES,
   isUiResourceUri,
   isMcpAppMimeType,
@@ -354,9 +355,19 @@ describe('extractAppHtml', () => {
 });
 
 describe('constants', () => {
-  it('sandbox excludes allow-same-origin (Phase 1 isolation boundary)', () => {
-    expect(MCP_APP_IFRAME_SANDBOX).toBe('allow-scripts');
-    expect(MCP_APP_IFRAME_SANDBOX).not.toContain('allow-same-origin');
+  it('matches the reference host View sandbox and withholds host-mediated privileges', () => {
+    // Spec isolation boundary is the sandbox proxy ORIGIN, not an opaque View:
+    // the proxy lives off FLUJO's origin, so allow-same-origin here can never
+    // reach FLUJO's cookies/storage. Downloads and popups stay host-mediated
+    // (ui/download-file, ui/open-link), so those tokens are never granted.
+    expect(MCP_APP_IFRAME_SANDBOX).toBe('allow-scripts allow-same-origin allow-forms');
+    expect(MCP_APP_IFRAME_SANDBOX).not.toContain('allow-downloads');
+    expect(MCP_APP_IFRAME_SANDBOX).not.toContain('allow-popups');
+    expect(MCP_APP_IFRAME_SANDBOX).not.toContain('allow-top-navigation');
+    expect(MCP_APP_IFRAME_SANDBOX_ALLOWED_TOKENS).toContain('allow-scripts');
+    for (const token of MCP_APP_IFRAME_SANDBOX.split(' ')) {
+      expect(MCP_APP_IFRAME_SANDBOX_ALLOWED_TOKENS).toContain(token);
+    }
   });
 
   it('exposes the ui:// scheme and a positive size cap', () => {

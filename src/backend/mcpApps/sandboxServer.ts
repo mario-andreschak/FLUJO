@@ -9,12 +9,17 @@
  *
  * This module runs that foreign origin as a dedicated HTTP listener on its own
  * port (4201 by default). It serves exactly one document — `sandbox.html`
- * — with a host-facing Content-Security-Policy set via HTTP header. The proxy
- * policy permits only its own mandatory `srcdoc` iframe and never inherits
- * app-declared network/frame domains. The resource's `_meta.ui.csp`, passed in
- * via the `?csp=` query param by the host, is instead sanitized and prepended
- * to that inner `srcdoc` as its first byte. Access also requires an unguessable,
+ * — with a host-facing Content-Security-Policy set via HTTP header. The
+ * resource's `_meta.ui.csp`, passed in via the `?csp=` query param by the host,
+ * is sanitized into both that header and a `<meta>` policy prepended to the
+ * View's HTML as its first byte. Access also requires an unguessable,
  * per-process query token obtained through FLUJO's authenticated API.
+ *
+ * The View is written into its iframe with `document.write` and carries the
+ * reference host's sandbox policy (`allow-scripts allow-same-origin
+ * allow-forms`), so it is same-origin with this throwaway proxy origin and
+ * origin-bound web APIs work. It is never same-origin with FLUJO: `window.top`
+ * stays cross-origin. See MCP_APP_IFRAME_SANDBOX for the full rationale.
  *
  * The proxy script is inlined (dependency-free vanilla JS) so this needs no
  * bundler step and stays in lockstep with the constants below.
@@ -27,7 +32,11 @@ import http from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createLogger } from '@/utils/logger';
 import { getExposureMode } from '@/utils/http/exposureMode';
-import { isLoopbackCspOrigin } from '@/shared/utils/mcpApps';
+import {
+  isLoopbackCspOrigin,
+  MCP_APP_IFRAME_SANDBOX,
+  MCP_APP_IFRAME_SANDBOX_ALLOWED_TOKENS,
+} from '@/shared/utils/mcpApps';
 
 const log = createLogger('backend/mcpApps/sandboxServer');
 
@@ -436,7 +445,7 @@ function buildInnerCspMeta(csp?: ResourceCsp): string {
  * loopback origin, self-tests that it cannot reach `window.top` (proving the
  * sandbox is real), creates the inner app iframe, and relays postMessage in
  * both directions with strict origin checks. `sandbox-resource-ready` is
- * intercepted to load the app HTML via `srcdoc` into an opaque-origin iframe.
+ * intercepted to create the View iframe and write the app HTML into it.
  */
 export function buildSandboxProxyHtml(
   configuredHostOrigins = getConfiguredSandboxHostOrigins(),
@@ -466,6 +475,8 @@ export function buildSandboxProxyHtml(
   var CONFIGURED_HOST_ORIGINS = ${JSON.stringify(configuredHostOrigins)};
   var HOST_ALLOWLIST_CONFIGURED = ${JSON.stringify(hostAllowlistConfigured)};
   var INNER_CSP_META = ${JSON.stringify(innerCspMeta)};
+  var DEFAULT_VIEW_SANDBOX = ${JSON.stringify(MCP_APP_IFRAME_SANDBOX)};
+  var ALLOWED_SANDBOX_TOKENS = ${JSON.stringify([...MCP_APP_IFRAME_SANDBOX_ALLOWED_TOKENS])};
 
   if (window.self === window.top) { throw new Error("Sandbox proxy must be embedded in an iframe."); }
   if (!document.referrer) { throw new Error("Sandbox proxy: no referrer to validate embedder."); }
@@ -491,6 +502,10 @@ export function buildSandboxProxyHtml(
     throw new Error("Sandbox proxy: embedder origin not allowed: " + referrerOrigin);
   }
   var EXPECTED_HOST_ORIGIN = referrerOrigin;
+  // The View is same-origin with this proxy, so its messages carry this origin
+  // rather than "null". Both are accepted so a narrowing sandbox override that
+  // drops allow-same-origin cannot silently mute the View's bridge.
+  var OWN_ORIGIN = window.location.origin;
 
   // Self-test: reaching window.top MUST throw a SecurityError. If it does not,
   // isolation is broken and we refuse to run.
@@ -511,20 +526,62 @@ export function buildSandboxProxyHtml(
     return !!data && typeof data.method === "string" && data.method.indexOf(SANDBOX_PREFIX) === 0;
   }
 
-  // Keep the untrusted View on an opaque origin: it cannot read cookies or
-  // persistent storage belonging to another View on this shared proxy origin.
-  // A trusted host may further restrict scripts via the optional override, but
-  // it cannot add same-origin, forms, navigation, popup or download privileges.
+  // The host owns the View's sandbox policy: an override may only ever narrow
+  // the default to a subset of the allowlist, never add navigation, popup or
+  // download privileges (those stay host-mediated via ui/open-link and
+  // ui/download-file). A View that cannot run scripts cannot run the bridge
+  // either, so dropping allow-scripts yields no privileges at all.
   function sanitizeSandbox(value) {
-    if (typeof value !== "string") { return "allow-scripts"; }
-    return value.split(/\\s+/).indexOf("allow-scripts") === -1 ? "" : "allow-scripts";
+    if (typeof value !== "string") { return DEFAULT_VIEW_SANDBOX; }
+    var requested = value.toLowerCase().split(/\\s+/);
+    var granted = [];
+    for (var i = 0; i < requested.length; i++) {
+      var token = requested[i];
+      if (ALLOWED_SANDBOX_TOKENS.indexOf(token) !== -1 && granted.indexOf(token) === -1) {
+        granted.push(token);
+      }
+    }
+    return granted.indexOf("allow-scripts") === -1 ? "" : granted.join(" ");
   }
 
-  var inner = document.createElement("iframe");
-  inner.style.cssText = "width:100%;height:100%;border:none;";
-  inner.setAttribute("referrerpolicy", "no-referrer");
-  inner.setAttribute("sandbox", sanitizeSandbox());
-  document.body.appendChild(inner);
+  var inner = null;
+
+  // Sandbox flags are committed when the browser creates the frame's initial
+  // about:blank document; later attribute edits only apply to a subsequent
+  // navigation, and this frame is never navigated. So build a fresh frame per
+  // resource with its final sandbox/allow attributes already in place.
+  function createViewFrame(sandbox, allow) {
+    if (inner && inner.parentNode) { inner.parentNode.removeChild(inner); }
+    inner = document.createElement("iframe");
+    inner.style.cssText = "width:100%;height:100%;border:none;";
+    inner.setAttribute("referrerpolicy", "no-referrer");
+    inner.setAttribute("sandbox", sandbox);
+    if (allow) { inner.setAttribute("allow", allow); }
+    document.body.appendChild(inner);
+    return inner;
+  }
+
+  // document.write (not srcdoc) keeps the View on this proxy origin, which is
+  // what makes origin-bound APIs and nested same-site documents work; it is
+  // also what the reference host does. Enforcement is unchanged: the about:blank
+  // document inherits this proxy's HTTP CSP, and the sanitized meta policy still
+  // precedes every untrusted app-controlled byte. srcdoc is the fallback for
+  // when the View document is unreachable (e.g. a narrowed sandbox override).
+  function writeView(frame, html) {
+    var doc = null;
+    try {
+      doc = frame.contentDocument
+        || (frame.contentWindow && frame.contentWindow.document)
+        || null;
+    } catch (e) { doc = null; }
+    if (doc && typeof doc.write === "function") {
+      doc.open();
+      doc.write(INNER_CSP_META + html);
+      doc.close();
+      return;
+    }
+    frame.srcdoc = INNER_CSP_META + html;
+  }
 
   window.addEventListener("message", function (event) {
     if (event.source === window.parent) {
@@ -532,21 +589,16 @@ export function buildSandboxProxyHtml(
       var data = event.data;
       if (data && data.method === RESOURCE_READY) {
         var params = data.params || {};
-        if (typeof params.sandbox === "string") {
-          inner.setAttribute("sandbox", sanitizeSandbox(params.sandbox));
-        }
-        var allow = buildAllowAttribute(params.permissions);
-        if (allow) { inner.setAttribute("allow", allow); }
-        if (typeof params.html === "string") {
-          // The sanitized policy must precede every untrusted app-controlled
-          // byte so markup in the View cannot race or invalidate enforcement.
-          inner.srcdoc = INNER_CSP_META + params.html;
-        }
-      } else if (!isSandboxControlMessage(data) && inner.contentWindow) {
+        var frame = createViewFrame(
+          sanitizeSandbox(params.sandbox),
+          buildAllowAttribute(params.permissions)
+        );
+        if (typeof params.html === "string") { writeView(frame, params.html); }
+      } else if (!isSandboxControlMessage(data) && inner && inner.contentWindow) {
         inner.contentWindow.postMessage(data, "*");
       }
-    } else if (event.source === inner.contentWindow) {
-      if (event.origin !== "null") { return; }
+    } else if (inner && event.source === inner.contentWindow) {
+      if (event.origin !== OWN_ORIGIN && event.origin !== "null") { return; }
       if (isSandboxControlMessage(event.data)) { return; }
       window.parent.postMessage(event.data, EXPECTED_HOST_ORIGIN);
     }

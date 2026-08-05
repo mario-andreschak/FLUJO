@@ -21,12 +21,36 @@ export const UI_RESOURCE_SCHEME = 'ui://';
 export const MCP_APP_MIME_PROFILE = 'profile=mcp-app';
 
 /**
- * Sandbox attribute for the inner app View. `allow-scripts` WITHOUT
- * `allow-same-origin`: the app may run JS but retains an opaque origin. The
- * foreign-origin outer proxy has a separate sandbox policy because it owns the
- * postMessage relay; do not reuse that policy for server-supplied HTML.
+ * Sandbox attribute for the inner app View, matching the MCP Apps reference
+ * host (`ext-apps/examples/basic-host/src/sandbox.ts`).
+ *
+ * The spec's sandbox-proxy rules require isolation from the HOST origin — the
+ * proxy MUST live on a different origin than FLUJO and MUST itself carry
+ * `allow-scripts allow-same-origin`; the View then reaches the host only
+ * through the proxy's postMessage relay. The View is NOT required to be on an
+ * opaque origin, and forcing one breaks every app that touches origin-bound
+ * browser state (cookies, `localStorage`, IndexedDB, service workers) or that
+ * nests a real document via `csp.frameDomains` — sandbox flags are inherited by
+ * every nested browsing context regardless of its URL.
+ *
+ * `allow-same-origin` here means "same origin as the throwaway sandbox proxy",
+ * never FLUJO's origin: `window.top` stays cross-origin, so FLUJO's session and
+ * storage remain unreachable. Cross-View isolation is an origin-separation
+ * problem (`_meta.ui.domain` / one origin per app), not a sandbox-flag problem.
  */
-export const MCP_APP_IFRAME_SANDBOX = 'allow-scripts';
+export const MCP_APP_IFRAME_SANDBOX = 'allow-scripts allow-same-origin allow-forms';
+
+/**
+ * The only sandbox tokens the proxy will ever put on the View, even if a host
+ * override asks for more. `allow-downloads` and `allow-popups` are deliberately
+ * excluded: the spec routes those through `ui/download-file` and `ui/open-link`
+ * so they stay host-mediated and auditable.
+ */
+export const MCP_APP_IFRAME_SANDBOX_ALLOWED_TOKENS = [
+  'allow-scripts',
+  'allow-same-origin',
+  'allow-forms',
+] as const;
 
 /** Hard cap on a rendered UI resource's HTML size (bytes). Guards the browser. */
 export const MAX_UI_RESOURCE_BYTES = 2 * 1024 * 1024; // 2 MiB

@@ -9,9 +9,11 @@
 
 import {
   buildConversationTitle,
+  isDefaultConversationTitle,
   MAX_TITLE_CHARS,
   DEFAULT_CONVERSATION_TITLE,
 } from '@/utils/shared/conversationTitle';
+import { chatMessageRows } from '@/frontend/i18n/catalogs/chat';
 
 describe('buildConversationTitle', () => {
   it('returns a short message unchanged, with no trailing ellipsis', () => {
@@ -52,5 +54,41 @@ describe('buildConversationTitle', () => {
     expect(buildConversationTitle('')).toBe(DEFAULT_CONVERSATION_TITLE);
     expect(buildConversationTitle(null)).toBe(DEFAULT_CONVERSATION_TITLE);
     expect(buildConversationTitle(undefined)).toBe(DEFAULT_CONVERSATION_TITLE);
+  });
+});
+
+describe('isDefaultConversationTitle', () => {
+  it('recognizes the canonical backend default', () => {
+    expect(isDefaultConversationTitle(DEFAULT_CONVERSATION_TITLE)).toBe(true);
+  });
+
+  it('recognizes the English UI placeholder with its lowercase "c" (the regression)', () => {
+    // The i18n pass changed the seeded title from 'New Conversation' to
+    // 'New conversation'; the strict `=== 'New Conversation'` gate then never
+    // matched and every chat kept the placeholder title.
+    expect(isDefaultConversationTitle('New conversation')).toBe(true);
+  });
+
+  it('recognizes every localized chat.page.newTitle variant', () => {
+    // Guard against locale drift: any newly added/changed translation of the
+    // "new conversation" label must also be accepted by the auto-title gate.
+    const localized = chatMessageRows['chat.page.newTitle'];
+    expect(localized.length).toBeGreaterThan(1);
+    for (const label of localized) {
+      expect(isDefaultConversationTitle(label)).toBe(true);
+    }
+  });
+
+  it('treats empty / whitespace-only titles as untitled', () => {
+    expect(isDefaultConversationTitle('')).toBe(true);
+    expect(isDefaultConversationTitle('   ')).toBe(true);
+    expect(isDefaultConversationTitle(null)).toBe(true);
+    expect(isDefaultConversationTitle(undefined)).toBe(true);
+  });
+
+  it('never clobbers a real or user-renamed title', () => {
+    expect(isDefaultConversationTitle('New conversation about billing')).toBe(false);
+    expect(isDefaultConversationTitle('Deploy checklist')).toBe(false);
+    expect(isDefaultConversationTitle(buildConversationTitle('why is my flow stuck'))).toBe(false);
   });
 });

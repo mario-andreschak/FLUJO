@@ -62,6 +62,21 @@ export function createLegacyAppTheme(mode: PaletteMode): Theme {
       h6: { fontWeight: 600 },
     },
     components: {
+      MuiCssBaseline: {
+        styleOverrides: {
+          body: {
+            // Same link contract as the modern theme (see createAppTheme): the
+            // shade that contrasts with this mode's surfaces, overridable per
+            // container for accent-filled surfaces like the user chat bubble.
+            '--flujo-link-color': isDark ? '#6aa6f7' : '#0056b3',
+          },
+          'a:not([class])': {
+            color: `var(--flujo-link-color, ${isDark ? '#6aa6f7' : '#0056b3'})`,
+            textDecorationColor: 'currentColor',
+            textUnderlineOffset: '2px',
+          },
+        },
+      },
       MuiButton: {
         styleOverrides: {
           root: {
@@ -261,6 +276,21 @@ export function createAppTheme(mode: PaletteMode): Theme {
         styleOverrides: {
           body: {
             backgroundColor: colors.background,
+            // Default markdown/plain-anchor link color. `primary.main` sits too
+            // close to the light-mode surfaces and to the accent-filled chat
+            // bubbles to be legible, so the shade that actually contrasts with
+            // the current mode's surfaces is published as a variable. Any
+            // container may re-point it (see markdownLinkVars).
+            '--flujo-link-color': isDark ? primaryLight : primaryDark,
+          },
+          // Anchors we don't render through MUI (react-markdown output, raw HTML)
+          // otherwise fall back to the UA's default blue/purple, which clashes
+          // with both palettes. MUI components always carry a class, so the
+          // :not([class]) guard keeps Buttons/Links untouched.
+          'a:not([class])': {
+            color: `var(--flujo-link-color, ${isDark ? primaryLight : primaryDark})`,
+            textDecorationColor: 'currentColor',
+            textUnderlineOffset: '2px',
           },
         },
       },

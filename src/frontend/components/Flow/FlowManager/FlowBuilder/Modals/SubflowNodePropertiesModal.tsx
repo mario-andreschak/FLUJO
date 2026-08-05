@@ -244,16 +244,30 @@ export const SubflowNodePropertiesModal = ({
           <Typography variant="subtitle2" sx={{ mb: 1 }}>
             {t('flows.subflow.flowToRun')}
           </Typography>
-          <Button
-            variant="outlined"
-            startIcon={<AccountTreeOutlinedIcon />}
-            onClick={() => setPickerOpen(true)}
-            sx={{ textTransform: 'none', maxWidth: '100%' }}
-          >
-            <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {selectedSubflowName || t('flows.subflow.choose')}
-            </Box>
-          </Button>
+          {/* The "open target flow" shortcut sits right next to the picker (it used
+              to live in the dialog footer, far away from the selection it acts on). */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            <Button
+              variant="outlined"
+              startIcon={<AccountTreeOutlinedIcon />}
+              onClick={() => setPickerOpen(true)}
+              sx={{ textTransform: 'none', maxWidth: '100%' }}
+            >
+              <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {selectedSubflowName || t('flows.subflow.choose')}
+              </Box>
+            </Button>
+            {selectedSubflowId && !selectedMissing && onNavigateToFlow && (
+              <Button
+                size="small"
+                onClick={() => onNavigateToFlow(selectedSubflowId)}
+                startIcon={<ArrowForwardIcon />}
+                sx={{ textTransform: 'none' }}
+              >
+                {t('flows.subflow.openTarget')}
+              </Button>
+            )}
+          </Box>
         </Box>
 
         {selectedMissing && (
@@ -449,15 +463,6 @@ export const SubflowNodePropertiesModal = ({
       </DialogContent>
 
       <DialogActions>
-        {selectedSubflowId && !selectedMissing && onNavigateToFlow && (
-          <Button
-            onClick={() => onNavigateToFlow(selectedSubflowId)}
-            startIcon={<ArrowForwardIcon />}
-          >
-            {t('flows.subflow.openTarget')}
-          </Button>
-        )}
-        <Box sx={{ flex: 1 }} />
         <Button onClick={onClose}>{t('flows.modal.cancel')}</Button>
         <Button onClick={handleSave} variant="contained" color="primary">
           {t('flows.modal.save')}

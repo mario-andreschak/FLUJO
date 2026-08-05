@@ -90,7 +90,7 @@ describe('buildSandboxCsp', () => {
     expect(csp).not.toContain('blob:');
   });
 
-  it('is embedded as the first bytes of the inner srcdoc after sanitization', () => {
+  it('is embedded as the first bytes of the written View document after sanitization', () => {
     const html = buildSandboxProxyHtml([], false, {
       connectDomains: [
         'https://api.example.com',
@@ -104,7 +104,10 @@ describe('buildSandboxCsp', () => {
     expect(html).toContain('connect-src https://api.example.com');
     expect(html).toContain('frame-src https://embed.example.com');
     expect(html).not.toContain('evil.example');
-    expect(html).toContain('inner.srcdoc = INNER_CSP_META + params.html');
+    // The policy precedes every untrusted byte on both the document.write path
+    // and the srcdoc fallback.
+    expect(html).toContain('doc.write(INNER_CSP_META + html)');
+    expect(html).toContain('frame.srcdoc = INNER_CSP_META + html');
   });
 });
 

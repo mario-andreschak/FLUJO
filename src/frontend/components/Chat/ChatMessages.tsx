@@ -61,6 +61,11 @@ import McpAppFrame from './McpAppFrame'; // #97: read-only, sandboxed MCP App (u
 import { createLogger } from '@/utils/logger'; // Import the logger
 import type { LazyToolPayloadRef, McpAppModelContext } from '@/shared/types/chat';
 import { mediaDataUrl, type ModelMediaPart } from '@/shared/types/model/media';
+import {
+  MARKDOWN_LINK_COMPONENTS,
+  MarkdownLink,
+  markdownLinkVars,
+} from '@/frontend/components/shared/MarkdownLink';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import {
   groupMcpAppOccurrences,
@@ -267,7 +272,10 @@ const MARKDOWN_COMPONENTS: Components = {
   ul: (props) => <Box component="ul" sx={{ pl: 2, mb: 1 }}>{props.children}</Box>,
   ol: (props) => <Box component="ol" sx={{ pl: 2, mb: 1 }}>{props.children}</Box>,
   li: (props) => <Box component="li" sx={{ mb: 0.5, whiteSpace: 'pre-line' }}>{props.children}</Box>,
-  a: (props) => <Typography component="a" sx={{ color: 'primary.main' }} href={props.href}>{props.children}</Typography>,
+  // Link color comes from the `--flujo-link-color` the surrounding surface sets
+  // (see MarkdownLink): `primary.main` was invisible on the accent-filled user
+  // bubble in the light modern theme.
+  a: MarkdownLink,
   blockquote: (props) => (
     <Box component="blockquote" sx={{
       borderLeft: '4px solid',
@@ -408,7 +416,7 @@ const ToolResultView: React.FC<{ content: unknown; showRaw: boolean }> = ({ cont
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                 {parsedContent.content.map((item: any, index: number) => {
                   if (item.type === 'text') {
-                    return <ReactMarkdown key={index} remarkPlugins={[remarkGfm]}>{item.text}</ReactMarkdown>;
+                    return <ReactMarkdown key={index} remarkPlugins={[remarkGfm]} components={MARKDOWN_LINK_COMPONENTS}>{item.text}</ReactMarkdown>;
                   } else if (item.type === 'image' && item.data && item.mimeType) {
                     return (
                       // MCP tool images are data URLs, which the Next image optimizer does not support.
@@ -462,10 +470,10 @@ const ToolResultView: React.FC<{ content: unknown; showRaw: boolean }> = ({ cont
             );
           }
           // Valid JSON but not the MCP shape: pretty-print it.
-          return <ReactMarkdown remarkPlugins={[remarkGfm]}>{`\`\`\`json\n${JSON.stringify(parsedContent, null, 2)}\n\`\`\``}</ReactMarkdown>;
+          return <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_LINK_COMPONENTS}>{`\`\`\`json\n${JSON.stringify(parsedContent, null, 2)}\n\`\`\``}</ReactMarkdown>;
         } catch (e) {
           // Not JSON: render the raw string as markdown.
-          return <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>;
+          return <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_LINK_COMPONENTS}>{content}</ReactMarkdown>;
         }
       })()}
     </Box>
@@ -985,10 +993,17 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
 
       <Paper
         elevation={1}
-        sx={{
+        sx={(theme) => ({
           p: 2,
           maxWidth: '75vw', // Set max width to 75% of viewport width
           borderRadius: 2,
+          // Markdown links read the `--flujo-link-color` var. Accent-filled
+          // bubbles (user / system) can't carry a brand tint - a violet link on
+          // the violet user bubble was ~1.05:1 contrast in the light modern
+          // theme - so there links inherit the bubble's contrast text color and
+          // stay recognizable via the underline. Neutral paper bubbles keep a
+          // brand-tinted link that actually contrasts with the surface.
+          ...markdownLinkVars(theme, message.role !== 'assistant' && message.role !== 'tool'),
           bgcolor: message.role === 'user'
             ? 'primary.light'
             : message.role === 'assistant' || message.role === 'tool'
@@ -1015,7 +1030,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
           // newline. Whitespace is instead preserved per-block (see the `p`
           // and `li` renderers above, which use `pre-line`).
           overflow: 'hidden', // Prevent content from visually overflowing the paper
-        }}
+        })}
       >
         {(
           <>

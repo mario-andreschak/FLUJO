@@ -13,6 +13,7 @@ import { markConversationDeleted, unmarkConversationDeleted } from '@/backend/ex
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { deleteRunResources } from '@/backend/services/runResources';
 import { quickChatFlowId } from '@/utils/shared/quickChat';
+import { DEFAULT_CONVERSATION_TITLE } from '@/utils/shared/conversationTitle';
 import { deleteConversationLog } from '@/backend/execution/flow/conversationLog';
 import { reconcileInterruptedRecovery } from '@/backend/execution/flow/recoveryCheckpoint';
 import type { StorageKey } from '@/shared/types/storage';
@@ -405,7 +406,7 @@ export async function POST(req: NextRequest) {
       { status: 400 });
   }
   if (!payload.title || typeof payload.title !== 'string') {
-    payload.title = 'New Conversation'; // Default title if missing
+    payload.title = DEFAULT_CONVERSATION_TITLE; // Default title if missing
     log.warn('Missing title in payload, using default', { requestId, conversationId: payload.id });
   }
   // Validate flowId: Must be a non-null string as SharedState requires it

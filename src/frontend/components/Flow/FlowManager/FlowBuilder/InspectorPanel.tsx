@@ -25,6 +25,7 @@ import SettingsSuggestRoundedIcon from '@mui/icons-material/SettingsSuggestRound
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
 import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
 import AutoFixHighRoundedIcon from '@mui/icons-material/AutoFixHighRounded';
+import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import type { Flow, FlowNode } from '@/frontend/types/flow/flow';
 import type { Model } from '@/shared/types';
 import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
@@ -98,6 +99,8 @@ interface InspectorPanelProps {
   onConnectAgent?: (processNodeId: string, flowId: string) => void;
   onRemoveAgent?: (processNodeId: string, subflowNodeId: string) => void;
   models?: Model[];
+  /** Opens another flow in the builder (used by the subflow target pill). */
+  onNavigateToFlow?: (flowId: string) => void;
 }
 
 const typeLabel = (node: FlowNode, beginnerMode: boolean, t: Translator) => {
@@ -149,6 +152,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onConnectAgent,
   onRemoveAgent,
   models = [],
+  onNavigateToFlow,
 }) => {
   const { t, tp } = useI18n();
   const [tab, setTab] = useState<InspectorTab>(selectedNode ? 'node' : 'flow');
@@ -191,14 +195,25 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     if (typeof properties.boundServer === 'string' && properties.boundServer && !serverHasInlinePicker) {
       entries.push({ label: beginnerMode ? t('flows.inspector.summary.app') : t('flows.inspector.summary.server'), value: properties.boundServer });
     }
-    if (typeof properties.subflowId === 'string' && properties.subflowId) {
-      entries.push({ label: beginnerMode ? t('flows.inspector.summary.agent') : t('flows.inspector.flow'), value: properties.subflowId });
-    }
+    // The subflow target is deliberately NOT listed here: it is rendered as a
+    // clickable pill at the top of the node tab (where the node id used to be)
+    // so it doubles as a shortcut into the target flow.
     if (typeof properties.signalName === 'string' && properties.signalName) {
       entries.push({ label: beginnerMode ? t('flows.inspector.summary.notification') : t('flows.inspector.summary.signal'), value: properties.signalName });
     }
     return entries;
   }, [selectedNode, beginnerMode, models, t, loadMcpServers, onSelectMcpNodeServer]);
+
+  // Subflow nodes get their target flow shown as a pill in the node header. The
+  // stored value is a flow id, so resolve it to the flow name when we know it
+  // (falling back to the raw id for targets that are not in `availableAgents`).
+  const subflowTarget = useMemo(() => {
+    if (!selectedNode) return null;
+    const subflowId = selectedNode.data.properties?.subflowId;
+    if (typeof subflowId !== 'string' || !subflowId) return null;
+    const target = availableAgents.find((flow) => flow.id === subflowId);
+    return { id: subflowId, name: target?.name || subflowId };
+  }, [selectedNode, availableAgents]);
 
   const commitNode = (): FlowNode | null => {
     if (!selectedNode) return null;
@@ -311,17 +326,35 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
       <Box sx={{ p: 1.5, overflowY: 'auto', flex: 1 }}>
         {tab === 'node' && selectedNode ? (
           <Stack spacing={1.5}>
-            <Stack direction="row" alignItems="center" gap={1}>
+            <Stack direction="row" alignItems="center" gap={1} sx={{ minWidth: 0 }}>
               <Chip
                 size="small"
+                sx={{ flexShrink: 0 }}
                 label={typeLabel(selectedNode, beginnerMode, t)}
                 color={selectedNode.data.type === 'finish' ? 'success' : 'primary'}
                 variant="outlined"
               />
-              {!beginnerMode && (
-                <Typography variant="caption" color="text.secondary" noWrap>
-                  {selectedNode.id}
-                </Typography>
+              {subflowTarget && (
+                <Tooltip
+                  title={onNavigateToFlow
+                    ? `${t('flows.subflow.openTarget')}: ${subflowTarget.name}`
+                    : subflowTarget.name}
+                >
+                  <Chip
+                    size="small"
+                    variant="outlined"
+                    icon={<AccountTreeOutlinedIcon />}
+                    label={subflowTarget.name}
+                    clickable={!!onNavigateToFlow}
+                    onClick={onNavigateToFlow
+                      ? () => {
+                          commitNode();
+                          onNavigateToFlow(subflowTarget.id);
+                        }
+                      : undefined}
+                    sx={{ minWidth: 0, flexShrink: 1, maxWidth: '100%' }}
+                  />
+                </Tooltip>
               )}
             </Stack>
 

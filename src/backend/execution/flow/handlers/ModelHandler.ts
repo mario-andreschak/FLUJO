@@ -1378,6 +1378,21 @@ export class ModelHandler {
       finalMessages.push(assistantMessage);
     }
 
+    // Retract live-only drafts that never became a durable message. A draft is
+    // confirmed either by onTranscriptMessage (self-orchestrating adapters) or
+    // by carrying the adapter's liveMessageId into the final assistant message.
+    // Anything left is a transient bubble the UI would otherwise keep showing
+    // until the next refetch — e.g. a quarantined SDK turn, or an adapter whose
+    // draft id could not be reconciled. Discarding it here keeps the live view
+    // identical to what gets persisted (no phantom half-sentence bubbles).
+    if (liveMessageIds.size > 0) {
+      const materializedIds = new Set(finalMessages.map(message => message.id));
+      for (const messageId of liveMessageIds) {
+        if (materializedIds.has(messageId)) continue;
+        emit?.({ type: 'model:end', messageId, discard: true, node: nodeId ? { nodeId } : undefined });
+      }
+    }
+
     // Map tool calls for the result structure (if they exist)
     // This provides structured info about requested calls, but doesn't execute them
     const toolCalls = completionToolCalls.length > 0 ? completionToolCalls.map((tc) => {

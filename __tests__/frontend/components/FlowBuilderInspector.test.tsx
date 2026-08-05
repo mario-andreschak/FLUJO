@@ -321,4 +321,39 @@ describe('FlowBuilder InspectorPanel', () => {
     expect(screen.getByRole('button', { name: 'Choose AI' })).toBeInTheDocument();
     expect(screen.queryByTestId('AddRoundedIcon')).not.toBeInTheDocument();
   });
+
+  it('never shows the raw node id', () => {
+    render(<InspectorPanel {...baseProps} authoringMode="advanced" selectedNode={processNode} />);
+
+    expect(screen.queryByText('process-1')).not.toBeInTheDocument();
+  });
+
+  it('shows the subflow target as a clickable pill at the top of the node tab', () => {
+    const subflowNode: any = {
+      id: 'subflow-1',
+      type: 'subflow',
+      position: { x: 0, y: 0 },
+      selected: true,
+      data: {
+        type: 'subflow',
+        label: 'Convert issues to plans',
+        properties: { subflowId: 'child-flow' },
+      },
+    };
+    const onNavigateToFlow = jest.fn();
+    render(
+      <InspectorPanel
+        {...baseProps}
+        authoringMode="advanced"
+        selectedNode={subflowNode}
+        availableAgents={[{ id: 'child-flow', name: 'Research assistant', nodes: [], edges: [] } as any]}
+        onNavigateToFlow={onNavigateToFlow}
+      />,
+    );
+
+    // The pill renders the resolved flow NAME (not the stored id) and opens it.
+    expect(screen.queryByText('child-flow')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('Research assistant'));
+    expect(onNavigateToFlow).toHaveBeenCalledWith('child-flow');
+  });
 });

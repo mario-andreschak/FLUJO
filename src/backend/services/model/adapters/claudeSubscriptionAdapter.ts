@@ -876,6 +876,37 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // concatenated text at the end (it would duplicate in the UI).
     let streamedText = false;
     const partialToolBlocks = new Map<string, { messageId: string; toolUseId: string }>();
+    // Live-draft correlation key. `SDKPartialAssistantMessage.uuid` is a FRESH
+    // uuid on EVERY stream event (verified against SDK 0.3.220: message_start,
+    // each content_block_delta and the durable `assistant` frame all carry
+    // different uuids), so it can NOT identify the message being streamed.
+    // Keying drafts on it made every token chunk open its own bubble and none of
+    // them reconciled with the durable message (issue: fragmented + duplicated
+    // Claude streaming). The API message id (`msg_…`) IS stable: it arrives on
+    // `message_start` and is repeated on every assistant frame of that message
+    // (`message.id`), so both sides derive the SAME transcript id from it. The
+    // wrapper uuid stays as a last-resort fallback for synthetic/older streams.
+    let streamApiMessageId: string | undefined;
+    // Append text/media onto an already-recorded transcript message and re-emit
+    // it, so the live view and persistence reconcile onto ONE bubble. Returns
+    // false when no message with that id exists yet.
+    const appendToRecordedMessage = (
+      messageId: string,
+      text: string,
+      media: ReturnType<typeof extractNativeMediaParts>,
+    ): boolean => {
+      const index = transcript.findIndex(m => m.id === messageId);
+      if (index < 0) return false;
+      const prior = transcript[index];
+      const merged = {
+        ...prior,
+        content: `${typeof prior.content === 'string' ? prior.content : ''}${text}`,
+        ...(media.length ? { media: [...(prior.media ?? []), ...media] } : {}),
+      } as FlujoChatMessage;
+      transcript[index] = merged;
+      onTranscriptMessage?.(merged);
+      return true;
+    };
     // Aborted-frame reconciliation (Agent SDK >= 0.3.220): an assistant frame
     // can arrive with wrapper-level `aborted: true` — the stream was cut
     // mid-word (e.g. max-output-tokens recovery, interrupt) and the SDK then
@@ -884,9 +915,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // message ("Toolchain conf") and the continuation becomes a second one
     // ("irmed. Now building…"). Track the open aborted prose so both its live
     // deltas and its durable continuation reconcile onto ONE stable message id.
-    let pendingAbortedProse:
-      | { messageId: string; content: string; media: ReturnType<typeof extractNativeMediaParts> }
-      | undefined;
+    let pendingAbortedProse: { messageId: string } | undefined;
 
     // The message loop, extracted so an external cancellation can race it: the
     // SDK does NOT reliably throw when its abortController fires mid-turn — the
@@ -921,9 +950,16 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         if (message.type === 'stream_event') {
           const partial = message as SDKPartialAssistantMessage;
           const event = partial.event;
+          // Stable per-API-message key (see streamApiMessageId above).
+          if (event.type === 'message_start') {
+            streamApiMessageId = event.message?.id;
+          } else if (event.type === 'message_stop') {
+            streamApiMessageId = undefined;
+          }
+          const frameKey = streamApiMessageId ?? partial.uuid;
           if (event.type === 'content_block_start' && event.content_block.type === 'tool_use') {
-            const messageId = `stream_claude_${partial.uuid}_tool_${event.index}`;
-            partialToolBlocks.set(`${partial.uuid}:${event.index}`, {
+            const messageId = `stream_claude_${frameKey}_tool_${event.index}`;
+            partialToolBlocks.set(`${frameKey}:${event.index}`, {
               messageId,
               toolUseId: event.content_block.id,
             });
@@ -942,11 +978,11 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
                 // Continuation deltas of an aborted turn keep the FIRST frame's
                 // id so the UI appends into the same bubble instead of opening
                 // a second mid-word draft under the continuation's new uuid.
-                messageId: pendingAbortedProse?.messageId ?? `stream_claude_${partial.uuid}`,
+                messageId: pendingAbortedProse?.messageId ?? `stream_claude_${frameKey}`,
                 contentDelta: event.delta.text,
               });
             } else if (event.delta.type === 'input_json_delta' && event.delta.partial_json) {
-              const toolBlock = partialToolBlocks.get(`${partial.uuid}:${event.index}`);
+              const toolBlock = partialToolBlocks.get(`${frameKey}:${event.index}`);
               if (toolBlock) {
                 onModelDelta?.({
                   messageId: toolBlock.messageId,
@@ -959,7 +995,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             }
           }
         } else if (message.type === 'assistant') {
-          const assistant = (message as { message?: { content?: unknown; usage?: SdkUsage } }).message;
+          const assistant = (message as { message?: { id?: string; content?: unknown; usage?: SdkUsage } }).message;
           const content = assistant?.content;
           let turnText = '';
           const turnMedia = extractNativeMediaParts(content);
@@ -1001,32 +1037,21 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
               // mid-stream and the SDK will continue it in the next assistant
               // frame (new uuid). See pendingAbortedProse above.
               const frameAborted = (message as { aborted?: boolean }).aborted === true;
-              if (pendingAbortedProse) {
-                // Continuation of an aborted frame: fold this frame's text and
-                // media into the SAME transcript message (same id) and re-emit
-                // it, so live view and persistence reconcile to one bubble
-                // instead of a mid-word split.
-                pendingAbortedProse.content += turnText;
-                if (turnMedia.length) pendingAbortedProse.media = [...pendingAbortedProse.media, ...turnMedia];
-                const mergeIndex = transcript.findIndex(m => m.id === pendingAbortedProse!.messageId);
-                if (mergeIndex >= 0) {
-                  const merged = {
-                    ...transcript[mergeIndex],
-                    content: pendingAbortedProse.content,
-                    ...(pendingAbortedProse.media.length ? { media: pendingAbortedProse.media } : {}),
-                  } as FlujoChatMessage;
-                  transcript[mergeIndex] = merged;
-                  onTranscriptMessage?.(merged);
-                }
-                if (!frameAborted) pendingAbortedProse = undefined;
-              } else {
-                // Stream THIS turn's narration live as its own assistant message, so
-                // the UI shows Claude's step-by-step reasoning interleaved with the
-                // tool calls (which already stream via recordToolPair) instead of
-                // arriving as one block after the whole (possibly long) run. Text
-                // blocks precede tool_use within a turn, so this lands in the right
-                // order: turn text -> tool pair -> next turn text -> ...
-                const messageId = `stream_claude_${message.uuid}`;
+              // Durable id derived from the API message id, exactly like the
+              // live drafts above, so the streamed bubble and this message are
+              // ONE UI message. Continuation frames of an aborted turn keep the
+              // first frame's id instead.
+              const messageId = pendingAbortedProse?.messageId
+                ?? `stream_claude_${assistant?.id ?? message.uuid}`;
+              // Fold into an existing message when this id was already
+              // recorded: an aborted turn's continuation, or a second text
+              // block of the SAME API message arriving as its own frame
+              // (interleaved text/tool_use turns). Otherwise stream THIS turn's
+              // narration live as its own assistant message, so the UI shows
+              // Claude's step-by-step reasoning interleaved with the tool calls
+              // (which already stream via recordToolPair) instead of arriving as
+              // one block after the whole (possibly long) run.
+              if (!appendToRecordedMessage(messageId, turnText, turnMedia)) {
                 recordMessage(
                   {
                     role: 'assistant',
@@ -1035,10 +1060,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
                   },
                   messageId,
                 );
-                if (frameAborted) {
-                  pendingAbortedProse = { messageId, content: turnText, media: [...turnMedia] };
-                }
               }
+              pendingAbortedProse = frameAborted ? { messageId } : undefined;
               streamedText = true;
             }
           } else if (pendingAbortedProse) {

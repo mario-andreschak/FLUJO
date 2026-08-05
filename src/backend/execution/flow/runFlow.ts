@@ -36,7 +36,7 @@ import { FEATURES } from '@/config/features';
 import { validateFlowForRun, validateFlowObjectForRun } from '@/backend/execution/flow/validateFlowForRun';
 import { MAX_SUBFLOW_DEPTH } from '@/backend/execution/flow/constants';
 import { isCancelledByAncestry, isConversationDeleted } from '@/backend/execution/flow/cancellation';
-import { buildConversationTitle } from '@/utils/shared/conversationTitle';
+import { buildConversationTitle, isDefaultConversationTitle, DEFAULT_CONVERSATION_TITLE } from '@/utils/shared/conversationTitle';
 import { setElicitationContext, clearElicitationContext } from '@/backend/services/mcp/elicitationContext';
 import { evaluatePermission, extractResource } from '@/backend/execution/flow/permissionEngine';
 import { decodeToolName } from '@/backend/execution/flow/handlers/toolNamespace';
@@ -534,7 +534,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       status: 'running',
       // A caller-supplied title (spawn lanes: the brief) sticks — the
       // first-user-message auto-titling below only replaces the placeholder.
-      title: input.title?.trim() || 'New Conversation',
+      title: input.title?.trim() || DEFAULT_CONVERSATION_TITLE,
       createdAt: Date.now(),
       updatedAt: Date.now(),
       debugMode: flujodebug,
@@ -800,7 +800,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
 
     try {
       sharedState.updatedAt = Date.now();
-      if (sharedState.title === 'New Conversation' && sharedState.messages.length > 0) {
+      if (isDefaultConversationTitle(sharedState.title) && sharedState.messages.length > 0) {
         const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
         if (firstUserMessage && typeof firstUserMessage.content === 'string') {
           sharedState.title = buildConversationTitle(firstUserMessage.content);
@@ -1338,7 +1338,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
           }, recoveryEmit);
         }
         sharedState.updatedAt = Date.now();
-        if (sharedState.title === 'New Conversation' && sharedState.messages.length > 0) {
+        if (isDefaultConversationTitle(sharedState.title) && sharedState.messages.length > 0) {
           const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
           if (firstUserMessage && typeof firstUserMessage.content === 'string') {
             sharedState.title = buildConversationTitle(firstUserMessage.content);
@@ -1564,7 +1564,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                 FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
                 try {
                   sharedState.updatedAt = Date.now();
-                  if (sharedState.title === 'New Conversation' && sharedState.messages.length > 0) {
+                  if (isDefaultConversationTitle(sharedState.title) && sharedState.messages.length > 0) {
                     const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
                     if (firstUserMessage && typeof firstUserMessage.content === 'string') {
                       sharedState.title = buildConversationTitle(firstUserMessage.content);
@@ -2053,7 +2053,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
 
   try {
     sharedState.updatedAt = Date.now();
-    if (sharedState.title === 'New Conversation' && sharedState.messages.length > 0) {
+    if (isDefaultConversationTitle(sharedState.title) && sharedState.messages.length > 0) {
       const firstUserMessage = sharedState.messages.find(m => m.role === 'user');
       if (firstUserMessage && typeof firstUserMessage.content === 'string') {
         sharedState.title = buildConversationTitle(firstUserMessage.content);

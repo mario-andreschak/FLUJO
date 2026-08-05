@@ -244,10 +244,23 @@ describe('ClaudeSubscriptionAdapter — built-in tool suppression (#166)', () =>
   });
 
   it('enables partial SDK events and reconciles streamed text with the final transcript id', async () => {
+    // REAL SDK shape (verified against 0.3.220): every `stream_event` carries a
+    // FRESH wrapper uuid, and the durable `assistant` frame has yet another one.
+    // Only the API message id (`message_start.message.id`, repeated as the
+    // assistant frame's `message.id`) is stable, so both the live drafts and the
+    // durable message must be keyed on it — otherwise each token chunk opens its
+    // own bubble and the final message duplicates all of them.
     queryMock.mockImplementation(() => (async function* () {
       yield {
         type: 'stream_event',
-        uuid: 'assistant-1',
+        uuid: 'ev-1',
+        session_id: 'sess-1',
+        parent_tool_use_id: null,
+        event: { type: 'message_start', message: { id: 'msg_1', role: 'assistant', content: [] } },
+      };
+      yield {
+        type: 'stream_event',
+        uuid: 'ev-2',
         session_id: 'sess-1',
         parent_tool_use_id: null,
         event: {
@@ -258,7 +271,7 @@ describe('ClaudeSubscriptionAdapter — built-in tool suppression (#166)', () =>
       };
       yield {
         type: 'stream_event',
-        uuid: 'assistant-1',
+        uuid: 'ev-3',
         session_id: 'sess-1',
         parent_tool_use_id: null,
         event: {
@@ -269,9 +282,10 @@ describe('ClaudeSubscriptionAdapter — built-in tool suppression (#166)', () =>
       };
       yield {
         type: 'assistant',
-        uuid: 'assistant-1',
+        uuid: 'frame-uuid-1',
         session_id: 'sess-1',
         message: {
+          id: 'msg_1',
           role: 'assistant',
           content: [{ type: 'text', text: 'hello' }],
           usage: { input_tokens: 1, output_tokens: 1 },
@@ -291,15 +305,82 @@ describe('ClaudeSubscriptionAdapter — built-in tool suppression (#166)', () =>
     );
 
     expect(capturedOptions().includePartialMessages).toBe(true);
+    // Both chunks stream under ONE id (not one per event uuid)…
     expect(deltas).toEqual([
-      expect.objectContaining({ messageId: 'stream_claude_assistant-1', contentDelta: 'hel' }),
-      expect.objectContaining({ messageId: 'stream_claude_assistant-1', contentDelta: 'lo' }),
+      expect.objectContaining({ messageId: 'stream_claude_msg_1', contentDelta: 'hel' }),
+      expect.objectContaining({ messageId: 'stream_claude_msg_1', contentDelta: 'lo' }),
     ]);
+    // …and the durable message reuses exactly that id, so the UI upsert replaces
+    // the draft instead of appending a second bubble with the same prose.
+    expect(transcript?.filter(m => m.role === 'assistant')).toHaveLength(1);
     expect(transcript?.[0]).toMatchObject({
-      id: 'stream_claude_assistant-1',
+      id: 'stream_claude_msg_1',
       role: 'assistant',
       content: 'hello',
     });
+  });
+
+  it('streams tool-call arguments even though each stream event has a new uuid', async () => {
+    // content_block_start and its input_json_delta events arrive with DIFFERENT
+    // wrapper uuids, so a uuid-keyed block map silently dropped every argument
+    // delta. The block must be tracked per API message id + block index.
+    queryMock.mockImplementation(() => (async function* () {
+      yield {
+        type: 'stream_event',
+        uuid: 'ev-1',
+        session_id: 'sess-1',
+        parent_tool_use_id: null,
+        event: { type: 'message_start', message: { id: 'msg_tool', role: 'assistant', content: [] } },
+      };
+      yield {
+        type: 'stream_event',
+        uuid: 'ev-2',
+        session_id: 'sess-1',
+        parent_tool_use_id: null,
+        event: {
+          type: 'content_block_start',
+          index: 1,
+          content_block: { type: 'tool_use', id: 'toolu_1', name: 'Bash' },
+        },
+      };
+      yield {
+        type: 'stream_event',
+        uuid: 'ev-3',
+        session_id: 'sess-1',
+        parent_tool_use_id: null,
+        event: {
+          type: 'content_block_delta',
+          index: 1,
+          delta: { type: 'input_json_delta', partial_json: '{"command":' },
+        },
+      };
+      yield {
+        type: 'result',
+        subtype: 'success',
+        result: 'done',
+        session_id: 'sess-1',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    })());
+
+    const deltas: Array<{ messageId: string; toolCallDelta?: Record<string, unknown> }> = [];
+    await new ClaudeSubscriptionAdapter().createCompletion(
+      baseInput({
+        onModelDelta: (delta: { messageId: string; toolCallDelta?: Record<string, unknown> }) =>
+          deltas.push(delta),
+      } as Partial<CompletionInput>),
+    );
+
+    expect(deltas).toEqual([
+      expect.objectContaining({
+        messageId: 'stream_claude_msg_tool_tool_1',
+        toolCallDelta: expect.objectContaining({ id: 'toolu_1', nameDelta: 'Bash' }),
+      }),
+      expect.objectContaining({
+        messageId: 'stream_claude_msg_tool_tool_1',
+        toolCallDelta: expect.objectContaining({ argumentsDelta: '{"command":' }),
+      }),
+    ]);
   });
 
   it('merges an aborted assistant frame with its continuation into ONE message id', async () => {
@@ -312,7 +393,14 @@ describe('ClaudeSubscriptionAdapter — built-in tool suppression (#166)', () =>
     queryMock.mockImplementation(() => (async function* () {
       yield {
         type: 'stream_event',
-        uuid: 'frame-a',
+        uuid: 'ev-a1',
+        session_id: 'sess-1',
+        parent_tool_use_id: null,
+        event: { type: 'message_start', message: { id: 'msg_a', role: 'assistant', content: [] } },
+      };
+      yield {
+        type: 'stream_event',
+        uuid: 'ev-a2',
         session_id: 'sess-1',
         parent_tool_use_id: null,
         event: {
@@ -327,6 +415,7 @@ describe('ClaudeSubscriptionAdapter — built-in tool suppression (#166)', () =>
         session_id: 'sess-1',
         aborted: true,
         message: {
+          id: 'msg_a',
           role: 'assistant',
           content: [{ type: 'text', text: 'Toolchain conf' }],
           usage: { input_tokens: 1, output_tokens: 1 },
@@ -334,7 +423,14 @@ describe('ClaudeSubscriptionAdapter — built-in tool suppression (#166)', () =>
       };
       yield {
         type: 'stream_event',
-        uuid: 'frame-b',
+        uuid: 'ev-b1',
+        session_id: 'sess-1',
+        parent_tool_use_id: null,
+        event: { type: 'message_start', message: { id: 'msg_b', role: 'assistant', content: [] } },
+      };
+      yield {
+        type: 'stream_event',
+        uuid: 'ev-b2',
         session_id: 'sess-1',
         parent_tool_use_id: null,
         event: {
@@ -348,6 +444,7 @@ describe('ClaudeSubscriptionAdapter — built-in tool suppression (#166)', () =>
         uuid: 'frame-b',
         session_id: 'sess-1',
         message: {
+          id: 'msg_b',
           role: 'assistant',
           content: [{ type: 'text', text: 'irmed.' }],
           usage: { input_tokens: 1, output_tokens: 1 },
@@ -374,20 +471,20 @@ describe('ClaudeSubscriptionAdapter — built-in tool suppression (#166)', () =>
     // Continuation deltas keep the FIRST frame's stable id, so the live view
     // appends into the same bubble instead of opening a new draft.
     expect(deltas).toEqual([
-      expect.objectContaining({ messageId: 'stream_claude_frame-a', contentDelta: 'Toolchain conf' }),
-      expect.objectContaining({ messageId: 'stream_claude_frame-a', contentDelta: 'irmed.' }),
+      expect.objectContaining({ messageId: 'stream_claude_msg_a', contentDelta: 'Toolchain conf' }),
+      expect.objectContaining({ messageId: 'stream_claude_msg_a', contentDelta: 'irmed.' }),
     ]);
     // Exactly ONE durable assistant prose message, holding the merged text.
     const prose = (transcript ?? []).filter(m => m.role === 'assistant');
     expect(prose).toHaveLength(1);
     expect(prose[0]).toMatchObject({
-      id: 'stream_claude_frame-a',
+      id: 'stream_claude_msg_a',
       role: 'assistant',
       content: 'Toolchain confirmed.',
     });
     // The merged continuation was re-emitted live under the SAME id, so the
     // frontend's id-keyed upsert replaces the truncated bubble in place.
-    const liveUnderStableId = streamed.filter(m => m.id === 'stream_claude_frame-a');
+    const liveUnderStableId = streamed.filter(m => m.id === 'stream_claude_msg_a');
     expect(liveUnderStableId.length).toBeGreaterThanOrEqual(2);
     expect(liveUnderStableId[liveUnderStableId.length - 1].content).toBe('Toolchain confirmed.');
   });
