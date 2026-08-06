@@ -1097,6 +1097,7 @@ export class SubflowNode extends BaseNode {
           r.status === 'error'
             ? {
                 subflowId: lane.subflowId,
+                subflowName: lane.subflowName,
                 success: false,
                 error: r.error?.message || 'Subflow execution failed',
                 laneTitle: lane.laneTitle,
@@ -1105,6 +1106,7 @@ export class SubflowNode extends BaseNode {
               }
             : {
                 subflowId: lane.subflowId,
+                subflowName: lane.subflowName,
                 success: true,
                 outputText: r.outputText,
                 outputMedia: r.outputMedia,
@@ -1124,6 +1126,7 @@ export class SubflowNode extends BaseNode {
       } catch (err) {
         results[i] = {
           subflowId: lane.subflowId,
+          subflowName: lane.subflowName,
           success: false,
           error: err instanceof Error ? err.message : String(err),
           laneTitle: lane.laneTitle,

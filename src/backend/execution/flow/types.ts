@@ -487,6 +487,8 @@ export interface SubflowLanePlan {
 /** The outcome of one queued child job, kept in request order. */
 export interface SubflowLaneResult {
     subflowId: string;
+    /** Display name of the subflow this lane ran (issue #359 separate presentation). */
+    subflowName?: string;
     success: boolean;
     outputText?: string;
     /** Generated media returned by this lane, in child-message order. */
