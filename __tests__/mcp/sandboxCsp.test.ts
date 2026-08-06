@@ -231,6 +231,26 @@ describe('buildSandboxProxyCsp', () => {
       "frame-ancestors 'none'"
     );
   });
+
+  it('names every trusted ancestor so a nested embedding chain is allowed', () => {
+    // A hosted demo frames the editor inside its own landing page, so the
+    // sandbox has two ancestors and the browser matches frame-ancestors against
+    // BOTH. Naming only the immediate parent blocks the top-level page.
+    expect(
+      buildSandboxProxyCsp(['https://now.try.example.test', 'https://try.example.test'])
+    ).toContain('frame-ancestors https://now.try.example.test https://try.example.test');
+  });
+
+  it('dedupes ancestors, drops invalid ones, and fails closed when none remain', () => {
+    // Collapses to a single source (frame-ancestors is the final directive).
+    expect(
+      buildSandboxProxyCsp(['https://a.example.test', 'https://a.example.test/path'])
+    ).toMatch(/frame-ancestors https:\/\/a\.example\.test$/);
+    expect(buildSandboxProxyCsp(['javascript:alert(1)', 'not a url'])).toContain(
+      "frame-ancestors 'none'"
+    );
+    expect(buildSandboxProxyCsp([])).toContain("frame-ancestors 'none'");
+  });
 });
 
 describe('hosted sandbox endpoint configuration', () => {

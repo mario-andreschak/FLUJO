@@ -93,7 +93,9 @@ RUN mkdir -p /app/data/db /app/data/mcp-servers /home/node/.npm \
 
 USER node
 
-EXPOSE 4200 4201
+# Port 4200: main HTTPS proxy
+# Ports 4201-4216: MCP Apps sandbox listeners (Mode A port pool)
+EXPOSE 4200 4201-4216
 
 # /api/cwd is a side-effect-free GET (returns the resolved paths), so it is a
 # safe readiness probe.

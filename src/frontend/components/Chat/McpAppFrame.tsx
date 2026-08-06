@@ -40,6 +40,7 @@ import {
   isLoopbackCspOrigin,
   isMcpAppMimeType,
 } from '@/shared/utils/mcpApps';
+import { deriveOriginKey } from '@/shared/utils/mcpAppOrigin';
 import { createLogger } from '@/utils/logger';
 import packageMetadata from '../../../../package.json';
 import {
@@ -65,6 +66,7 @@ const ALL_DISPLAY_MODES: McpUiDisplayMode[] = ['inline', 'fullscreen', 'pip'];
 const SUPPORTED_CONTEXT_BLOCK_TYPES = new Set(['text']);
 export const MAX_MCP_APP_CONTEXT_BYTES = 256 * 1024;
 const MAX_APP_DIMENSION_PX = 6_000;
+
 
 export interface McpAppFrameProps {
   /** Conversation that owns app-created server state, when hosted from chat. */
@@ -302,17 +304,20 @@ function createStablePostMessageTransport(
   return wrapper;
 }
 
-/** CSP + permission block a UI resource declares under `_meta.ui`. */
+/** CSP + permission + domain block a UI resource declares under `_meta.ui`. */
 interface AppResource {
   html: string;
   csp?: McpUiResourceCsp;
   permissions?: McpUiResourcePermissions;
+  domain?: string;  // Optional origin domain for per-app sandbox isolation
 }
 
 interface SandboxEndpointResponse {
   port?: number;
   token?: string;
   url?: string;
+  originKey?: string;  // Echo of the requested originKey (when provided)
+  shared?: boolean;    // Whether this is a fallback to the shared origin (Mode C)
 }
 
 interface BrowserLocation {
@@ -373,22 +378,38 @@ export function buildSandboxUrl(
   return sandboxUrl.href;
 }
 
-/** Module-level cache of the authenticated sandbox endpoint (one fetch/session). */
-let sandboxEndpointPromise: Promise<SandboxEndpointResponse> | null = null;
-async function resolveSandboxBaseUrl(): Promise<string> {
-  if (!sandboxEndpointPromise) {
-    sandboxEndpointPromise = fetch('/api/mcp/app-sandbox').then(async (response) => {
-      if (!response.ok) {
-        throw new Error(`Sandbox endpoint discovery failed (${response.status})`);
-      }
-      return await response.json() as SandboxEndpointResponse;
-    }).catch((error) => {
-      // Allow a later mount to retry a transient startup failure.
-      sandboxEndpointPromise = null;
-      throw error;
-    });
+/** Per-originKey cache of the authenticated sandbox endpoint. */
+const sandboxEndpointCache = new Map<string, Promise<SandboxEndpointResponse>>();
+
+async function resolveSandboxBaseUrl(originKey?: string): Promise<string> {
+  const cacheKey = originKey || '';
+  if (!sandboxEndpointCache.has(cacheKey)) {
+    const params = new URLSearchParams();
+    if (originKey) params.set('originKey', originKey);
+    const url = `/api/mcp/app-sandbox${params.toString() ? `?${params}` : ''}`;
+    const promise = fetch(url)
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`Sandbox endpoint discovery failed (${response.status})`);
+        }
+        return await response.json() as SandboxEndpointResponse;
+      })
+      .catch((error) => {
+        // Allow a later mount to retry a transient startup failure.
+        sandboxEndpointCache.delete(cacheKey);
+        throw error;
+      });
+    sandboxEndpointCache.set(cacheKey, promise);
   }
-  return buildSandboxUrl(await sandboxEndpointPromise, window.location);
+  const response = await sandboxEndpointCache.get(cacheKey)!;
+  const sandboxUrl = buildSandboxUrl(response, window.location);
+  
+  // Validate that the returned originKey matches if one was requested.
+  if (originKey && response.originKey && response.originKey !== originKey) {
+    throw new Error(`Sandbox endpoint returned mismatched originKey`);
+  }
+  
+  return sandboxUrl;
 }
 
 function decodeBase64Utf8(blob: string): string {
@@ -527,6 +548,7 @@ export function extractAppResource(readData: unknown, expectedUri: string): AppR
     permissions: permissions.success
       ? sanitizeGrantedPermissions(permissions.data)
       : undefined,
+    domain: typeof uiMeta?.domain === 'string' ? uiMeta.domain : undefined,
   };
 }
 
@@ -1084,11 +1106,18 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       if (!read || read.success === false) throw new Error(read?.error || t('chat.app.readFailed'));
       const app = extractAppResource(read.data, uri);
 
-      // 2. Resolve the foreign sandbox origin.
-      const sandboxBase = await resolveSandboxBaseUrl();
+      // 2. Derive per-app origin key for sandbox isolation.
+      const originKey = deriveOriginKey({
+        domain: app.domain,
+        serverName,
+        uri,
+      });
+
+      // 3. Resolve the foreign sandbox origin.
+      const sandboxBase = await resolveSandboxBaseUrl(originKey);
       if (!isCurrentMount() || !containerRef.current) return;
 
-      // 3. Create the OUTER (sandbox-proxy) iframe.
+      // 4. Create the OUTER (sandbox-proxy) iframe.
       const iframe = document.createElement('iframe');
       iframe.title = t('chat.app.frameTitle', { uri });
       iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
@@ -1101,7 +1130,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       containerRef.current.appendChild(iframe);
       iframeRef.current = iframe;
 
-      // 4. Wait for the proxy to signal readiness, then point it at the sandbox.
+      // 5. Wait for the proxy to signal readiness, then point it at the sandbox.
       // Pin both WindowProxy and origin: a redirect (or a misconfigured public
       // endpoint) must not be able to impersonate FLUJO's trusted relay.
       const sandboxUrl = new URL(sandboxBase);
@@ -1131,7 +1160,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       await proxyReady;
       if (!isCurrentMount() || iframeRef.current !== iframe) return;
 
-      // 5. Build the bridge and wire host callbacks BEFORE connecting.
+      // 6. Build the bridge and wire host callbacks BEFORE connecting.
       // The app has not declared any display-mode capability yet. Initialize
       // every fresh View in the protocol's inline baseline, then promote it
       // only after its ui/initialize declaration has been verified.
