@@ -9,6 +9,7 @@ import {
   hasSandboxPublicUrlConfiguration,
   isSandboxServerReady,
   ensureSandboxForOriginKey,
+  registerSandboxHostOrigin,
 } from '@/backend/mcpApps/sandboxServer';
 
 /**
@@ -47,6 +48,12 @@ function externalOrigin(request: NextRequest): string {
 export async function GET(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
+
+  // The sandbox listener only ever sees its OWN origin in the request headers,
+  // so it cannot derive a correct `frame-ancestors` on its own. This request is
+  // authenticated and comes from the page that will embed the proxy: record its
+  // origin as a trusted embedder before handing out the token.
+  registerSandboxHostOrigin(externalOrigin(request));
 
   // Ensure the shared sandbox listener is allocated and ready.
   // This is fire-and-forget on startup, but on first request we wait for it.

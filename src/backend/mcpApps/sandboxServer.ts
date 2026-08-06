@@ -93,6 +93,13 @@ interface SandboxRuntimeState {
   publicUrl?: string;
   /** Configured host origins (legacy Mode B configuration). */
   configuredHostOrigins: string[];
+  /**
+   * FLUJO origins observed on authenticated `/api/mcp/app-sandbox` requests.
+   * The sandbox listener never sees the embedder in its own `Host` header, so
+   * this is how a local install learns which origin is allowed to frame it.
+   * Insertion-ordered and bounded; oldest entries are dropped first.
+   */
+  hostOrigins: string[];
 }
 
 /**
@@ -107,6 +114,17 @@ let sandboxRuntime: SandboxRuntimeState | undefined;
 
 function getOrInitRuntimeState(): SandboxRuntimeState {
   if (!sandboxRuntime) {
+    // Adopt the state a sibling bundle already published, otherwise the two
+    // bundles mint different secrets and — since the API route registers the
+    // embedder origin while the listener reads it — the sandbox would answer
+    // with `frame-ancestors 'none'`.
+    const shared = globalRegistry[SANDBOX_RUNTIME_STATE_KEY] as SandboxRuntimeState | undefined;
+    if (shared) {
+      // Tolerate state published before `hostOrigins` existed.
+      shared.hostOrigins ??= [];
+      sandboxRuntime = shared;
+      return sandboxRuntime;
+    }
     sandboxRuntime = {
       secret: randomBytes(32),
       entries: new Map(),
@@ -114,6 +132,7 @@ function getOrInitRuntimeState(): SandboxRuntimeState {
       bindHost: getSandboxBindHost(),
       publicUrl: getSandboxPublicUrl(),
       configuredHostOrigins: getConfiguredSandboxHostOrigins(),
+      hostOrigins: [],
     };
     globalRegistry[SANDBOX_RUNTIME_STATE_KEY] = sandboxRuntime;
   }
@@ -584,51 +603,100 @@ export function buildSandboxProxyHtml(
     // Notify the parent that the proxy is ready.
     window.parent.postMessage({
       jsonrpc: '2.0',
-      method: '${SANDBOX_PROXY_READY}'
+      method: '${SANDBOX_PROXY_READY}',
+      params: {}
     }, '*');
 
     // Listen for the View HTML from the parent.
     let viewHtml = null;
     let viewReady = false;
+    let viewPermissions = {};
+    let viewSandboxOverride = null;
 
     window.addEventListener('message', (event) => {
-      if (event.origin !== referrer) return;
-      if (!event.data || typeof event.data !== 'object') return;
+      if (event.origin !== referrer) { return; }
+      if (!event.data || typeof event.data !== 'object') { return; }
       if (event.data.method === '${SANDBOX_RESOURCE_READY}' && typeof event.data.params?.html === 'string') {
         viewHtml = event.data.params.html;
+        // Extract permissions for allow attribute
+        viewPermissions = event.data.params.permissions || {};
+        // Extract and sanitize sandbox override from host
+        viewSandboxOverride = event.data.params.sandbox;
         if (!viewReady) renderView();
       } else if (event.data.method?.startsWith('${SANDBOX_NOTIFICATION_PREFIX}')) {
-        // Relay other sandbox notifications to the parent.
         window.parent.postMessage(event.data, referrer);
       } else if (!event.data.method?.startsWith('${SANDBOX_NOTIFICATION_PREFIX}')) {
-        // Relay tool calls and other requests back to parent.
         window.parent.postMessage(event.data, referrer);
       }
     });
 
+    var viewIframe = null;
+    function buildAllowAttribute(p) {
+      if (!p) return '';
+      var out = [];
+      if (p.camera) out.push('camera');
+      if (p.microphone) out.push('microphone');
+      if (p.geolocation) out.push('geolocation');
+      if (p.clipboardWrite) out.push('clipboard-write');
+      return out.join('; ');
+    }
+    function sanitizeSandbox(value) {
+      if (typeof value !== 'string') { return DEFAULT_VIEW_SANDBOX; }
+      var requested = value.toLowerCase().split(/\s+/);
+      var granted = [];
+      for (var i = 0; i < requested.length; i++) {
+        var token = requested[i];
+        if (ALLOWED_SANDBOX_TOKENS.indexOf(token) !== -1 && granted.indexOf(token) === -1) {
+          granted.push(token);
+        }
+      }
+      return granted.indexOf('allow-scripts') === -1 ? '' : granted.join(' ');
+    }
     function renderView() {
       if (!viewHtml) return;
       viewReady = true;
-      const iframe = document.getElementById('app');
-      iframe.onload = () => {
-        // Notify parent that the inner View has loaded.
-        window.parent.postMessage({
-          jsonrpc: '2.0',
-          method: '${SANDBOX_RESOURCE_READY}',
-          params: { loaded: true }
-        }, referrer);
-      };
-      iframe.srcdoc = viewHtml;
+      const iframe = document.createElement('iframe');
+      iframe.id = 'app';
+      iframe.style.cssText = 'width:100%;height:100%;border:none;';
+      iframe.setAttribute('referrerpolicy', 'no-referrer');
+      var sandboxAttr = viewSandboxOverride ? sanitizeSandbox(viewSandboxOverride) : DEFAULT_VIEW_SANDBOX;
+      iframe.setAttribute('sandbox', sandboxAttr);
+      var allowAttr = buildAllowAttribute(viewPermissions);
+      if (allowAttr) iframe.setAttribute('allow', allowAttr);
+      document.body.appendChild(iframe);
+      viewIframe = iframe;
+      
+      // Write content after iframe is in DOM (matching original working implementation)
+      var doc = null;
+      try {
+        doc = iframe.contentDocument
+          || (iframe.contentWindow && iframe.contentWindow.document)
+          || null;
+      } catch (e) { doc = null; }
+      if (doc && typeof doc.write === 'function') {
+        doc.open();
+        doc.write(INNER_CSP_META + viewHtml);
+        doc.close();
+      } else {
+        iframe.srcdoc = INNER_CSP_META + viewHtml;
+      }
+      
+      // Notify parent that the inner View has loaded.
+      window.parent.postMessage({
+        jsonrpc: '2.0',
+        method: '${SANDBOX_RESOURCE_READY}',
+        params: { loaded: true }
+      }, referrer);
     }
 
     // Bridge requests from inner View to parent and responses back.
     window.addEventListener('message', (event) => {
-      if (event.source === document.getElementById('app')?.contentWindow) {
+      if (event.source === viewIframe?.contentWindow) {
         // Inner View → Parent
         window.parent.postMessage(event.data, referrer);
       } else if (event.origin === referrer && !event.data?.method?.startsWith('${SANDBOX_NOTIFICATION_PREFIX}')) {
         // Parent response → Inner View
-        const iframe = document.getElementById('app');
+        const iframe = viewIframe;
         if (iframe?.contentWindow) {
           iframe.contentWindow.postMessage(event.data, event.origin);
         }
@@ -682,11 +750,15 @@ export async function ensureSandboxForOriginKey(
     }
   }
 
-  // Allocate a listener on the next free port.
+  // Allocate a listener on the next free port. Ports already held by another
+  // originKey in this pool are skipped up front — probing them would only
+  // produce a self-inflicted EADDRINUSE round trip per app.
+  const portsInUse = new Set<number>();
+  for (const entry of state.entries.values()) portsInUse.add(entry.port);
+
   for (let offset = 0; offset < MAX_SANDBOX_ORIGINS; offset++) {
     const port = state.basePort + offset;
-    const candidate = `port:${port}`;
-    if (state.entries.has(candidate)) continue;
+    if (portsInUse.has(port)) continue;
 
     // Try to start a listener on this port.
     const listenerState: SandboxListenerState = {
@@ -776,22 +848,113 @@ export async function stopAllSandboxListeners(): Promise<void> {
 }
 
 /**
- * Get the allowed frame-ancestors for a request based on configured host origins
- * and the request's own origin.
+ * Record a FLUJO origin that is allowed to frame the sandbox. Called from the
+ * authenticated `/api/mcp/app-sandbox` handler, which is the only place where
+ * the host origin is known for certain: the sandbox listener's own request
+ * headers describe the *sandbox* origin, never the embedder.
  */
-function getAllowedFrameAncestors(req: http.IncomingMessage): string[] {
+export function registerSandboxHostOrigin(candidate: string | undefined | null): void {
+  if (!candidate) return;
+  const origin = parseHttpOrigin(candidate);
+  if (!origin) return;
   const state = getOrInitRuntimeState();
-  if (req.headers['x-forwarded-proto'] && req.headers['x-forwarded-host']) {
-    const proto = (req.headers['x-forwarded-proto'] as string).split(',')[0].trim();
-    const host = (req.headers['x-forwarded-host'] as string).split(',')[0].trim();
-    return [`${proto}://${host}`];
+  const existing = state.hostOrigins.indexOf(origin);
+  if (existing !== -1) state.hostOrigins.splice(existing, 1);
+  state.hostOrigins.push(origin);
+  while (state.hostOrigins.length > MAX_CONFIGURED_HOST_ORIGINS) {
+    state.hostOrigins.shift();
   }
-  // Fall back to host header.
-  if (req.headers.host) {
-    const proto = req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
-    return [`${proto}://${req.headers.host}`];
+}
+
+/** Diagnostic/test accessor for the registered embedder origins. */
+export function getRegisteredSandboxHostOrigins(): string[] {
+  return [...getOrInitRuntimeState().hostOrigins];
+}
+
+/**
+ * The embedder's origin as reported by `Referer`. The host sets
+ * `referrerpolicy="origin"` on the proxy iframe, but tolerate a full URL too
+ * (a stricter/looser policy must not silently break framing).
+ */
+function refererOriginOf(referer: string | undefined): string | undefined {
+  if (!referer) return undefined;
+  try {
+    const parsed = new URL(referer);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return undefined;
+    if (parsed.username || parsed.password) return undefined;
+    return parsed.origin;
+  } catch {
+    return undefined;
   }
-  return state.configuredHostOrigins;
+}
+
+function hostnameOf(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  try {
+    return new URL(value.includes('://') ? value : `http://${value}`).hostname;
+  } catch {
+    return undefined;
+  }
+}
+
+const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+
+function isLoopbackHostname(hostname: string | undefined): boolean {
+  if (!hostname) return false;
+  return LOOPBACK_HOSTNAMES.has(hostname.toLowerCase());
+}
+
+/**
+ * Decide whether the referring document may be named in `frame-ancestors`.
+ * A local install serves FLUJO and the sandbox from the same hostname on
+ * different ports, so a same-hostname (or loopback-to-loopback) referrer is
+ * the expected desktop case. Anything else must be declared explicitly.
+ */
+function isTrustedEmbedderOrigin(origin: string, req: http.IncomingMessage): boolean {
+  const state = getOrInitRuntimeState();
+  if (state.configuredHostOrigins.includes(origin)) return true;
+  if (state.hostOrigins.includes(origin)) return true;
+
+  const embedderHost = hostnameOf(origin);
+  const listenerHost = hostnameOf(req.headers.host);
+  if (!embedderHost) return false;
+  if (listenerHost && embedderHost.toLowerCase() === listenerHost.toLowerCase()) return true;
+  return isLoopbackHostname(embedderHost) && isLoopbackHostname(listenerHost);
+}
+
+/**
+ * Get the allowed `frame-ancestors` for a sandbox document request.
+ *
+ * The embedder is FLUJO's own page (e.g. `http://localhost:4200`), NOT this
+ * listener (`http://localhost:4203`). Deriving the directive from the request's
+ * `Host`/`X-Forwarded-Host` header therefore named the sandbox itself and the
+ * browser blocked every frame. Sources, in order of trust:
+ *   1. `FLUJO_MCP_APP_HOST_ORIGINS` (explicit allowlist, needed for nested chains)
+ *   2. Origins registered when the host minted a sandbox token (authenticated)
+ *   3. The request's `Referer` origin, when it passes {@link isTrustedEmbedderOrigin}
+ * An empty result stays fail-closed (`'none'`) in {@link sanitizeFrameAncestors}.
+ */
+export function getAllowedFrameAncestors(req: http.IncomingMessage): string[] {
+  const state = getOrInitRuntimeState();
+  const ancestors: string[] = [];
+  const seen = new Set<string>();
+  const add = (value: string | undefined) => {
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    ancestors.push(value);
+  };
+
+  for (const origin of state.configuredHostOrigins) add(origin);
+
+  // A configured allowlist is authoritative and stays fail-closed.
+  if (state.configuredHostOrigins.length > 0) return ancestors;
+
+  for (const origin of state.hostOrigins) add(origin);
+
+  const refererOrigin = refererOriginOf(req.headers.referer);
+  if (refererOrigin && isTrustedEmbedderOrigin(refererOrigin, req)) add(refererOrigin);
+
+  return ancestors;
 }
 
 /**

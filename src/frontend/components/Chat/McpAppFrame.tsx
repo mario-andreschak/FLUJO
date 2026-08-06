@@ -1120,6 +1120,13 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       // 4. Create the OUTER (sandbox-proxy) iframe.
       const iframe = document.createElement('iframe');
       iframe.title = t('chat.app.frameTitle', { uri });
+      // `allow-scripts allow-same-origin` is required and safe here: the proxy
+      // is served from a DIFFERENT origin (the sandbox listener), so it is only
+      // same-origin with that throwaway origin and never with FLUJO. Chrome logs
+      // a generic "can escape its sandboxing" notice for this combination — that
+      // is expected; the isolation boundary is the origin, not the sandbox flag.
+      // Removing allow-same-origin would break the relay (it needs DOM access to
+      // the inner View it writes) so do not "fix" the console notice here.
       iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
       iframe.referrerPolicy = 'origin'; // the sandbox validates the embedder via referrer
       const allow = buildAllowAttribute(app.permissions as any);
