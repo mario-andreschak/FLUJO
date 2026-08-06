@@ -94,9 +94,26 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
     <Dialog
       open={open}
       onClose={onClose}
-      maxWidth="lg"
-      fullWidth
-      PaperProps={{ sx: { height: '85vh', maxHeight: '85vh' } }}
+      fullScreen
+      slotProps={{
+        paper: {
+          sx: {
+            // Opt out of the global theme's backdropFilter so that
+            // position:fixed descendants (MCP App panels) resolve against
+            // the real viewport instead of being clipped by this dialog.
+            backdropFilter: 'none',
+            borderRadius: 0,
+            border: 0,
+            margin: 0,
+            width: '100%',
+            maxWidth: '100%',
+            height: '100%',
+            maxHeight: '100%',
+            display: 'flex',
+            flexDirection: 'column',
+          },
+        },
+      }}
     >
       <DialogTitle component="div" sx={{ pb: 0 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -120,7 +137,7 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
         </Tabs>
       </DialogTitle>
       <Divider />
-      <DialogContent sx={{ overflow: 'auto' }}>
+      <DialogContent sx={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
         {/* Keep the active server name; render only the active tab's content. */}
         {open && tab === 'tools' && <ToolManager serverName={serverName} prefill={toolPrefill} />}
         {open && tab === 'resources' && <CapabilitiesManager serverName={serverName} show="resources" />}

@@ -245,7 +245,31 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
   }, [allApps, open, selectedKey]);
 
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="xl" aria-labelledby="mcp-apps-dashboard-title">
+    <Dialog
+      open={open}
+      onClose={onClose}
+      fullScreen
+      aria-labelledby="mcp-apps-dashboard-title"
+      slotProps={{
+        paper: {
+          sx: {
+            // Opt out of the global theme's backdropFilter so that
+            // position:fixed descendants (MCP App panels) resolve against
+            // the real viewport instead of being clipped by this dialog.
+            backdropFilter: 'none',
+            borderRadius: 0,
+            border: 0,
+            margin: 0,
+            width: '100%',
+            maxWidth: '100%',
+            height: '100%',
+            maxHeight: '100%',
+            display: 'flex',
+            flexDirection: 'column',
+          },
+        },
+      }}
+    >
       <DialogTitle id="mcp-apps-dashboard-title" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <AppsIcon color="primary" />
         {t('mcp.apps.title')}
@@ -268,16 +292,16 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
       </DialogTitle>
       <Divider />
 
-      <DialogContent sx={{ p: 0, minHeight: { xs: 480, md: 620 } }}>
+      <DialogContent sx={{ p: 0, flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         {loading ? (
-          <Stack alignItems="center" justifyContent="center" spacing={2} sx={{ minHeight: 420 }}>
+          <Stack alignItems="center" justifyContent="center" spacing={2} sx={{ flex: 1 }}>
             <CircularProgress />
             <Typography color="text.secondary">{t('mcp.apps.discovering')}</Typography>
           </Stack>
         ) : loadError ? (
           <Alert severity="error" sx={{ m: 3 }}>{loadError}</Alert>
         ) : eligibleServerCount === 0 ? (
-          <Stack alignItems="center" justifyContent="center" spacing={1} sx={{ minHeight: 420, p: 3 }}>
+          <Stack alignItems="center" justifyContent="center" spacing={1} sx={{ flex: 1, p: 3 }}>
             <AppsIcon color="disabled" sx={{ fontSize: 48 }} />
             <Typography variant="h6">{t('mcp.apps.noServers')}</Typography>
             <Typography color="text.secondary" textAlign="center">
@@ -285,8 +309,8 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
             </Typography>
           </Stack>
         ) : (
-          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'minmax(300px, 38%) 1fr' }, minHeight: 620 }}>
-            <Box sx={{ borderRight: { md: '1px solid' }, borderColor: { md: 'divider' }, p: 2, overflow: 'auto' }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'minmax(300px, 34%) 1fr' }, flex: 1, minHeight: 0, overflow: 'hidden' }}>
+            <Box sx={{ borderRight: { md: '1px solid' }, borderColor: { md: 'divider' }, p: 2, overflow: 'auto', minHeight: 0 }}>
               <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
                 {t('mcp.apps.summary', {
                   apps: tp('mcp.apps.app', allApps.length),
@@ -344,9 +368,9 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
               )}
             </Box>
 
-            <Box sx={{ p: { xs: 2, md: 3 }, minWidth: 0, overflow: 'auto' }}>
+            <Box sx={{ p: { xs: 2, md: 3 }, minWidth: 0, overflow: 'auto', minHeight: 0 }}>
               {!selectedApp ? (
-                <Stack alignItems="center" justifyContent="center" spacing={1} sx={{ minHeight: 360 }}>
+                <Stack alignItems="center" justifyContent="center" spacing={1} sx={{ minHeight: '100%' }}>
                   <AppsIcon color="disabled" sx={{ fontSize: 44 }} />
                   <Typography variant="h6">{t('mcp.apps.select')}</Typography>
                   <Typography color="text.secondary" textAlign="center">

@@ -3,7 +3,9 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import DevCanvasDock, { type CanvasDockLayout } from '@/frontend/components/Chat/DevCanvasDock';
 import {
+  clampFloatingPosition,
   constrainFloatingRect,
+  fixedOriginOffset,
   resizeFloatingRect,
 } from '@/frontend/components/Chat/floatingPanel';
 
@@ -74,6 +76,82 @@ describe('floating MCP App resizing', () => {
       { width: 900, height: 700 },
       { width: 480, height: 320 },
     )).toEqual({ x: 100, y: 100, width: 800, height: 600 });
+  });
+
+  // #371: a dragged panel must never park its resize handles off screen.
+  it('keeps a dragged panel fully inside the viewport', () => {
+    expect(clampFloatingPosition(
+      { x: 1100, y: 850 },
+      { width: 800, height: 600 },
+      { width: 1200, height: 900 },
+    )).toEqual({ x: 400, y: 300 });
+
+    expect(clampFloatingPosition(
+      { x: -240, y: -180 },
+      { width: 800, height: 600 },
+      { width: 1200, height: 900 },
+    )).toEqual({ x: 0, y: 0 });
+
+    // Larger than the viewport still anchors at the origin.
+    expect(clampFloatingPosition(
+      { x: 90, y: 70 },
+      { width: 1600, height: 1200 },
+      { width: 1200, height: 900 },
+    )).toEqual({ x: 0, y: 0 });
+  });
+});
+
+// #371: `backdrop-filter` on MUI's glass Dialog paper makes it the containing
+// block for `position: fixed`, so viewport pointer coordinates must be rebased
+// before they are written back as left/top.
+describe('floating panel containing-block compensation', () => {
+  const fakeFixedElement = (
+    applied: { left: number; top: number },
+    rendered: { left: number; top: number },
+    position = 'fixed',
+  ) => ({
+    getBoundingClientRect: () => ({ left: rendered.left, top: rendered.top }),
+    __style: { position, left: `${applied.left}px`, top: `${applied.top}px` },
+  }) as unknown as HTMLElement;
+
+  const originalGetComputedStyle = window.getComputedStyle;
+  beforeEach(() => {
+    Object.defineProperty(window, 'getComputedStyle', {
+      configurable: true,
+      writable: true,
+      value: (element: HTMLElement & { __style?: CSSStyleDeclaration }) =>
+        element.__style ?? originalGetComputedStyle(element),
+    });
+  });
+  afterEach(() => {
+    Object.defineProperty(window, 'getComputedStyle', {
+      configurable: true,
+      writable: true,
+      value: originalGetComputedStyle,
+    });
+  });
+
+  it('reports the offset of a shifted containing block', () => {
+    // Panel asked for left/top 100/80 but paints at 340/260 => origin 240/180.
+    expect(fixedOriginOffset(
+      fakeFixedElement({ left: 100, top: 80 }, { left: 340, top: 260 }),
+    )).toEqual({ x: 240, y: 180 });
+  });
+
+  it('stays neutral for a true viewport anchor, sub-pixel noise and non-fixed boxes', () => {
+    expect(fixedOriginOffset(
+      fakeFixedElement({ left: 100, top: 80 }, { left: 100, top: 80 }),
+    )).toEqual({ x: 0, y: 0 });
+
+    expect(fixedOriginOffset(
+      fakeFixedElement({ left: 100, top: 80 }, { left: 100.4, top: 80.3 }),
+    )).toEqual({ x: 0, y: 0 });
+
+    expect(fixedOriginOffset(
+      fakeFixedElement({ left: 100, top: 80 }, { left: 340, top: 260 }, 'absolute'),
+    )).toEqual({ x: 0, y: 0 });
+
+    expect(fixedOriginOffset(null)).toEqual({ x: 0, y: 0 });
   });
 });
 

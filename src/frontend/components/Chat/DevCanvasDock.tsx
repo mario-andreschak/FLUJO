@@ -37,10 +37,12 @@ import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 import McpAppFrame from './McpAppFrame';
 import type { CanvasAppEntry } from './canvasState';
 import {
+  clampFloatingPosition,
   constrainFloatingRect,
   FloatingResizeHandles,
   PointerDragShield,
   resizeFloatingRect,
+  useFixedOriginOffset,
   usePointerDrag,
   type FloatingRect,
   type ResizeDirection,
@@ -259,12 +261,14 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
     const startX = event.clientX;
     const startY = event.clientY;
     startPointerDrag(event, 'move', (move) => {
-      setFloatingRect({
-        x: clamp(rect.left + move.clientX - startX, 0, window.innerWidth - 120),
-        y: clamp(rect.top + move.clientY - startY, 0, window.innerHeight - 56),
-        width: rect.width,
-        height: rect.height,
-      });
+      // #371: keep the whole panel on screen so every resize handle stays
+      // reachable after a drag.
+      const position = clampFloatingPosition(
+        { x: rect.left + move.clientX - startX, y: rect.top + move.clientY - startY },
+        { width: rect.width, height: rect.height },
+        { width: window.innerWidth, height: window.innerHeight },
+      );
+      setFloatingRect({ ...position, width: rect.width, height: rect.height });
     });
   }, [fullscreen, startPointerDrag]);
 
@@ -297,6 +301,10 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
       ));
     });
   }, [fullscreen, startPointerDrag]);
+
+  // #371: translate viewport geometry into the containing block established by
+  // any `backdrop-filter`/`transform` ancestor.
+  const fixedOffset = useFixedOriginOffset(rootRef, fullscreen);
 
   if (entries.length === 0) return null;
 
@@ -359,8 +367,8 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
         ...(fullscreen
           ? {
               position: 'fixed',
-              left: floatingRect?.x ?? 16,
-              top: floatingRect?.y ?? 16,
+              left: (floatingRect?.x ?? 16) - fixedOffset.x,
+              top: (floatingRect?.y ?? 16) - fixedOffset.y,
               width: floatingRect?.width ?? 'calc(100vw - 32px)',
               height: floatingRect?.height ?? 'calc(100vh - 32px)',
               minWidth: 'min(480px, 100vw)',

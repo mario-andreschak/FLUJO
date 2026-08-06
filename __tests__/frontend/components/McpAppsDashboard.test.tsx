@@ -161,4 +161,43 @@ describe('McpAppsDashboard', () => {
     expect(await screen.findByText('No MCP Apps-capable servers are enabled')).toBeInTheDocument();
     expect(service.clearCapabilitiesCache).toHaveBeenCalledWith('weather');
   });
+
+  it('uses fullScreen dialog and opts out of backdropFilter so fixed descendants are not clipped', async () => {
+    service.loadServerConfigs.mockResolvedValue([
+      { name: 'enabled-apps', disabled: false, enableMcpApps: true },
+    ] as any);
+    service.listServerResources.mockResolvedValue({
+      resources: [{ uri: 'ui://valid', name: 'Valid App', mimeType: APP_MIME }],
+      resourceTemplates: [],
+    });
+
+    renderDashboard();
+    await waitFor(() => expect(screen.getByText('Valid App')).toBeInTheDocument());
+
+    const paper = document.querySelector('.MuiDialog-paper') as HTMLElement;
+    expect(paper).toBeInTheDocument();
+    // MUI v6 fullScreen adds this class to the paper element
+    expect(paper.className).toContain('MuiDialog-paperFullScreen');
+    // The sx prop on slotProps.paper sets backdropFilter: 'none' so that a
+    // position:fixed MCP App panel resolves against the real viewport (#371).
+    // Emotion emits it as a generated class, so assert on the injected rules
+    // that actually apply to this paper element.
+    const paperClasses = paper.className.split(/\s+/).filter(Boolean);
+    // Emotion may keep rules only in the CSSOM ("speedy" insertion), so read
+    // both the style tag text and the live stylesheets.
+    const emotionRules = [
+      ...Array.from(document.querySelectorAll('style')).map((tag) => tag.textContent ?? ''),
+      ...Array.from(document.styleSheets).flatMap((sheet) => {
+        try {
+          return Array.from(sheet.cssRules).map((rule) => rule.cssText);
+        } catch {
+          return [];
+        }
+      }),
+    ].join('').replace(/\s+/g, '');
+    const backdropRule = paperClasses.some((className) => (
+      new RegExp(`\\.${className}\\{[^}]*backdrop-filter:none`).test(emotionRules)
+    ));
+    expect(backdropRule).toBe(true);
+  });
 });

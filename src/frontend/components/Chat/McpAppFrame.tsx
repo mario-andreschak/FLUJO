@@ -44,10 +44,12 @@ import { deriveOriginKey } from '@/shared/utils/mcpAppOrigin';
 import { createLogger } from '@/utils/logger';
 import packageMetadata from '../../../../package.json';
 import {
+  clampFloatingPosition,
   constrainFloatingRect,
   FloatingResizeHandles,
   PointerDragShield,
   resizeFloatingRect,
+  useFixedOriginOffset,
   usePointerDrag,
   type ResizeDirection,
 } from './floatingPanel';
@@ -912,18 +914,19 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
     if (effectiveDisplayMode !== 'fullscreen' || !frameRootRef.current) return;
     if ((event.target as HTMLElement).closest('button,[role="button"]')) return;
     event.preventDefault();
+    // Pointer coordinates and getBoundingClientRect are both viewport based, so
+    // `floatingRect` stays in viewport space; the render step translates it into
+    // the containing block (#371).
     const rect = frameRootRef.current.getBoundingClientRect();
     const startX = event.clientX;
     const startY = event.clientY;
     startPointerDrag(event, 'move', (move) => {
-      const maxX = Math.max(0, window.innerWidth - 120);
-      const maxY = Math.max(0, window.innerHeight - 56);
-      setFloatingRect({
-        x: Math.min(Math.max(rect.left + move.clientX - startX, 0), maxX),
-        y: Math.min(Math.max(rect.top + move.clientY - startY, 0), maxY),
-        width: rect.width,
-        height: rect.height,
-      });
+      const position = clampFloatingPosition(
+        { x: rect.left + move.clientX - startX, y: rect.top + move.clientY - startY },
+        { width: rect.width, height: rect.height },
+        { width: window.innerWidth, height: window.innerHeight },
+      );
+      setFloatingRect({ ...position, width: rect.width, height: rect.height });
     });
   }, [effectiveDisplayMode, startPointerDrag]);
 
@@ -956,6 +959,13 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       ));
     });
   }, [effectiveDisplayMode, startPointerDrag]);
+
+  // #371: the floating panel may live inside a `backdrop-filter` surface (MUI's
+  // glass Dialog paper), which becomes the containing block for `position:
+  // fixed`. Translate the stored viewport geometry into that space so the panel
+  // lands exactly where the pointer is.
+  const fixedOffset = useFixedOriginOffset(frameRootRef, displayMode === 'fullscreen' && !docked);
+
   latestToolDeliveryRef.current = {
     args: toolArgs,
     resultContent: toolResultContent,
@@ -1685,8 +1695,8 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
         ...(displayMode === 'fullscreen'
           ? {
               position: 'fixed',
-              left: floatingRect?.x ?? 16,
-              top: floatingRect?.y ?? 16,
+              left: (floatingRect?.x ?? 16) - fixedOffset.x,
+              top: (floatingRect?.y ?? 16) - fixedOffset.y,
               width: floatingRect?.width ?? 'calc(100vw - 32px)',
               height: floatingRect?.height ?? 'calc(100vh - 32px)',
               minWidth: 'min(480px, 100vw)',
