@@ -29,6 +29,11 @@ import {
   FormLabel,
   InputLabel,
   FormHelperText,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogContentText,
+  DialogActions,
 } from '@mui/material';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -119,6 +124,7 @@ interface ChatMessagesProps {
   onBeginEditMessage?: (messageId: string) => void;
   onApproveToolCall?: (toolCallId: string, always?: boolean) => void; // Add approve handler prop
   onRejectToolCall?: (toolCallId: string, always?: boolean, feedback?: string) => void; // Add reject handler prop (feedback: issue #247)
+  onCancelToolCall?: (toolCallId: string) => void; // Issue #357: cancel one in-flight tool call
   /** Submit elicitation form — called with the collected field values. */
   onSubmitElicitation?: (elicitationId: string, content: Record<string, string | number | boolean | string[]>) => void;
   /** Cancel the pending elicitation request. */
@@ -578,8 +584,12 @@ const ToolCallDetails: React.FC<{
   pair: ToolCallPair<ChatMessage>;
   showRaw: boolean;
   onRawChange: (showRaw: boolean) => void;
-}> = ({ pair, showRaw, onRawChange }) => {
+  /** Issue #357: cancel THIS still-running tool call (confirmed first). */
+  onCancelToolCall?: (toolCallId: string) => void;
+}> = ({ pair, showRaw, onRawChange, onCancelToolCall }) => {
   const { t } = useI18n();
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [cancelRequested, setCancelRequested] = useState(false);
   const args = useLazyToolPayload(pair.argumentPayload, pair.toolCall.function.arguments);
   const pairUi = pair.result?.ui;
   const launchInfo = pairUi?.uri && pairUi.serverName ? {
@@ -668,8 +678,43 @@ const ToolCallDetails: React.FC<{
       ) : (
         <Typography variant="body2" fontStyle="italic" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <CircularProgress size={14} thickness={6} /> {t('chat.messages.waitingTool')}
+          {/* Issue #357: a stalling tool call can be aborted on its own, without
+              stopping the whole run. Confirmation first, as the issue asks. */}
+          {onCancelToolCall && pair.toolCall.id && (
+            <Button
+              size="small"
+              variant="outlined"
+              color="warning"
+              startIcon={<BlockIcon />}
+              disabled={cancelRequested}
+              onClick={() => setConfirmCancel(true)}
+              sx={{ ml: 1 }}
+            >
+              {t('chat.messages.cancelTool')}
+            </Button>
+          )}
         </Typography>
       )}
+      <Dialog open={confirmCancel} onClose={() => setConfirmCancel(false)}>
+        <DialogTitle>{t('chat.messages.cancelTool')}</DialogTitle>
+        <DialogContent>
+          <DialogContentText>{t('chat.messages.cancelToolConfirm')}</DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmCancel(false)}>{t('chat.page.cancel')}</Button>
+          <Button
+            color="warning"
+            variant="contained"
+            onClick={() => {
+              setConfirmCancel(false);
+              setCancelRequested(true);
+              onCancelToolCall?.(pair.toolCall.id);
+            }}
+          >
+            {t('chat.messages.cancelToolConfirmAction')}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };
@@ -701,10 +746,13 @@ export const ToolCallTimeline: React.FC<{
   onMcpAppManualOpen?: (appKey: string) => void;
   /** Conversation-level ownership: only these latest results may host a live View. */
   mcpAppHostResultIds?: ReadonlySet<string>;
+  /** Issue #357: cancel a single in-flight tool call. */
+  onCancelToolCall?: (toolCallId: string) => void;
 }> = ({
   pairs,
   messageId,
   conversationId,
+  onCancelToolCall,
   onAppMessage,
   onUpdateModelContext,
   onRegisterAppTeardown,
@@ -818,6 +866,7 @@ export const ToolCallTimeline: React.FC<{
           <ToolCallDetails
             key={expandedKey}
             pair={expandedPair}
+            onCancelToolCall={onCancelToolCall}
             showRaw={Boolean(expandedKey && rawByKey[expandedKey])}
             onRawChange={(showRaw) => {
               if (expandedKey) setRawByKey((prev) => ({ ...prev, [expandedKey]: showRaw }));
@@ -859,6 +908,8 @@ interface MessageBubbleProps {
   dismissedMcpAppKeys?: ReadonlySet<string>;
   onMcpAppManualOpen?: (appKey: string) => void;
   mcpAppHostResultIds?: ReadonlySet<string>;
+  /** Issue #357: cancel a single in-flight tool call. */
+  onCancelToolCall?: (toolCallId: string) => void;
   /**
    * #95 (follow-up): handoff tool calls hoisted from suppressed tool-call-only
    * messages in the same assistant run, rendered as slim markers on this anchor
@@ -894,6 +945,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
   dismissedMcpAppKeys,
   onMcpAppManualOpen,
   mcpAppHostResultIds,
+  onCancelToolCall,
   hoistedHandoffs,
   isBeingEdited,
   onMenuOpen,
@@ -1143,6 +1195,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
             dismissedMcpAppKeys={dismissedMcpAppKeys}
             onMcpAppManualOpen={onMcpAppManualOpen}
             mcpAppHostResultIds={mcpAppHostResultIds}
+            onCancelToolCall={onCancelToolCall}
           />
         )}
 
@@ -1524,6 +1577,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   onBeginEditMessage,
   onApproveToolCall, // Destructure new prop
   onRejectToolCall, // Destructure new prop
+  onCancelToolCall, // Issue #357
   onSubmitElicitation,
   onCancelElicitation,
   pendingQuestion,
@@ -1749,6 +1803,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
             dismissedMcpAppKeys={dismissedMcpAppKeys}
             onMcpAppManualOpen={onMcpAppManualOpen}
             mcpAppHostResultIds={mcpAppHostResultIds}
+            onCancelToolCall={onCancelToolCall}
             hoistedHandoffs={renderHandoffsById.get(message.id)}
             isBeingEdited={!!editingMessageId && message.id === editingMessageId}
             onMenuOpen={handleMenuOpen}

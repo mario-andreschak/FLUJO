@@ -3451,6 +3451,22 @@ const Chat: React.FC = () => {
     handleToolResponse('reject', toolCallId, always, feedback);
   };
 
+  /**
+   * Issue #357: abort ONE in-flight (stalling) tool call. Unlike Stop this keeps
+   * the run alive — the backend answers the aborted call with a cancelled tool
+   * result and the model continues — so no loading/stream state changes here;
+   * the tool:result event updates the chip.
+   */
+  const handleCancelToolCall = async (toolCallId: string) => {
+    if (!currentConversationId) return;
+    log.info('Cancelling single tool call', { conversationId: currentConversationId, toolCallId });
+    try {
+      await chatService.cancelToolCall(currentConversationId, toolCallId);
+    } catch (err) {
+      log.warn('Failed to cancel tool call', { conversationId: currentConversationId, toolCallId, err });
+    }
+  };
+
   const handleSubmitElicitation = async (
     elicitationId: string,
     content: Record<string, string | number | boolean | string[]>
@@ -4235,6 +4251,7 @@ const Chat: React.FC = () => {
                 onBeginEditMessage={beginEditMessage} // "Edit" opens the input editor
                 onApproveToolCall={handleApproveToolCall}
                 onRejectToolCall={handleRejectToolCall}
+                onCancelToolCall={handleCancelToolCall}
                 onSubmitElicitation={handleSubmitElicitation}
                 onCancelElicitation={handleCancelElicitation}
                 pendingQuestion={pendingQuestion}

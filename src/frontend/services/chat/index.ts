@@ -244,6 +244,21 @@ class ChatService {
     return parse<any>(response);
   }
 
+  /**
+   * POST /v1/chat/conversations/{id}/respond with action 'cancelToolCall' —
+   * abort ONE in-flight tool call (issue #357) without stopping the run. Safe
+   * no-op (cancelled:false) if the call already finished.
+   */
+  async cancelToolCall(id: string, toolCallId: string): Promise<{ cancelled: boolean }> {
+    log.debug('cancelToolCall: Entering method', { conversationId: id, toolCallId });
+    const response = await fetch(`${BASE}/${encodeURIComponent(id)}/respond`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'cancelToolCall', toolCallId }),
+    });
+    return parse<{ cancelled: boolean }>(response);
+  }
+
   /** POST /v1/chat/conversations/{id}/debug/step — advance one debug step. */
   async debugStep(id: string): Promise<any> {
     log.debug('debugStep: Entering method', { conversationId: id });

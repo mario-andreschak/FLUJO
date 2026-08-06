@@ -32,6 +32,8 @@ import { mapOpenAiUsage, OpenAiUsageLike } from '@/backend/services/model/adapte
 import { fingerprintPrefix, classifyDrift, logCacheOutcome, derivePromptCacheKey } from './promptCacheMetrics';
 import { trimTools } from './trimToolBlock';
 import { mcpService } from '@/backend/services/mcp';
+import { registerToolCall, releaseToolCall } from '../toolCancelRegistry';
+import { combineAbortSignals } from '../combineAbortSignals';
 import { runWithConcurrency } from '@/backend/services/mcp/utils/boundedConcurrency';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { extractUiResourceUri } from '@/shared/utils/mcpApps';
@@ -2611,24 +2613,38 @@ export class ModelHandler {
           // tool:progress events AND reset the SDK's request timer (see
           // services/mcp/tools.ts), so a finite timeout only kills silent calls.
           const timeout = decoded.timeout ?? DEFAULT_TOOL_CALL_TIMEOUT_SECONDS;
-          const result = await mcpService.callTool(
-            serverName,
-            toolName,
-            args,
-            timeout,
-            (progress) => emit?.({
-              type: 'tool:progress',
-              toolCallId: id,
-              name,
-              progress: progress.progress,
-              total: progress.total,
-              message: progress.message
-            }),
-            decoded.nodeId,
-            signal,
-            'model',
-            conversationId ? `conversation:${conversationId}` : undefined,
-          );
+
+          // Issue #357: register a per-call AbortController so the user can
+          // cancel THIS tool call from the chat UI (or so whole-run Stop can
+          // interrupt it) while it is already in flight. Combined with any
+          // inbound signal from the caller; released in the finally below so
+          // controllers never leak.
+          const cancelScope = conversationId ?? runId;
+          const perCallController = cancelScope ? registerToolCall(cancelScope, id) : undefined;
+          const callSignal = combineAbortSignals(signal, perCallController?.signal);
+          let result: Awaited<ReturnType<typeof mcpService.callTool>>;
+          try {
+            result = await mcpService.callTool(
+              serverName,
+              toolName,
+              args,
+              timeout,
+              (progress) => emit?.({
+                type: 'tool:progress',
+                toolCallId: id,
+                name,
+                progress: progress.progress,
+                total: progress.total,
+                message: progress.message
+              }),
+              decoded.nodeId,
+              callSignal,
+              'model',
+              conversationId ? `conversation:${conversationId}` : undefined,
+            );
+          } finally {
+            if (cancelScope) releaseToolCall(cancelScope, id);
+          }
 
           // Tier 3 data flow: auto-capture binary/large tool results as
           // run-scoped resources. The capture may rewrite the result (binary

@@ -8,6 +8,7 @@ import { loadItem as loadItemBackend } from '@/utils/storage/backend';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { StorageKey } from '@/shared/types/storage';
 import { listPendingToolCalls, clearPendingApprovals } from '@/backend/execution/flow/toolApprovalRegistry';
+import { cancelAllToolCalls } from '@/backend/execution/flow/toolCancelRegistry';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { repairDanglingToolCalls, appendRawForState } from '@/backend/execution/flow/conversationLog';
 import { clearSteeringInbox } from '@/backend/execution/flow/steeringInbox';
@@ -84,6 +85,14 @@ export async function POST(
     // been folded in yet: the user stopped this run, so a correction aimed at it
     // must not silently resurface at the start of the next one.
     clearSteeringInbox(conversationId);
+
+    // Issue #357: Stop must also interrupt tool calls that are ALREADY in
+    // flight — the isCancelled flag alone is only polled before the next call,
+    // so a stalling MCP request used to keep the run alive until its timeout.
+    const abortedInFlight = cancelAllToolCalls(conversationId);
+    if (abortedInFlight > 0) {
+      log.info(`Aborted in-flight tool call(s) on cancel`, { requestId, conversationId, abortedInFlight });
+    }
 
     // 3a. In-request agentic approvals (Claude subscription): the run is live,
     // blocked inside canUseTool. Reject every pending call so the adapter

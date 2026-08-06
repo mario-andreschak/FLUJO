@@ -9,6 +9,7 @@ import { persistConversationState } from '@/backend/execution/flow/persistConver
 import { appendRawForState } from '@/backend/execution/flow/conversationLog';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import { resolvePendingApproval, listPendingToolCalls } from '@/backend/execution/flow/toolApprovalRegistry';
+import { cancelToolCall } from '@/backend/execution/flow/toolCancelRegistry';
 import { resolveElicitation } from '@/backend/services/mcp/elicitationRegistry';
 import { resolvePendingQuestion, declinePendingQuestion } from '@/backend/services/questionRegistry';
 import { applyApprovalDecision } from '@/backend/execution/flow/resumeAfterApproval';
@@ -25,7 +26,8 @@ type RespondRequestBody =
   | { action: 'elicitation-submit'; elicitationId: string; content: Record<string, string | number | boolean | string[]> }
   | { action: 'elicitation-cancel'; elicitationId: string }
   | { action: 'question-answer'; questionId: string; answers: string[][] }
-  | { action: 'question-decline'; questionId: string };
+  | { action: 'question-decline'; questionId: string }
+  | { action: 'cancelToolCall'; toolCallId: string };
 
 export async function POST(
   request: NextRequest,
@@ -51,12 +53,12 @@ export async function POST(
   let requestBody: RespondRequestBody;
   try {
     requestBody = await request.json();
-    const validActions = ['approve', 'reject', 'elicitation-submit', 'elicitation-cancel', 'question-answer', 'question-decline'];
+    const validActions = ['approve', 'reject', 'elicitation-submit', 'elicitation-cancel', 'question-answer', 'question-decline', 'cancelToolCall'];
     if (!requestBody.action || !validActions.includes(requestBody.action)) {
       throw new Error(`Invalid request body. action must be one of: ${validActions.join(', ')}`);
     }
-    if ((requestBody.action === 'approve' || requestBody.action === 'reject') && !requestBody.toolCallId) {
-      throw new Error('toolCallId is required for approve/reject actions');
+    if ((requestBody.action === 'approve' || requestBody.action === 'reject' || requestBody.action === 'cancelToolCall') && !requestBody.toolCallId) {
+      throw new Error('toolCallId is required for approve/reject/cancelToolCall actions');
     }
     if ((requestBody.action === 'elicitation-submit' || requestBody.action === 'elicitation-cancel') && !requestBody.elicitationId) {
       throw new Error('elicitationId is required for elicitation actions');
@@ -67,6 +69,16 @@ export async function POST(
   } catch (error) {
     log.warn('Invalid request body', { requestId, error: error instanceof Error ? error.message : error });
     return NextResponse.json({ error: 'Invalid request body', details: error instanceof Error ? error.message : 'Unknown error' }, { status: 400 });
+  }
+
+  // --- Cancel ONE in-flight tool call (issue #357) ---
+  // Aborts just that call's MCP request; the run stays alive and continues with
+  // a cancelled tool result, so the transcript stays well-formed. Already
+  // finished calls are a race-safe 200 no-op.
+  if (requestBody.action === 'cancelToolCall') {
+    const cancelled = cancelToolCall(conversationId, requestBody.toolCallId);
+    log.info('Cancel single tool call requested', { requestId, conversationId, toolCallId: requestBody.toolCallId, cancelled });
+    return NextResponse.json({ cancelled, conversation_id: conversationId });
   }
 
   // --- Elicitation submit/cancel (in-request path: run is live, blocked in the handler) ---
