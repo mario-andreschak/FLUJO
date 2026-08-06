@@ -585,8 +585,30 @@ export interface SignalNodeParams extends BaseNodeParams<SignalNodeProperties> {
     type: 'signal';
 }
 
+export interface StaticNodeParams extends BaseNodeParams<StaticNodeProperties> {
+    type: 'static';
+}
+
+/**
+ * Static node (issue #358): a deterministic, non-LLM, pass-through node that
+ * INJECTS pre-authored entries into the conversation when traversed. Each entry
+ * is either a plain message (system/user/assistant) or a synthetic assistant
+ * tool-call plus its matching tool result (two messages).
+ */
+export type StaticEntry =
+    | { kind: 'message'; role: 'system' | 'user' | 'assistant'; content: string }
+    | { kind: 'toolCall'; toolName: string; argumentsJson: string; result: string };
+
+export interface StaticNodeProperties {
+    name?: string;
+    /** Entries injected, in order, onto sharedState.messages. */
+    entries?: StaticEntry[];
+    /** When true, inject only the first time the node is traversed in a run. */
+    injectOnce?: boolean;
+}
+
 // Union type for all node params
-export type NodeParams = StartNodeParams | ProcessNodeParams | FinishNodeParams | MCPNodeParams | SubflowNodeParams | ResourceNodeParams | SignalNodeParams;
+export type NodeParams = StartNodeParams | ProcessNodeParams | FinishNodeParams | MCPNodeParams | SubflowNodeParams | ResourceNodeParams | SignalNodeParams | StaticNodeParams;
 
 // Resource node (Tier 3) — a config-holder like the MCP node: it represents a
 // data artifact in the graph and is never executed. FlowConverter folds its

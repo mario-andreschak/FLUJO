@@ -541,6 +541,50 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
     }
   }
 
+  // --- Static nodes (issue #358: pre-authored conversation injection) ---
+  // A static node with no entries injects nothing (inert); a tool-call entry
+  // must be well-formed or provider adapters reject the resulting history, so
+  // missing tool names / invalid JSON arguments are hard errors at authoring time.
+  const staticNodes = nodes.filter((n) => getNodeType(n) === 'static');
+  for (const node of staticNodes) {
+    const props = node.data?.properties ?? {};
+    const entries = Array.isArray(props.entries) ? props.entries : [];
+    if (entries.length === 0) {
+      add(
+        'warning',
+        'static-no-entries',
+        `Static node "${getNodeLabel(node)}" has no entries; it injects nothing into the conversation.`,
+        node
+      );
+      continue;
+    }
+    entries.forEach((entry: any, index: number) => {
+      if (!entry || entry.kind !== 'toolCall') return;
+      const toolName = typeof entry.toolName === 'string' ? entry.toolName.trim() : '';
+      if (!toolName) {
+        add(
+          'error',
+          'static-toolcall-missing-name',
+          `Static node "${getNodeLabel(node)}": tool-call entry #${index + 1} has no tool name.`,
+          node
+        );
+      }
+      const args = typeof entry.argumentsJson === 'string' ? entry.argumentsJson.trim() : '';
+      if (args) {
+        try {
+          JSON.parse(args);
+        } catch {
+          add(
+            'error',
+            'static-toolcall-invalid-json',
+            `Static node "${getNodeLabel(node)}": tool-call entry #${index + 1} has invalid JSON arguments.`,
+            node
+          );
+        }
+      }
+    });
+  }
+
   // --- Connectivity / runnability ---
   if (startNodes.length > 0) {
     const adj = buildControlAdjacency(edges);

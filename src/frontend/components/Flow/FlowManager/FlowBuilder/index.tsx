@@ -68,6 +68,7 @@ import EdgePropertiesModal from './Modals/EdgePropertiesModal';
 import SubflowNodePropertiesModal from './Modals/SubflowNodePropertiesModal';
 import ResourceNodePropertiesModal from './Modals/ResourceNodePropertiesModal';
 import SignalNodePropertiesModal from './Modals/SignalNodePropertiesModal';
+import StaticNodePropertiesModal from './Modals/StaticNodePropertiesModal';
 import TriggerNodePropertiesModal from './Modals/TriggerNodePropertiesModal';
 import FlowVersionHistoryDialog from './Modals/FlowVersionHistoryDialog';
 import ConvertProcessToSubflowDialog from './Modals/ConvertProcessToSubflowDialog';
@@ -360,6 +361,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const [subflowModalOpen, setSubflowModalOpen] = useState(false);
   const [resourceModalOpen, setResourceModalOpen] = useState(false);
   const [signalModalOpen, setSignalModalOpen] = useState(false);
+  const [staticModalOpen, setStaticModalOpen] = useState(false);
   const [triggerModalOpen, setTriggerModalOpen] = useState(false);
   // Compact, non-blocking feedback for rejected quick-authoring actions.
   const [builderNotice, setBuilderNotice] = useState<string | null>(null);
@@ -1730,6 +1732,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setSubflowModalOpen(false);
     setResourceModalOpen(false);
     setSignalModalOpen(false);
+    setStaticModalOpen(false);
     setTriggerModalOpen(false);
     setNodeToEdit(null);
     log.debug(`handleNodeUpdate: Closed property modals`);
@@ -1963,6 +1966,8 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       setResourceModalOpen(true);
     } else if (node.data.type === 'signal') {
       setSignalModalOpen(true);
+    } else if (node.data.type === 'static') {
+      setStaticModalOpen(true);
     } else if (node.data.type === 'trigger') {
       setTriggerModalOpen(true);
     } else {
@@ -2541,6 +2546,13 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         open={signalModalOpen}
         node={nodeToEdit}
         onClose={() => setSignalModalOpen(false)}
+        onSave={handleNodeUpdate}
+      />
+
+      <StaticNodePropertiesModal
+        open={staticModalOpen}
+        node={nodeToEdit}
+        onClose={() => setStaticModalOpen(false)}
         onSave={handleNodeUpdate}
       />
 

@@ -41,9 +41,11 @@ import {
   ResourceNode,
   SignalNode,
   TriggerNode,
+  StaticNode,
   RESOURCE_COLOR,
   SIGNAL_COLOR,
   TRIGGER_COLOR,
+  STATIC_COLOR,
   FLOW_QUICK_CONNECT_EVENT,
   type FlowQuickConnectEventDetail,
 } from '../CustomNodes';
@@ -95,6 +97,7 @@ export const nodeTypes = {
   resource: ResourceNode,
   signal: SignalNode,
   trigger: TriggerNode,
+  static: StaticNode,
 };
 
 export const edgeTypes = {
@@ -170,6 +173,11 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
       label: t('flows.canvas.triggerNode'),
       description: t('flows.canvas.triggerDescription'),
     },
+    {
+      type: 'static',
+      label: t('flows.canvas.staticNode'),
+      description: t('flows.canvas.staticDescription'),
+    },
   ];
 
   // Filter node types based on validation
@@ -197,6 +205,8 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
         return <div style={{ width: 24, height: 24, backgroundColor: SIGNAL_COLOR, borderRadius: '50%' }}></div>;
       case 'trigger':
         return <div style={{ width: 24, height: 24, backgroundColor: TRIGGER_COLOR, borderRadius: '50%' }}></div>;
+      case 'static':
+        return <div style={{ width: 24, height: 24, backgroundColor: STATIC_COLOR, borderRadius: '50%' }}></div>;
       default:
         return <div style={{ width: 24, height: 24, backgroundColor: theme.palette.primary.main, borderRadius: '50%' }}></div>;
     }

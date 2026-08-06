@@ -162,7 +162,7 @@ export function validTargetTypesFor(
 ): NodeType[] {
   // Trigger nodes can only connect to Start (issue #241).
   if (sourceType === 'trigger') return ['start'];
-  const all: NodeType[] = ['process', 'finish', 'mcp', 'subflow', 'resource', 'signal', 'trigger'];
+  const all: NodeType[] = ['process', 'finish', 'mcp', 'subflow', 'resource', 'signal', 'trigger', 'static'];
   if (!sourceType || !sourceHandleId) return all;
   return all.filter(
     t => getConnectionError(sourceType, sourceHandleId, t, defaultTargetHandleFor(t, sourceHandleId)) === null

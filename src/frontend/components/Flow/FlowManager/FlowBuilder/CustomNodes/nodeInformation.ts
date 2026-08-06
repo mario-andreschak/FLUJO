@@ -133,6 +133,10 @@ const PROPERTY_SPECS: Record<NodeType, readonly PropertySpec[]> = {
     { key: 'topic', label: 'Topic' },
     { key: 'payloadTemplate', label: 'Payload template' },
   ],
+  static: [
+    { key: 'entries', label: 'Entries' },
+    { key: 'injectOnce', label: 'Inject once', defaultValue: false },
+  ],
   trigger: [
     { key: 'executionId', label: 'Execution ID' },
     { key: 'name', label: 'Name' },
@@ -396,6 +400,21 @@ const addOtherSummary = (
     if (preview !== undefined) {
       summary.push({ key: 'payload', label: tr(i18n, 'flows.nodeInfo.payload', 'Payload'), value: preview, multiline: true });
     }
+  } else if (nodeType === 'static') {
+    // Static node (issue #358): show how much conversation content is injected.
+    const entries = Array.isArray(properties.entries) ? properties.entries : [];
+    summary.push({
+      key: 'entries',
+      label: tr(i18n, 'flows.nodeInfo.entries', 'Entries'),
+      value: String(entries.length),
+    });
+    const first = entries.find((entry) => isRecord(entry)) as Record<string, unknown> | undefined;
+    if (first) {
+      const preview = promptPreview(first.kind === 'toolCall' ? first.toolName : first.content);
+      if (preview !== undefined) {
+        summary.push({ key: 'first', label: tr(i18n, 'flows.nodeInfo.first', 'First entry'), value: preview, multiline: true });
+      }
+    }
   } else if (nodeType === 'trigger') {
     const trigger = isRecord(properties.trigger) ? properties.trigger : {};
     summary.push({
@@ -420,7 +439,11 @@ export const buildNodeInformation = (
   flowNames?: ReadonlyMap<string, string>,
 ): NodeInformationViewModel => {
   const source = data || {};
-  const properties = isRecord(source.properties) ? source.properties : {};
+  let properties = isRecord(source.properties) ? source.properties : {};
+  // For signal nodes, trim topic whitespace so label and technical details are consistent.
+  if (nodeType === 'signal' && typeof properties.topic === 'string') {
+    properties = { ...properties, topic: properties.topic.trim() };
+  }
   const fallbackLabel = nodeType === 'signal'
     ? tr(i18n, 'flows.nodeInfo.signal', 'Signal')
     : tr(i18n, 'flows.nodeInfo.noLabel', 'No Label');

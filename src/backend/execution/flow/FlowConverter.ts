@@ -1,7 +1,7 @@
 // Local implementation of PocketFlow for debugging
 import { Flow, BaseNode } from './pocketflow';
 import { Flow as ReactFlow, FlowNode } from '@/frontend/types/flow/flow';
-import { StartNode, ProcessNode, MCPNode, FinishNode, SubflowNode, ResourceNode, SignalNode } from './nodes';
+import { StartNode, ProcessNode, MCPNode, FinishNode, SubflowNode, ResourceNode, SignalNode, StaticNode } from './nodes';
 import { createLogger } from '@/utils/logger';
 import {
   NodeParams,
@@ -16,7 +16,8 @@ import {
   FinishNodeProperties,
   SubflowNodeProperties,
   ResourceNodeProperties,
-  SignalNodeProperties
+  SignalNodeProperties,
+  StaticNodeProperties
 } from './types';
 
 // Create a logger instance for this file
@@ -341,6 +342,18 @@ export class FlowConverter {
           label: node.data.label,
           type: 'signal',
           properties: node.data.properties as SignalNodeProperties || { name: node.data.label }
+        };
+        break;
+      case 'static':
+        // Static node (issue #358): a pass-through control node that injects
+        // pre-authored messages / tool-call pairs into the conversation when
+        // traversed. Normal successor edges only, so instantiation is enough.
+        pocketNode = new StaticNode();
+        nodeParams = {
+          id: node.id,
+          label: node.data.label,
+          type: 'static',
+          properties: node.data.properties as StaticNodeProperties || { name: node.data.label }
         };
         break;
       default:

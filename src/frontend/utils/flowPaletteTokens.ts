@@ -15,6 +15,7 @@ export const flowNodeColors = {
     resource: '#18AFA3',
     signal: '#9A78FF',
     trigger: '#EF5D8E',
+    static: '#8A6BD1',
   },
   dark: {
     start: '#B7C0D2',
@@ -25,6 +26,7 @@ export const flowNodeColors = {
     resource: '#63D8CE',
     signal: '#C4B2FF',
     trigger: '#FF9ABD',
+    static: '#BFA8F0',
   },
 } as const satisfies Record<'light' | 'dark', Record<NodeType, string>>;
 
@@ -32,4 +34,5 @@ export const flowNodeLightColors = {
   resource: '#63D8CE',
   signal: '#C4B2FF',
   trigger: '#FF9ABD',
+  static: '#BFA8F0',
 } as const;

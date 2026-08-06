@@ -14,7 +14,8 @@ import BoltIcon from '@mui/icons-material/Bolt';
 import ExtensionRoundedIcon from '@mui/icons-material/ExtensionRounded';
 import MemoryRoundedIcon from '@mui/icons-material/MemoryRounded';
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
-import { RESOURCE_COLOR, SIGNAL_COLOR, TRIGGER_COLOR, TRIGGER_COLOR_LIGHT } from './CustomNodes';
+import NoteAddIcon from '@mui/icons-material/NoteAdd';
+import { RESOURCE_COLOR, SIGNAL_COLOR, TRIGGER_COLOR, TRIGGER_COLOR_LIGHT, STATIC_COLOR, STATIC_COLOR_LIGHT } from './CustomNodes';
 import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { getNodeTypes } from './nodeTypeCatalog';
@@ -76,6 +77,8 @@ const NodeItem = styled(Paper, {
       ? SIGNAL_COLOR
       : nodeType === 'trigger'
       ? TRIGGER_COLOR
+      : nodeType === 'static'
+      ? STATIC_COLOR
       : theme.palette.info.main
   }`,
   boxShadow: 'none',
@@ -96,6 +99,8 @@ const NodeItem = styled(Paper, {
         ? SIGNAL_COLOR
         : nodeType === 'trigger'
         ? TRIGGER_COLOR
+        : nodeType === 'static'
+        ? STATIC_COLOR
         : theme.palette.info.main,
       0.55,
     ),
@@ -112,6 +117,8 @@ const NodeItem = styled(Paper, {
         ? SIGNAL_COLOR
         : nodeType === 'trigger'
         ? TRIGGER_COLOR
+        : nodeType === 'static'
+        ? STATIC_COLOR
         : theme.palette.info.main
     }, 0 14px 30px rgba(0,0,0,0.12)`
   },
@@ -150,6 +157,8 @@ const NodeHeader = styled(Box, {
       ? '#B39DDB' // SIGNAL_COLOR light
       : nodeType === 'trigger'
       ? TRIGGER_COLOR_LIGHT
+      : nodeType === 'static'
+      ? STATIC_COLOR_LIGHT
       : theme.palette.info.light
   }`,
   marginBottom: theme.spacing(1),
@@ -191,6 +200,8 @@ const getNodeIcon = (type: NodeType) => {
       return <NotificationsActiveIcon sx={{ color: SIGNAL_COLOR }} />;
     case 'trigger':
       return <BoltIcon sx={{ color: TRIGGER_COLOR }} />;
+    case 'static':
+      return <NoteAddIcon sx={{ color: STATIC_COLOR }} />;
     default:
       return <SettingsIcon color="primary" />;
   }
@@ -317,7 +328,7 @@ export const NodePalette: React.FC<{
             role="button"
             tabIndex={0}
             aria-label={`${node.label}: ${node.description}`}
-            title={`${node.label} — ${node.description}`}
+            title={`${node.label} â€” ${node.description}`}
             onDragStart={(e) => onDragStart(e, node.type)}
             onDragEnd={(e) => onDragEnd(e, node.type)}
             onClick={() => addNodeFromPalette(node.type)}

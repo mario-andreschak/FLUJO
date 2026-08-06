@@ -617,7 +617,14 @@ class FlowService {
         // Guided FlowBuilder does not expose process input modes. Persist its
         // intended "Full conversation" choice explicitly so a newly-created
         // process node can never inherit or be mistaken for latest-message.
-        properties: type === 'process' ? { inputMode: 'full-history' } : {},
+        properties:
+          type === 'process'
+            ? { inputMode: 'full-history' }
+            // Static nodes (issue #358) always carry an entries list so the
+            // properties modal and validation never see an undefined array.
+            : type === 'static'
+            ? { entries: [] }
+            : {},
       },
     };
   }

@@ -23,6 +23,7 @@ import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import DescriptionIcon from '@mui/icons-material/Description';
 import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
 import BoltIcon from '@mui/icons-material/Bolt';
+import NoteAddIcon from '@mui/icons-material/NoteAdd';
 import BuildRoundedIcon from '@mui/icons-material/BuildRounded';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import PlayArrowRoundedIcon from '@mui/icons-material/PlayArrowRounded';
@@ -43,6 +44,9 @@ const SIGNAL_COLOR_LIGHT = flowNodeLightColors.signal;
 export const TRIGGER_COLOR = flowNodeColors.light.trigger;
 export const TRIGGER_COLOR_LIGHT = flowNodeLightColors.trigger;
 
+export const STATIC_COLOR = flowNodeColors.light.static;
+export const STATIC_COLOR_LIGHT = flowNodeLightColors.static;
+
 // One authority for per-type node colors instead of five repeated ternary
 // chains. `main` styles borders/icons; `light` styles the header divider.
 const NODE_TYPE_COLORS: Record<NodeType, { main: (theme: any) => string; light: (theme: any) => string }> = {
@@ -54,6 +58,7 @@ const NODE_TYPE_COLORS: Record<NodeType, { main: (theme: any) => string; light: 
   resource: { main: () => RESOURCE_COLOR, light: () => RESOURCE_COLOR_LIGHT },
   signal: { main: () => SIGNAL_COLOR, light: () => SIGNAL_COLOR_LIGHT },
   trigger: { main: () => TRIGGER_COLOR, light: () => TRIGGER_COLOR_LIGHT },
+  static: { main: () => STATIC_COLOR, light: () => STATIC_COLOR_LIGHT },
 };
 
 const nodeMainColor = (type: NodeType, theme: any) => (NODE_TYPE_COLORS[type] ?? NODE_TYPE_COLORS.start).main(theme);
@@ -164,6 +169,7 @@ const QUICK_CONNECT_HANDLES: Record<NodeType, QuickConnectHandle[]> = {
   resource: [{ handleId: 'resource-out', side: 'right' }],
   signal: [{ handleId: 'signal-bottom', side: 'bottom' }],
   trigger: [{ handleId: 'trigger-bottom', side: 'bottom' }],
+  static: [{ handleId: 'static-bottom', side: 'bottom' }],
 };
 
 const quickConnectRotation: Record<QuickConnectSide, number> = {
@@ -192,6 +198,9 @@ const getNodeIcon = (type: NodeType) => {
       return <NotificationsActiveIcon sx={{ color: SIGNAL_COLOR }} />;
     case 'trigger':
       return <BoltIcon sx={{ color: TRIGGER_COLOR }} />;
+    case 'static':
+      // Static node (issue #358): pre-authored conversation content.
+      return <NoteAddIcon sx={{ color: STATIC_COLOR }} />;
     default:
       return <ChatIcon sx={{ color: '#7E889E' }} />;
   }
@@ -485,6 +494,25 @@ const CustomNode = ({ id, data, nodeType, selected }: CustomNodeProps & { select
           />
         </>
       );
+    } else if (nodeType === 'static') {
+      // Static nodes (issue #358) sit inline like a signal node: in from above,
+      // out below. They inject pre-authored messages and pass through.
+      return (
+        <>
+          <Handle
+            id="static-top"
+            type="target"
+            position={Position.Top}
+            style={getProcessHandleStyle(theme)}
+          />
+          <Handle
+            id="static-bottom"
+            type="source"
+            position={Position.Bottom}
+            style={getProcessHandleStyle(theme)}
+          />
+        </>
+      );
     } else if (nodeType === 'trigger') {
       // Trigger nodes (issue #241) sit ABOVE the Start node. They have only a
       // bottom source handle — the edge flows Trigger → Start.
@@ -717,4 +745,8 @@ export const SignalNode = memo(function SignalNode(props: NodeProps) {
 
 export const TriggerNode = memo(function TriggerNode(props: NodeProps) {
   return <CustomNode {...props} nodeType="trigger" selected={props.selected} />;
+});
+
+export const StaticNode = memo(function StaticNode(props: NodeProps) {
+  return <CustomNode {...props} nodeType="static" selected={props.selected} />;
 });
