@@ -611,10 +611,22 @@ async function readSingleFileTool(args: Record<string, unknown>, roots: string[]
     );
   }
 
+  // #365: Early media detection. Media files cannot support pattern/range operations.
+  // Read buffer early to detect media type (via magic bytes) before attempting grep.
+  const buf = await fs.readFile(filePath);
+  const mediaDetection = detectMediaFile(buf, filePath);
+  if (mediaDetection && (hasRange || pattern)) {
+    // Reject attempts to use line ranges or patterns on media files.
+    return errorResult(
+      `Cannot apply line-range or pattern operations to media files. ` +
+      `Read the media file without "from"/"to" or "pattern" parameters.`
+    );
+  }
+
   // #287: pattern grep path (only when no explicit range was given). `*` is the
   // escape hatch that means "read the whole file regardless".
   if (pattern && pattern !== '*' && !hasRange) {
-    const buf = await fs.readFile(filePath);
+    // buf already read above for early media detection
     if (looksBinary(buf)) {
       return errorResult(`File appears to be binary; cannot grep for a pattern: ${filePath}`);
     }
@@ -662,20 +674,9 @@ async function readSingleFileTool(args: Record<string, unknown>, roots: string[]
   }
 
   // Whole-file / explicit-range read (pattern '*' lands here too).
-  // First, read as buffer to detect media files.
-  const buf = await fs.readFile(filePath);
   recordTouchedFile(filePath, 'read', size);
 
-  // #365: Check if this is a media file (image/audio/video).
-  // Media files cannot be read with line ranges or pattern grepping.
-  const mediaDetection = detectMediaFile(buf, filePath);
-  if (mediaDetection && (hasRange || pattern)) {
-    // Reject attempts to use line ranges or patterns on media files.
-    return errorResult(
-      `Cannot apply line-range or pattern operations to media files. ` +
-      `Read the media file without "from"/"to" or "pattern" parameters.`
-    );
-  }
+  // #365: If media was detected and no pattern/range, return as media.
   if (mediaDetection && !hasRange && !pattern) {
     // Media files are returned as-is (no line ranges or pattern grepping for media).
     return mediaResult(filePath, buf, mediaDetection.mediaType, mediaDetection.mimeType);
