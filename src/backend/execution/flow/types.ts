@@ -459,6 +459,29 @@ export interface SubflowNodeProperties {
      *  `false` opts out; the modal no longer seeds a value into stored data, so an
      *  unrelated save can never silently bake in this key. */
     saveConversation?: boolean;
+    /** Issue #363: resumable child conversations. Session scope for this Subflow:
+     *    - 'per-visit' (default / absent): today's behavior; every visit spawns a new child.
+     *    - 'per-run': all visits within one parent run reuse the same child conversation.
+     *    - 'per-key': map session keys to unique children; different keys run in parallel,
+     *      same key serialised. Requires `sessionKey` template or caller-supplied key.
+     *  Canonical default is absent (per-visit). Do NOT write this into stored data
+     *  unless the user explicitly changes it (issue #138 anti-pattern). */
+    sessionScope?: 'per-visit' | 'per-run' | 'per-key';
+    /** Issue #363: template for 'per-key' session identity. e.g. "{{scene_id}}".
+     *  Resolved against run vars, lane item, and caller handoff args. Only meaningful
+     *  when `sessionScope: 'per-key'`. Absent in stored data unless explicitly set.
+     *  For `per-key` without an authored key, the handoff tool exposes an optional
+     *  `sessionKey` string parameter so the model can name a session. */
+    sessionKey?: string;
+    /** Issue #363: how resumed child conversations are re-entered on subsequent visits:
+     *    - 'resume' (default when a scope is set): append the new task to the child's
+     *      existing transcript; the child retains all prior context.
+     *    - 'summary': run summarizingCompaction on the child's transcript before
+     *      appending the new task, bounding token growth for long-lived sessions.
+     *  Canonical default is absent (treated as 'resume' at runtime when a scope is set).
+     *  Ignored if `sessionScope` is absent/per-visit. Do NOT write this into stored
+     *  data unless the user explicitly changes it (issue #138). */
+    sessionInputMode?: 'resume' | 'summary';
 }
 
 /** One resolved job in a SubflowNode queue. Legacy code and event payloads still
@@ -521,6 +544,12 @@ export interface SubflowInvocationLane extends SubflowLanePlan {
     outputMedia?: ModelMediaPart[];
     error?: string;
     updatedAt: number;
+    /** Issue #363: session registry identity for this lane's reused child. */
+    sessionIdentity?: string;
+    /** Issue #363: for 'per-key' scopes, the resolved key identifying this lane's session. */
+    sessionKey?: string;
+    /** Issue #363: true if this lane reused a child conversation from a prior visit. */
+    resumedVisit?: boolean;
 }
 
 export type SubflowInvocationStatus = 'running' | 'blocked' | 'ready' | 'folded';
@@ -708,6 +737,18 @@ export interface SharedState {
     /** Unfolded invocation per Subflow node. A completed/folded visit clears its
      *  entry so a later graph loop creates a genuinely new batch. */
     activeSubflowInvocationByNode?: Record<string, string>;
+    /** Issue #363: session registry for resumable subflow child conversations.
+     *  Maps session identity to tracked child conversationId. Dies with the parent
+     *  run; no cross-run leakage. Absent map => old behavior. */
+    subflowSessions?: Record<string, {
+        version: 1;
+        conversationId: string;
+        nodeId: string;
+        sessionKey?: string;
+        visits: number;
+        lastUsedAt: number;
+        status: 'idle' | 'running' | 'failed';
+    }>
     /** On a persisted child conversation, identifies the exact parent lane that
      *  this conversation must satisfy after a retry or continued turn. */
     subflowLane?: RecoveryLaneIdentity;
@@ -1264,6 +1305,14 @@ export interface SubflowNodePrepResult extends BasePrepResult {
     resultPresentation?: 'separate' | 'joined';
     /** Durable parent join record backing this execution, when recoverable. */
     invocationId?: string;
+    /** Issue #363: session scope for resumable child conversations.
+     *  'per-visit' (default/absent) | 'per-run' | 'per-key'. */
+    sessionScope?: 'per-visit' | 'per-run' | 'per-key';
+    /** Issue #363: template for 'per-key' session identity. Resolved per-lane. */
+    sessionKeyTemplate?: string;
+    /** Issue #363: how resumed children are re-entered.
+     *  'resume' (default) | 'summary'. */
+    sessionInputMode?: 'resume' | 'summary';
 }
 
 // Union type for all prep results

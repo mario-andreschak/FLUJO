@@ -30,6 +30,11 @@ import {
   persistSubflowParent,
   syncLaneFromPersistedChild,
 } from '../subflowRecovery';
+import {
+  resolveSessionIdentity,
+  resolveSessionConversationId,
+  updateSessionRegistry,
+} from '../sessionManagement';
 
 const log = createLogger('backend/execution/flow/nodes/SubflowNode');
 
@@ -1004,9 +1009,31 @@ export class SubflowNode extends BaseNode {
       const durableLane = lane.laneId && invocation
         ? invocation.lanes.find((candidate) => candidate.id === lane.laneId)
         : undefined;
-      const laneConversationId = prepResult.persistConversation
-        ? (lane.conversationId ?? durableLane?.conversationId ?? crypto.randomUUID())
-        : undefined;
+      
+      // Issue #363: session-aware conversation ID resolution
+      const sessionIdentity = resolveSessionIdentity(
+        prepResult.parentRunId,
+        prepResult.nodeId,
+        prepResult.sessionScope,
+        prepResult.sessionKeyTemplate,
+      );
+      
+      let laneConversationId: string | undefined;
+      let resumedVisit = false;
+      if (prepResult.persistConversation) {
+        const result = resolveSessionConversationId(
+          parentState,
+          sessionIdentity,
+          prepResult.nodeId,
+          undefined,
+        );
+        laneConversationId = result.conversationId;
+        resumedVisit = result.resumedVisit;
+        // For non-session lanes, prefer durable lane ID
+        if (!sessionIdentity) {
+          laneConversationId = lane.conversationId ?? durableLane?.conversationId ?? laneConversationId;
+        }
+      }
       // Jobs without a brief fall back to the child-flow name so live-view row
       // labels and sidebar titles agree (and are non-empty).
       const laneTitle = lane.laneTitle ?? lane.subflowName;
