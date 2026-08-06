@@ -630,6 +630,9 @@ export class SubflowNode extends BaseNode {
       // events onto the PARENT conversation's channel, nested by depth.
       emit: sharedState.emit,
       nodeName: node_params?.properties?.name,
+      // Result presentation mode for parallel subflows (issue #359):
+      // 'separate' or 'joined' (default 'joined' when absent for back-compat).
+      resultPresentation: node_params?.properties?.resultPresentation ?? 'joined',
     };
     if (inputMode === 'isolated') {
       // Isolated mode sends a single authored prompt. When this node opted into
@@ -1288,33 +1291,82 @@ export class SubflowNode extends BaseNode {
     const artifactSummary = buildMediaArtifactSummary(outputMedia);
     const resultText = [outputText, artifactSummary].filter(part => part.trim().length > 0).join('\n\n');
 
-    // Issue #218: FRAME the folded output as an explicit returned result. On the
-    // model wire, stripHandoffPlumbing removes the caller's `handoff_to_*` call
-    // and its tool result but KEEPS the caller's departing prose — so an unframed
-    // fold reads as a SECOND assistant turn the caller itself wrote. That is the
-    // reported dead-end: after a bidirectional sub-agent returns, the caller sees
-    // what looks like its own message, concludes the work is still pending, says
-    // "awaiting the sub-agent's report", and ends its turn on plain text (which
-    // terminates the run). A short attribution header makes the boundary explicit
-    // and tells the model the sub-task is FINISHED, not in-flight. The RAW
-    // `resultText` is kept for lastResponse and every capture path below so the
-    // frame never leaks into programmatic outputs (captureVariable/Resource/kv)
-    // or the run's returned outputText.
-    const subAgentName =
-      node_params?.properties?.name || prepResult.subflowName || 'the sub-agent';
-    const framedContent =
-      resultText.trim().length > 0
-        ? `[↩ Returned result from sub-agent "${subAgentName}" — this is a FINISHED sub-task result handed back to you, not your own message. Use it to continue your task; do not wait for further output from it.]\n\n${resultText}`
-        : `[↩ Sub-agent "${subAgentName}" finished and returned control to you with no output. Continue your task; do not wait for further output from it.]`;
-    const assistantMessage: FlujoChatMessage = {
-      role: 'assistant',
-      content: framedContent,
-      id: crypto.randomUUID(),
-      timestamp: Date.now(),
-      processNodeId: node_params?.id,
-      ...(outputMedia.length > 0 ? { media: outputMedia } : {}),
-    };
-    sharedState.messages.push(assistantMessage);
+    // Issue #359: Result presentation mode for parallel subflows.
+    // When resultPresentation === 'separate' and there are multiple lanes,
+    // create one framed assistant message per lane instead of joining them.
+    const resultPresentation = prepResult.resultPresentation ?? 'joined';
+    const hasMultipleLanes = (execResult.lanes?.length ?? 0) > 1;
+    const useSeparatePresentation = resultPresentation === 'separate' && hasMultipleLanes;
+
+    if (useSeparatePresentation && execResult.lanes) {
+      // Separate presentation: one message per lane with structured metadata.
+      const laneCount = execResult.lanes.length;
+      for (let laneIndex = 0; laneIndex < laneCount; laneIndex++) {
+        const lane = execResult.lanes[laneIndex];
+        const laneText = lane.success ? (lane.outputText ?? '') : (lane.error ?? 'Subflow execution failed');
+        const laneMedia = lane.success ? (lane.outputMedia ?? []) : [];
+        const promotedLaneMedia = await promoteSubflowMedia(laneMedia, sharedState, node_params);
+        const laneSummary = buildMediaArtifactSummary(promotedLaneMedia);
+        const laneResultText = [laneText, laneSummary].filter(part => part.trim().length > 0).join('\n\n');
+
+        // Frame each lane with attribution to preserve the finished sub-task signal.
+        const laneName = lane.laneTitle || `Lane ${laneIndex + 1}`;
+        const subAgentName =
+          node_params?.properties?.name || prepResult.subflowName || 'the sub-agent';
+        const framedLaneContent =
+          laneResultText.trim().length > 0
+            ? `[↩ Returned result from sub-agent "${subAgentName}" (${laneName}) — this is a FINISHED sub-task result handed back to you, not your own message. Use it to continue your task; do not wait for further output from it.]\n\n${laneResultText}`
+            : `[↩ Sub-agent "${subAgentName}" (${laneName}) finished and returned control to you with no output. Continue your task; do not wait for further output from it.]`;
+
+        const laneMessage: FlujoChatMessage = {
+          role: 'assistant',
+          content: framedLaneContent,
+          id: crypto.randomUUID(),
+          timestamp: Date.now(),
+          processNodeId: node_params?.id,
+          ...(promotedLaneMedia.length > 0 ? { media: promotedLaneMedia } : {}),
+          subflowResult: {
+            subflowId: lane.subflowId,
+            subflowName: lane.subflowName,
+            laneTitle: lane.laneTitle,
+            laneIndex,
+            laneCount,
+            status: lane.success ? 'completed' : 'error',
+            conversationId: lane.conversationId,
+          },
+        };
+        sharedState.messages.push(laneMessage);
+      }
+    } else {
+      // Joined presentation (default): single message with all lanes merged.
+      // Issue #218: FRAME the folded output as an explicit returned result. On the
+      // model wire, stripHandoffPlumbing removes the caller's `handoff_to_*` call
+      // and its tool result but KEEPS the caller's departing prose — so an unframed
+      // fold reads as a SECOND assistant turn the caller itself wrote. That is the
+      // reported dead-end: after a bidirectional sub-agent returns, the caller sees
+      // what looks like its own message, concludes the work is still pending, says
+      // "awaiting the sub-agent's report", and ends its turn on plain text (which
+      // terminates the run). A short attribution header makes the boundary explicit
+      // and tells the model the sub-task is FINISHED, not in-flight. The RAW
+      // `resultText` is kept for lastResponse and every capture path below so the
+      // frame never leaks into programmatic outputs (captureVariable/Resource/kv)
+      // or the run's returned outputText.
+      const subAgentName =
+        node_params?.properties?.name || prepResult.subflowName || 'the sub-agent';
+      const framedContent =
+        resultText.trim().length > 0
+          ? `[↩ Returned result from sub-agent "${subAgentName}" — this is a FINISHED sub-task result handed back to you, not your own message. Use it to continue your task; do not wait for further output from it.]\n\n${resultText}`
+          : `[↩ Sub-agent "${subAgentName}" finished and returned control to you with no output. Continue your task; do not wait for further output from it.]`;
+      const assistantMessage: FlujoChatMessage = {
+        role: 'assistant',
+        content: framedContent,
+        id: crypto.randomUUID(),
+        timestamp: Date.now(),
+        processNodeId: node_params?.id,
+        ...(outputMedia.length > 0 ? { media: outputMedia } : {}),
+      };
+      sharedState.messages.push(assistantMessage);
+    }
     sharedState.lastResponse = resultText;
 
     // Tier 2c (named variables): capture the child's folded output into the

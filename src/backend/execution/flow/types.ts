@@ -398,6 +398,15 @@ export interface SubflowNodeProperties {
     /** String placed between joined lane outputs (child order) in parallel mode.
      *  Default "\n\n". */
     joinSeparator?: string;
+    /** Result presentation mode for parallel subflows (issue #359):
+     *    - 'separate' (default for newly created parallel/spawn nodes): each lane
+     *      produces its own framed assistant message in the parent conversation,
+     *      carrying structured lane metadata (index, title, status).
+     *    - 'joined': retain the current behavior — one framed message with joined
+     *      outputs and failure summary (back-compat: absent is treated as 'joined').
+     *  Applies only to parallel/spawn/fan-out/map-over-list executions with
+     *  multiple lanes; single-child subflows are unaffected. */
+    resultPresentation?: 'separate' | 'joined';
     /** Parallel error handling (issue #102):
      *    - 'collect-all' (default): every lane runs to completion; successful
      *      outputs are folded plus a marked failure summary; the node still
@@ -1246,6 +1255,9 @@ export interface SubflowNodePrepResult extends BasePrepResult {
     joinSeparator?: string;
     /** Error handling strategy for parallel mode (default 'collect-all'). */
     errorStrategy?: 'fail-fast' | 'collect-all';
+    /** Result presentation mode for parallel subflows (issue #359):
+     *  'separate' or 'joined' (default 'joined' when absent for back-compat). */
+    resultPresentation?: 'separate' | 'joined';
     /** Durable parent join record backing this execution, when recoverable. */
     invocationId?: string;
 }

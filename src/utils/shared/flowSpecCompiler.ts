@@ -207,6 +207,15 @@ export interface FlowSpecNode {
    * secrets (distinct from `${global:VAR}`).
    */
   captureKv?: string;
+  /**
+   * subflow only (issue #359): result presentation mode for parallel subflows.
+   * - 'separate': each lane produces its own framed assistant message in the
+   *   parent conversation, carrying structured lane metadata (index, title, status).
+   * - 'joined' (default when absent): one framed message with joined outputs
+   *   and failure summary (back-compat).
+   * Only applies to parallel/spawn/fan-out/map-over-list executions.
+   */
+  resultPresentation?: 'separate' | 'joined';
 }
 
 export interface FlowSpecEdge {
@@ -1271,6 +1280,11 @@ export function compileFlowSpec(
         warn('invalid-error-strategy', `Node "${specNode.key}": errorStrategy "${String(specNode.errorStrategy)}" is not valid (fail-fast | collect-all); using collect-all.`, specNode.key);
       }
     }
+    // Result presentation mode (issue #359): round-trip only the explicit 'separate'
+    // ('joined' is the default and stays implicit).
+    if (specNode.resultPresentation === 'separate') {
+      properties.resultPresentation = 'separate';
+    }
   }
 }
 
@@ -1400,6 +1414,9 @@ export function flowToSpec(flow: Flow): FlowSpec {
       if (typeof props.captureVariable === 'string' && props.captureVariable) specNode.captureVariable = props.captureVariable;
       if (typeof props.captureResource === 'string' && props.captureResource) specNode.captureResource = props.captureResource;
       if (typeof props.captureKv === 'string' && props.captureKv) specNode.captureKv = props.captureKv;
+      // Result presentation mode (issue #359): round-trip only the explicit 'separate'
+      // ('joined' is the default and stays implicit).
+      if (props.resultPresentation === 'separate') specNode.resultPresentation = 'separate';
     } else if (type === 'resource') {
       // Tier 3: round-trip the binding so AI-Improve never drops resource nodes.
       if (props.scope === 'run' && typeof props.runName === 'string' && props.runName) {

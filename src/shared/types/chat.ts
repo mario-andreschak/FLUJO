@@ -179,4 +179,20 @@ export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
    * a lightweight URL/resourceUri here rather than base64 in conversation JSON.
    */
   media?: ModelMediaPart[];
+
+  /**
+   * Structured metadata about a parallel subflow result (issue #359).
+   * Only present on assistant messages that fold parallel lane outputs,
+   * and only when `resultPresentation: 'separate'` creates per-lane messages.
+   * Contains lane identity, index, status, and child conversation id.
+   */
+  subflowResult?: {
+    subflowId: string;
+    subflowName?: string;
+    laneTitle?: string;
+    laneIndex: number;
+    laneCount: number;
+    status: 'completed' | 'error';
+    conversationId?: string;
+  };
 };
