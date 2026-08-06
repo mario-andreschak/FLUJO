@@ -30,17 +30,10 @@ function bootProxy(options: { csp?: Parameters<typeof buildSandboxCsp>[0]; sameO
   const parentMessages: unknown[] = [];
   const frames: ViewFrame[] = [];
   const parentWindow = { postMessage: (message: unknown) => parentMessages.push(message) };
-  let messageHandlers: Array<(event: any) => void> = [];
+  let messageHandler: ((event: any) => void) | undefined;
   const replaceState = jest.fn();
 
-  let createdIframe: ViewFrame | null = null;
-  let createElementCalled = false;
-  const createElement = (tagName: string): unknown => {
-    createElementCalled = true;
-    console.log('createElement called with:', tagName);
-    if (tagName.toLowerCase() !== 'iframe') {
-      return { style: {}, setAttribute: jest.fn() };
-    }
+  const createElement = (): unknown => {
     const frame: ViewFrame = {
       attributes: new Map(),
       written: '',
@@ -50,7 +43,6 @@ function bootProxy(options: { csp?: Parameters<typeof buildSandboxCsp>[0]; sameO
     };
     frame.contentWindow.postMessage = (message: unknown) => frame.messages.push(message);
     frames.push(frame);
-    createdIframe = frame;
     const doc = {
       open: jest.fn(),
       write: (value: string) => { frame.written += value; },
@@ -63,23 +55,7 @@ function bootProxy(options: { csp?: Parameters<typeof buildSandboxCsp>[0]; sameO
       contentDocument: options.sameOriginView === false ? null : doc,
       get srcdoc() { return frame.srcdoc; },
       set srcdoc(value: string) { frame.srcdoc = value; },
-      onload: null as any,
     };
-  };
-
-  const mockDocument = {
-    referrer: `${HOST_ORIGIN}/`,
-    body: {
-      appendChild: (child: any) => {
-        console.log('mockDocument.body.appendChild called');
-        // Trigger iframe onload if it exists
-        if (child && typeof child.onload === 'function') {
-          console.log('Triggering iframe.onload from appendChild');
-          setTimeout(() => child.onload(), 0);
-        }
-      }
-    },
-    createElement,
   };
 
   const sandboxWindow: any = {
@@ -93,63 +69,32 @@ function bootProxy(options: { csp?: Parameters<typeof buildSandboxCsp>[0]; sameO
     },
     history: { replaceState },
     addEventListener: (name: string, handler: (event: any) => void) => {
-      if (name === 'message') {
-        console.log('[TEST] addEventListener called for message');
-        messageHandlers.push(handler);
-      }
+      if (name === 'message') messageHandler = handler;
     },
   };
   sandboxWindow.self = sandboxWindow;
-  sandboxWindow.document = mockDocument;
 
-  const vmDocument = {
-    referrer: `${HOST_ORIGIN}/`,
-    body: { 
-      appendChild: (child: any) => { 
-        console.log('VM document.body.appendChild called'); 
-        // The iframe's onload should fire after appendChild
-        if (child && child.onload) {
-          console.log('Triggering iframe.onload');
-          setTimeout(() => child.onload(), 0);
-        }
-      } 
-    },
-    createElement: (tagName: string) => {
-      console.log('VM document.createElement called with:', tagName);
-      const result = createElement(tagName);
-      console.log('VM document.createElement returning:', result ? 'object' : 'null');
-      return result;
-    },
-  };
   vm.runInNewContext(script!, {
     URL,
     console,
-    document: vmDocument,
+    document: {
+      referrer: `${HOST_ORIGIN}/`,
+      body: { appendChild: jest.fn() },
+      createElement,
+    },
     window: sandboxWindow,
   });
 
-  expect(messageHandlers.length).toBeGreaterThan(0);
-  console.log('bootProxy: messageHandlers count:', messageHandlers.length, 'frames length:', frames.length);
+  expect(messageHandler).toBeDefined();
   return {
     parentMessages,
     frames,
     replaceState,
-    view: () => {
-      console.log('view() called, frames length:', frames.length);
-      return frames[frames.length - 1];
-    },
-    fromHost: (data: unknown, origin = HOST_ORIGIN) => {
-      console.log('fromHost called with:', data);
-      console.log('messageHandlers count:', messageHandlers.length);
-      const event = { source: parentWindow, origin, data };
-      console.log('calling all messageHandlers with event:', event);
-      for (const handler of messageHandlers) {
-        handler(event);
-      }
-      console.log('after messageHandler calls');
-    },
+    view: () => frames[frames.length - 1],
+    fromHost: (data: unknown, origin = HOST_ORIGIN) =>
+      messageHandler!({ source: parentWindow, origin, data }),
     fromView: (data: unknown, origin = SANDBOX_ORIGIN) =>
-      messageHandlers.forEach(h => h({ source: frames[frames.length - 1].contentWindow, origin, data })),
+      messageHandler!({ source: frames[frames.length - 1].contentWindow, origin, data }),
   };
 }
 
@@ -222,16 +167,16 @@ describe('MCP App sandbox proxy relay', () => {
 
     // View → Host relay: the View now speaks from the sandbox origin.
     proxy.fromView({ jsonrpc: '2.0', method: 'ui/initialize', id: 4 });
-    expect(proxy.parentMessages).toHaveLength(3); // +1 for sandbox-resource-ready loaded
+    expect(proxy.parentMessages).toHaveLength(2);
     proxy.fromView({ jsonrpc: '2.0', method: 'ui/initialize', id: 5 }, 'null');
-    expect(proxy.parentMessages).toHaveLength(4);
+    expect(proxy.parentMessages).toHaveLength(3);
     proxy.fromView({ jsonrpc: '2.0', method: 'ui/initialize', id: 6 }, 'https://evil.example.com');
-    expect(proxy.parentMessages).toHaveLength(4);
+    expect(proxy.parentMessages).toHaveLength(3);
 
     proxy.fromView({ jsonrpc: '2.0', method: 'ui/notifications/sandbox-proxy-ready' });
     proxy.fromView({ jsonrpc: '2.0', method: 'ui/notifications/sandbox-resource-ready' });
     proxy.fromView({ jsonrpc: '2.0', method: 'ui/notifications/sandbox-custom' });
-    expect(proxy.parentMessages).toHaveLength(4);
+    expect(proxy.parentMessages).toHaveLength(3);
   });
 
   it('lets a host sandbox override narrow the View policy but never widen it', () => {
