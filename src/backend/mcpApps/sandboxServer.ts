@@ -136,10 +136,11 @@ function getSandboxTokenForOriginKey(originKey: string): string {
 function isSandboxTokenValidForOriginKey(token: unknown, originKey: string): boolean {
   if (typeof token !== 'string' || token.length === 0) return false;
   const expected = getSandboxTokenForOriginKey(originKey);
-  const supplied = Buffer.from(token, 'base64url').toString('utf8');
-  const expectedBuf = Buffer.from(expected, 'utf8');
   try {
-    return supplied.length === expected.length && timingSafeEqual(Buffer.from(supplied, 'utf8'), expectedBuf);
+    // Decode both tokens from base64url to buffers for constant-time comparison.
+    const suppliedBuf = Buffer.from(token, 'base64url');
+    const expectedBuf = Buffer.from(expected, 'base64url');
+    return suppliedBuf.length === expectedBuf.length && timingSafeEqual(suppliedBuf, expectedBuf);
   } catch {
     return false;
   }
@@ -614,7 +615,7 @@ ${cspMeta}>
  * `{ port, token }` on success or `undefined` if allocation failed and Mode C
  * fallback should be used.
  */
-async function ensureSandboxForOriginKey(
+export async function ensureSandboxForOriginKey(
   originKey: string,
 ): Promise<{ port: number; token: string } | undefined> {
   const state = getOrInitRuntimeState();
