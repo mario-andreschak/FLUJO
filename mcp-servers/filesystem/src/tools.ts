@@ -667,8 +667,15 @@ async function readSingleFileTool(args: Record<string, unknown>, roots: string[]
   recordTouchedFile(filePath, 'read', size);
 
   // #365: Check if this is a media file (image/audio/video).
-  // If so, return it as media content; capture infrastructure will handle persistence.
+  // Media files cannot be read with line ranges or pattern grepping.
   const mediaDetection = detectMediaFile(buf, filePath);
+  if (mediaDetection && (hasRange || pattern)) {
+    // Reject attempts to use line ranges or patterns on media files.
+    return errorResult(
+      `Cannot apply line-range or pattern operations to media files. ` +
+      `Read the media file without "from"/"to" or "pattern" parameters.`
+    );
+  }
   if (mediaDetection && !hasRange && !pattern) {
     // Media files are returned as-is (no line ranges or pattern grepping for media).
     return mediaResult(filePath, buf, mediaDetection.mediaType, mediaDetection.mimeType);
