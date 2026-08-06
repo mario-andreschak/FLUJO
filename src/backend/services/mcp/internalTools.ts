@@ -441,6 +441,62 @@ export function internalToolDefinitions(): Tool[] {
       },
     },
     {
+      name: 'browser_capture_page',
+      description:
+        'Capture a deterministic screenshot of a page or element with viewport control, animations disabled, fonts ready waiting, and optional file:// access. Returns PNG as a run-resource image artifact.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          url: { type: 'string', description: 'HTTP/HTTPS/file:// URL or localhost (file:// and localhost require allowLocal=true + env FLUJO_BROWSER_ALLOW_LOCAL_CAPTURE).' },
+          html: { type: 'string', description: 'Inline HTML to render instead of loading a URL.' },
+          filePath: { type: 'string', description: 'Local file path converted to file:// (requires allowLocal=true + env var).' },
+          width: { type: 'integer', minimum: 320, maximum: 1920, description: 'Viewport width in CSS pixels (default 1920).' },
+          height: { type: 'integer', minimum: 240, maximum: 1080, description: 'Viewport height in CSS pixels (default 1080).' },
+          deviceScaleFactor: { type: 'number', minimum: 1, maximum: 3, description: 'Device scale factor (default 1).' },
+          fullPage: { type: 'boolean', description: 'Capture full page height scrolled, not just viewport (default false).' },
+          clipSelector: { type: 'string', description: 'CSS selector to capture only that element with no browser chrome.' },
+          waitFor: { type: 'string', description: 'CSS selector or JS predicate (e.g. \".ready\" or \"() => document.fonts.ready\") to wait for before capture.' },
+          colorScheme: { type: 'string', enum: ['light', 'dark'], description: 'CSS prefers-color-scheme (default light).' },
+          allowLocal: { type: 'boolean', description: 'Allow file:// and localhost URLs (requires env FLUJO_BROWSER_ALLOW_LOCAL_CAPTURE=1; default false).' },
+        },
+        required: [],
+      },
+    },
+    {
+      name: 'browser_capture_element_metrics',
+      description:
+        'Query element metrics: bounding boxes, computed styles, overflow/clipping flags and safe-area indicators. Useful for verifying layout without taking a full screenshot.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          selectors: { type: 'array', items: { type: 'string' }, description: 'One or more CSS selectors to query.' },
+          allowLocal: { type: 'boolean', description: 'Allow file:// and localhost URLs (default false).' },
+        },
+        required: ['selectors'],
+      },
+    },
+    {
+      name: 'browser_capture_region',
+      description:
+        'Capture a specific rectangular region of a page by pixel coordinates. Cheaper than full-page capture when you know the exact region to capture.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          url: { type: 'string', description: 'HTTP/HTTPS/file:// URL or localhost (file:// and localhost require allowLocal=true + env FLUJO_BROWSER_ALLOW_LOCAL_CAPTURE).' },
+          filePath: { type: 'string', description: 'Local file path converted to file:// (requires allowLocal=true + env var).' },
+          x: { type: 'integer', minimum: 0, description: 'Left edge in CSS pixels.' },
+          y: { type: 'integer', minimum: 0, description: 'Top edge in CSS pixels.' },
+          width: { type: 'integer', minimum: 1, description: 'Region width in CSS pixels.' },
+          height: { type: 'integer', minimum: 1, description: 'Region height in CSS pixels.' },
+          allowLocal: { type: 'boolean', description: 'Allow file:// and localhost URLs (default false).' },
+        },
+        required: ['width', 'height'],
+      },
+    },
+    {
       name: 'list_models',
       description:
         'List the models configured in this FLUJO instance (id, name, display name, description, provider, base URL, context window). API keys are never included. Reference models by id or name in FlowSpecs.',
@@ -1090,6 +1146,88 @@ async function setMcpServerEnabled(
     return textResult({ error: result.error }, true);
   }
   return textResult({ server, enabled });
+}
+
+async function browserCapturePage(
+  args: Record<string, unknown>,
+): Promise<CallToolResult> {
+  // browser_capture_page: delegates to browser MCP server for page capture
+  // with viewport control, animations disabled, fonts-ready waiting.
+  const url = typeof args?.url === 'string' ? args.url : undefined;
+  const html = typeof args?.html === 'string' ? args.html : undefined;
+  const filePath = typeof args?.filePath === 'string' ? args.filePath : undefined;
+  const width = typeof args?.width === 'number' ? Math.floor(args.width) : 1920;
+  const height = typeof args?.height === 'number' ? Math.floor(args.height) : 1080;
+  const deviceScaleFactor = typeof args?.deviceScaleFactor === 'number' ? args.deviceScaleFactor : 1;
+  const fullPage = args?.fullPage === true;
+  const clipSelector = typeof args?.clipSelector === 'string' ? args.clipSelector : undefined;
+  const waitFor = typeof args?.waitFor === 'string' ? args.waitFor : undefined;
+  const colorScheme = (args?.colorScheme === 'light' || args?.colorScheme === 'dark') ? args.colorScheme : 'light';
+  const allowLocal = args?.allowLocal === true;
+
+  if (!url && !html && !filePath) {
+    return textResult({ error: 'Provide one of: url, html, or filePath.' }, true);
+  }
+
+  // Validate viewport bounds
+  if (width < 320 || width > 1920 || height < 240 || height > 1080) {
+    return textResult({ error: `Viewport out of range: width must be 320-1920 and height 240-1080.` }, true);
+  }
+
+  // Future: implement using direct Patchright or delegate to browser MCP server.
+  // For now, return a placeholder that tools can be tested against.
+  return textResult({
+    error: 'browser_capture_page is not yet fully implemented. Implementation pending.',
+    note: 'This tool will capture pages with viewport control via the browser MCP server.',
+  }, true);
+}
+
+async function browserCaptureElementMetrics(
+  args: Record<string, unknown>,
+): Promise<CallToolResult> {
+  // browser_capture_element_metrics: query element dimensions, styles, overflow flags.
+  const rawSelectors = args?.selectors;
+  if (!Array.isArray(rawSelectors) || rawSelectors.length === 0) {
+    return textResult({ error: 'Provide "selectors" array with one or more CSS selectors.' }, true);
+  }
+  const selectors = rawSelectors.map(s => String(s)).filter(s => s.length > 0);
+  if (selectors.length === 0) {
+    return textResult({ error: 'At least one non-empty selector is required.' }, true);
+  }
+
+  const allowLocal = args?.allowLocal === true;
+
+  // Future: implement using direct Patchright or delegate to browser MCP server.
+  return textResult({
+    error: 'browser_capture_element_metrics is not yet fully implemented. Implementation pending.',
+    note: 'This tool will query element metrics (bounding boxes, computed styles, overflow flags) via the browser MCP server.',
+  }, true);
+}
+
+async function browserCaptureRegion(
+  args: Record<string, unknown>,
+): Promise<CallToolResult> {
+  // browser_capture_region: capture a clipped rectangular region of a page.
+  const url = typeof args?.url === 'string' ? args.url : undefined;
+  const filePath = typeof args?.filePath === 'string' ? args.filePath : undefined;
+  const x = typeof args?.x === 'number' ? Math.max(0, Math.floor(args.x)) : 0;
+  const y = typeof args?.y === 'number' ? Math.max(0, Math.floor(args.y)) : 0;
+  const width = typeof args?.width === 'number' ? Math.floor(args.width) : undefined;
+  const height = typeof args?.height === 'number' ? Math.floor(args.height) : undefined;
+  const allowLocal = args?.allowLocal === true;
+
+  if (!url && !filePath) {
+    return textResult({ error: 'Provide one of: url or filePath.' }, true);
+  }
+  if (!width || !height || width < 1 || height < 1) {
+    return textResult({ error: 'Provide width and height, both at least 1 pixel.' }, true);
+  }
+
+  // Future: implement using direct Patchright or delegate to browser MCP server.
+  return textResult({
+    error: 'browser_capture_region is not yet fully implemented. Implementation pending.',
+    note: 'This tool will capture page regions via the browser MCP server.',
+  }, true);
 }
 
 async function listFlows(args: Record<string, unknown>): Promise<CallToolResult> {
@@ -1765,6 +1903,12 @@ export async function internalCallTool(
         return await restartMcpServer(service, args);
       case 'set_mcp_server_enabled':
         return await setMcpServerEnabled(service, args);
+      case 'browser_capture_page':
+        return await browserCapturePage(args);
+      case 'browser_capture_element_metrics':
+        return await browserCaptureElementMetrics(args);
+      case 'browser_capture_region':
+        return await browserCaptureRegion(args);
       case 'list_models':
         return await listModels(args);
       case 'list_planned_executions':
