@@ -32,6 +32,7 @@ const ADVANCED_SUBFLOW_PROPERTIES = new Set([
   'concurrencyLimit',
   'joinSeparator',
   'errorStrategy',
+  'resultPresentation',
   'allowCallerPrompt',
   'saveConversation',
   'captureVariable',
