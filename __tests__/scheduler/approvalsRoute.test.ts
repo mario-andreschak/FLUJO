@@ -114,7 +114,9 @@ describe('GET /api/approvals (#115)', () => {
     listPendingApprovalsMock.mockResolvedValue([]);
     const res = await GET();
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ approvals: [] });
+    // The inbox also surfaces model-initiated questions (issue #258), which is
+    // empty here because no run is blocked on the question registry.
+    expect(await res.json()).toEqual({ approvals: [], questions: [] });
   });
 
   it('lists a paused run with metadata only (no tool arguments / prompt)', async () => {

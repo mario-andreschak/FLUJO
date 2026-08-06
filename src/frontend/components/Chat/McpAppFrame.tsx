@@ -459,20 +459,25 @@ function sanitizeCspOrigins(
 /**
  * Mirror of the sandbox server's loopback allowance gate
  * (allowLoopbackCspOrigins in backend/mcpApps/sandboxServer.ts, which admits
- * loopback HTTP/WS CSP origins only in the `localhost` exposure mode). The
+ * loopback HTTP/WS CSP origins in every exposure mode except `public`). The
  * browser cannot read the server's exposure setting directly, so the closest
- * faithful signal is used: FLUJO itself being browsed from a plain-HTTP
- * loopback origin, which only exists in that mode. HTTPS/hosted deployments
- * therefore keep the strict secure-origin-only grant here too, and any
- * divergence still fails closed at the sandbox server's enforcer.
+ * faithful signal is used: FLUJO itself being served over plain HTTP, which a
+ * public deployment never is.
+ *
+ * The hostname is deliberately NOT restricted to loopback spellings: a
+ * `network`-mode install is reached by its LAN name or address
+ * (`http://192.168.1.20:4200`) while its MCP App servers still bind loopback,
+ * and demanding a loopback FLUJO origin here stripped those grants before they
+ * could ever reach the sandbox's `?csp=` parameter. HTTPS/hosted deployments
+ * keep the strict secure-origin-only grant, and any divergence still fails
+ * closed at the sandbox server's enforcer.
  */
 export function allowLoopbackCspGrant(
   location: { protocol: string; hostname: string } | undefined
     = typeof window === 'undefined' ? undefined : window.location,
 ): boolean {
   if (!location) return false;
-  return location.protocol === 'http:'
-    && ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(location.hostname.toLowerCase());
+  return location.protocol === 'http:';
 }
 
 /**

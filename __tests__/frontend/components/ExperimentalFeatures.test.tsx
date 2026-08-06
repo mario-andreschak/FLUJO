@@ -34,6 +34,19 @@ jest.mock('@/frontend/components/BugReport/BugReportButton', () => ({
   default: () => null,
 }));
 
+jest.mock('@/frontend/contexts/AskFlujoContext', () => ({
+  useAskFlujo: () => ({
+    open: false,
+    openDock: jest.fn(),
+    closeDock: jest.fn(),
+    toggleDock: jest.fn(),
+    getPageContext: jest.fn(),
+    applyPageAction: jest.fn(),
+    registerPage: jest.fn(() => jest.fn()),
+  }),
+  useAskFlujoPage: jest.fn(() => null),
+}));
+
 import Navigation from '@/frontend/components/Navigation';
 import ExperimentalFeaturesSettings from '@/frontend/components/Settings/ExperimentalFeaturesSettings';
 

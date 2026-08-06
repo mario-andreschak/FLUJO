@@ -48,6 +48,17 @@ function renderContents(label: string, sourceDesc: string, data: ResourceContent
   return `### ${label} (${sourceDesc})\n${body}\n`;
 }
 
+/** Fire-and-forget resource subscription that can never disturb the read path. */
+function subscribeBestEffort(server: string, uri: string): void {
+  try {
+    void Promise.resolve(mcpService.subscribeToResource(server, uri)).catch((error) => {
+      log.debug(`subscribeToResource failed for ${server}/${uri} (ignored)`, error);
+    });
+  } catch (error) {
+    log.debug(`subscribeToResource threw for ${server}/${uri} (ignored)`, error);
+  }
+}
+
 export class ResourceHandler {
   /**
    * Read every consume-role resource node and render the context block.
@@ -112,10 +123,13 @@ export class ResourceHandler {
             sections.push(`### ${label}\n(resource ${uri} on ${server} could not be read: ${result.error ?? 'unknown error'})\n`);
             continue;
           }
-          // Best-effort subscription — non-blocking, swallows all errors internally.
+          // Best-effort subscription — non-blocking and fully isolated from the read.
           // If the server supports resources/subscribe, subsequent list_changed and
           // updated notifications for this URI will be tracked in pendingResourceUpdates.
-          void mcpService.subscribeToResource(server, uri);
+          // It must NEVER affect the resource we just read successfully, so a missing
+          // method, a synchronous throw and a rejected promise are all swallowed here
+          // (an unhandled rejection would otherwise escape the `void`).
+          subscribeBestEffort(server, uri);
           sections.push(renderContents(label, `${uri} from ${server}`, result.data as ResourceContentsLike));
           const first = (result.data as ResourceContentsLike).contents?.[0];
           input.emit?.({

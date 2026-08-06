@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { submitFeedback } from '@/backend/utils/packageRegistryClient';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { createLogger } from '@/utils/logger';
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 
 const log = createLogger('app/api/registry/feedback/route');
 
@@ -30,6 +31,10 @@ const feedbackSchema = z
 export async function POST(request: NextRequest) {
   const notLocal = assertLocalRequest(request);
   if (notLocal) return notLocal;
+
+  // #77 deny-by-default encryption gate.
+  const locked = await assertUnlocked();
+  if (locked) return locked;
 
   let json: unknown;
   try {

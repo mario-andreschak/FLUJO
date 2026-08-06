@@ -266,7 +266,11 @@ function isMeaningfulFileAccessRoot(value: unknown): boolean {
   if (/^file:/i.test(root)) {
     try {
       const uri = new URL(root);
-      return uri.protocol === 'file:' && (!!uri.hostname || !!uri.pathname);
+      if (uri.protocol !== 'file:') return false;
+      // A bare "file://" normalises to "file:///" (pathname "/"), which points at
+      // nothing the runtime can use as a root — treat it as malformed/blank.
+      const hasPath = uri.pathname.replace(/\/+$/, '') !== '';
+      return !!uri.hostname || hasPath;
     } catch {
       return false;
     }

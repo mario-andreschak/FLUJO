@@ -19,6 +19,19 @@ jest.mock('@/utils/logger', () => ({
   }),
 }));
 
+jest.mock('@/frontend/contexts/AskFlujoContext', () => ({
+  useAskFlujo: () => ({
+    open: false,
+    openDock: jest.fn(),
+    closeDock: jest.fn(),
+    toggleDock: jest.fn(),
+    getPageContext: jest.fn(),
+    applyPageAction: jest.fn(),
+    registerPage: jest.fn(() => jest.fn()),
+  }),
+  useAskFlujoPage: jest.fn(() => null),
+}));
+
 import FlowDashboard from '@/frontend/components/Flow/FlowDashboard/FlowDashboard';
 
 describe('Agent product terminology', () => {
@@ -49,14 +62,14 @@ describe('Agent product terminology', () => {
       />,
     );
 
-    expect(screen.getByPlaceholderText('Search agents...')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Search agents…')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Show agent cards' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Show compact agent list' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Group agents' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Sort agents' })).toBeInTheDocument();
     expect(screen.getByText('0 of 0 agents')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'No agents yet' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Create My First Agent' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create my first agent' })).toBeInTheDocument();
 
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(2));
   });

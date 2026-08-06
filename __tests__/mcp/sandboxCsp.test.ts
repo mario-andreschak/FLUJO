@@ -111,7 +111,7 @@ describe('buildSandboxCsp', () => {
   });
 });
 
-describe('loopback CSP origins (localhost exposure mode)', () => {
+describe('loopback CSP origins (self-hosted exposure modes)', () => {
   const originalExposure = process.env.FLUJO_EXPOSURE_MODE;
 
   afterEach(() => {
@@ -126,14 +126,28 @@ describe('loopback CSP origins (localhost exposure mode)', () => {
     baseUriDomains: ['http://127.0.0.1:59503'],
   };
 
-  it('admits explicit-port loopback http/ws origins into both policies', () => {
-    process.env.FLUJO_EXPOSURE_MODE = 'localhost';
-    for (const csp of [buildSandboxCsp(loopbackCsp), buildSandboxProxyCsp('http://127.0.0.1:4200', loopbackCsp)]) {
-      expect(csp).toMatch(/connect-src http:\/\/127\.0\.0\.1:59503 ws:\/\/127\.0\.0\.1:59503/);
-      expect(csp).toMatch(/frame-src[^;]*http:\/\/127\.0\.0\.1:59503/);
-      expect(csp).toMatch(/img-src[^;]*http:\/\/127\.0\.0\.1:59503/);
-      expect(csp).toMatch(/base-uri[^;]*http:\/\/127\.0\.0\.1:59503/);
-    }
+  it.each(['localhost', 'network'])(
+    'admits explicit-port loopback http/ws origins into both policies in %s mode',
+    (mode) => {
+      process.env.FLUJO_EXPOSURE_MODE = mode;
+      for (const csp of [buildSandboxCsp(loopbackCsp), buildSandboxProxyCsp('http://127.0.0.1:4200', loopbackCsp)]) {
+        expect(csp).toMatch(/connect-src http:\/\/127\.0\.0\.1:59503 ws:\/\/127\.0\.0\.1:59503/);
+        expect(csp).toMatch(/frame-src[^;]*http:\/\/127\.0\.0\.1:59503/);
+        expect(csp).toMatch(/img-src[^;]*http:\/\/127\.0\.0\.1:59503/);
+        expect(csp).toMatch(/base-uri[^;]*http:\/\/127\.0\.0\.1:59503/);
+      }
+    },
+  );
+
+  // Regression: an app whose gateway lives on loopback (a local IDE/workbench)
+  // must still be frameable after the operator switches on LAN access.
+  it('keeps a loopback gateway frameable in network mode', () => {
+    process.env.FLUJO_EXPOSURE_MODE = 'network';
+    const gateway = 'http://127.0.0.1:65459';
+    const appCsp = { frameDomains: [gateway], connectDomains: [gateway, 'ws://127.0.0.1:65459'] };
+    expect(buildSandboxCsp(appCsp)).toContain(`frame-src ${gateway}`);
+    expect(buildSandboxProxyCsp('http://192.168.1.20:4200', appCsp))
+      .toContain(`frame-src 'self' ${gateway}`);
   });
 
   it('accepts localhost and [::1] loopback spellings', () => {
@@ -163,16 +177,14 @@ describe('loopback CSP origins (localhost exposure mode)', () => {
     expect(csp).toContain("connect-src 'none'");
   });
 
-  it('drops loopback http/ws origins outside the localhost exposure mode', () => {
-    for (const mode of ['network', 'public']) {
-      process.env.FLUJO_EXPOSURE_MODE = mode;
-      const csp = buildSandboxCsp(loopbackCsp);
-      expect(csp).toContain("connect-src 'none'");
-      expect(csp).toContain("frame-src 'none'");
-      expect(csp).not.toContain('127.0.0.1:59503');
-      const proxyCsp = buildSandboxProxyCsp('https://flujo.example.test', loopbackCsp);
-      expect(proxyCsp).not.toContain('127.0.0.1:59503');
-    }
+  it('drops loopback http/ws origins in the public exposure mode', () => {
+    process.env.FLUJO_EXPOSURE_MODE = 'public';
+    const csp = buildSandboxCsp(loopbackCsp);
+    expect(csp).toContain("connect-src 'none'");
+    expect(csp).toContain("frame-src 'none'");
+    expect(csp).not.toContain('127.0.0.1:59503');
+    const proxyCsp = buildSandboxProxyCsp('https://flujo.example.test', loopbackCsp);
+    expect(proxyCsp).not.toContain('127.0.0.1:59503');
   });
 });
 

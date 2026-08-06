@@ -364,12 +364,21 @@ const MAX_CSP_SOURCE_LENGTH = 2048;
 
 /**
  * Local MCP App servers legitimately serve their embedded UI over plain HTTP/WS
- * on loopback. Those origins are only safe to admit into a CSP grant when FLUJO
- * itself runs in the `localhost` exposure mode. Network/public deployments keep
- * the strict secure-origin-only policy.
+ * on loopback (an IDE gateway on `http://127.0.0.1:<port>` with its bridge on
+ * `ws://127.0.0.1:<port>`, for example). Those origins stay safe to admit into a
+ * CSP grant for as long as FLUJO is NOT published to the open internet: only in
+ * the `public` mode does the browser rendering an app belong to someone else, so
+ * that `http://127.0.0.1:…` would name a stranger's machine instead of the one
+ * running the MCP server.
+ *
+ * `localhost` and `network` are both self-hosted modes — `network` differs only
+ * in which hostname the operator reaches the same install by — so gating on
+ * `localhost` alone silently broke every local App with a loopback gateway as
+ * soon as LAN access was enabled (`frame-src`/`connect-src` collapsed to
+ * `'none'`). Public deployments keep the strict secure-origin-only policy.
  */
 function allowLoopbackCspOrigins(): boolean {
-  return getExposureMode() === 'localhost';
+  return getExposureMode() !== 'public';
 }
 
 /** Map a directive's secure schemes to their loopback-only counterparts. */

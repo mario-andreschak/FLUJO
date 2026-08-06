@@ -9,6 +9,23 @@ jest.mock('@/frontend/components/mcp/MCPServerManager/ServerCard', () => ({
   ),
 }));
 
+jest.mock('@/frontend/contexts/AskFlujoContext', () => ({
+  useAskFlujo: () => ({
+    open: false,
+    openDock: jest.fn(),
+    closeDock: jest.fn(),
+    toggleDock: jest.fn(),
+    getPageContext: jest.fn(),
+    applyPageAction: jest.fn(),
+    registerPage: jest.fn(() => jest.fn()),
+  }),
+  useAskFlujoPage: jest.fn(() => null),
+}));
+
+jest.mock('@/frontend/contexts/ThemeContext', () => ({
+  useTheme: () => ({ toggleTheme: jest.fn(), isDarkMode: false, visualStyle: 'modern', livingWorldEnabled: false, themeHydrated: true, setVisualStyle: jest.fn(), setLivingWorldEnabled: jest.fn(), setThemePreset: jest.fn() }),
+}));
+
 const processNode: any = {
   id: 'process-1',
   type: 'process',

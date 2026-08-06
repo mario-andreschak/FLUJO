@@ -611,10 +611,29 @@ async function readSingleFileTool(args: Record<string, unknown>, roots: string[]
     );
   }
 
+  // #365: Read as buffer first to detect media files BEFORE any text processing.
+  // This ensures pattern/range on media files are rejected appropriately.
+  const buf = await fs.readFile(filePath);
+  recordTouchedFile(filePath, 'read', size);
+
+  // #365: Check if this is a media file (image/audio/video).
+  const mediaDetection = detectMediaFile(buf, filePath);
+  if (mediaDetection) {
+    // Media files cannot be pattern-grepped or range-read as text.
+    if (hasRange || (pattern && pattern !== '*')) {
+      return errorResult(
+        `File appears to be binary (${mediaDetection.mimeType} media). ` +
+        `Cannot perform pattern grep or line-range reads on binary files. ` +
+        `Read the file without pattern/range options to get the media content.`
+      );
+    }
+    // Media files are returned as-is (no line ranges or pattern grepping for media).
+    return mediaResult(filePath, buf, mediaDetection.mediaType, mediaDetection.mimeType);
+  }
+
   // #287: pattern grep path (only when no explicit range was given). `*` is the
   // escape hatch that means "read the whole file regardless".
   if (pattern && pattern !== '*' && !hasRange) {
-    const buf = await fs.readFile(filePath);
     if (looksBinary(buf)) {
       return errorResult(`File appears to be binary; cannot grep for a pattern: ${filePath}`);
     }
@@ -648,7 +667,6 @@ async function readSingleFileTool(args: Record<string, unknown>, roots: string[]
     }
     let out = parts.join('\n');
     if (out.length > MAX_READ_CHARS) out = out.slice(0, MAX_READ_CHARS) + '\n…[truncated]';
-    recordTouchedFile(filePath, 'read', size);
     return dualResult({
       path: filePath,
       from: 1,
@@ -662,19 +680,7 @@ async function readSingleFileTool(args: Record<string, unknown>, roots: string[]
   }
 
   // Whole-file / explicit-range read (pattern '*' lands here too).
-  // First, read as buffer to detect media files.
-  const buf = await fs.readFile(filePath);
-  recordTouchedFile(filePath, 'read', size);
-
-  // #365: Check if this is a media file (image/audio/video).
-  // If so, return it as media content; capture infrastructure will handle persistence.
-  const mediaDetection = detectMediaFile(buf, filePath);
-  if (mediaDetection && !hasRange && !pattern) {
-    // Media files are returned as-is (no line ranges or pattern grepping for media).
-    return mediaResult(filePath, buf, mediaDetection.mediaType, mediaDetection.mimeType);
-  }
-
-  // Not media, or pattern/range was specified: treat as text.
+  // Not media: treat as text.
   let content: string;
   try {
     content = buf.toString('utf8');
@@ -685,6 +691,7 @@ async function readSingleFileTool(args: Record<string, unknown>, roots: string[]
       `Try reading it as a media file if it's an image, audio, or video.`
     );
   }
+
   const lines = splitLines(content);
   const totalLines = lines.length;
 

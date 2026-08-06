@@ -9,6 +9,19 @@ jest.mock('@xyflow/react', () => ({
   applyEdgeChanges: jest.fn((changes: unknown, edges: unknown) => edges),
 }));
 
+jest.mock('@/frontend/contexts/AskFlujoContext', () => ({
+  useAskFlujo: () => ({
+    open: false,
+    openDock: jest.fn(),
+    closeDock: jest.fn(),
+    toggleDock: jest.fn(),
+    getPageContext: jest.fn(),
+    applyPageAction: jest.fn(),
+    registerPage: jest.fn(() => jest.fn()),
+  }),
+  useAskFlujoPage: jest.fn(() => null),
+}));
+
 jest.mock('@/frontend/components/Flow/FlowManager/FlowBuilder/Canvas', () => ({
   Canvas: () => <div data-testid="canvas" />,
 }));
@@ -68,10 +81,10 @@ describe('FlowBuilder permission rules', () => {
 
     expect(screen.queryByRole('checkbox', { name: /Unattended/i })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save Flow' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save flow' }));
     expect(onSave).toHaveBeenCalledTimes(1);
     expect(onSave.mock.calls[0][0]).not.toHaveProperty('unattended');
-    await waitFor(() => expect(screen.getByLabelText('Save status: saved')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByLabelText('Save status: Saved')).toBeInTheDocument());
   });
 
   it('edits, reorders, and saves rules in their displayed order without editor IDs', async () => {
@@ -81,11 +94,11 @@ describe('FlowBuilder permission rules', () => {
     fireEvent.click(screen.getByRole('button', { name: /Permission Rules/i }));
     expect(screen.getByText('Flow permission rules')).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText('Rule 1 action'), { target: { value: 'read_config' } });
+    fireEvent.change(screen.getByLabelText('Rule 1: Action'), { target: { value: 'read_config' } });
     fireEvent.click(screen.getByRole('button', { name: 'Move rule 1 down' }));
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
     await waitFor(() => expect(screen.queryByText('Flow permission rules')).not.toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: 'Save Flow' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save flow' }));
 
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
       permissionRules: [
@@ -93,7 +106,7 @@ describe('FlowBuilder permission rules', () => {
         { action: 'read_config', resource: '/tmp/*', effect: 'allow' },
       ],
     }));
-    await waitFor(() => expect(screen.getByLabelText('Save status: saved')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByLabelText('Save status: Saved')).toBeInTheDocument());
   });
 
   it('prevents saving an incomplete newly added rule', async () => {
@@ -104,7 +117,7 @@ describe('FlowBuilder permission rules', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add rule' }));
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
     await waitFor(() => expect(screen.queryByText('Flow permission rules')).not.toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: 'Save Flow' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save flow' }));
 
     expect(screen.getByText(/Each permission rule needs both an action and a resource/i)).toBeInTheDocument();
     expect(onSave).not.toHaveBeenCalled();

@@ -612,11 +612,16 @@ describe('resume after error — turn replay (issue #151)', () => {
 
   it('falls back to the flow start node when the last user message is unstamped', async () => {
     seedErrored('error');
-    (flowService.getFlow as jest.Mock).mockResolvedValueOnce({
+    // A run fetches the flow more than once (e.g. the statistics flow-name
+    // snapshot before the replay guard), so serve the node-bearing flow for
+    // EVERY call rather than just the first one.
+    const getFlowMock = flowService.getFlow as jest.Mock;
+    const previousGetFlow = getFlowMock.getMockImplementation()!;
+    getFlowMock.mockImplementation(async () => ({
       id: FLOW_ID,
       name: 'TestFlow',
       nodes: [{ id: START, type: 'start' }, { id: PROCESS, type: 'process' }],
-    });
+    }));
     const { seen, restore } = captureStepNodes();
     try {
       const result = await runFlow({
@@ -635,6 +640,7 @@ describe('resume after error — turn replay (issue #151)', () => {
       expect(seen[0]).toBe(START);
     } finally {
       restore();
+      getFlowMock.mockImplementation(previousGetFlow);
     }
   });
 

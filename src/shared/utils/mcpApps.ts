@@ -203,8 +203,10 @@ export function isValidCspSourceToken(
  * here explicitly because the secure-origin grammar's hostname class excludes
  * the bracketed-colon form.
  *
- * This is an opt-in exception: callers must gate it on FLUJO's `localhost`
- * exposure mode. Public/hosted deployments keep the secure-origin-only policy.
+ * This is an opt-in exception: callers must gate it on FLUJO not being publicly
+ * exposed (the `localhost` and `network` modes, where the operator's browser and
+ * the MCP servers share a machine). Public/hosted deployments keep the
+ * secure-origin-only policy.
  */
 export function isLoopbackCspOrigin(
   token: unknown,

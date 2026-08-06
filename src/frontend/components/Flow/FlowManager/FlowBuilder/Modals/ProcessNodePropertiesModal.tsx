@@ -393,11 +393,15 @@ export const ProcessNodePropertiesModal = ({
     }
 
     // Reset both navigation levels whenever the modal target or open state changes.
-    // Guided edit sessions with an authored task open directly on Task; new and
-    // advanced sessions start on Basic.
+    // Issue #320: editing an existing step opens directly on Task, creating a new
+    // one starts on Basic. Guided sessions keep the softer heuristic from the
+    // guided-authoring work: a guided edit only jumps to Task once the step has an
+    // authored task prompt, otherwise the author is sent to Basic first.
     const initialSection: SectionKey = mode === 'create'
       ? 'basic'
-      : getInitialProcessSection(authoringMode, node?.data.properties?.promptTemplate);
+      : authoringMode === 'guided'
+        ? getInitialProcessSection(authoringMode, node?.data.properties?.promptTemplate)
+        : 'task';
     setActiveSection(initialSection);
     setActiveTab('server');
     isProgrammaticScroll.current = true;

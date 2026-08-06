@@ -108,6 +108,19 @@ jest.mock('@/utils/logger', () => ({
   }),
 }));
 
+jest.mock('@/frontend/contexts/AskFlujoContext', () => ({
+  useAskFlujo: () => ({
+    open: false,
+    openDock: jest.fn(),
+    closeDock: jest.fn(),
+    toggleDock: jest.fn(),
+    getPageContext: jest.fn(),
+    applyPageAction: jest.fn(),
+    registerPage: jest.fn(() => jest.fn()),
+  }),
+  useAskFlujoPage: jest.fn(() => null),
+}));
+
 import Chat from '@/frontend/components/Chat';
 
 const conversationSummary = {
@@ -151,8 +164,8 @@ describe('Talk conversation Agent switch terminology', () => {
     expect(within(dialog).getByRole('heading', { name: 'Switch agent?' })).toBeInTheDocument();
     expect(dialog).toHaveTextContent('current agent');
     expect(dialog).toHaveTextContent('Writing Agent');
-    expect(dialog).toHaveTextContent("that agent's starting point");
-    expect(within(dialog).getByRole('button', { name: 'Switch Agent' })).toBeInTheDocument();
+    expect(dialog).toHaveTextContent('that agent’s starting point');
+    expect(within(dialog).getByRole('button', { name: 'Switch agent' })).toBeInTheDocument();
     expect(dialog).not.toHaveTextContent(/\bflow\b/i);
   });
 });

@@ -135,20 +135,20 @@ describe('FlowBuilder toolbar', () => {
       />,
     );
 
-    expect(screen.getByLabelText('Flow Name')).toBeInTheDocument();
+    expect(screen.getByLabelText('Flow name')).toBeInTheDocument();
     expect(screen.getByLabelText('Description')).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'Advanced' })).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'Expert view' })).toBeChecked();
-    expect(screen.getByRole('button', { name: 'Save Flow' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save flow' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Check Flow' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add node' })).toBeInTheDocument();
     expect(screen.getByLabelText('Save status: Saved')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Auto-Align' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Auto-align nodes' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Undo' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Redo' })).toBeDisabled();
 
     fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
-    expect(screen.getByRole('menuitem', { name: 'Auto-Align' })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('menuitem', { name: 'Auto-align nodes' })).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByRole('menuitem', { name: 'Repair automatically (no model)' })).toBeEnabled();
     expect(screen.getByRole('menuitem', { name: /Repair with AI/i })).toBeEnabled();
   });
@@ -251,7 +251,7 @@ describe('FlowBuilder toolbar', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     fireEvent.click(screen.getByRole('menuitem', { name: /Repair with AI/i }));
-    expect(screen.getByTestId('improve-dialog')).toHaveTextContent(/Repair this flow's wiring/i);
+    expect(screen.getByTestId('improve-dialog')).toHaveTextContent(/Repair this flow[’']s wiring/i);
   });
 
   it('gates saved-flow actions behind the More actions menu', () => {
@@ -266,16 +266,16 @@ describe('FlowBuilder toolbar', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
-    expect(screen.getByRole('menuitem', { name: 'AI-Improve' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Improve with AI' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'History' })).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: 'Duplicate Flow' })).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: 'Delete Flow' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Duplicate flow' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Delete flow' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('menuitem', { name: 'History' }));
     expect(screen.getByTestId('history-dialog')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete Flow' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete flow' }));
     expect(onDelete).toHaveBeenCalledWith('flow-1');
 
     rerender(
@@ -291,12 +291,12 @@ describe('FlowBuilder toolbar', () => {
   it('preserves disabled states for invalid and empty flows', () => {
     render(<FlowBuilder onSave={() => {}} onDelete={() => {}} allFlows={[]} />);
 
-    fireEvent.change(screen.getByLabelText('Flow Name'), { target: { value: '' } });
-    expect(screen.getByRole('button', { name: 'Save Flow' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Flow name'), { target: { value: '' } });
+    expect(screen.getByRole('button', { name: 'Save flow' })).toBeDisabled();
 
-    expect(screen.getByRole('button', { name: 'Auto-Align' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Auto-align nodes' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
-    expect(screen.getByRole('menuitem', { name: 'Auto-Align' })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('menuitem', { name: 'Auto-align nodes' })).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByRole('menuitem', { name: 'Repair automatically (no model)' })).toBeEnabled();
     expect(screen.getByRole('menuitem', { name: /Repair with AI/i })).toBeEnabled();
   });
@@ -312,13 +312,13 @@ describe('FlowBuilder toolbar', () => {
       />,
     );
 
-    fireEvent.change(screen.getByLabelText('Flow Name'), { target: { value: 'renamed_flow' } });
-    expect(screen.getByLabelText('Save status: unsaved')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Flow name'), { target: { value: 'renamed_flow' } });
+    expect(screen.getByLabelText('Save status: Unsaved')).toBeInTheDocument();
 
     fireEvent.keyDown(document, { key: 's', ctrlKey: true });
 
     await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ name: 'renamed_flow' })));
-    await waitFor(() => expect(screen.getByLabelText('Save status: saved')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByLabelText('Save status: Saved')).toBeInTheDocument());
     expect(screen.queryByText('Rename Flow')).not.toBeInTheDocument();
   });
 
@@ -334,9 +334,9 @@ describe('FlowBuilder toolbar', () => {
     );
 
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Still working' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save Flow' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save flow' }));
 
-    await waitFor(() => expect(screen.getByLabelText('Save status: failed')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByLabelText('Save status: Save failed')).toBeInTheDocument());
     expect(onSave).toHaveBeenCalledTimes(1);
   });
 
@@ -359,7 +359,7 @@ describe('FlowBuilder toolbar', () => {
 
     expect(onSave).toHaveBeenCalledTimes(1);
     finishSave(true);
-    await waitFor(() => expect(screen.getByLabelText('Save status: saved')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByLabelText('Save status: Saved')).toBeInTheDocument());
   });
 
   it('appends and wires a legal next step in one palette click', async () => {
@@ -501,7 +501,7 @@ describe('FlowBuilder toolbar', () => {
     fireEvent.click(triggerButton);
     fireEvent.click(triggerButton);
 
-    await waitFor(() => expect(screen.getByText(/Trigger node already exists/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/already has a Trigger node/i)).toBeInTheDocument());
     expect(screen.getByTestId('canvas')).toHaveTextContent('2:0');
   });
 

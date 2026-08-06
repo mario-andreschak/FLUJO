@@ -72,12 +72,14 @@ describe('fetchModelsFromProvider (litellm)', () => {
       id: 'azure/gpt-4o',
       name: 'Azure GPT-4o',
       description: 'GPT-4o via Azure',
+      visionInputCapability: 'unknown',
     });
     // Model without explicit name/description gets sensible defaults.
     expect(models[1]).toEqual({
       id: 'anthropic/claude-sonnet-4-20250514',
       name: 'anthropic/claude-sonnet-4-20250514',
       description: 'Model anthropic/claude-sonnet-4-20250514',
+      visionInputCapability: 'unknown',
     });
   });
 
@@ -172,6 +174,7 @@ describe('fetchOpenRouterModels capability discovery', () => {
       supportedParameters: ['temperature', 'response_format'],
       inputModalities: ['text', 'image'],
       outputModalities: ['text', 'image'],
+      visionInputCapability: 'supported',
     });
   });
 

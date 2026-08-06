@@ -147,20 +147,20 @@ describe('ProcessNodePropertiesModal issue #320 interactions', () => {
     rerender(<ProcessNodePropertiesModal {...baseProps} node={processNode('two')} mode="create" />);
     await waitFor(() => expect(screen.getByRole('tab', { name: 'Basic' })).toHaveAttribute('aria-selected', 'true'));
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Connected Nodes' }));
-    expect(screen.getByRole('tab', { name: 'Connected Nodes' })).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(screen.getByRole('tab', { name: 'Connected nodes' }));
+    expect(screen.getByRole('tab', { name: 'Connected nodes' })).toHaveAttribute('aria-selected', 'true');
     rerender(<ProcessNodePropertiesModal {...baseProps} node={processNode('three')} mode="edit" />);
     await waitFor(() => expect(screen.getByRole('tab', { name: 'Task' })).toHaveAttribute('aria-selected', 'true'));
     expect(screen.getByRole('tab', { name: 'MCP' })).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('orders Task tabs as MCP, Connected Nodes, Resources and keeps the prompt editor mounted', () => {
+  it('orders Task tabs as MCP, Connected nodes, Resources and keeps the prompt editor mounted', () => {
     renderModal({ mode: 'edit' });
     const taskTabs = within(screen.getByRole('tablist', { name: 'Task tools' })).getAllByRole('tab');
-    expect(taskTabs.map((tab) => tab.textContent)).toEqual(['MCP', 'Connected Nodes', 'Resources']);
+    expect(taskTabs.map((tab) => tab.textContent)).toEqual(['MCP', 'Connected nodes', 'Resources']);
 
     const editor = screen.getByTestId('prompt-editor');
-    fireEvent.click(screen.getByRole('tab', { name: 'Connected Nodes' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Connected nodes' }));
     expect(screen.getByTestId('prompt-editor')).toBe(editor);
     fireEvent.click(screen.getByRole('tab', { name: 'Resources' }));
     expect(screen.getByTestId('prompt-editor')).toBe(editor);
@@ -240,14 +240,14 @@ describe('ProcessNodePropertiesModal issue #320 interactions', () => {
 
     expect(screen.getByText('1 parameter · 1 required')).toBeInTheDocument();
     expect(screen.queryByText('Parameters:')).not.toBeInTheDocument();
-    const expand = screen.getByRole('button', { name: 'Expand summarize details' });
+    const expand = screen.getByRole('button', { name: 'Expand details for summarize' });
     expect(expand).toHaveAttribute('aria-expanded', 'false');
 
     fireEvent.mouseOver(screen.getByText(longDescription));
     expect(await screen.findByRole('tooltip')).toHaveTextContent(longDescription);
 
     fireEvent.click(expand);
-    expect(screen.getByRole('button', { name: 'Collapse summarize details' })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: 'Collapse details for summarize' })).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByText('Parameters:')).toBeInTheDocument();
     expect(screen.getByText(/topic/)).toBeInTheDocument();
   });
@@ -256,9 +256,9 @@ describe('ProcessNodePropertiesModal issue #320 interactions', () => {
     renderModal({ mode: 'edit' });
     const editor = screen.getByTestId('prompt-editor');
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Connected Nodes' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Connected nodes' }));
     fireEvent.click(screen.getByRole('tab', { name: 'MCP' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Add summarize from server-one to prompt' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add summarize from server-one to the prompt' }));
 
     expect(screen.getByTestId('prompt-editor')).toBe(editor);
     expect(editor).toHaveTextContent('${tool:server-one__summarize}');

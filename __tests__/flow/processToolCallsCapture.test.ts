@@ -245,6 +245,8 @@ describe('processToolCalls tool-args capture (#168)', () => {
     }));
 
     // The active call still executes with the FULL args (capture is lineage-only).
+    // Issue #357: the call also carries a per-call AbortSignal so the user can
+    // cancel this tool call while it is in flight.
     expect(callToolMock).toHaveBeenCalledWith(
       'srv',
       'screenshot',
@@ -252,7 +254,7 @@ describe('processToolCalls tool-args capture (#168)', () => {
       expect.anything(),
       expect.anything(),
       undefined,
-      undefined,
+      expect.any(AbortSignal),
       'model',
       'conversation:conv-1',
     );

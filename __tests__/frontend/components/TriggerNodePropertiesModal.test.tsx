@@ -6,6 +6,11 @@ jest.mock('@/frontend/services/plannedExecutions', () => ({
   plannedExecutionsService: {
     create: jest.fn(),
     update: jest.fn(),
+    // SchedulePanel live-previews the next fire times from a 300ms debounced
+    // timer. Whether that timer elapses before the test finishes depends on
+    // machine load, so the stub must exist or the suite fails intermittently.
+    // Mirrors the real Promise<{ valid, error?, nextRuns }> contract.
+    previewSchedule: jest.fn().mockResolvedValue({ valid: true, nextRuns: [] }),
   },
 }));
 

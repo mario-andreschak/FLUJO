@@ -102,12 +102,17 @@ describe('MCP App resource validation', () => {
 });
 
 describe('loopback CSP grant mirror', () => {
-  it('gates the loopback allowance on a plain-HTTP loopback FLUJO origin', () => {
+  it('gates the loopback allowance on a plain-HTTP FLUJO origin', () => {
     expect(allowLoopbackCspGrant({ protocol: 'http:', hostname: '127.0.0.1' })).toBe(true);
     expect(allowLoopbackCspGrant({ protocol: 'http:', hostname: 'localhost' })).toBe(true);
     expect(allowLoopbackCspGrant({ protocol: 'http:', hostname: '[::1]' })).toBe(true);
+    // A `network`-mode install is reached by its LAN name/address while its MCP
+    // App servers still bind loopback, so the grant must survive that spelling.
+    expect(allowLoopbackCspGrant({ protocol: 'http:', hostname: '192.168.1.20' })).toBe(true);
+    expect(allowLoopbackCspGrant({ protocol: 'http:', hostname: 'flujo.local' })).toBe(true);
+    // Public/hosted deployments are HTTPS and keep the secure-origin-only grant.
     expect(allowLoopbackCspGrant({ protocol: 'https:', hostname: 'localhost' })).toBe(false);
-    expect(allowLoopbackCspGrant({ protocol: 'http:', hostname: 'flujo.example.test' })).toBe(false);
+    expect(allowLoopbackCspGrant({ protocol: 'https:', hostname: 'flujo.example.test' })).toBe(false);
     // jsdom serves the suite from http://localhost, so the browser default applies.
     expect(allowLoopbackCspGrant()).toBe(true);
   });

@@ -3,6 +3,7 @@ import { NextRequest } from 'next/server';
 
 import { createNdjsonStreamResponse } from '@/backend/utils/ndjsonStream';
 import { createLogger } from '@/utils/logger';
+import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { AI_CLI_PACKAGES, buildWingetArgs, type AiCliTool } from './winget';
 
 const log = createLogger('app/api/setup/ai-cli/route');
@@ -15,6 +16,10 @@ export const runtime = 'nodejs';
  * local-only route cannot become a general shell-execution seam.
  */
 export async function POST(request: NextRequest) {
+  // #77 deny-by-default encryption gate.
+  const locked = await assertUnlocked();
+  if (locked) return locked;
+
   let tool: AiCliTool;
   try {
     const body = (await request.json()) as { tool?: unknown };

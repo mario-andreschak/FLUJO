@@ -107,9 +107,11 @@ describe('withTransientRetry', () => {
     const fn = jest.fn().mockRejectedValue(transientErr);
 
     const resultPromise = withTransientRetry(fn, { maxAttempts: 3, baseDelayMs: 100 });
+    // Attach the rejection handler BEFORE advancing timers to avoid unhandled rejection
+    const rejectionPromise = expect(resultPromise).rejects.toThrow('socket hang up');
     await jest.runAllTimersAsync();
 
-    await expect(resultPromise).rejects.toThrow('socket hang up');
+    await rejectionPromise;
     expect(fn).toHaveBeenCalledTimes(3);
   });
 
