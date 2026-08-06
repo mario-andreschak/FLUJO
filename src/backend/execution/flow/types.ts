@@ -492,6 +492,8 @@ export interface SubflowLaneResult {
     /** Generated media returned by this lane, in child-message order. */
     outputMedia?: ModelMediaPart[];
     error?: string;
+    /** Author-defined or caller-supplied lane title for attribution (issue #359). */
+    laneTitle?: string;
     laneId?: string;
     conversationId?: string;
 }

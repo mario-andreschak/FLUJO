@@ -1099,6 +1099,7 @@ export class SubflowNode extends BaseNode {
                 subflowId: lane.subflowId,
                 success: false,
                 error: r.error?.message || 'Subflow execution failed',
+                laneTitle: lane.laneTitle,
                 laneId: lane.laneId,
                 conversationId: laneConversationId,
               }
@@ -1107,6 +1108,7 @@ export class SubflowNode extends BaseNode {
                 success: true,
                 outputText: r.outputText,
                 outputMedia: r.outputMedia,
+                laneTitle: lane.laneTitle,
                 laneId: lane.laneId,
                 conversationId: laneConversationId,
               };
@@ -1124,6 +1126,7 @@ export class SubflowNode extends BaseNode {
           subflowId: lane.subflowId,
           success: false,
           error: err instanceof Error ? err.message : String(err),
+          laneTitle: lane.laneTitle,
           laneId: lane.laneId,
           conversationId: laneConversationId,
         };
