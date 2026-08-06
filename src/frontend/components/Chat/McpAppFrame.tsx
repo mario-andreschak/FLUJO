@@ -36,8 +36,8 @@ import type {
 import { mcpService } from '@/frontend/services/mcp';
 import {
   MAX_UI_RESOURCE_BYTES,
+  canonicalizeLoopbackCspOrigin,
   extractUiResourceUri,
-  isLoopbackCspOrigin,
   isMcpAppMimeType,
 } from '@/shared/utils/mcpApps';
 import { deriveOriginKey } from '@/shared/utils/mcpAppOrigin';
@@ -444,13 +444,19 @@ function sanitizeCspOrigins(
   for (const value of values ?? []) {
     if (value.length === 0 || value.length > 2_048 || /[^\x21-\x7e]/.test(value)) continue;
     // ws: may widen only connect-style directives, mirroring wss:.
-    const loopbackOk = allowLoopback
-      && isLoopbackCspOrigin(value, schemes.includes('wss') ? ['http', 'ws'] : ['http']);
-    if (!loopbackOk && !isSecureOrigin(value)) continue;
-    const dedupeKey = value.toLowerCase();
+    // Loopback grants collapse to their port-wildcard form so a local App
+    // server's ephemeral-port restart cannot invalidate the committed policy;
+    // this must stay byte-identical to the sandbox server's normalizeCspOrigin,
+    // otherwise ui/initialize advertises a grant the enforcer does not apply.
+    const loopback = allowLoopback
+      ? canonicalizeLoopbackCspOrigin(value, schemes.includes('wss') ? ['http', 'ws'] : ['http'])
+      : undefined;
+    if (!loopback && !isSecureOrigin(value)) continue;
+    const normalized = loopback ?? value;
+    const dedupeKey = normalized.toLowerCase();
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
-    sanitized.push(value);
+    sanitized.push(normalized);
     if (sanitized.length >= 64) break;
   }
   return sanitized;

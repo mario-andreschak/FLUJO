@@ -117,7 +117,7 @@ describe('loopback CSP grant mirror', () => {
     expect(allowLoopbackCspGrant()).toBe(true);
   });
 
-  it('grants explicit-port loopback http/ws origins only when allowed', () => {
+  it('grants loopback http/ws origins as port wildcards only when allowed', () => {
     const requested = {
       connectDomains: ['http://127.0.0.1:59503', 'ws://127.0.0.1:59503', 'http://insecure.example.com'],
       resourceDomains: ['http://127.0.0.1:59503'],
@@ -125,11 +125,13 @@ describe('loopback CSP grant mirror', () => {
       baseUriDomains: ['http://127.0.0.1'],
     };
 
+    // The port is collapsed to `:*` so the grant survives the app server's next
+    // ephemeral-port restart, matching the sandbox server's normalizeCspOrigin.
     expect(sanitizeGrantedCsp(requested, true)).toEqual({
-      connectDomains: ['http://127.0.0.1:59503', 'ws://127.0.0.1:59503'],
-      resourceDomains: ['http://127.0.0.1:59503'],
+      connectDomains: ['http://127.0.0.1:*', 'ws://127.0.0.1:*'],
+      resourceDomains: ['http://127.0.0.1:*'],
       // ws: never widens frame-src; portless loopback is rejected.
-      frameDomains: ['http://127.0.0.1:59503'],
+      frameDomains: ['http://127.0.0.1:*'],
       baseUriDomains: [],
     });
 
@@ -137,6 +139,17 @@ describe('loopback CSP grant mirror', () => {
       connectDomains: [],
       resourceDomains: [],
       frameDomains: [],
+      baseUriDomains: [],
+    });
+  });
+
+  it('dedupes several ports on one loopback host into a single granted source', () => {
+    expect(sanitizeGrantedCsp({
+      frameDomains: ['http://127.0.0.1:4300', 'http://127.0.0.1:4301', 'http://localhost:4302'],
+    }, true)).toEqual({
+      connectDomains: [],
+      resourceDomains: [],
+      frameDomains: ['http://127.0.0.1:*', 'http://localhost:*'],
       baseUriDomains: [],
     });
   });

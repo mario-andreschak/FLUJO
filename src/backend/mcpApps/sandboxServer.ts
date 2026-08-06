@@ -37,6 +37,7 @@ import { createLogger } from '@/utils/logger';
 import { getExposureMode } from '@/utils/http/exposureMode';
 import { MAX_SANDBOX_ORIGINS } from '@/shared/utils/mcpAppOrigin';
 import {
+  canonicalizeLoopbackCspOrigin,
   isLoopbackCspOrigin,
   MCP_APP_IFRAME_SANDBOX,
   MCP_APP_IFRAME_SANDBOX_ALLOWED_TOKENS,
@@ -430,8 +431,30 @@ function isValidCspOrigin(
 }
 
 /**
+ * Resolve one declared origin to the exact source expression the policy should
+ * carry, or `undefined` to drop it. Secure origins are emitted verbatim; the
+ * loopback exception is collapsed to its port-wildcard form so a local App
+ * server's ephemeral-port restart cannot invalidate an already-committed CSP
+ * (see canonicalizeLoopbackCspOrigin).
+ */
+function normalizeCspOrigin(
+  source: unknown,
+  allowedSchemes: readonly CspScheme[],
+  allowLoopback: boolean,
+): string | undefined {
+  if (allowLoopback) {
+    const loopback = canonicalizeLoopbackCspOrigin(source, loopbackSchemesFor(allowedSchemes));
+    if (loopback) return loopback;
+  }
+  // Loopback already handled, so this call only admits secure origins.
+  return isValidCspOrigin(source, allowedSchemes, false) ? source : undefined;
+}
+
+/**
  * Drop invalid entries rather than attempting to repair them. De-duplicating
- * also keeps the response header bounded and deterministic.
+ * also keeps the response header bounded and deterministic — and, because
+ * loopback origins are normalized first, several ports on the same loopback host
+ * collapse into a single wildcard source.
  */
 function sanitizeCspDomains(
   domains: unknown,
@@ -442,11 +465,12 @@ function sanitizeCspDomains(
   const seen = new Set<string>();
   const clean: string[] = [];
   for (const source of domains) {
-    if (!isValidCspOrigin(source, allowedSchemes, allowLoopback)) continue;
-    const key = source.toLowerCase();
+    const normalized = normalizeCspOrigin(source, allowedSchemes, allowLoopback);
+    if (normalized === undefined) continue;
+    const key = normalized.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    clean.push(source);
+    clean.push(normalized);
     if (clean.length >= MAX_CSP_SOURCES_PER_DIRECTIVE) break;
   }
   return clean;
