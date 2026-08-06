@@ -26,6 +26,8 @@ import {
   bashCallTool,
   _resetBashSessionsForTests,
   _resetBashShellCacheForTests,
+  wrapPowerShellCommand,
+  wrapCmdCommand,
 } from '@/backend/services/mcp/internal/bashTools';
 
 const mockedRoots = loadServerRoots as jest.Mock;
@@ -133,7 +135,7 @@ describe('bash tool definitions', () => {
     }
     expect(tools.find((tool) => tool.name === 'start')?._meta).toBeUndefined();
     const run = tools.find((tool) => tool.name === 'run');
-    expect(run?.description).toContain('live progress');
+    expect(run?.description).toContain('Run one command to completion');
     expect(run?.inputSchema.properties?.shell).toEqual(expect.objectContaining({
       enum: ['default', 'pwsh', 'bash', 'cmd'],
     }));
@@ -162,7 +164,9 @@ describe('bash run (foreground)', () => {
   });
 
   it('kills a command that exceeds the timeout', async () => {
-    const command = isWin ? 'ping -n 6 127.0.0.1 > NUL' : 'sleep 5';
+    // NOTE: no `> NUL` here — that is cmd redirection syntax and fails instantly
+    // under PowerShell (exactly the dialect trap issue #364 is about).
+    const command = isWin ? 'ping -n 6 127.0.0.1' : 'sleep 5';
     const r = await bashCallTool('run', { command, timeout: 1 });
     expect(r.isError).toBe(true);
     expect(text(r)).toContain('timedOut');
@@ -210,7 +214,7 @@ describe('bash shell selection (issues #225, #327)', () => {
       }));
       expect(mockedSpawn).toHaveBeenCalledWith(
         executable,
-        ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command],
+        ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', wrapPowerShellCommand(command)],
         expect.objectContaining({ shell: false })
       );
     });
@@ -228,7 +232,7 @@ describe('bash shell selection (issues #225, #327)', () => {
       expect(started.sessionId).toBeTruthy();
       expect(mockedSpawn).toHaveBeenCalledWith(
         executable,
-        ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command],
+        ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', wrapPowerShellCommand(command)],
         expect.objectContaining({ shell: false })
       );
 
@@ -342,7 +346,7 @@ describe('bash shell selection (issues #225, #327)', () => {
       expect(r.isError).toBeUndefined();
       expect(mockedSpawn).toHaveBeenCalledWith(
         executable,
-        ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', 'Write-Output windowsapps-pwsh-marker'],
+        ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', wrapPowerShellCommand('Write-Output windowsapps-pwsh-marker')],
         expect.objectContaining({ shell: false }),
       );
     } finally {
@@ -390,7 +394,7 @@ describe('bash shell selection (issues #225, #327)', () => {
       }));
       expect(mockedSpawn).toHaveBeenCalledWith(
         executable,
-        ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command],
+        ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', wrapPowerShellCommand(command)],
         expect.objectContaining({ shell: false }),
       );
     });
@@ -405,7 +409,7 @@ describe('bash shell selection (issues #225, #327)', () => {
     expect(parse(r).shell).toBe('cmd');
     expect(mockedSpawn).toHaveBeenCalledWith(
       expect.stringMatching(/cmd\.exe$/i),
-      ['/d', '/s', '/c', command],
+      ['/d', '/s', '/c', wrapCmdCommand(command)],
       expect.objectContaining({
         shell: false,
         windowsVerbatimArguments: true,

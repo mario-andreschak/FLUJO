@@ -241,11 +241,115 @@ function resolveCmdExecutable(): string | null {
   ]);
 }
 
+function resolveShExecutable(): string | null {
+  if (process.platform === 'win32') return findExecutableOnPath('sh');
+  return firstExistingFile(['/bin/sh', findExecutableOnPath('sh')]);
+}
+
+/**
+ * Interpreters and utilities probed by `shell_info` (issue #364) so a caller can
+ * discover the machine up front instead of rediscovering it by failed commands.
+ */
+const PROBED_BINARIES = [
+  'python', 'python3', 'node', 'npm', 'npx', 'git', 'rg',
+  'ffmpeg', 'ffprobe', 'curl', 'tar', 'grep', 'sed', 'awk', 'head', 'tail',
+];
+
+export interface ShellInfoShellEntry {
+  shell: string;
+  available: boolean;
+  path: string | null;
+}
+
+export interface ShellInfoBinaryEntry {
+  name: string;
+  found: boolean;
+  path: string | null;
+  /** Windows Store app-execution alias stub: present on PATH but not runnable. */
+  alias?: boolean;
+}
+
+export interface ShellInfoPayload {
+  platform: NodeJS.Platform;
+  defaultShell: EffectiveShell;
+  defaultShellPath: string | null;
+  shells: ShellInfoShellEntry[];
+  binaries: ShellInfoBinaryEntry[];
+  notes: string[];
+}
+
+/**
+ * A zero-byte Windows Store app-execution alias (typically `python3.exe` under
+ * `WindowsApps`) resolves on PATH but only opens the Store when executed.
+ */
+function isWindowsStoreAliasStub(candidate: string | null): boolean {
+  if (!candidate || process.platform !== 'win32') return false;
+  if (!/[\\/]WindowsApps[\\/]/i.test(candidate)) return false;
+  try {
+    return fs.statSync(candidate).size === 0;
+  } catch {
+    return true;
+  }
+}
+
+function shellEntry(shell: string, resolved: string | null): ShellInfoShellEntry {
+  return { shell, available: Boolean(resolved), path: resolved };
+}
+
+let cachedShellInfo: ShellInfoPayload | undefined;
+
+/** Describe the shells and interpreters actually available on this machine. */
+export function collectShellInfo(): ShellInfoPayload {
+  if (cachedShellInfo) return cachedShellInfo;
+  const defaultPlan = buildSpawn('', 'default');
+  const shells: ShellInfoShellEntry[] = [
+    shellEntry('pwsh', resolvePwshExecutable()),
+    shellEntry('powershell', resolveWindowsPowerShellExecutable()),
+    shellEntry('bash', resolveBashExecutable()),
+    shellEntry('cmd', resolveCmdExecutable()),
+    shellEntry('sh', resolveShExecutable()),
+  ];
+  const binaries: ShellInfoBinaryEntry[] = PROBED_BINARIES.map((name) => {
+    const resolved = findExecutableOnPath(name);
+    if (isWindowsStoreAliasStub(resolved)) {
+      return { name, found: false, path: resolved, alias: true };
+    }
+    return { name, found: Boolean(resolved), path: resolved };
+  });
+  const notes = [
+    'Tool output merges stdout and stderr into one "output" field; "isError" reflects the process exit code only.',
+    `The "default" shell on this machine is "${defaultPlan.effectiveShell}".`,
+    'Pass shell:"bash" for POSIX syntax (&&, pipes into head/grep, $(…)); an unavailable explicit shell fails fast.',
+  ];
+  if (!shells.find((entry) => entry.shell === 'pwsh')?.available
+    && shells.find((entry) => entry.shell === 'powershell')?.available) {
+    notes.push('Only Windows PowerShell 5.1 is installed: "&&" and "||" are not valid statement separators there.');
+  }
+  cachedShellInfo = {
+    platform: process.platform,
+    defaultShell: defaultPlan.effectiveShell,
+    defaultShellPath: defaultPlan.file || null,
+    shells,
+    binaries,
+    notes,
+  };
+  return cachedShellInfo;
+}
+
+function availableShellNames(): string[] {
+  return collectShellInfo().shells.filter((entry) => entry.available).map((entry) => entry.shell);
+}
+
+function shellInfoTool(): CallToolResult {
+  return textResult(collectShellInfo());
+}
+
 /** Test-only: forget cached shell-executable lookups. */
 export function _resetBashShellCacheForTests(): void {
   cachedBashPath = undefined;
   cachedPwshPath = undefined;
   cachedWindowsPowerShellPath = undefined;
+  cachedShellInfo = undefined;
 }
 
 interface BashSession {
@@ -257,6 +361,8 @@ interface BashSession {
   child: ChildProcess;
   output: string;
   truncated: boolean;
+  /** Characters that arrived on stderr (logging volume, not failure).  */
+  stderrChars?: number;
   running: boolean;
   exitCode: number | null;
   startedAt: number;
@@ -403,6 +509,27 @@ async function resolveCwd(input: unknown, roots: string[]): Promise<string> {
   if (roots.length === 0 || !roots.some((root) => isInside(root, resolved))) {
     throw new Error(`cwd "${resolved}" is outside the configured bash roots.`);
   }
+  return resolved;
+}
+
+/**
+ * Resolve an `outputFile` spool target under the same confinement rules as
+ * `cwd` (issue #364) and make sure its parent directory exists.
+ */
+async function resolveOutputFile(input: unknown, cwd: string, roots: string[]): Promise<string> {
+  const raw = typeof input === 'string' ? input.trim() : '';
+  if (!raw) throw new Error('"outputFile" must be a non-empty path.');
+  const resolved = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(cwd, raw);
+  if (await isProtectedPathsEnabled()) {
+    const prot = isProtected(resolved);
+    if (prot.denied) {
+      throw new Error(`outputFile "${resolved}" is within a protected location (${prot.matchedRoot}).`);
+    }
+  }
+  if (roots.length === 0 || !roots.some((root) => isInside(root, resolved))) {
+    throw new Error(`outputFile "${resolved}" is outside the configured bash roots.`);
+  }
+  await fs.promises.mkdir(path.dirname(resolved), { recursive: true });
   return resolved;
 }
 
@@ -580,6 +707,14 @@ function buildChildEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEn
     }
     out.PATHEXT = windowsExecutableExtensions().join(';');
   }
+  // Deterministic text encoding and number formatting for children (issue #364):
+  // without this, interpreters emit locale-dependent decimal commas and non-UTF-8
+  // bytes that come back as mojibake. Explicit per-call `env` still wins below.
+  if (out.PYTHONIOENCODING === undefined) out.PYTHONIOENCODING = 'utf-8';
+  if (process.platform !== 'win32') {
+    if (!out.LANG) out.LANG = 'C.UTF-8';
+    if (!out.LC_ALL) out.LC_ALL = 'C.UTF-8';
+  }
   for (const [key, value] of Object.entries(overrides)) {
     if (process.platform === 'win32') {
       for (const existing of Object.keys(out)) {
@@ -613,6 +748,40 @@ function validateEnv(input: unknown): EnvValidation {
   return { valid: true, env };
 }
 
+/**
+ * PowerShell prelude (issue #364). It makes three platform traps go away for
+ * every command we run:
+ *   - stderr from a native binary no longer turns into a terminating error, so
+ *     the reported exit code is the native process' own,
+ *   - console output is forced to UTF-8 (otherwise logs come back as UTF-16 or
+ *     OEM mojibake),
+ *   - the culture is pinned to invariant, so numbers never use a decimal comma.
+ * The epilogue re-surfaces the native exit code (`$LASTEXITCODE`), falling back
+ * to `$?` when no native command ran.
+ */
+const POWERSHELL_PRELUDE = [
+  "$ErrorActionPreference='Continue'",
+  "$ProgressPreference='SilentlyContinue'",
+  'try { [Console]::OutputEncoding=[Text.Encoding]::UTF8; $OutputEncoding=[Text.Encoding]::UTF8 } catch {}',
+  'try { [Threading.Thread]::CurrentThread.CurrentCulture=[Globalization.CultureInfo]::InvariantCulture;'
+    + ' [Threading.Thread]::CurrentThread.CurrentUICulture=[Globalization.CultureInfo]::InvariantCulture } catch {}',
+].join('; ');
+
+const POWERSHELL_EPILOGUE = 'exit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } elseif ($?) { 0 } else { 1 })';
+
+export function wrapPowerShellCommand(command: string): string {
+  return `${POWERSHELL_PRELUDE}\n${command}\n${POWERSHELL_EPILOGUE}`;
+}
+
+/** `chcp 65001` forces UTF-8 output for cmd.exe children (issue #364). */
+export function wrapCmdCommand(command: string): string {
+  return `chcp 65001>nul & ${command}`;
+}
+
+function powerShellArgs(command: string): string[] {
+  return ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', wrapPowerShellCommand(command)];
+}
+
 interface SpawnPlan {
   file: string;
   args: string[];
@@ -635,7 +804,7 @@ function buildSpawn(command: string, shell: ShellKind): SpawnPlan {
   if (shell === 'pwsh') {
     const resolved = resolvePwshExecutable();
     if (resolved) {
-      return { file: resolved, args: ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], useShell: false, effectiveShell: 'pwsh' };
+      return { file: resolved, args: powerShellArgs(command), useShell: false, effectiveShell: 'pwsh' };
     }
     return { file: '', args: [], useShell: false, effectiveShell: 'pwsh', unavailableShell: 'pwsh' };
   }
@@ -651,7 +820,7 @@ function buildSpawn(command: string, shell: ShellKind): SpawnPlan {
     if (resolved) {
       return {
         file: resolved,
-        args: ['/d', '/s', '/c', command],
+        args: ['/d', '/s', '/c', wrapCmdCommand(command)],
         useShell: false,
         effectiveShell: 'cmd',
         windowsVerbatimArguments: true,
@@ -662,17 +831,17 @@ function buildSpawn(command: string, shell: ShellKind): SpawnPlan {
   if (process.platform === 'win32') {
     const pwsh = resolvePwshExecutable();
     if (pwsh) {
-      return { file: pwsh, args: ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], useShell: false, effectiveShell: 'pwsh' };
+      return { file: pwsh, args: powerShellArgs(command), useShell: false, effectiveShell: 'pwsh' };
     }
     const windowsPowerShell = resolveWindowsPowerShellExecutable();
     if (windowsPowerShell) {
-      return { file: windowsPowerShell, args: ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], useShell: false, effectiveShell: 'powershell' };
+      return { file: windowsPowerShell, args: powerShellArgs(command), useShell: false, effectiveShell: 'powershell' };
     }
     const cmd = resolveCmdExecutable();
     if (cmd) {
       return {
         file: cmd,
-        args: ['/d', '/s', '/c', command],
+        args: ['/d', '/s', '/c', wrapCmdCommand(command)],
         useShell: false,
         effectiveShell: 'cmd',
         windowsVerbatimArguments: true,
@@ -768,20 +937,217 @@ function startChild(command: string, cwd: string, shell: ShellKind, env: Record<
   }
 }
 
-function makeAppender(get: () => string, set: (v: string, truncated: boolean) => void) {
-  return (chunk: string) => {
-    let out = get();
-    if (out.length >= MAX_OUTPUT_CHARS) {
-      if (chunk) set(out, true);
-      return;
+export interface OutputAppender {
+  (chunk: string): void;
+  /** Total characters ever appended, including any omitted middle. */
+  totalChars: () => number;
+  /** Characters dropped from the middle because of the cap. */
+  droppedChars: () => number;
+}
+
+/**
+ * Bounded output accumulator (issue #364). Retention is head + tail rather than
+ * head-only, so the command echo at the start AND the final result at the end
+ * both survive an output flood (e.g. a 50k-line ffmpeg progress log); the
+ * omitted middle is reported explicitly.
+ */
+function makeAppender(
+  get: () => string,
+  set: (v: string, truncated: boolean) => void,
+  maxChars = MAX_OUTPUT_CHARS,
+): OutputAppender {
+  const limit = Math.max(1_000, Math.min(Math.floor(maxChars) || MAX_OUTPUT_CHARS, MAX_OUTPUT_CHARS));
+  const headLimit = Math.max(1, Math.floor(limit * 0.3));
+  const tailLimit = Math.max(1, limit - headLimit);
+  let head = '';
+  let tail = '';
+  let dropped = 0;
+  let total = 0;
+  const compose = () => (dropped > 0
+    ? head + '\n…[' + dropped + ' characters of output omitted]…\n' + tail
+    : head + tail);
+  const append = ((chunk: string) => {
+    if (!chunk) return;
+    total += chunk.length;
+    let rest = chunk;
+    if (head.length < headLimit) {
+      const take = Math.min(headLimit - head.length, rest.length);
+      head += rest.slice(0, take);
+      rest = rest.slice(take);
     }
-    out += chunk;
-    let truncated = false;
-    if (out.length > MAX_OUTPUT_CHARS) {
-      out = out.slice(0, MAX_OUTPUT_CHARS) + '\n…[output truncated]';
-      truncated = true;
+    if (rest) {
+      tail += rest;
+      if (tail.length > tailLimit) {
+        const remove = tail.length - tailLimit;
+        tail = tail.slice(remove);
+        dropped += remove;
+      }
     }
-    set(out, truncated);
+    set(compose(), dropped > 0);
+  }) as OutputAppender;
+  append.totalChars = () => total;
+  append.droppedChars = () => dropped;
+  // `get` is retained for call-site symmetry with the previous signature.
+  void get;
+  return append;
+}
+
+/**
+ * Shell-dialect trap detection (issue #364). Commands are NEVER rewritten —
+ * translating shell text between dialects is far riskier than executing what
+ * the caller wrote — so every finding is returned as an advisory
+ * `dialectWarnings` entry with a concrete suggested fix.
+ */
+const POSIX_ONLY_BINARIES = new Set([
+  'head', 'tail', 'grep', 'sed', 'awk', 'wc', 'cat', 'cut', 'tr', 'uniq', 'sort', 'xargs', 'touch', 'which',
+]);
+
+/** Blank out quoted spans so operators inside string literals never trip us. */
+function stripQuotedSegments(command: string): string {
+  return command.replace(/"(?:\\.|[^"\\])*"|'[^']*'/g, (match) => ' '.repeat(match.length));
+}
+
+function commandSegmentHeads(stripped: string): string[] {
+  return stripped
+    .split(/&&|\|\||[|;\n]/)
+    .map((segment) => segment.trim().split(/\s+/)[0] ?? '')
+    .map((head) => head.replace(/^[('"`]+/, ''))
+    .filter(Boolean);
+}
+
+/** True when the command relies on POSIX `&&` / `||` statement chaining. */
+export function commandUsesPosixChaining(command: string): boolean {
+  return /&&|\|\|/.test(stripQuotedSegments(command));
+}
+
+export function detectDialectMismatch(
+  command: string,
+  shell: EffectiveShell,
+  isAvailable: (name: string) => boolean = (name) => Boolean(findExecutableOnPath(name)),
+): string[] {
+  const warnings: string[] = [];
+  const stripped = stripQuotedSegments(command);
+  const heads = commandSegmentHeads(stripped);
+  const posixShell = shell === 'bash' || shell === 'sh';
+
+  if (!posixShell) {
+    for (const head of new Set(heads)) {
+      const name = path.basename(head).toLowerCase().replace(/\.exe$/, '');
+      if (!POSIX_ONLY_BINARIES.has(name)) continue;
+      if (isAvailable(name)) continue;
+      warnings.push(
+        `"${name}" is a POSIX utility and is not available as an executable on this machine; `
+        + `under ${shell} it resolves to nothing (or to an unrelated alias). Pass shell:"bash" or use the native equivalent.`
+      );
+    }
+  }
+
+  if (shell === 'powershell' && /&&|\|\|/.test(stripped)) {
+    warnings.push(
+      '"&&" and "||" are not statement separators in Windows PowerShell 5.1 (they are a parse error). '
+      + 'Use ";" for unconditional chaining, or pass shell:"bash" / shell:"pwsh".'
+    );
+  }
+
+  if (shell === 'pwsh' || shell === 'powershell') {
+    if (/\$\(\s*([A-Za-z_][\w-]*)/.test(stripped)) {
+      const inner = /\$\(\s*([A-Za-z_][\w-]*)/.exec(stripped)?.[1] ?? '';
+      if (POSIX_ONLY_BINARIES.has(inner.toLowerCase()) && !isAvailable(inner.toLowerCase())) {
+        warnings.push(
+          `"$(${inner} …)" is POSIX command substitution; PowerShell evaluates it as a subexpression `
+          + 'and cannot run that utility. Pass shell:"bash".'
+        );
+      }
+    }
+    if ((stripped.match(/`/g) ?? []).length >= 2) {
+      warnings.push(
+        'Backticks are the line-continuation/escape character in PowerShell, not command substitution. '
+        + 'Use "$(…)" for PowerShell, or pass shell:"bash".'
+      );
+    }
+    if (/2>&1/.test(stripped)) {
+      warnings.push(
+        'No "2>&1" redirection is needed: this tool already merges stdout and stderr into one "output" field, '
+        + 'and "isError" is derived from the exit code only.'
+      );
+    }
+  }
+
+  if (shell === 'cmd') {
+    if (/'/.test(command.replace(/"(?:\\.|[^"\\])*"/g, ''))) {
+      warnings.push('cmd.exe does not treat single quotes as string delimiters; use double quotes.');
+    }
+    if (/\$\(|`/.test(stripped)) {
+      warnings.push('Command substitution ($(…) / backticks) is not supported by cmd.exe. Pass shell:"bash" or shell:"pwsh".');
+    }
+  }
+
+  if (posixShell && /\b(?:Get|Set|New|Remove|Write|Select|Out|Format|Test|Invoke|Start|Stop)-[A-Z][A-Za-z]+\b/.test(stripped)) {
+    warnings.push('This looks like a PowerShell cmdlet but the command is running under a POSIX shell. Pass shell:"pwsh".');
+  }
+
+  return warnings;
+}
+
+/** Commands that typically hang forever waiting on a pager or interactive prompt. */
+export function detectInteractiveHangRisk(command: string): string[] {
+  const hints: string[] = [];
+  const stripped = stripQuotedSegments(command);
+  if (/\bgit\b(?![^|;]*--no-pager)[^|;]*\b(?:log|diff|show|branch)\b/.test(stripped)) {
+    hints.push('git paginates by default; use "git --no-pager …" (or append "| cat") for non-interactive runs.');
+  }
+  if (/(^|[|;\s])(?:less|more)(\s|$)/.test(stripped)) {
+    hints.push('"less"/"more" are interactive pagers and will never exit here; drop them.');
+  }
+  if (/Format-(?:Table|List)\b/.test(stripped) && !/Out-String/.test(stripped)) {
+    hints.push('Pipe Format-Table/Format-List into "| Out-String" so PowerShell does not wait on the host formatter.');
+  }
+  if (/(^|[|;\s])(?:npm|yarn|pnpm)\s+(?:init|login)(\s|$)/.test(stripped)) {
+    hints.push('This command prompts interactively; add its non-interactive flag (e.g. "npm init -y").');
+  }
+  return hints;
+}
+
+export type OutputEncodingMode = 'utf8' | 'utf16le' | 'auto';
+
+function validateEncoding(input: unknown): OutputEncodingMode | null {
+  if (input === undefined) return 'auto';
+  if (input === 'utf8' || input === 'utf16le' || input === 'auto') return input;
+  return null;
+}
+
+function looksLikeUtf16le(buf: Buffer): boolean {
+  const len = Math.min(buf.length, 64);
+  if (len < 4) return false;
+  let nuls = 0;
+  for (let i = 0; i < len; i += 1) if (buf[i] === 0) nuls += 1;
+  return nuls / len > 0.3;
+}
+
+/**
+ * Decode child output deterministically (issue #364). Windows tooling happily
+ * writes UTF-16LE (e.g. PowerShell redirection into a log) which the default
+ * UTF-8 decode turns into NUL-riddled mojibake. `auto` sniffs a BOM or a high
+ * NUL ratio in the first chunk and then stays with that choice.
+ */
+export function createStreamDecoder(mode: OutputEncodingMode = 'auto'): (chunk: Buffer | string) => string {
+  let resolved: 'utf8' | 'utf16le' | null = mode === 'auto' ? null : mode;
+  let first = true;
+  return (chunk: Buffer | string): string => {
+    if (typeof chunk === 'string') return chunk;
+    let buf = chunk;
+    if (first) {
+      if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) {
+        if (resolved === null) resolved = 'utf16le';
+        if (resolved === 'utf16le') buf = buf.subarray(2);
+      } else if (resolved === null) {
+        resolved = looksLikeUtf16le(buf) ? 'utf16le' : 'utf8';
+      }
+      first = false;
+    }
+    let text = buf.toString(resolved ?? 'utf8');
+    if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+    return text;
   };
 }
 
@@ -931,7 +1297,26 @@ export function bashToolDefinitions(): Tool[] {
     additionalProperties: { type: 'string' },
     description: 'Environment variables to add or override for this command.',
   };
+  const encodingProp = {
+    type: 'string',
+    enum: ['auto', 'utf8', 'utf16le'],
+    description: 'How to decode child output. "auto" (default) detects UTF-16LE (BOM or NUL-heavy) and otherwise uses UTF-8.',
+  };
+  const maxOutputCharsProp = {
+    type: 'number',
+    description: 'Cap the returned output (default and hard maximum 100000 characters). When exceeded, the head and tail are kept and the omitted middle is reported.',
+  };
+  const outputFileProp = {
+    type: 'string',
+    description: 'Spool the full merged output to this file (confined to the configured roots) while the result stays bounded.',
+  };
   return [
+    {
+      name: 'shell_info',
+      description:
+        'Describe this machine before running anything: platform, which shell "default" resolves to, which of pwsh/powershell/bash/cmd/sh are available, and whether common interpreters (python, node, git, ffmpeg, …) are on PATH. Call this instead of discovering the environment through failed commands.',
+      inputSchema: { type: 'object', properties: {} },
+    },
     {
       name: 'open_terminal',
       description: 'Open a real interactive pseudoterminal (PTY/ConPTY) and display its MCP App. Returns an owner-scoped terminal sessionId.',
@@ -999,7 +1384,9 @@ export function bashToolDefinitions(): Tool[] {
     {
       name: 'run',
       description:
-        'Run one command to completion. Output is sent as live progress when supported and returned with the exit code; use start/status for a persistent background session.',
+        'Run one command to completion. "output" is stdout and stderr MERGED (no 2>&1 needed) and "isError" reflects the process exit code only — text on stderr is not a failure. '
+        + 'On an unknown machine call "shell_info" first; prefer shell:"bash" for POSIX syntax (&&, pipes into head/grep). Output is UTF-8 decoded and PowerShell runs with invariant culture, so numbers and text are stable. '
+        + 'Use start/status for a persistent background session.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1007,15 +1394,18 @@ export function bashToolDefinitions(): Tool[] {
           cwd: cwdProp,
           shell: shellProp,
           env: envProp,
-          timeout: { type: 'number', description: 'Timeout in seconds (default 60, max 600).' },
+          timeout: { type: 'number', description: 'Timeout in seconds (default 60, max 600). On timeout the whole process tree is killed and elapsedMs/timeoutMs are reported.' },
           normalizeNewlines: { type: 'boolean', description: 'If true, CRLF/CR in the captured output are normalized to LF.' },
+          encoding: encodingProp,
+          maxOutputChars: maxOutputCharsProp,
+          outputFile: outputFileProp,
         },
         required: ['command'],
       },
     },
     {
       name: 'start',
-      description: 'Start an independent background command and return its sessionId. Multiple sessions may run in parallel; use status/wait, write_stdin, or kill.',
+      description: 'Start an independent background command and return its sessionId. Output is stdout and stderr merged, decoded as UTF-8. Multiple sessions may run in parallel; use status/wait, write_stdin, or kill.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1023,6 +1413,9 @@ export function bashToolDefinitions(): Tool[] {
           cwd: cwdProp,
           shell: shellProp,
           env: envProp,
+          encoding: encodingProp,
+          maxOutputChars: maxOutputCharsProp,
+          outputFile: outputFileProp,
         },
         required: ['command'],
       },
@@ -1082,6 +1475,73 @@ function maybeNormalize(text: string, normalize: boolean): string {
   return normalize ? text.replace(/\r\n?/g, '\n') : text;
 }
 
+interface ShellSelection {
+  shell: ShellKind;
+  autoSelected: boolean;
+}
+
+/**
+ * Only when the caller said `shell: "default"` may we pick a different shell
+ * (issue #364): a command chained with POSIX `&&`/`||` cannot even parse under
+ * Windows PowerShell 5.1, so prefer a shell that can run it. An explicitly
+ * requested shell is never overridden.
+ */
+function selectShell(command: string, requested: ShellKind): ShellSelection {
+  if (requested !== 'default') return { shell: requested, autoSelected: false };
+  const plan = buildSpawn(command, 'default');
+  if (plan.effectiveShell === 'powershell' && commandUsesPosixChaining(command)) {
+    if (resolvePwshExecutable()) return { shell: 'pwsh', autoSelected: true };
+    if (resolveBashExecutable()) return { shell: 'bash', autoSelected: true };
+  }
+  return { shell: 'default', autoSelected: false };
+}
+
+/** Optional per-call output limits shared by `run` and `start`. */
+function resolveMaxOutputChars(input: unknown): number {
+  return typeof input === 'number' && input > 0
+    ? Math.min(Math.floor(input), MAX_OUTPUT_CHARS)
+    : MAX_OUTPUT_CHARS;
+}
+
+/** Spool the full merged output to a file while the tool result stays bounded. */
+function createOutputSpool(file: string | undefined): {
+  write: (chunk: string) => void;
+  close: () => void;
+  bytes: () => number;
+  error: () => string | undefined;
+} {
+  if (!file) return { write: () => undefined, close: () => undefined, bytes: () => 0, error: () => undefined };
+  let bytes = 0;
+  let failure: string | undefined;
+  let stream: fs.WriteStream | undefined;
+  try {
+    stream = fs.createWriteStream(file, { encoding: 'utf8' });
+    stream.on('error', (err) => { failure = err instanceof Error ? err.message : String(err); });
+  } catch (err) {
+    failure = err instanceof Error ? err.message : String(err);
+  }
+  return {
+    write: (chunk: string) => {
+      if (!stream || failure || !chunk) return;
+      try {
+        stream.write(chunk);
+        bytes += Buffer.byteLength(chunk, 'utf8');
+      } catch (err) {
+        failure = err instanceof Error ? err.message : String(err);
+      }
+    },
+    close: () => {
+      try {
+        stream?.end();
+      } catch {
+        /* best-effort */
+      }
+    },
+    bytes: () => bytes,
+    error: () => failure,
+  };
+}
+
 async function runTool(
   args: Record<string, unknown>,
   roots: string[],
@@ -1099,35 +1559,79 @@ async function runTool(
     return textResult({ error: 'Command cancelled before it started.', cancelled: true, requestedShell }, true);
   }
 
+  const encodingMode = validateEncoding(args.encoding);
+  if (!encodingMode) {
+    return textResult({ error: '"encoding" must be one of "utf8", "utf16le", or "auto".' }, true);
+  }
+
   const cwd = await resolveCwd(args.cwd, roots);
   const warnings = await scanCommandForExternalPaths(command, cwd, roots);
   const warn = warnings.length ? { warnings } : {};
   const normalize = args.normalizeNewlines === true;
   const timeoutSec = typeof args.timeout === 'number' && args.timeout > 0 ? args.timeout : DEFAULT_TIMEOUT_MS / 1000;
   const timeoutMs = Math.min(timeoutSec * 1000, MAX_TIMEOUT_MS);
+  const maxOutputChars = resolveMaxOutputChars(args.maxOutputChars);
+  let outputFilePath: string | undefined;
+  if (args.outputFile !== undefined) {
+    try {
+      outputFilePath = await resolveOutputFile(args.outputFile, cwd, roots);
+    } catch (err) {
+      return textResult({ error: err instanceof Error ? err.message : String(err), cwd }, true);
+    }
+  }
+  const selection = selectShell(command, requestedShell);
   registerExitCleanup();
+  const startedAt = Date.now();
 
   return await new Promise<CallToolResult>((resolve) => {
     let output = '';
     let truncated = false;
     let settled = false;
+    let stderrChars = 0;
 
-    const append = makeAppender(() => output, (v, t) => { output = v; truncated = t || truncated; });
+    const append = makeAppender(
+      () => output,
+      (v, t) => { output = v; truncated = t || truncated; },
+      maxOutputChars,
+    );
+    const spool = createOutputSpool(outputFilePath);
+    const decodeStdout = createStreamDecoder(encodingMode);
+    const decodeStderr = createStreamDecoder(encodingMode);
     const progress = createCommandProgressReporter(context);
 
     const { child, startError, effectiveShell, unavailableShell } = startChild(
       command,
       cwd,
-      requestedShell,
+      selection.shell,
       envValidation.env,
     );
+    const dialectWarnings = detectDialectMismatch(command, effectiveShell);
+    const dialect = dialectWarnings.length ? { dialectWarnings } : {};
+    const auto = selection.autoSelected ? { shellAutoSelected: true } : {};
+    const spoolInfo = () => (outputFilePath
+      ? { outputFile: outputFilePath, outputBytes: spool.bytes(), ...(spool.error() ? { outputFileError: spool.error() } : {}) }
+      : {});
+    const outputStats = () => ({
+      truncated,
+      stderrChars,
+      outputChars: append.totalChars(),
+      ...(append.droppedChars() > 0 ? { omittedChars: append.droppedChars() } : {}),
+    });
     if (unavailableShell) {
+      spool.close();
       void progress.stop().then(() => {
-        resolve(textResult({ error: `Requested shell "${unavailableShell}" is unavailable or could not be resolved.`, cwd, shell: unavailableShell }, true));
+        resolve(textResult({
+          error: `Requested shell "${unavailableShell}" is unavailable or could not be resolved.`,
+          cwd,
+          shell: unavailableShell,
+          availableShells: availableShellNames(),
+          hint: 'Call "shell_info" to see which shells and interpreters exist on this machine.',
+        }, true));
       });
       return;
     }
     if (startError || !child) {
+      spool.close();
       void progress.stop().then(() => {
         resolve(textResult({ error: `Failed to start command (${effectiveShell}): ${startError ?? 'unknown error'}`, cwd, shell: effectiveShell }, true));
       });
@@ -1147,8 +1651,11 @@ async function runTool(
         requestedShell,
         shell: effectiveShell,
         exitCode: null,
-        truncated,
         output: finalOut,
+        ...outputStats(),
+        ...spoolInfo(),
+        ...dialect,
+        ...auto,
         ...warn,
       }, true), true);
     };
@@ -1158,6 +1665,7 @@ async function runTool(
       if (timer) clearTimeout(timer);
       context?.signal?.removeEventListener('abort', onAbort);
       if (!keepKillEscalation) cancelEscalation?.();
+      spool.close();
       await progress.stop();
       resolve(result);
     };
@@ -1165,25 +1673,38 @@ async function runTool(
     timer = setTimeout(() => {
       cancelEscalation = killProcessTree(child);
       const finalOut = maybeNormalize(output, normalize);
+      const hangHints = detectInteractiveHangRisk(command);
       void finish(textResult({
         timedOut: true,
         cwd,
         requestedShell,
         shell: effectiveShell,
         exitCode: null,
-        truncated,
+        timeoutMs,
+        elapsedMs: Date.now() - startedAt,
+        killedProcessTree: true,
+        suggestion: `Command exceeded ${timeoutMs / 1000}s and its process tree was killed. `
+          + 'Raise "timeout" (max 600s) or run it via "start" + "wait" for long jobs.',
         output: `${finalOut}${finalOut ? '\n' : ''}[killed after ${timeoutMs / 1000}s timeout]`,
+        ...outputStats(),
+        ...spoolInfo(),
+        ...(hangHints.length ? { hangHints } : {}),
+        ...dialect,
+        ...auto,
         ...warn,
       }, true), true);
     }, timeoutMs);
     child.stdout?.on('data', (d: Buffer) => {
-      const chunk = d.toString();
+      const chunk = decodeStdout(d);
       append(chunk);
+      spool.write(chunk);
       progress.push(maybeNormalize(chunk, normalize));
     });
     child.stderr?.on('data', (d: Buffer) => {
-      const chunk = d.toString();
+      const chunk = decodeStderr(d);
+      stderrChars += chunk.length;
       append(chunk);
+      spool.write(chunk);
       progress.push(maybeNormalize(chunk, normalize));
     });
 
@@ -1199,7 +1720,18 @@ async function runTool(
       cancelEscalation?.();
       if (settled) return;
       const finalOut = maybeNormalize(output, normalize);
-      void finish(textResult({ exitCode: code, cwd, requestedShell, shell: effectiveShell, truncated, output: finalOut, ...warn }, code !== 0));
+      void finish(textResult({
+        exitCode: code,
+        cwd,
+        requestedShell,
+        shell: effectiveShell,
+        output: finalOut,
+        ...outputStats(),
+        ...spoolInfo(),
+        ...dialect,
+        ...auto,
+        ...warn,
+      }, code !== 0));
     });
     if (context?.signal?.aborted) onAbort();
     else context?.signal?.addEventListener('abort', onAbort, { once: true });
@@ -1246,17 +1778,38 @@ async function startTool(
 
   registerExitCleanup();
 
+  const encodingMode = validateEncoding(args.encoding);
+  if (!encodingMode) {
+    return textResult({ error: '"encoding" must be one of "utf8", "utf16le", or "auto".' }, true);
+  }
+
   const cwd = await resolveCwd(args.cwd, roots);
   const warnings = await scanCommandForExternalPaths(command, cwd, roots);
   const warn = warnings.length ? { warnings } : {};
+  const maxOutputChars = resolveMaxOutputChars(args.maxOutputChars);
+  let outputFilePath: string | undefined;
+  if (args.outputFile !== undefined) {
+    try {
+      outputFilePath = await resolveOutputFile(args.outputFile, cwd, roots);
+    } catch (err) {
+      return textResult({ error: err instanceof Error ? err.message : String(err), cwd }, true);
+    }
+  }
+  const selection = selectShell(command, requestedShell);
   const { child, startError, effectiveShell, unavailableShell } = startChild(
     command,
     cwd,
-    requestedShell,
+    selection.shell,
     envValidation.env,
   );
   if (unavailableShell) {
-    return textResult({ error: `Requested shell "${unavailableShell}" is unavailable or could not be resolved.`, cwd, shell: unavailableShell }, true);
+    return textResult({
+      error: `Requested shell "${unavailableShell}" is unavailable or could not be resolved.`,
+      cwd,
+      shell: unavailableShell,
+      availableShells: availableShellNames(),
+      hint: 'Call "shell_info" to see which shells and interpreters exist on this machine.',
+    }, true);
   }
   if (startError || !child) {
     return textResult({ error: `Failed to start command (${effectiveShell}): ${startError ?? 'unknown error'}`, cwd, shell: effectiveShell }, true);
@@ -1277,9 +1830,25 @@ async function startTool(
   };
   table.set(id, session);
 
-  const append = makeAppender(() => session.output, (v, t) => { session.output = v; session.truncated = t || session.truncated; });
-  child.stdout?.on('data', (d: Buffer) => append(d.toString()));
-  child.stderr?.on('data', (d: Buffer) => append(d.toString()));
+  const append = makeAppender(
+    () => session.output,
+    (v, t) => { session.output = v; session.truncated = t || session.truncated; },
+    maxOutputChars,
+  );
+  const spool = createOutputSpool(outputFilePath);
+  const decodeStdout = createStreamDecoder(encodingMode);
+  const decodeStderr = createStreamDecoder(encodingMode);
+  child.stdout?.on('data', (d: Buffer) => {
+    const chunk = decodeStdout(d);
+    append(chunk);
+    spool.write(chunk);
+  });
+  child.stderr?.on('data', (d: Buffer) => {
+    const chunk = decodeStderr(d);
+    session.stderrChars = (session.stderrChars ?? 0) + chunk.length;
+    append(chunk);
+    spool.write(chunk);
+  });
   child.on('error', (err: Error) => {
     append(`\n${err.message}`);
     session.running = false;
@@ -1290,10 +1859,21 @@ async function startTool(
     session.running = false;
     session.exitCode = code;
     session.endedAt = Date.now();
+    spool.close();
     scheduleReap(session);
   });
 
-  return textResult({ sessionId: id, cwd, requestedShell, shell: effectiveShell, ...warn });
+  const dialectWarnings = detectDialectMismatch(command, effectiveShell);
+  return textResult({
+    sessionId: id,
+    cwd,
+    requestedShell,
+    shell: effectiveShell,
+    ...(selection.autoSelected ? { shellAutoSelected: true } : {}),
+    ...(dialectWarnings.length ? { dialectWarnings } : {}),
+    ...(outputFilePath ? { outputFile: outputFilePath } : {}),
+    ...warn,
+  });
 }
 
 function snapshot(session: BashSession, extra: Record<string, unknown> = {}): Record<string, unknown> {
@@ -1303,6 +1883,7 @@ function snapshot(session: BashSession, extra: Record<string, unknown> = {}): Re
     exitCode: session.exitCode,
     output: session.output,
     truncated: session.truncated,
+    stderrChars: session.stderrChars ?? 0,
     ...extra,
   };
 }
@@ -1456,7 +2037,11 @@ async function openTerminalTool(
   const cwd = await resolveCwd(args.cwd, roots);
   const plan = buildPtySpawn(shellValidation.shell);
   if (plan.unavailableShell) {
-    return textResult({ error: `Requested shell "${plan.unavailableShell}" is unavailable or could not be resolved.` }, true);
+    return textResult({
+      error: `Requested shell "${plan.unavailableShell}" is unavailable or could not be resolved.`,
+      availableShells: availableShellNames(),
+      hint: 'Call "shell_info" to see which shells and interpreters exist on this machine.',
+    }, true);
   }
   if (plan.startError) return textResult({ error: plan.startError }, true);
 
@@ -1610,6 +2195,8 @@ export async function bashCallTool(
         return closeTerminalTool(args, scope);
       case 'terminal_list':
         return listTerminalsTool(scope);
+      case 'shell_info':
+        return shellInfoTool();
       case 'run': {
         const roots = await loadEffectiveRoots(BASH_SERVER_NAME, BASH_ROOT_ENV_VARS, callerNodeId);
         return await runTool(args, roots, context);
