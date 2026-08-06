@@ -540,23 +540,36 @@ export function buildSandboxProxyHtml(
   hostAllowlistConfigured = false,
   csp?: ResourceCsp,
 ): string {
-  const cspString = buildSandboxCsp(csp);
-  const cspMeta = `<meta http-equiv="Content-Security-Policy" content="${cspString.replace(/"/g, '&quot;')}"`;
+  const innerCspMeta = buildInnerCspMeta(csp);
+  const proxyCspString = buildSandboxProxyCsp(configuredHostOrigins, csp);
 
   return `<!doctype html>
 <html>
 <head>
-<meta charset="utf-8">
-${cspMeta}>
+<meta charset="utf-8" />
+<meta name="color-scheme" content="light dark" />
+<title>FLUJO MCP App Sandbox</title>
 <style>
-  body { margin: 0; overflow: hidden; }
-  #app { width: 100%; height: 100%; border: none; }
+  html, body { margin: 0; height: 100vh; width: 100vw; background: transparent; }
+  body { display: flex; flex-direction: column; }
+  * { box-sizing: border-box; }
+  iframe { background: transparent; border: 0 none transparent; padding: 0; overflow: hidden; flex-grow: 1; color-scheme: inherit; }
 </style>
 </head>
 <body>
-<iframe id="app"></iframe>
 <script>
-  (function() {
+(function () {
+  var RESOURCE_READY = ${JSON.stringify(SANDBOX_RESOURCE_READY)};
+  var PROXY_READY = ${JSON.stringify(SANDBOX_PROXY_READY)};
+  var SANDBOX_PREFIX = ${JSON.stringify(SANDBOX_NOTIFICATION_PREFIX)};
+  var CONFIGURED_HOST_ORIGINS = ${JSON.stringify(configuredHostOrigins)};
+  var HOST_ALLOWLIST_CONFIGURED = ${JSON.stringify(hostAllowlistConfigured)};
+  var INNER_CSP_META = ${JSON.stringify(innerCspMeta)};
+  var DEFAULT_VIEW_SANDBOX = ${JSON.stringify(MCP_APP_IFRAME_SANDBOX)};
+  var ALLOWED_SANDBOX_TOKENS = ${JSON.stringify([...MCP_APP_IFRAME_SANDBOX_ALLOWED_TOKENS])};
+
+  if (window.self === window.top) { throw new Error("Sandbox proxy must be embedded in an iframe."); }
+  if (!document.referrer) { throw new Error("Sandbox proxy: no referrer to validate embedder."); }
     // Validate embedder origin via referrer and confirm cross-origin isolation.
     // The one-time access token and CSP declaration do not belong in untrusted
     // View-visible referrer state. The HTTP policy is already committed, so strip
