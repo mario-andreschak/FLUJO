@@ -516,6 +516,20 @@ export function buildSandboxProxyCsp(
   return directives.join('; ');
 }
 
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function buildInnerCspMeta(csp?: ResourceCsp): string {
+  return `<meta http-equiv="Content-Security-Policy" content="${escapeHtmlAttribute(
+    buildSandboxCsp(csp)
+  )}">`;
+}
+
 /**
  * Generate the HTML for the sandbox proxy relay document. This runs on the
  * foreign origin and creates the inner app View, relaying postMessage between
@@ -544,6 +558,10 @@ ${cspMeta}>
 <script>
   (function() {
     // Validate embedder origin via referrer and confirm cross-origin isolation.
+    // The one-time access token and CSP declaration do not belong in untrusted
+    // View-visible referrer state. The HTTP policy is already committed, so strip
+    // the query before creating the inner iframe.
+    try { window.history.replaceState(null, "", window.location.pathname); } catch (e) {}
     const referrer = document.referrer ? new URL(document.referrer).origin : null;
     if (!referrer || window.top === window) {
       document.body.innerHTML = '<p style="color:#999">Invalid proxy context</p>';
