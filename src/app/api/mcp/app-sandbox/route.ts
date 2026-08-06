@@ -48,14 +48,18 @@ export async function GET(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
-  if (!isSandboxServerReady()) {
+  // Ensure the shared sandbox listener is allocated and ready.
+  // This is fire-and-forget on startup, but on first request we wait for it.
+  const sharedSandbox = await ensureSandboxForOriginKey('');
+  if (!sharedSandbox) {
     return NextResponse.json(
-      { error: 'MCP Apps sandbox is not ready' },
+      { error: 'MCP Apps sandbox failed to start; retry in a moment' },
       {
         status: 503,
         headers: {
-          'Cache-Control': 'no-store',
+          'Cache-Control': 'no-store, no-cache',
           Pragma: 'no-cache',
+          'Retry-After': '2',
         },
       },
     );
