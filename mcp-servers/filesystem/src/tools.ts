@@ -38,6 +38,7 @@ import {
   loadEffectiveRoots,
 } from '@flujo-ai/mcp-shared';
 import { recordTouchedFile } from './resources.js';
+import { detectMediaFile, mimeTypeFromExtension, mediaTypeFromMime, looksBinaryHeuristic } from './media.js';
 
 const FILESYSTEM_SERVER_NAME = 'filesystem';
 
@@ -151,7 +152,7 @@ export function filesystemToolDefinitions(): Tool[] {
       name: 'read_file',
       annotations: READ_ONLY_ANNOTATIONS,
       description:
-        'Read one text file with "path", or up to 25 files in input order with mutually exclusive "paths". Optional "from"/"to" (1-based, inclusive) and "pattern" settings apply to every target. ' +
+        'Read one text file with "path", or up to 25 files in input order with mutually exclusive "paths". Optional "from"/"to" (1-based, inclusive) and "pattern" settings apply to every target. Media files (images, audio, video) are automatically detected and returned as MCP media content items (type: image/audio/video); the capture infrastructure persists them as run resources and models can access them with same-turn vision. ' +
         `For large files (> ${LARGE_FILE_BYTES / 1000} KB) read WHOLE (no "from"/"to"), a "pattern" is REQUIRED: the server greps the file and returns only matching lines (with a little surrounding context) so you can follow up with targeted "from"/"to" reads. Pass pattern "*" to force-read the entire large file anyway. ` +
         'Single reads return { path, from, to, totalLines, content, truncated, contentHash, matches? } unchanged. Batch reads return { files }, with one ordered success or { requestedPath, path?, error } record per input; individual failures do not discard successful reads. Batch output is limited to 1,000,000 serialized characters. Pass contentHash back as "expectedHash" on a follow-up edit_file/write_file to guard against the file changing in between (TOCTOU).',
       inputSchema: {
@@ -511,11 +512,45 @@ function splitBom(content: string): { bom: string; body: string } {
 const STALE_CONTENT_MESSAGE =
   'File changed after permission approval. Read it again before editing. No changes written.';
 
-/** Heuristic binary sniff: a NUL byte in the first chunk means "not text". */
+/** Legacy heuristic binary sniff: a NUL byte in the first chunk means "not text". */
 function looksBinary(buf: Buffer): boolean {
-  const n = Math.min(buf.length, 8000);
-  for (let i = 0; i < n; i++) if (buf[i] === 0) return true;
-  return false;
+  return looksBinaryHeuristic(buf);
+}
+
+/**
+ * Build a media content result (image/audio/video) as a CallToolResult.
+ * The capture infrastructure will auto-capture the base64 data to run resources.
+ */
+function mediaResult(
+  filePath: string,
+  buf: Buffer,
+  mediaType: 'image' | 'audio' | 'video',
+  mimeType: string,
+): StructuredResult {
+  const base64Data = buf.toString('base64');
+  // Build the structured content for return (not the media item itself)
+  const payload = {
+    path: filePath,
+    mediaType,
+    mimeType,
+    size: buf.length,
+    encoding: 'base64',
+  };
+
+  // Return a CallToolResult with the media content item.
+  // The capture infrastructure will intercept this and replace it with a run-resource URI.
+  // SDK CallToolResult only supports 'image' and 'audio' types in the SDK definition.
+  // For 'video', we build the item generically and cast it.
+  const item: Record<string, unknown> = {
+    type: mediaType,
+    data: base64Data,
+    mimeType,
+  };
+  const result: StructuredResult = {
+    content: [item as CallToolResult['content'][number]],
+    structuredContent: payload,
+  };
+  return result;
 }
 
 /**
@@ -627,7 +662,29 @@ async function readSingleFileTool(args: Record<string, unknown>, roots: string[]
   }
 
   // Whole-file / explicit-range read (pattern '*' lands here too).
-  const content = await fs.readFile(filePath, 'utf8');
+  // First, read as buffer to detect media files.
+  const buf = await fs.readFile(filePath);
+  recordTouchedFile(filePath, 'read', size);
+
+  // #365: Check if this is a media file (image/audio/video).
+  // If so, return it as media content; capture infrastructure will handle persistence.
+  const mediaDetection = detectMediaFile(buf, filePath);
+  if (mediaDetection && !hasRange && !pattern) {
+    // Media files are returned as-is (no line ranges or pattern grepping for media).
+    return mediaResult(filePath, buf, mediaDetection.mediaType, mediaDetection.mimeType);
+  }
+
+  // Not media, or pattern/range was specified: treat as text.
+  let content: string;
+  try {
+    content = buf.toString('utf8');
+  } catch {
+    // Fallback: if UTF-8 decode fails, treat as binary and reject.
+    return errorResult(
+      `File at "${filePath}" is binary or not valid UTF-8. ` +
+      `Try reading it as a media file if it's an image, audio, or video.`
+    );
+  }
   const lines = splitLines(content);
   const totalLines = lines.length;
 
@@ -642,7 +699,6 @@ async function readSingleFileTool(args: Record<string, unknown>, roots: string[]
     out = out.slice(0, MAX_READ_CHARS) + '\n…[truncated]';
     truncated = true;
   }
-  recordTouchedFile(filePath, 'read', size);
   return dualResult({ path: filePath, from: hasRange ? from : 1, to: hasRange ? to : totalLines, totalLines, truncated, content: out, contentHash: contentHash(content) });
 }
 
