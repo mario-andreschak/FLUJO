@@ -10,6 +10,7 @@
   helper used by both execution and the model-card test.
 
 ### Added
+- Experimental `experimental.subflowSessions` flag gating resumable Subflow child conversations, with an Experimental-features toggle and user documentation for the `per-run` session scope (#391, follow-up to #363).
 - The model card "Test" dialog now shows which adapter/endpoint the flow engine actually resolves
   for a model (`Adapter used by flows`) and exercises that exact adapter, so a green test result now
   matches real chat behaviour.

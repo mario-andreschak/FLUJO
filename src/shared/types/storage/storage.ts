@@ -192,6 +192,21 @@ export interface ExperimentalSettings {
    */
   subflowToolInvocation?: boolean;
   /**
+   * When true, a Subflow node honours its `sessionScope` configuration and may
+   * RESUME the same child conversation across repeat visits inside one parent
+   * run, instead of starting a fresh child run every visit (issue #363 Phase
+   * 1, gated by #391). Off by default: resumed children inherit their own
+   * prior transcript, which changes what the child model sees each visit, so
+   * this stays opt-in until verified on real flows. Only `sessionScope:
+   * 'per-run'` is functional today; `'per-key'` and `sessionInputMode:
+   * 'summary'` are reserved for future phases (#363 Phases 2–3) and currently
+   * behave like `'per-visit'`/`'resume'`. When off, a Subflow node authored
+   * with `sessionScope: 'per-run'` silently falls back to `'per-visit'` —
+   * flipping this flag never breaks an existing flow. A missing value is
+   * treated as disabled.
+   */
+  subflowSessions?: boolean;
+  /**
    * When true, MCP client connections are built on the v2 beta SDK
    * (`@modelcontextprotocol/client`, spec revision 2026-07-28) with automatic
    * version negotiation: the client probes each server and speaks the new

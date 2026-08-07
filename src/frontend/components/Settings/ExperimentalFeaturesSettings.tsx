@@ -100,6 +100,17 @@ export default function ExperimentalFeaturesSettings() {
     });
   };
 
+  const handleSubflowSessionsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    log.debug(`Subflow sessions toggled: ${event.target.checked}`);
+    updateSettings({
+      ...settings,
+      experimental: {
+        ...experimental,
+        subflowSessions: event.target.checked,
+      },
+    });
+  };
+
   const handleMcpAppLaunchRestrictionChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     log.debug(`MCP App click-to-launch restriction toggled: ${event.target.checked}`);
     updateSettings({
@@ -403,6 +414,22 @@ export default function ExperimentalFeaturesSettings() {
         />
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
           {t('settings.experimental.subflowToolInvocationDescription')}
+        </Typography>
+      </FormControl>
+
+      <FormControl fullWidth sx={{ mb: 2 }}>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={experimental.subflowSessions ?? false}
+              onChange={handleSubflowSessionsChange}
+              name="subflowSessions"
+            />
+          }
+          label={t('settings.experimental.subflowSessions')}
+        />
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+          {t('settings.experimental.subflowSessionsDescription')}
         </Typography>
       </FormControl>
 

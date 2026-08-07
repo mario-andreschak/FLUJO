@@ -14,6 +14,7 @@ This section provides detailed documentation for Flujo's features.
 - **[Running Flows](./flows/running-flows.md)**: How to run and monitor flows
 - **[FlowSpec ↔ FlowBuilder UI Coverage](./flowspec-ui-coverage.md)**: Which DSL capabilities the visual FlowBuilder can author vs. what still requires the generator / `POST /api/flow/compile` (Issue #186)
 - **[Flow Templates](./flows/templates.md)**: Using and creating flow templates
+- **[Resumable Subflow Sessions](./subflow-session-scope.md)**: Experimental `per-run` session scope that lets a Subflow node resume the same child conversation across repeat visits inside one parent run, instead of starting fresh every time (Issue #363/#391)
 
 ### Process Node vs Subflow Node: input/output modes
 
@@ -73,6 +74,17 @@ does **not** do this — it keeps the current turn's tool exchange.
   is queued. For an isolated Subflow, the configured prompt is the default when `task`
   is omitted and `task` overrides it when supplied. Process-to-Process handoffs keep
   their existing caller-prompt behavior.
+
+#### Session scope (experimental)
+
+By default, every visit to a Subflow node starts a brand-new, memory-less child
+conversation. An experimental **session scope** setting lets a node opt into resuming
+the same child conversation across repeat visits within one parent run — useful for
+retry loops (e.g. produce → validate → re-produce) where re-stating the whole task on
+every retry is wasteful. It is off by default and requires both an experimental-features
+toggle and a `sessionScope` set on the node. See
+[Resumable Subflow Sessions](./subflow-session-scope.md) for the full picture, including
+current limitations.
 
 #### Subflow execution queue
 

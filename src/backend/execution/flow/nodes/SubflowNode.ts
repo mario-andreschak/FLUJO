@@ -1266,6 +1266,19 @@ export async function runSubflowLanes(
       ? parentState.subflowInvocations?.[prepResult.invocationId]
       : undefined;
 
+    // Issue #391: read the experiment gate ONCE for the whole lane pool (not
+    // inside runLane(), which can be invoked many times) — resolveSessionIdentity()
+    // etc. stay flag-agnostic; the gate simply decides whether we ever pass
+    // them a real sessionScope.
+    const { ModelHandler } = await import('../handlers/ModelHandler');
+    const subflowSessionsEnabled = await ModelHandler.isSubflowSessionsEnabled();
+    if (!subflowSessionsEnabled && prepResult.sessionScope && prepResult.sessionScope !== 'per-visit') {
+      log.debug(
+        'Subflow sessionScope is configured but experimental.subflowSessions is disabled; falling back to per-visit',
+        { nodeId: prepResult.nodeId, sessionScope: prepResult.sessionScope },
+      );
+    }
+
     log.info('runSubflowLanes() running queued subflow jobs', {
       laneCount,
       concurrencyLimit,
@@ -1286,13 +1299,19 @@ export async function runSubflowLanes(
         ? invocation.lanes.find((candidate) => candidate.id === lane.laneId)
         : undefined;
 
-      // Issue #363: session-aware conversation ID resolution
-      const sessionIdentity = resolveSessionIdentity(
-        prepResult.parentRunId,
-        prepResult.nodeId,
-        prepResult.sessionScope,
-        prepResult.sessionKeyTemplate,
-      );
+      // Issue #363/#391: session-aware conversation ID resolution, gated by
+      // the experimental.subflowSessions flag. When the flag is off, the
+      // identity resolves to undefined regardless of the node's configured
+      // sessionScope, which reproduces pre-#363 per-visit behaviour exactly:
+      // every branch below already keys off `sessionIdentity` being truthy.
+      const sessionIdentity = subflowSessionsEnabled
+        ? resolveSessionIdentity(
+            prepResult.parentRunId,
+            prepResult.nodeId,
+            prepResult.sessionScope,
+            prepResult.sessionKeyTemplate,
+          )
+        : undefined;
 
       let laneConversationId: string | undefined;
       let resumedVisit = false;
@@ -1309,6 +1328,14 @@ export async function runSubflowLanes(
         if (!sessionIdentity) {
           laneConversationId = lane.conversationId ?? durableLane?.conversationId ?? laneConversationId;
         }
+      }
+
+      // Issue #391: populate the lane's visibility fields so the durable lane
+      // record (and, transitively, the live view) can show whether this visit
+      // resumed a prior child conversation.
+      if (durableLane && sessionIdentity) {
+        durableLane.sessionIdentity = sessionIdentity;
+        durableLane.resumedVisit = resumedVisit;
       }
       // Jobs without a brief fall back to the child-flow name so live-view row
       // labels and sidebar titles agree (and are non-empty).
@@ -1426,6 +1453,15 @@ export async function runSubflowLanes(
           invocation!.updatedAt = Date.now();
           if (parentState) await persistSubflowParent(parentState);
         }
+        // Issue #391: fold this visit's outcome back into the session registry
+        // (visits counter, lastUsedAt, idle/failed status) now that the lane has
+        // a terminal status. No-op when sessionIdentity is undefined (flag off
+        // or per-visit scope).
+        updateSessionRegistry(
+          parentState,
+          sessionIdentity,
+          durableLane ? durableLane.status as 'completed' | 'error' | 'cancelled' : (r.status === 'error' ? 'error' : 'completed'),
+        );
       } catch (err) {
         results[i] = {
           subflowId: lane.subflowId,
@@ -1445,6 +1481,9 @@ export async function runSubflowLanes(
           invocation!.updatedAt = Date.now();
           if (parentState) await persistSubflowParent(parentState);
         }
+        // Issue #391: a thrown runFlow() is still a terminal (error) outcome
+        // for the session registry.
+        updateSessionRegistry(parentState, sessionIdentity, 'error');
         // runFlow THREW (rather than returning status 'error'), so the child
         // never emitted run:done and no subflow:done reached the live view —
         // the lane's row would spin until run end and the partial-failure

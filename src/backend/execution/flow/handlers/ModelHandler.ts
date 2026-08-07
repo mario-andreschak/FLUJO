@@ -373,6 +373,24 @@ export class ModelHandler {
   }
 
   /**
+   * Read the experimental `subflowSessions` flag (issue #391, gate for #363
+   * Phase 1) from the persisted Settings blob. Gates whether `runSubflowLanes()`
+   * honours a Subflow node's `sessionScope` and resumes a child conversation
+   * across repeat visits within one parent run. Same best-effort pattern as
+   * `isClaudeSessionResumeEnabled`: any failure (or a missing value) reads as
+   * disabled, so an unconfigured install keeps today's per-visit behaviour.
+   */
+  static async isSubflowSessionsEnabled(): Promise<boolean> {
+    try {
+      const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
+      return Boolean(settings?.experimental?.subflowSessions);
+    } catch (err) {
+      log.warn('Failed to read subflowSessions setting; defaulting to disabled', { err });
+      return false;
+    }
+  }
+
+  /**
    * Read the experimental summarizing-compaction settings (issue #248) from the
    * persisted Settings blob. Best-effort: any failure reads as disabled, so the
    * completion path keeps its existing (wire-only) behaviour.
