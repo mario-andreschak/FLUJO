@@ -35,10 +35,11 @@ import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import CheckIcon from '@mui/icons-material/Check';
 import EditIcon from '@mui/icons-material/Edit';
 import TuneIcon from '@mui/icons-material/Tune';
+import BugReportIcon from '@mui/icons-material/BugReport';
 import FlowNodePicker from './FlowNodePicker';
 import { v4 as uuidv4 } from 'uuid';
 import { Attachment } from './index';
-import GlobalReferenceEditor from '@/frontend/components/shared/GlobalReferenceEditor';
+import GlobalReferenceEditor, { GlobalReferenceEditorRef } from '@/frontend/components/shared/GlobalReferenceEditor';
 import { mcpService } from '@/frontend/services/mcp';
 import {
   createPromptReferenceSuggestion,
@@ -53,9 +54,18 @@ interface ChatInputProps {
   // Add callback and state for the approval toggle
   requireApproval?: boolean;
   onRequireApprovalChange?: (checked: boolean) => void;
-  // Add callback and state for the debugger toggle
-  executeInDebugger?: boolean;
-  onExecuteInDebuggerChange?: (checked: boolean) => void;
+  /**
+   * THE debugger control (one button, not two).
+   *
+   * There used to be a "Run in debugger" checkbox here AND an "Attach debugger"
+   * button floating in the live-run indicator, which forced the user to pick
+   * the right one depending on whether a run happened to be in flight. This is
+   * now a single toggle: pressing it opens the debugger panel immediately and
+   * the chat container decides whether that means "arm the next run" or
+   * "attach to the running one". Pressing it again closes/detaches.
+   */
+  debuggerOpen?: boolean;
+  onToggleDebugger?: () => void;
   // Node picker: nodes of the conversation's flow, the node the next message
   // will resume on, whether that node is a manual pick, and the pick callback
   // (null = back to automatic).
@@ -81,8 +91,8 @@ const ChatInput: React.FC<ChatInputProps> = ({
   placeholder,
   requireApproval = false,
   onRequireApprovalChange,
-  executeInDebugger = false, // Default to false
-  onExecuteInDebuggerChange,
+  debuggerOpen = false,
+  onToggleDebugger,
   availableNodes = [],
   flow = null,
   currentNodeId = null,
@@ -111,6 +121,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
   const [recordingTime, setRecordingTime] = useState(0);
   const [recordingInterval, setRecordingInterval] = useState<NodeJS.Timeout | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const editorRef = useRef<GlobalReferenceEditorRef>(null);
   const dragDepthRef = useRef(0);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   
@@ -130,8 +141,8 @@ const ChatInput: React.FC<ChatInputProps> = ({
     availableNodes.find(n => n.id === id)?.label
     || (id ? `${id.substring(0, 6)}...` : t('chat.input.startNode'));
   const currentNodeLabel = nodeLabelFor(pickerSelectedId);
-  const hasRunOptions = !!onRequireApprovalChange || ((!!onSelectNode || isEditing) && availableNodes.length > 0);
-  const hasActiveRunOption = requireApproval || executeInDebugger || nodeOverrideActive;
+  const hasRunOptions = !!onRequireApprovalChange || !!onToggleDebugger || ((!!onSelectNode || isEditing) && availableNodes.length > 0);
+  const hasActiveRunOption = requireApproval || debuggerOpen || nodeOverrideActive;
   const handlePickNode = (nodeId: string | null) => {
     if (isEditing) onEditingNodeChange?.(nodeId);
     else onSelectNode?.(nodeId);
@@ -253,11 +264,16 @@ const ChatInput: React.FC<ChatInputProps> = ({
 
   // Handle sending a message
   const handleSend = () => {
+    // The textbox stays editable while `disabled` (so the user can type ahead while a
+    // conversation loads or a run is in flight), so sending is gated here instead.
+    if (disabled) return;
     if (message.trim() || attachments.length > 0) {
       log.debug('Sending message', { messageLength: message.length, attachmentsCount: attachments.length });
       onSendMessage(message, attachments);
       setMessage('');
       setAttachments([]);
+      // Keep the caret in the composer so the user can keep typing after a send.
+      editorRef.current?.focus();
     }
   };
 
@@ -746,6 +762,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
         {/* Input area */}
         <Box sx={{ display: 'flex', alignItems: 'flex-end', gap: 0.35 }}>
           <GlobalReferenceEditor
+            ref={editorRef}
             value={isEditing ? (editing?.content ?? '') : message}
             onChange={handleMessageChange}
             globalNames={globalNames}
@@ -758,7 +775,12 @@ const ChatInput: React.FC<ChatInputProps> = ({
             placeholder={isEditing ? t('chat.input.editPlaceholder') : (placeholder || t('chat.input.placeholder'))}
             onKeyDown={handleKeyPress}
             onPaste={handlePaste}
-            disabled={isEditing ? false : disabled}
+            // Never read-only: `disabled` flips to true on every conversation switch
+            // (details loading), while a run is in flight and while a tool approval is
+            // pending. Making the textbox contenteditable=false in those windows meant
+            // the first click was swallowed and the user had to click a second time.
+            // Sending is still blocked — see handleSend.
+            disabled={false}
             autoFocus={isEditing}
             containerSx={{ flex: 1 }}
           />
@@ -936,20 +958,23 @@ const ChatInput: React.FC<ChatInputProps> = ({
               sx={{ mr: 'auto' }} // Push to the left
             />
             )}
-            {/* Debugger Checkbox */}
-            {onExecuteInDebuggerChange && ( // Only show if callback is provided
-              <FormControlLabel
-                control={
-                  <Checkbox
-                    checked={executeInDebugger}
-                    onChange={(e) => onExecuteInDebuggerChange(e.target.checked)}
-                    size="small"
-                    disabled={disabled}
-                  />
-                }
-                label={<Typography variant="caption">{t('chat.input.debugger')}</Typography>}
-                sx={{ ml: 2 }} // Add some margin to separate from the other checkbox
-              />
+            {/* THE Debugger button (replaces the old checkbox + the live-run
+                "attach debugger" floater). Never disabled by `disabled`: the
+                composer is disabled while a run is in flight or paused, which
+                is exactly when opening the debugger is most useful. */}
+            {onToggleDebugger && (
+              <Tooltip title={debuggerOpen ? t('chat.input.debuggerClose') : t('chat.input.debuggerOpen')}>
+                <Chip
+                  icon={<BugReportIcon />}
+                  label={t('chat.input.debugger')}
+                  size="small"
+                  color={debuggerOpen ? 'primary' : 'default'}
+                  variant={debuggerOpen ? 'filled' : 'outlined'}
+                  onClick={onToggleDebugger}
+                  aria-pressed={debuggerOpen}
+                  sx={{ ml: 1 }}
+                />
+              </Tooltip>
             )}
           </Box>
         )} {/* End of Checkboxes Box */}
@@ -1015,16 +1040,15 @@ const ChatInput: React.FC<ChatInputProps> = ({
             label={t('chat.input.requireApprovals')}
           />
         )}
-        {onExecuteInDebuggerChange && (
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={executeInDebugger}
-                onChange={(e) => onExecuteInDebuggerChange(e.target.checked)}
-                disabled={disabled}
-              />
-            }
-            label={t('chat.input.debugger')}
+        {onToggleDebugger && (
+          <Chip
+            icon={<BugReportIcon />}
+            label={debuggerOpen ? t('chat.input.debuggerClose') : t('chat.input.debuggerOpen')}
+            color={debuggerOpen ? 'primary' : 'default'}
+            variant={debuggerOpen ? 'filled' : 'outlined'}
+            onClick={() => { onToggleDebugger(); setMobileOptionsOpen(false); }}
+            aria-pressed={debuggerOpen}
+            sx={{ alignSelf: 'flex-start', mt: 1 }}
           />
         )}
       </Drawer>

@@ -58,6 +58,11 @@ import {
 } from '@/backend/execution/flow/recoveryCheckpoint';
 import { queueSubflowRunOutcome } from '@/backend/execution/flow/subflowRecovery';
 import { hydrateLazyToolPayloads } from '@/backend/execution/flow/lazyToolPayloads';
+import {
+  ATTACH_BREAKPOINT,
+  matchToolBreakpoint,
+  nodeBreakpoints,
+} from '@/utils/shared/debugBreakpoints';
 
 const log = createLogger('backend/execution/flow/runFlow');
 
@@ -1197,6 +1202,14 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   };
 
   const singleStep = !!sharedState.debugMode && !continueDebug;
+  /** The tool breakpoint (if any) armed for this batch of tool calls. Decodes
+   *  namespaced MCP names so `tool:read_file` matches `mcp_<slug>_<hash>`. */
+  const matchedToolBreakpointName = (toolCalls: readonly { function?: { name?: string } }[] | undefined) =>
+    matchToolBreakpoint(
+      sharedState.breakpoints,
+      toolCalls,
+      (name) => decodeToolName(name, sharedState.toolNameMap),
+    );
   const pauseForDebug = () => {
     sharedState.status = 'paused_debug';
     emit({ type: 'run:paused', reason: 'debug', node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined });
@@ -1278,18 +1291,21 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
           continue;
         }
 
-        // Breakpoint check.
-        if (!singleStep && sharedState.breakpoints && sharedState.breakpoints.length > 0) {
+        // Breakpoint check (node-scoped; `tool:` breakpoints are evaluated at
+        // the tool-call gate further down, not here).
+        const armedNodeBreakpoints = nodeBreakpoints(sharedState.breakpoints);
+        const attachArmed = !!sharedState.breakpoints?.includes(ATTACH_BREAKPOINT);
+        if (!singleStep && (armedNodeBreakpoints.length > 0 || attachArmed)) {
           const nextNodeId = await FlowExecutor.peekNextNodeId(sharedState);
-          // '*' is a one-shot "attach" breakpoint set by the live-view Attach-
-          // debugger button (setBreakpoints(convId, ['*'])): pause before
-          // whatever node comes next, then consume the sentinel so a subsequent
-          // Continue resumes normally instead of re-pausing at every node.
-          const wildcard = sharedState.breakpoints.includes('*');
-          const hit = !!nextNodeId && (wildcard || sharedState.breakpoints.includes(nextNodeId));
+          // '*' is a one-shot "attach" breakpoint set by the Debugger button
+          // (setBreakpoints(convId, ['*'])): pause before whatever node comes
+          // next, then consume the sentinel so a subsequent Continue resumes
+          // normally instead of re-pausing at every node.
+          const wildcard = attachArmed;
+          const hit = !!nextNodeId && (wildcard || armedNodeBreakpoints.includes(nextNodeId));
           if (hit && sharedState.lastBreakNodeId !== nextNodeId) {
             if (wildcard) {
-              sharedState.breakpoints = sharedState.breakpoints.filter(b => b !== '*');
+              sharedState.breakpoints = (sharedState.breakpoints ?? []).filter(b => b !== ATTACH_BREAKPOINT);
             }
             log.info(`Breakpoint hit at node ${nextNodeId}${wildcard ? ' (attach)' : ''} for conv ${effectiveConvId}. Pausing.`);
             sharedState.status = 'paused_debug';
@@ -1578,15 +1594,31 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                 }
                 emit({ type: 'run:awaiting_approval', pendingToolCalls: lastAssistantMsg.tool_calls });
                 break;
-              } else if (singleStep) {
-                log.info(`[Debug Step] Paused before executing ${lastAssistantMsg.tool_calls.length} tool call(s) for conv ${effectiveConvId}.`);
+              } else if (singleStep || matchedToolBreakpointName(lastAssistantMsg.tool_calls)) {
+                // Two ways to stop here: single-stepping (every tool batch is a
+                // step boundary), or an armed `tool:` breakpoint — the tool-call
+                // equivalent of a node breakpoint, so a freely running flow can
+                // be caught right before a specific tool fires (and inspected /
+                // stepped from there).
+                const toolBreakpointName = singleStep ? null : matchedToolBreakpointName(lastAssistantMsg.tool_calls);
+                log.info(`[Debug] Paused before executing ${lastAssistantMsg.tool_calls.length} tool call(s) for conv ${effectiveConvId}.`, {
+                  reason: toolBreakpointName ? `tool breakpoint (${toolBreakpointName})` : 'single step',
+                });
                 sharedState.debugPendingToolCalls = lastAssistantMsg.tool_calls;
+                if (toolBreakpointName) {
+                  // Entering the debugger from a normal run: turn debug mode on
+                  // so the trace builds and Step/Continue behave as expected.
+                  sharedState.debugMode = true;
+                }
                 FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
                 try {
                   sharedState.updatedAt = Date.now();
                   await persistState(storageKey, sharedState); // chokepoint refuses ephemeral states
                 } catch (error) {
                   log.error(`Failed to save state before debug tool pause for conv ${effectiveConvId}:`, error);
+                }
+                if (toolBreakpointName && sharedState.currentNodeId) {
+                  emit({ type: 'breakpoint:hit', node: { nodeId: sharedState.currentNodeId } });
                 }
                 pauseForDebug();
                 break;

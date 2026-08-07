@@ -45,13 +45,21 @@ let runtimeRoot: string | undefined;
 let lastSessionId: string | undefined;
 const sessions = new Map<string, BrowserSession>();
 
-function integerEnv(name: string, fallback: number, min: number, max: number): number {
+export function integerEnv(name: string, fallback: number, min: number, max: number): number {
   const raw = Number.parseInt(process.env[name] ?? '', 10);
   return Number.isFinite(raw) ? Math.min(max, Math.max(min, raw)) : fallback;
 }
 
-function enabledEnv(name: string): boolean {
+export function enabledEnv(name: string): boolean {
   return /^(1|true|yes|on)$/i.test(process.env[name]?.trim() ?? '');
+}
+
+/** Viewport the live view starts at before the app reports its real size. */
+export function defaultViewport(): { width: number; height: number } {
+  return {
+    width: integerEnv('FLUJO_BROWSER_VIEWPORT_WIDTH', 1280, 320, 3840),
+    height: integerEnv('FLUJO_BROWSER_VIEWPORT_HEIGHT', 720, 240, 2160),
+  };
 }
 
 export function timeoutMs(value: unknown): number {
@@ -95,6 +103,27 @@ function isPrivateAddress(address: string): boolean {
     || parts[0] >= 224;
 }
 
+const DNS_CACHE_TTL_MS = 60_000;
+const DNS_CACHE_MAX_ENTRIES = 512;
+const dnsCache = new Map<string, { expiresAt: number; addresses: string[] }>();
+
+/**
+ * Resolve a hostname for the SSRF check, memoised for a minute.
+ *
+ * Every subresource passes through the route handler, so an uncached lookup per
+ * request meant a media-heavy page (an HLS player fetching one segment per few
+ * seconds, or any CDN-backed site) paid a DNS round trip per asset and stalled.
+ */
+async function resolveHostAddresses(hostname: string): Promise<string[]> {
+  const now = Date.now();
+  const cached = dnsCache.get(hostname);
+  if (cached && cached.expiresAt > now) return cached.addresses;
+  const addresses = (await lookup(hostname, { all: true, verbatim: true })).map(({ address }) => address);
+  if (dnsCache.size >= DNS_CACHE_MAX_ENTRIES) dnsCache.clear();
+  dnsCache.set(hostname, { expiresAt: now + DNS_CACHE_TTL_MS, addresses });
+  return addresses;
+}
+
 export async function assertNavigationAllowed(input: string): Promise<URL> {
   let url: URL;
   try {
@@ -120,10 +149,8 @@ export async function assertNavigationAllowed(input: string): Promise<URL> {
       throw new BrowserMcpError('NAVIGATION_BLOCKED', 'Private and local network destinations are blocked.');
     }
     try {
-      const addresses = isIP(hostname)
-        ? [{ address: hostname }]
-        : await lookup(hostname, { all: true, verbatim: true });
-      if (addresses.length === 0 || addresses.some(({ address }) => isPrivateAddress(address))) {
+      const addresses = isIP(hostname) ? [hostname] : await resolveHostAddresses(hostname);
+      if (addresses.length === 0 || addresses.some((address) => isPrivateAddress(address))) {
         throw new BrowserMcpError('NAVIGATION_BLOCKED', 'Private and local network destinations are blocked.');
       }
     } catch (error) {
@@ -165,19 +192,65 @@ export async function writeScreenshotArtifact(
   return path.resolve(filePath);
 }
 
+type LaunchOptions = NonNullable<Parameters<typeof chromium.launch>[0]>;
+
+/**
+ * Chromium flags that make embedded media behave the way a user expects.
+ *
+ * Without an explicit autoplay policy, headless Chromium requires a real user
+ * gesture before it will start `<video>`/`<audio>` playback, so the live view
+ * only ever showed the poster frame.
+ */
+const MEDIA_LAUNCH_ARGS = [
+  '--autoplay-policy=no-user-gesture-required',
+];
+
+function launchOptions(downloadsPath: string, channel: string | undefined): LaunchOptions {
+  const options: LaunchOptions = {
+    headless: !enabledEnv('FLUJO_BROWSER_HEADED'),
+    downloadsPath,
+    args: MEDIA_LAUNCH_ARGS,
+  };
+  if (channel) options.channel = channel;
+  // Patchright mutes audio by default. Unmuting only matters where the operator
+  // captures host audio, so it stays opt-in.
+  if (enabledEnv('FLUJO_BROWSER_AUDIO')) options.ignoreDefaultArgs = ['--mute-audio'];
+  if (process.env.FLUJO_BROWSER_EXECUTABLE_PATH) {
+    options.executablePath = process.env.FLUJO_BROWSER_EXECUTABLE_PATH;
+  }
+  return options;
+}
+
+/**
+ * Preferred Chromium channel.
+ *
+ * `headless: true` alone resolves to `chrome-headless-shell`, the reduced build
+ * with no real compositor — which is why animation and video looked frozen.
+ * The full `chromium` channel runs modern headless instead, so screencast
+ * frames advance like they do in a headed browser.
+ */
+function preferredChannel(): string | undefined {
+  const configured = process.env.FLUJO_BROWSER_CHANNEL?.trim();
+  if (configured) return configured === 'default' ? undefined : configured;
+  return process.env.FLUJO_BROWSER_EXECUTABLE_PATH ? undefined : 'chromium';
+}
+
 async function acquireBrowser(): Promise<Browser> {
   if (browser?.isConnected()) return browser;
   if (browserPromise) return browserPromise;
   browserPromise = (async () => {
     const downloadsPath = await ensureRuntimeRoot();
     try {
-      const launched = await chromium.launch({
-        headless: true,
-        downloadsPath,
-        ...(process.env.FLUJO_BROWSER_EXECUTABLE_PATH
-          ? { executablePath: process.env.FLUJO_BROWSER_EXECUTABLE_PATH }
-          : {}),
-      });
+      const channel = preferredChannel();
+      let launched: Browser;
+      try {
+        launched = await chromium.launch(launchOptions(downloadsPath, channel));
+      } catch (error) {
+        // Deployments that only installed the headless shell have no `chromium`
+        // channel; fall back rather than losing the browser entirely.
+        if (!channel) throw error;
+        launched = await chromium.launch(launchOptions(downloadsPath, undefined));
+      }
       browser = launched;
       launched.once('disconnected', () => {
         if (browser === launched) browser = undefined;
@@ -270,8 +343,10 @@ export async function openSession(requestedId: unknown, signal: AbortSignal): Pr
   try {
     context = await activeBrowser.newContext({
       acceptDownloads: false,
-      serviceWorkers: 'block',
-      viewport: { width: 1280, height: 720 },
+      // Many streaming and app-shell sites route their media fetches through a
+      // service worker, so operators can opt into allowing them.
+      serviceWorkers: enabledEnv('FLUJO_BROWSER_ALLOW_SERVICE_WORKERS') ? 'allow' : 'block',
+      viewport: defaultViewport(),
     });
     if (cancelled || signal.aborted) {
       throw new BrowserMcpError('CANCELLED', 'The browser request was cancelled.');
@@ -290,10 +365,20 @@ export async function openSession(requestedId: unknown, signal: AbortSignal): Pr
     }
     const maxRedirects = integerEnv('FLUJO_BROWSER_MAX_REDIRECTS', DEFAULT_MAX_REDIRECTS, 0, 50);
 
+    const mainFrame = session.page.mainFrame();
     await context.route('**/*', async (route) => {
       const request = route.request();
+      // Only a top-level document counts toward the redirect budget. Counting
+      // every `document` request meant an ad- or embed-heavy page tripped the
+      // limit on its tenth <iframe> and wedged the whole session.
+      let mainDocument = false;
       try {
-        if (request.resourceType() === 'document') {
+        mainDocument = request.resourceType() === 'document' && request.frame() === mainFrame;
+      } catch {
+        mainDocument = false;
+      }
+      try {
+        if (mainDocument) {
           session.documentRequests += 1;
           if (session.documentRequests > maxRedirects + 1) {
             throw new BrowserMcpError('NAVIGATION_BLOCKED', 'The navigation exceeded the redirect limit.');
@@ -302,7 +387,10 @@ export async function openSession(requestedId: unknown, signal: AbortSignal): Pr
         await assertNavigationAllowed(request.url());
         await route.continue();
       } catch {
-        session.navigationBlocked = true;
+        // Likewise, a blocked tracker pixel or third-party CDN asset must not
+        // poison the session flag and make the next click report a bogus
+        // NAVIGATION_BLOCKED.
+        if (mainDocument) session.navigationBlocked = true;
         await route.abort('blockedbyclient').catch(() => undefined);
       }
     });

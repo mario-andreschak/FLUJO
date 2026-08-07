@@ -11,13 +11,15 @@ import {
 import { browserCallTool, browserToolDefinitions } from './tools.js';
 import { browserListResources, browserReadResource } from './resources.js';
 import { shutdownBrowserRuntime } from './runtime.js';
+import { shutdownBrowserGateway } from './gateway.js';
 
 export * from './tools.js';
 export * from './resources.js';
 export * from './runtime.js';
+export * from './gateway.js';
 
 const server = new Server(
-  { name: '@mario.andreschak/mcp-browser', version: '3.38.0' },
+  { name: '@mario.andreschak/mcp-browser', version: '3.42.1' },
   { capabilities: { tools: {}, resources: {} } },
 );
 
@@ -34,13 +36,14 @@ let closing = false;
 async function shutdown(): Promise<void> {
   if (closing) return;
   closing = true;
+  await shutdownBrowserGateway();
   await shutdownBrowserRuntime();
   await server.close().catch(() => undefined);
 }
 process.once('SIGINT', () => void shutdown());
 process.once('SIGTERM', () => void shutdown());
 process.once('SIGHUP', () => void shutdown());
-process.once('beforeExit', () => void shutdownBrowserRuntime());
+process.once('beforeExit', () => void shutdown());
 
 server.connect(transport).catch((error) => {
   process.stderr.write(`@mario.andreschak/mcp-browser failed: ${error instanceof Error ? error.name : 'unknown error'}\n`);

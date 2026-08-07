@@ -277,6 +277,17 @@ class ChatService {
     return parse<any>(response);
   }
 
+  /**
+   * GET /v1/chat/conversations/{id}/debug/state — read the current debug state.
+   * Lets the debugger panel attach to a run this tab did not start (or one that
+   * paused after its POST had already resolved) instead of waiting forever.
+   */
+  async getDebugState(id: string): Promise<{ status: string; breakpoints: string[]; debugState: any }> {
+    log.debug('getDebugState: Entering method', { conversationId: id });
+    const response = await fetch(`${BASE}/${encodeURIComponent(id)}/debug/state`);
+    return parse<{ status: string; breakpoints: string[]; debugState: any }>(response);
+  }
+
   /** PUT /v1/chat/conversations/{id}/breakpoints — replace breakpoint set. */
   async setBreakpoints(id: string, breakpoints: string[]): Promise<void> {
     log.debug('setBreakpoints: Entering method', { conversationId: id, count: breakpoints.length });

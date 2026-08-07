@@ -3,7 +3,6 @@
 import React, { useEffect, useState } from 'react';
 import { Box, Button, CircularProgress, Collapse, IconButton, Tooltip, Typography } from '@mui/material';
 import PauseCircleOutlineIcon from '@mui/icons-material/PauseCircleOutline';
-import BugReportIcon from '@mui/icons-material/BugReport';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
@@ -36,10 +35,10 @@ interface LiveRunIndicatorProps {
   /** Open a lane's persisted sidebar conversation (rows are clickable only
    *  when the lane carries a laneConversationId). */
   onOpenLane?: (conversationId: string) => void;
-  /** Attach the debugger to this in-flight run: arms a one-shot breakpoint so
-   *  execution pauses before the next node and opens the debugger panel. Only
-   *  provided for a foreground (tracked) run — absent → no button. */
-  onAttachDebugger?: () => void;
+  /* NOTE: attaching the debugger used to live here as a "bug" floater button.
+   * It moved to the composer's single Debugger toggle, which owns BOTH arming
+   * the next run and attaching to a run already in flight — two controls for
+   * one concept was the confusing part. */
   /** Docked, single-row treatment used above the phone composer. */
   compact?: boolean;
 }
@@ -101,14 +100,10 @@ const LaneRow: React.FC<{ lane: LiveLane; onOpenLane?: (conversationId: string) 
  * only while the viewed conversation is running, so the interval's lifecycle
  * is simply this component's lifecycle.
  */
-const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, stopDisabled, awaitingApproval, lanes, onOpenLane, onAttachDebugger, compact = false }) => {
+const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, stopDisabled, awaitingApproval, lanes, onOpenLane, compact = false }) => {
   const { locale, t, tp, formatNumber, formatList } = useI18n();
   const [nowTick, setNowTick] = useState<number>(() => Date.now());
   const [mountedAt] = useState<number>(() => Date.now());
-  // Once armed, the pause fires at the next node and this component unmounts
-  // (the debugger panel takes over), so the transient "Attaching…" state clears
-  // itself. Guards against re-arming with repeated clicks in the meantime.
-  const [attaching, setAttaching] = useState(false);
   const [compactExpanded, setCompactExpanded] = useState(false);
 
   useEffect(() => {
@@ -198,21 +193,6 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
               </IconButton>
             </Tooltip>
           )}
-          {onAttachDebugger && !awaitingApproval && (
-            <Tooltip title={attaching ? t('chat.live.attaching') : t('chat.live.attach')}>
-              <span>
-                <IconButton
-                  size="small"
-                  color="primary"
-                  onClick={() => { setAttaching(true); onAttachDebugger(); }}
-                  disabled={attaching}
-                  aria-label={attaching ? t('chat.live.attaching') : t('chat.live.attach')}
-                >
-                  <BugReportIcon fontSize="small" />
-                </IconButton>
-              </span>
-            </Tooltip>
-          )}
           <Button
             variant="outlined"
             color="secondary"
@@ -276,18 +256,6 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
             ? t('chat.live.waitingApproval')
             : liveStats?.activeNode ? t('chat.live.running', { node: liveStats.activeNode }) : t('chat.live.working')}
         </Typography>
-        {onAttachDebugger && !awaitingApproval && (
-          <Button
-            variant="outlined"
-            color="primary"
-            size="small"
-            startIcon={<BugReportIcon fontSize="small" />}
-            onClick={() => { setAttaching(true); onAttachDebugger(); }}
-            disabled={attaching}
-          >
-            {attaching ? t('chat.live.attaching') : t('chat.live.attach')}
-          </Button>
-        )}
         <Button
           variant="outlined"
           color="secondary"

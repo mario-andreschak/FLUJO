@@ -384,26 +384,53 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
     ReactEditor.focus(editor);
   }, [activeCompletion, editor]);
 
+  // ReactEditor.focus throws when the editor is not (yet) attached to the DOM, which
+  // callers should never have to care about.
+  const safeFocus = useCallback(() => {
+    try {
+      ReactEditor.focus(editor);
+    } catch {
+      /* editor not mounted */
+    }
+  }, [editor]);
+
   useImperativeHandle(ref, () => ({
     insertText: (text: string) => {
       const parsed = parsePromptRefPill(text);
       if (parsed) insertReference(editor, parsed);
       else editor.insertText(text);
       onChange(serializeReferenceValue(editor.children as Descendant[]));
-      ReactEditor.focus(editor);
+      safeFocus();
     },
-    focus: () => ReactEditor.focus(editor),
-  }), [editor, onChange]);
+    focus: safeFocus,
+  }), [editor, onChange, safeFocus]);
 
   useEffect(() => {
     const current = serializeReferenceValue(editor.children as Descendant[]);
     const normalized = serializeReferenceValue(deserializeReferenceValue(value || ''));
     if (current === normalized) return;
+    // Replacing the content from outside used to drop the selection, which blurs the
+    // contenteditable — that is what made the chat composer lose focus after every
+    // send. When the user is still in the editor we keep focus and park the caret at
+    // the end of the new content instead.
+    const wasFocused = ReactEditor.isFocused(editor);
     applyingExternalValue.current = true;
     editor.children = deserializeReferenceValue(value || '') as typeof editor.children;
-    editor.selection = null;
+    const end = Editor.end(editor, []);
+    editor.selection = wasFocused ? { anchor: end, focus: end } : null;
     editor.onChange();
     setRevision((currentRevision) => currentRevision + 1);
+    if (!wasFocused) return;
+    // Slate writes the DOM selection in a layout effect; refocus afterwards so the
+    // caret is actually visible and the next keystroke lands in the editor.
+    const frame = requestAnimationFrame(() => {
+      try {
+        ReactEditor.focus(editor);
+      } catch {
+        /* editor unmounted or detached — nothing to focus */
+      }
+    });
+    return () => cancelAnimationFrame(frame);
   }, [editor, value]);
 
   const handleChange = useCallback((nodes: Descendant[]) => {
@@ -472,6 +499,22 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
     <Box sx={{ position: 'relative', width: '100%', ...containerSx }} data-revision={revision}>
       <Box
         className={bare ? 'global-reference-editor bare' : 'global-reference-editor'}
+        // Clicks that land on the frame's padding (not on the text line itself) used to
+        // be swallowed, so the first click of a click-to-type looked like it did nothing.
+        onMouseDown={(event) => {
+          if (disabled) return;
+          if (event.target !== event.currentTarget) return;
+          event.preventDefault();
+          try {
+            // Focus first: ReactEditor.focus defers itself while the editor has
+            // pending operations, so selecting before focusing would only focus a
+            // tick later.
+            ReactEditor.focus(editor);
+            Transforms.select(editor, Editor.end(editor, []));
+          } catch {
+            /* editor not mounted yet */
+          }
+        }}
         sx={{
           border: bare ? 'none' : '1px solid',
           borderColor: 'rgba(0, 0, 0, 0.23)',

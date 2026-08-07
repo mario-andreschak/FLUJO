@@ -59,7 +59,9 @@ import ConversationStats from './ConversationStats';
 import FlowSelector from './FlowSelector';
 import QuickChatDialog, { QuickChatStartSelection } from './QuickChatDialog';
 import DebuggerCanvas from './DebuggerCanvas';
+import DebuggerPendingPanel from './DebuggerPendingPanel';
 import ExecutedFlowPanel from './ExecutedFlowPanel';
+import { ATTACH_BREAKPOINT } from '@/utils/shared/debugBreakpoints';
 import { isQuickChatFlowId } from '@/utils/shared/quickChat';
 import type { RecoveryRecord } from '@/shared/types/execution/events';
 import { getStartNode } from '@/utils/shared/getStartNode';
@@ -485,6 +487,15 @@ const Chat: React.FC = () => {
   // (between pauses) — it stays open and shows live progress, then re-populates
   // when the next pause arrives. Cleared when the session ends or is closed.
   const [debugSessionActive, setDebugSessionActive] = useState<boolean>(false);
+  // The single Debugger control (one button, replacing the old "run in
+  // debugger" checkbox + "attach to debugger" floater) opens the panel
+  // IMMEDIATELY, before there is any debugState to show. This flag keeps it
+  // open in that pending state: armed for the next run, or attaching to the
+  // run that is already in flight. Cleared when the debugger is closed.
+  const [debuggerRequested, setDebuggerRequested] = useState<boolean>(false);
+  // An attach is in flight (wildcard breakpoint armed, waiting for the loop to
+  // reach its next node) — drives the panel's spinner caption.
+  const [debugAttaching, setDebugAttaching] = useState<boolean>(false);
 
   // User-resizable debugger panel width in px (0 = default 50%). Persisted so
   // the preferred split survives reloads. Adjusted by dragging the divider
@@ -677,6 +688,9 @@ const Chat: React.FC = () => {
   const openaiRef = useRef<OpenAI | null>(null);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  // The debugger toggle is defined before handleDebugClose (it is handed to the
+  // composer); this ref lets it call the latest close/detach implementation.
+  const handleDebugCloseRef = useRef<(() => Promise<void>) | null>(null);
   // Highest event seq applied, for ordering + dedupe across SSE reconnects.
   const lastSeqRef = useRef<number>(-1);
   const mcpAppContextsByConversationRef = useRef<Map<string, McpAppModelContextMap>>(
@@ -3587,6 +3601,20 @@ const Chat: React.FC = () => {
     }
   }, [debugState]);
 
+  // Replace the whole breakpoint set (context-menu actions: clear all, arm/
+  // disarm the `tool:*` tool breakpoint, …). Optimistic, reverts on failure.
+  const handleSetBreakpoints = useCallback(async (next: string[]) => {
+    if (!currentConversationId) return;
+    const previous = breakpoints;
+    setBreakpoints(next);
+    try {
+      await chatService.setBreakpoints(currentConversationId, next);
+    } catch (err) {
+      log.error('Failed to update breakpoints', { conversationId: currentConversationId, err });
+      setBreakpoints(previous);
+    }
+  }, [breakpoints, currentConversationId]);
+
   // Toggle a breakpoint on a node and persist it to the server.
   const handleToggleBreakpoint = useCallback(async (nodeId: string) => {
     if (!currentConversationId) return;
@@ -3604,20 +3632,62 @@ const Chat: React.FC = () => {
 
   // Attach the debugger to an already-running conversation. Arms a one-shot
   // wildcard breakpoint ('*') on the live run: the backend loop pauses before
-  // its next node and returns paused_debug, which resolves the still-pending
-  // send POST with debugState and opens the debugger panel through the normal
-  // paused_debug path. Only offered for the foreground (tracked) run — a
-  // background/re-attached run has no pending POST to carry debugState back.
+  // its next node and returns paused_debug. When this client owns the run, the
+  // still-pending send POST resolves with debugState; otherwise the pause is
+  // picked up from the SSE stream and the state is pulled with getDebugState
+  // (see the hydration effect below), so attaching also works for background
+  // runs and after a reload.
   const handleAttachDebugger = useCallback(async () => {
     if (!currentConversationId) return;
     log.info('Attaching debugger to running conversation', { conversationId: currentConversationId });
+    setDebugAttaching(true);
     try {
-      await chatService.setBreakpoints(currentConversationId, ['*']);
+      await chatService.setBreakpoints(currentConversationId, [ATTACH_BREAKPOINT]);
     } catch (err) {
       log.error('Failed to attach debugger', { conversationId: currentConversationId, err });
+      setDebugAttaching(false);
       setError(err instanceof Error ? err.message : t('chat.page.attachDebuggerFailed'));
     }
   }, [currentConversationId, t]);
+
+  // THE Debugger control (single button, see ChatInput). One toggle covers what
+  // used to be two separate controls:
+  //   closed + idle conversation  → open the panel now, armed: the next run
+  //                                 starts in debug mode (flujodebug).
+  //   closed + running conversation → open the panel now, attaching: arm the
+  //                                 one-shot breakpoint and wait for the pause.
+  //   open                        → close it (detach, never cancel).
+  // In both opening cases the panel appears IMMEDIATELY with a spinner and
+  // disabled controls; it swaps to the live debugger the moment a debugState
+  // exists.
+  const handleToggleDebugger = useCallback(() => {
+    const open = debuggerRequested || debugSessionActive || isDebugPaused;
+    if (open) {
+      void handleDebugCloseRef.current?.();
+      return;
+    }
+    setDebuggerRequested(true);
+    setExecuteInDebugger(true); // the next turn runs in debug mode
+    const running =
+      (isLoading && loadingConversationId === currentConversationId) ||
+      (!!currentConversationId && runningConvs.has(currentConversationId)) ||
+      currentConversationSummary?.status === 'running';
+    if (running && currentConversationId) {
+      if (!eventSourceRef.current) void openEventStream(currentConversationId);
+      void handleAttachDebugger();
+    }
+  }, [
+    debuggerRequested,
+    debugSessionActive,
+    isDebugPaused,
+    isLoading,
+    loadingConversationId,
+    currentConversationId,
+    runningConvs,
+    currentConversationSummary?.status,
+    handleAttachDebugger,
+    openEventStream,
+  ]);
 
   // Step Over: advance one node at a time until the active node changes (i.e.
   // skip a process node's internal tool-call iterations), or execution pauses
@@ -3732,16 +3802,93 @@ const Chat: React.FC = () => {
     }
   };
 
-  // Manually dismiss the debugger panel. Hides the split view and clears the
-  // local debug state, then cancels the paused run so the conversation is not
-  // left stuck in 'paused_debug' on the backend.
-  const handleDebugClose = async () => {
-    log.info('Closing debugger panel', { conversationId: currentConversationId });
+  // Close the debugger = DETACH, not cancel.
+  //
+  // Closing used to call handleCancelRequest(), which killed the run: the panel
+  // is the only UI that can resume a 'paused_debug' conversation, so dismissing
+  // it while paused would have left the run parked forever with no way back.
+  // Detaching resolves that properly instead: clear the breakpoints, then let
+  // the run finish on its own (debug/continue) while the chat view takes over
+  // the live progress. An idle/armed panel just closes; the explicit Stop
+  // button in the debugger (and the live indicator) still cancels a run.
+  const handleDebugClose = useCallback(async () => {
+    const conversationId = currentConversationId;
+    const wasPaused = isDebugPaused;
+    log.info('Closing debugger panel (detach)', { conversationId, wasPaused });
+    setDebuggerRequested(false);
+    setDebugAttaching(false);
+    setExecuteInDebugger(false);
     setIsDebugPaused(false);
     setDebugState(null);
     setDebugSessionActive(false);
-    await handleCancelRequest();
-  };
+    if (!conversationId) return;
+    try {
+      // Disarm every breakpoint so the resumed run does not stop again with
+      // nobody watching (also drops a still-pending attach sentinel).
+      await chatService.setBreakpoints(conversationId, []);
+      setBreakpoints([]);
+    } catch (err) {
+      log.error('Failed to clear breakpoints while detaching', { conversationId, err });
+    }
+    if (!wasPaused) return; // nothing parked — the run (if any) keeps going
+    // Resume the parked run in the background and keep tracking it in the
+    // normal chat live view.
+    setIsLoading(true);
+    setLoadingConversationId(conversationId);
+    markConvRunning(conversationId, true);
+    await openEventStream(conversationId);
+    try {
+      const data = await chatService.debugContinue(conversationId);
+      handleApiResponse(data, conversationId);
+    } catch (err) {
+      log.error('Failed to resume run while detaching the debugger', { conversationId, err });
+      setIsLoading(false);
+      markConvRunning(conversationId, false);
+      setError(err instanceof Error ? err.message : t('chat.page.debugContinueFailed'));
+    }
+  }, [currentConversationId, isDebugPaused, openEventStream, handleApiResponse, markConvRunning, t]);
+
+  // handleToggleDebugger is declared earlier (it is passed down to the input);
+  // route its close branch through the latest handleDebugClose.
+  useEffect(() => {
+    handleDebugCloseRef.current = handleDebugClose;
+  }, [handleDebugClose]);
+
+  // Attach hydration: a pause can arrive as an SSE event (breakpoint:hit /
+  // run:paused) for a run whose POST this tab does not own — a background run,
+  // another tab's run, or one resumed after a reload. In that case no
+  // debugState ever lands in state and the panel would spin forever, so pull it
+  // from the server once the conversation reports it is parked.
+  useEffect(() => {
+    if (!currentConversationId) return;
+    if (!debuggerRequested && !debugSessionActive) return;
+    if (debugState) return;
+    const parked =
+      isDebugPaused || currentConversationSummary?.status === 'paused_debug';
+    if (!parked) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await chatService.getDebugState(currentConversationId);
+        if (cancelled || !data?.debugState) return;
+        setDebugState(data.debugState as SharedState);
+        setDebugSessionActive(true);
+        setIsDebugPaused(true);
+        setDebugAttaching(false);
+        setBreakpoints(data.breakpoints ?? []);
+      } catch (err) {
+        log.error('Failed to hydrate debug state', { conversationId: currentConversationId, err });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [
+    currentConversationId,
+    debuggerRequested,
+    debugSessionActive,
+    debugState,
+    isDebugPaused,
+    currentConversationSummary?.status,
+  ]);
 
   // --- Add logging for Edit button prop ---
   log.debug('Rendering Chat component', {
@@ -3752,7 +3899,17 @@ const Chat: React.FC = () => {
 
   // The debugger panel stays open for the whole debug session (not just while
   // paused), so it doesn't flicker shut while a step/continue is executing.
-  const debugPanelOpen = (debugSessionActive || isDebugPaused) && !!debugState && !!currentConversationId;
+  // It ALSO opens the instant the user presses the Debugger button — before any
+  // debugState exists (debuggerRequested) — and shows the pending panel until
+  // the first pause hands it a state to render.
+  const debugPanelOpen =
+    (debuggerRequested || debugSessionActive || isDebugPaused) && !!currentConversationId;
+  // While the panel is open but has no debugState yet (`!debugState`), the
+  // pending panel is rendered instead of the canvas — armed for the next run, or
+  // spinning while an attach lands.
+  const debugPendingMode: 'armed' | 'attaching' = debugAttaching ? 'attaching' : 'armed';
+  /** The Debugger button is "on" whenever the panel is showing in any form. */
+  const debuggerOpen = debugPanelOpen;
 
   // The viewed conversation counts as running when THIS client started or
   // re-attached to the run (isLoading/loadingConversationId/runningConvs) OR
@@ -4411,14 +4568,6 @@ const Chat: React.FC = () => {
                   onOpenLane={setCurrentConversationId}
                   onStop={handleCancelRequest}
                   stopDisabled={!currentConversationId}
-                  // Only a foreground (tracked) run holds a pending send POST
-                  // that can carry debugState back and open the panel; and never
-                  // while a debug session already owns the run.
-                  onAttachDebugger={
-                    isLoading && loadingConversationId === currentConversationId && !debugSessionActive
-                      ? handleAttachDebugger
-                      : undefined
-                  }
                 />
               )}
 
@@ -4551,11 +4700,6 @@ const Chat: React.FC = () => {
             onOpenLane={setCurrentConversationId}
             onStop={handleCancelRequest}
             stopDisabled={!currentConversationId}
-            onAttachDebugger={
-              isLoading && loadingConversationId === currentConversationId && !debugSessionActive
-                ? handleAttachDebugger
-                : undefined
-            }
           />
         )}
         {isPhoneLayout && !viewedConversationRunning && viewedConversationAwaitingApproval && !isDebugPaused && (
@@ -4610,8 +4754,13 @@ const Chat: React.FC = () => {
             disabled={isLoadingDetails || !(detailedConversation?.flowId || currentConversationSummary?.flowId) || !!pendingToolCalls || isDebugPaused}
             requireApproval={requireApproval}
             onRequireApprovalChange={handleRequireApprovalChange}
-            executeInDebugger={executeInDebugger} // Pass debugger state
-            onExecuteInDebuggerChange={setExecuteInDebugger} // Pass debugger handler
+            // ONE Debugger control (issue: two overlapping controls). The old
+            // "run in debugger" checkbox + the live indicator's "attach
+            // debugger" floater are now this single toggle: it opens the panel
+            // immediately and either arms the next run or attaches to the one
+            // already in flight.
+            debuggerOpen={debuggerOpen}
+            onToggleDebugger={handleToggleDebugger}
             // Node picker: shows where the next message resumes; a manual pick
             // overrides it for one send (null = back to automatic).
             availableNodes={availableNodes}
@@ -4699,7 +4848,7 @@ const Chat: React.FC = () => {
         {/* Debugger Area (open for the whole debug session, not only when paused).
             Docked side-panel layout — shown unless the user expanded it into the
             full-screen modal (issue #162). */}
-        {debugPanelOpen && debugState && currentConversationId && !debuggerExpanded && !isCompactLayout && (
+        {debugPanelOpen && currentConversationId && !debuggerExpanded && !isCompactLayout && (
           <>
             {/* Draggable divider: resizes the debugger panel. */}
             <Box
@@ -4752,22 +4901,32 @@ const Chat: React.FC = () => {
                 bgcolor: 'background.default',
               }}
             >
-              <DebuggerCanvas
-                debugState={debugState}
-                conversationId={currentConversationId}
-                liveActivity={liveActivity}
-                executionEvents={debuggerEvents}
-                onStep={handleDebugStep}
-                onStepOver={handleStepOver}
-                onContinue={handleDebugContinue}
-                onCancel={handleCancelRequest}
-                isLoading={isLoading}
-                breakpoints={breakpoints}
-                onToggleBreakpoint={handleToggleBreakpoint}
-                onClose={handleDebugClose}
-                isExpanded={debuggerExpanded}
-                onToggleExpand={() => setDebuggerExpanded(v => !v)}
-              />
+              {debugState ? (
+                <DebuggerCanvas
+                  debugState={debugState}
+                  conversationId={currentConversationId}
+                  liveActivity={liveActivity}
+                  executionEvents={debuggerEvents}
+                  onStep={handleDebugStep}
+                  onStepOver={handleStepOver}
+                  onContinue={handleDebugContinue}
+                  onCancel={handleCancelRequest}
+                  isLoading={isLoading}
+                  breakpoints={breakpoints}
+                  onToggleBreakpoint={handleToggleBreakpoint}
+                  onSetBreakpoints={handleSetBreakpoints}
+                  onClose={handleDebugClose}
+                  isExpanded={debuggerExpanded}
+                  onToggleExpand={() => setDebuggerExpanded(v => !v)}
+                />
+              ) : (
+                <DebuggerPendingPanel
+                  mode={debugPendingMode}
+                  onClose={handleDebugClose}
+                  isExpanded={debuggerExpanded}
+                  onToggleExpand={() => setDebuggerExpanded(v => !v)}
+                />
+              )}
             </Box>
           </>
         )}
@@ -4796,7 +4955,7 @@ const Chat: React.FC = () => {
           the whole viewport so the 3 sections (Conversation / Execution Tracker
           / Detail) have room. Toggled by the expand button in the debugger
           header; the debug session/state is untouched. */}
-      {debugPanelOpen && debugState && currentConversationId && (debuggerExpanded || isCompactLayout) && (
+      {debugPanelOpen && currentConversationId && (debuggerExpanded || isCompactLayout) && (
         <Dialog
           fullScreen
           open
@@ -4807,25 +4966,38 @@ const Chat: React.FC = () => {
           aria-label={t('chat.page.debuggerDialog')}
         >
           <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-            <DebuggerCanvas
-              debugState={debugState}
-              conversationId={currentConversationId}
-              liveActivity={liveActivity}
-              executionEvents={debuggerEvents}
-              onStep={handleDebugStep}
-              onStepOver={handleStepOver}
-              onContinue={handleDebugContinue}
-              onCancel={handleCancelRequest}
-              isLoading={isLoading}
-              breakpoints={breakpoints}
-              onToggleBreakpoint={handleToggleBreakpoint}
-              onClose={handleDebugClose}
-              isExpanded={debuggerExpanded || isCompactLayout}
-              onToggleExpand={() => {
-                if (isCompactLayout) handleDebugClose();
-                else setDebuggerExpanded(v => !v);
-              }}
-            />
+            {debugState ? (
+              <DebuggerCanvas
+                debugState={debugState}
+                conversationId={currentConversationId}
+                liveActivity={liveActivity}
+                executionEvents={debuggerEvents}
+                onStep={handleDebugStep}
+                onStepOver={handleStepOver}
+                onContinue={handleDebugContinue}
+                onCancel={handleCancelRequest}
+                isLoading={isLoading}
+                breakpoints={breakpoints}
+                onToggleBreakpoint={handleToggleBreakpoint}
+                onSetBreakpoints={handleSetBreakpoints}
+                onClose={handleDebugClose}
+                isExpanded={debuggerExpanded || isCompactLayout}
+                onToggleExpand={() => {
+                  if (isCompactLayout) handleDebugClose();
+                  else setDebuggerExpanded(v => !v);
+                }}
+              />
+            ) : (
+              <DebuggerPendingPanel
+                mode={debugPendingMode}
+                onClose={handleDebugClose}
+                isExpanded={debuggerExpanded || isCompactLayout}
+                onToggleExpand={() => {
+                  if (isCompactLayout) handleDebugClose();
+                  else setDebuggerExpanded(v => !v);
+                }}
+              />
+            )}
           </Box>
         </Dialog>
       )}

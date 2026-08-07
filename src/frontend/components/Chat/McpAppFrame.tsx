@@ -312,6 +312,10 @@ interface AppResource {
   csp?: McpUiResourceCsp;
   permissions?: McpUiResourcePermissions;
   domain?: string;  // Optional origin domain for per-app sandbox isolation
+  // `_meta.ui.prefersBorder: false` means the app paints its own frame (a
+  // workbench, a browser window). Drawing FLUJO's decorative border on top of
+  // one is what makes those apps look like a debug harness.
+  prefersBorder?: boolean;
 }
 
 interface SandboxEndpointResponse {
@@ -562,6 +566,7 @@ export function extractAppResource(readData: unknown, expectedUri: string): AppR
       ? sanitizeGrantedPermissions(permissions.data)
       : undefined,
     domain: typeof uiMeta?.domain === 'string' ? uiMeta.domain : undefined,
+    prefersBorder: typeof uiMeta?.prefersBorder === 'boolean' ? uiMeta.prefersBorder : undefined,
   };
 }
 
@@ -850,6 +855,8 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   const [displayMode, setDisplayMode] = useState<McpUiDisplayMode>(docked ? 'pip' : 'inline');
   const [floatingRect, setFloatingRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [appDisplayModes, setAppDisplayModes] = useState<McpUiDisplayMode[]>([]);
+  // Apps that paint their own window chrome opt out of FLUJO's decorative frame.
+  const [chromeless, setChromeless] = useState(false);
   const previousDefaultExpandedRef = useRef(defaultExpanded);
   const { activeCursor, startPointerDrag } = usePointerDrag();
   const effectiveDisplayMode = hostDisplayMode ?? displayMode;
@@ -1126,6 +1133,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       }
       if (!read || read.success === false) throw new Error(read?.error || t('chat.app.readFailed'));
       const app = extractAppResource(read.data, uri);
+      setChromeless(app.prefersBorder === false);
 
       // 2. Derive per-app origin key for sandbox isolation.
       const originKey = deriveOriginKey({
@@ -1152,9 +1160,14 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       iframe.referrerPolicy = 'origin'; // the sandbox validates the embedder via referrer
       const allow = buildAllowAttribute(app.permissions as any);
       if (allow) iframe.setAttribute('allow', allow);
+      // A self-framing app supplies its own background; forcing #fff on the
+      // iframe flashes white over a dark workbench or browser window until it
+      // paints, and the rounded corner cuts into its own chrome.
+      const surface = app.prefersBorder === false ? 'transparent' : '#fff';
       iframe.style.cssText = dockedRef.current || displayModeRef.current === 'fullscreen'
-        ? 'width:100%;height:100%;border:none;background:#fff;'
-        : 'width:100%;min-height:120px;height:200px;border:none;border-radius:4px;background:#fff;';
+        ? `width:100%;height:100%;border:none;background:${surface};`
+        : `width:100%;min-height:120px;height:200px;border:none;background:${surface};`
+          + (app.prefersBorder === false ? '' : 'border-radius:4px;');
       containerRef.current.appendChild(iframe);
       iframeRef.current = iframe;
 
@@ -1565,8 +1578,8 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
     iframe.style.width = '100%';
     iframe.style.height = `${inlineHeightRef.current}px`;
     iframe.style.minHeight = '120px';
-    iframe.style.borderRadius = '4px';
-  }, [docked, effectiveDisplayMode]);
+    iframe.style.borderRadius = chromeless ? '0' : '4px';
+  }, [chromeless, docked, effectiveDisplayMode]);
 
   // Stable MCP Apps delivers at most one input/outcome pair to a View. A later
   // invocation for the same canvas identity therefore gets a fresh View, after
@@ -1699,9 +1712,9 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       ref={frameRootRef}
       sx={{
         mt: 1,
-        border: '1px solid',
-        borderColor: 'divider',
-        borderRadius: 1,
+        ...(chromeless
+          ? { border: 0, borderRadius: 0 }
+          : { border: '1px solid', borderColor: 'divider', borderRadius: 1 }),
         overflow: 'hidden',
         ...(displayMode === 'fullscreen'
           ? {

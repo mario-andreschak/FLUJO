@@ -42,11 +42,25 @@ node mcp-servers/browser/dist/index.js
 
 The browser server is seeded disabled by default. Enable it in MCP Manager, or set `FLUJO_BROWSER_ENABLED=1` before first startup to seed it enabled. Its shipped record enables MCP Apps so the browser view is immediately available once the server is enabled; disabling the server still blocks both app resource access and tool calls. The browser package's npm `install` lifecycle runs `patchright install chromium`, so normal FLUJO, standalone package, and graphical-installer installations automatically download the version-matched managed browser. The Docker image also installs the required Linux libraries and uses a shared browser cache readable by its unprivileged runtime user. Installations that deliberately suppress npm lifecycle scripts with `--ignore-scripts` must run `npx patchright install chromium` themselves. Patchright supports current Windows, macOS, and Linux platforms covered by its Chromium distribution; failures to launch are returned as a stable `BROWSER_UNAVAILABLE` MCP error.
 
-Every session uses a new incognito context inside a lazily launched, shared Chromium process. Profiles are never taken from a host browser. Downloads are rejected and service workers are blocked. Each screenshot remains in the MCP payload and is also written to a bounded per-session `viewport.png` or `full-page.png`; the tool result always reports that artifact's absolute host path. Patchright's temporary/download root lives under an isolated OS temp directory that is removed at shutdown. Sessions are bounded, expire when idle, close on cancellation, and can be explicitly discarded with `browser_close`.
+Every session uses a new incognito context inside a lazily launched, shared Chromium process. Profiles are never taken from a host browser. Downloads are rejected, and service workers are blocked unless `FLUJO_BROWSER_ALLOW_SERVICE_WORKERS=1` is set (some streaming sites fetch their media through one). The full `chromium` channel is preferred over the reduced headless shell so compositing, animation, and video decode behave like a real browser, and autoplay does not require a user gesture. Each screenshot remains in the MCP payload and is also written to a bounded per-session `viewport.png` or `full-page.png`; the tool result always reports that artifact's absolute host path. Patchright's temporary/download root lives under an isolated OS temp directory that is removed at shutdown. Sessions are bounded, expire when idle, close on cancellation, and can be explicitly discarded with `browser_close`.
 
 `sessionId` is optional on every browser tool. When omitted, the server targets the most recently used live session. `browser_open` creates a new random session only when no live session exists; supplying an explicit id remains the way to select, reuse, or create a particular session.
 
-Navigation permits only HTTP(S), rejects URL credentials, and blocks localhost/private-network destinations (including DNS resolutions) unless `FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS=1` is explicitly set. Set `FLUJO_BROWSER_ALLOWED_ORIGINS` to a comma-separated exact-origin allowlist for a narrower policy. The MCP App at `ui://browser/view` is self-contained, runs in FLUJO's existing separate-origin sandbox, and calls only the owning browser server's declared tools; browser actions remain server-side. Its screenshot viewport supports direct pointer clicks, scrolling, focused typing, keyboard navigation, back/forward/reload, and fullscreen mode, with selector controls retained as a fallback.
+Navigation permits only HTTP(S), rejects URL credentials, and blocks localhost/private-network destinations (including DNS resolutions, memoised for one minute so a media-heavy page does not pay a lookup per subresource) unless `FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS=1` is explicitly set. Set `FLUJO_BROWSER_ALLOWED_ORIGINS` to a comma-separated exact-origin allowlist for a narrower policy. Only top-level documents count against the redirect cap, so embed-heavy pages are not blocked by their tenth iframe.
+
+### Live view
+
+The MCP App at `ui://browser/view` is a thin shell that performs the MCP handshake, opens the session, and then frames the browser UI served by a loopback gateway the server starts itself — the same pattern the VS Code MCP App uses to embed OpenVSCode. Because that UI runs on a real HTTP origin instead of inside the host's app sandbox, it is not bound by the app CSP and can behave like an actual browser window: tab strip, omnibox with a security indicator, loading bar, back/forward/reload, and full-screen handoff.
+
+The gateway binds loopback only and requires a per-process bearer token that is templated into the app shell, so the token never reaches the model. It serves:
+
+- `/view` — the browser UI (granted to the app through `_meta.ui.csp.frameDomains`).
+- `/stream` — an MJPEG stream fed by CDP `Page.startScreencast`, so video, canvas, and CSS animation render continuously instead of one screenshot per tool call. Focus emulation keeps rendering alive on the headless page.
+- `/audio` — chunked PCM tapped out of the page's Web Audio graph and played back by Web Audio in the viewer's browser, the same way a local audio app renders sound. `--mute-audio` only silences Chromium's device sink, so the host machine stays quiet while the samples still arrive. Cross-origin media served without CORS headers taints the graph and stays silent; the picture is unaffected.
+- `/events` — page URL/title/loading transitions.
+- `/input` — batched pointer, wheel, keyboard, paste, and viewport events, dispatched through a per-session queue so keystrokes cannot interleave.
+
+Browser actions still run server-side, and the model-facing tools are unchanged: when the gateway is unavailable the app falls back to the screenshot flow.
 
 Browser controls:
 
@@ -58,6 +72,17 @@ Browser controls:
 - `FLUJO_BROWSER_IDLE_TIMEOUT_MS`: idle cleanup interval, 10 seconds–24 hours (default 10 minutes).
 - `FLUJO_BROWSER_MAX_REDIRECTS`: per-navigation document redirect cap, 0–50 (default 10).
 - `FLUJO_BROWSER_SCREENSHOT_DIR`: optional screenshot artifact directory; defaults to `<FLUJO_DATA_DIR>/screenshots/browser`.
+- `FLUJO_BROWSER_STREAM_ENABLED=0`: disable the live view gateway; the app falls back to screenshots.
+- `FLUJO_BROWSER_STREAM_HOST` / `FLUJO_BROWSER_STREAM_PORT`: gateway bind address (default `127.0.0.1`) and port (default ephemeral).
+- `FLUJO_BROWSER_STREAM_PUBLIC_ORIGIN`: advertise a different reachable origin when FLUJO runs behind a reverse proxy.
+- `FLUJO_BROWSER_STREAM_QUALITY`: JPEG quality of the live stream, 10–95 (default 55).
+- `FLUJO_BROWSER_STREAM_MAX_WIDTH` / `FLUJO_BROWSER_STREAM_MAX_HEIGHT`: streamed frame bounds (defaults 1600×1200).
+- `FLUJO_BROWSER_STREAM_AUDIO=0`: stop capturing page audio (on by default).
+- `FLUJO_BROWSER_VIEWPORT_WIDTH` / `FLUJO_BROWSER_VIEWPORT_HEIGHT`: initial viewport before the app reports its own size (defaults 1280×720).
+- `FLUJO_BROWSER_CHANNEL`: Chromium channel to launch (default `chromium`; falls back to the headless shell when unavailable).
+- `FLUJO_BROWSER_HEADED=1`: run the managed browser with a visible window.
+- `FLUJO_BROWSER_AUDIO=1`: also let the managed browser play audio on the host's speakers.
+- `FLUJO_BROWSER_ALLOW_SERVICE_WORKERS=1`: allow service workers (needed by some streaming sites).
 
 The exposed contract is deliberately narrow: open, navigate/history/reload, snapshot, selector or coordinate click, focused or selector typing, key press, scroll, persisted PNG screenshot, and close. Apart from its own bounded screenshot artifact directory, it exposes no process execution, arbitrary host filesystem access, cookies, storage dumps, raw profiles, or unrestricted downloads.
 

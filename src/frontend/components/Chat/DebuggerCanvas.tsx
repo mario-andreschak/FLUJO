@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
     Box, Typography, List, ListItem, ListItemButton, ListItemText, Button, Paper, CircularProgress, Alert,
     Accordion, AccordionSummary, AccordionDetails, // Import Accordion components
-    IconButton, Tooltip
+    IconButton, Tooltip, Menu, MenuItem, ListItemIcon, Chip, alpha
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'; // Import icon for Accordion
 import CloseIcon from '@mui/icons-material/Close';
@@ -15,6 +15,10 @@ import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 import ForumOutlinedIcon from '@mui/icons-material/ForumOutlined';
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
+import RemoveCircleOutlineIcon from '@mui/icons-material/RemoveCircleOutline';
+import DeleteSweepOutlinedIcon from '@mui/icons-material/DeleteSweepOutlined';
+import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
 import { styled, useTheme } from '@mui/material/styles';
 import { ReactFlow, useNodesState, useEdgesState, Node, Edge, ReactFlowProvider } from '@xyflow/react'; // Import ReactFlow components
 import { SharedState, DebugStep, ModelInputSnapshot } from '@/backend/execution/flow/types'; // Import backend types
@@ -33,6 +37,11 @@ import {
   DEBUGGER_ROOT_FRAME_KEY,
   type DebuggerFrame,
 } from '@/utils/shared/debuggerFrames';
+import {
+  ANY_TOOL_BREAKPOINT,
+  nodeBreakpoints,
+  toolBreakpointNames,
+} from '@/utils/shared/debugBreakpoints';
 import RunResourcesPanel from './RunResourcesPanel';
 import DebuggerConversation from './DebuggerConversation';
 import { useI18n } from '@/frontend/contexts/I18nContext';
@@ -51,8 +60,11 @@ interface DebuggerCanvasProps {
   onContinue: () => void; // Callback for Continue button
   onCancel: () => void; // Callback for Cancel button
   isLoading: boolean; // To disable buttons during API calls
-  breakpoints?: string[]; // Node IDs with active breakpoints
+  breakpoints?: string[]; // Node IDs with active breakpoints (+ `tool:` entries)
   onToggleBreakpoint?: (nodeId: string) => void; // Toggle a breakpoint on node click
+  /** Replace the whole breakpoint set — used by the canvas context menu for
+   *  bulk actions (clear all, arm/disarm the tool-call breakpoint). */
+  onSetBreakpoints?: (breakpoints: string[]) => void;
   onClose?: () => void; // Callback to dismiss/hide the debugger panel
   /** Whether the debugger is currently shown in the large (modal) layout. */
   isExpanded?: boolean;
@@ -212,6 +224,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   isLoading,
   breakpoints,
   onToggleBreakpoint,
+  onSetBreakpoints,
   onClose,
   isExpanded,
   onToggleExpand,
@@ -505,15 +518,21 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
       const liveColor = live?.kind === 'active' ? theme.palette.primary.main : RESOURCE_HIGHLIGHT;
       return {
         ...node,
+        // A breakpoint used to be a thin dashed border that disappeared under
+        // the current-node/live highlights and was easy to miss entirely. It is
+        // now a class on the node wrapper: the canvas styles it with a solid
+        // red ring, a halo and a red dot marker (like a gutter breakpoint in an
+        // IDE), so it stays visible WHILE the node is executing/highlighted.
+        className: [node.className, isBreakpoint ? 'flujo-breakpoint' : null]
+          .filter(Boolean)
+          .join(' ') || undefined,
         style: {
           ...node.style,
           border: isCurrent
             ? `2px solid ${theme.palette.warning.main}`
             : live
               ? `2px solid ${liveColor}`
-              : isBreakpoint
-                ? `2px dashed ${theme.palette.error.main}`
-                : (node.style?.border as string | undefined),
+              : (node.style?.border as string | undefined),
           boxShadow: isCurrent
             ? `0 0 10px ${theme.palette.warning.light}`
             : live
@@ -523,6 +542,41 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
       };
     });
   }, [nodes, canvasFrame.key, currentStepData, breakpoints, theme, liveActivityFor, now]);
+
+  // --- Breakpoint context menu ---------------------------------------------
+  // Right-clicking a node (or the empty canvas) opens the breakpoint menu:
+  // discoverable, and it also carries the bulk actions that have nowhere else
+  // to live (clear all, break on every tool call).
+  const [bpMenu, setBpMenu] = useState<{ x: number; y: number; nodeId?: string; nodeLabel?: string } | null>(null);
+  const closeBpMenu = useCallback(() => setBpMenu(null), []);
+  const activeBreakpoints = breakpoints ?? [];
+  const toolBreakOn = activeBreakpoints.includes(ANY_TOOL_BREAKPOINT);
+
+  const handleNodeContextMenu = useCallback((event: React.MouseEvent, node: Node) => {
+    event.preventDefault();
+    const label = typeof node.data?.label === 'string' ? node.data.label : node.id;
+    setBpMenu({ x: event.clientX, y: event.clientY, nodeId: node.id, nodeLabel: label });
+  }, []);
+
+  const handlePaneContextMenu = useCallback((event: React.MouseEvent | MouseEvent) => {
+    event.preventDefault();
+    setBpMenu({ x: (event as React.MouseEvent).clientX, y: (event as React.MouseEvent).clientY });
+  }, []);
+
+  const toggleToolBreakpoint = useCallback(() => {
+    if (!onSetBreakpoints) return;
+    onSetBreakpoints(
+      toolBreakOn
+        ? activeBreakpoints.filter(b => b !== ANY_TOOL_BREAKPOINT)
+        : [...activeBreakpoints, ANY_TOOL_BREAKPOINT],
+    );
+    closeBpMenu();
+  }, [onSetBreakpoints, toolBreakOn, activeBreakpoints, closeBpMenu]);
+
+  const clearAllBreakpoints = useCallback(() => {
+    onSetBreakpoints?.([]);
+    closeBpMenu();
+  }, [onSetBreakpoints, closeBpMenu]);
 
   const selectedFramePath = useMemo(
     () => debuggerFramePath(frameState, selectedFrame.key),
@@ -750,7 +804,41 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
               {childFlowNotice}
             </Alert>
           )}
-          <Box sx={{ flexGrow: 1, minHeight: 0, position: 'relative' }}>
+          <Box
+            sx={{
+              flexGrow: 1,
+              minHeight: 0,
+              position: 'relative',
+              // Breakpoint styling lives here (not in inline node styles) so it
+              // can add a marker pseudo-element and survive the current-node /
+              // live-activity borders.
+              '& .react-flow__node.flujo-breakpoint': {
+                outline: `3px solid ${theme.palette.error.main}`,
+                outlineOffset: '2px',
+                borderRadius: '8px',
+                boxShadow: `0 0 0 7px ${alpha(theme.palette.error.main, 0.16)}, 0 0 14px ${alpha(theme.palette.error.main, 0.5)}`,
+              },
+              '& .react-flow__node.flujo-breakpoint::before': {
+                content: '""',
+                position: 'absolute',
+                top: '-11px',
+                left: '-11px',
+                width: '16px',
+                height: '16px',
+                borderRadius: '50%',
+                backgroundColor: theme.palette.error.main,
+                border: `2px solid ${theme.palette.background.paper}`,
+                boxShadow: `0 0 8px ${theme.palette.error.main}`,
+                zIndex: 12,
+                pointerEvents: 'none',
+              },
+            }}
+            onContextMenu={(e) => {
+              // Right-click anywhere on the canvas surface (including gaps that
+              // ReactFlow's own pane handler misses) opens the menu.
+              if (!(e.target as HTMLElement).closest('.react-flow__node')) handlePaneContextMenu(e);
+            }}
+          >
             {flowLoading ? (
               <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
                 <CircularProgress />
@@ -779,11 +867,51 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
                     e.preventDefault();
                     if (onToggleBreakpoint) onToggleBreakpoint(node.id);
                   }}
+                  onNodeContextMenu={handleNodeContextMenu}
+                  onPaneContextMenu={handlePaneContextMenu}
                   onEdgeClick={(e) => e.preventDefault()}
                   onPaneClick={() => {}}
                 />
               </ReactFlowProvider>
             )}
+            <Menu
+              open={!!bpMenu}
+              onClose={closeBpMenu}
+              anchorReference="anchorPosition"
+              anchorPosition={bpMenu ? { top: bpMenu.y, left: bpMenu.x } : undefined}
+            >
+              {bpMenu?.nodeId && (
+                <MenuItem
+                  onClick={() => { onToggleBreakpoint?.(bpMenu.nodeId!); closeBpMenu(); }}
+                  disabled={!onToggleBreakpoint}
+                >
+                  <ListItemIcon>
+                    {activeBreakpoints.includes(bpMenu.nodeId) ? <RemoveCircleOutlineIcon fontSize="small" color="error" /> : <FiberManualRecordIcon fontSize="small" color="error" />}
+                  </ListItemIcon>
+                  <ListItemText
+                    primary={activeBreakpoints.includes(bpMenu.nodeId)
+                      ? t('chat.debug.menu.removeBreakpoint')
+                      : t('chat.debug.menu.addBreakpoint')}
+                    secondary={bpMenu.nodeLabel}
+                  />
+                </MenuItem>
+              )}
+              <MenuItem onClick={toggleToolBreakpoint} disabled={!onSetBreakpoints}>
+                <ListItemIcon>
+                  <BuildOutlinedIcon fontSize="small" color={toolBreakOn ? 'error' : 'inherit'} />
+                </ListItemIcon>
+                <ListItemText
+                  primary={toolBreakOn ? t('chat.debug.menu.toolBreakpointOff') : t('chat.debug.menu.toolBreakpointOn')}
+                  secondary={t('chat.debug.menu.toolBreakpointHelp')}
+                />
+              </MenuItem>
+              <MenuItem onClick={clearAllBreakpoints} disabled={!onSetBreakpoints || activeBreakpoints.length === 0}>
+                <ListItemIcon>
+                  <DeleteSweepOutlinedIcon fontSize="small" />
+                </ListItemIcon>
+                <ListItemText primary={t('chat.debug.menu.clearAll')} />
+              </MenuItem>
+            </Menu>
           </Box>
         </Box>
       </FlowDisplayPanel>
@@ -943,8 +1071,36 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
           <Typography variant="h6">{t('chat.debug.title')}</Typography>
           <Typography variant="caption" color="textSecondary" display="block">
             {t('chat.debug.breakpointHelp')}
-            {breakpoints && breakpoints.length > 0 ? ` · ${tp('chat.debug.activeBreakpoints', breakpoints.length)}` : ''}
+            {activeBreakpoints.length > 0 ? ` · ${tp('chat.debug.activeBreakpoints', activeBreakpoints.length)}` : ''}
           </Typography>
+          {/* Legend + the breakpoints that have no node to sit on (tool
+              breakpoints), so an armed tool break is never invisible. */}
+          {activeBreakpoints.length > 0 && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5, flexWrap: 'wrap' }}>
+              {nodeBreakpoints(activeBreakpoints).length > 0 && (
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  color="error"
+                  icon={<FiberManualRecordIcon />}
+                  label={tp('chat.debug.nodeBreakpoints', nodeBreakpoints(activeBreakpoints).length)}
+                />
+              )}
+              {toolBreakpointNames(activeBreakpoints).map(name => (
+                <Chip
+                  key={name}
+                  size="small"
+                  variant="outlined"
+                  color="error"
+                  icon={<BuildOutlinedIcon />}
+                  label={name === '*' ? t('chat.debug.anyToolBreakpoint') : name}
+                  onDelete={onSetBreakpoints
+                    ? () => onSetBreakpoints(activeBreakpoints.filter(b => b !== `tool:${name}`))
+                    : undefined}
+                />
+              ))}
+            </Box>
+          )}
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
           {/* Section visibility toggles */}

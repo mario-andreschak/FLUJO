@@ -3,6 +3,8 @@ import {
   browserListResources,
   browserReadResource,
 } from '../../mcp-servers/browser/src/resources';
+import { shutdownBrowserGateway } from '../../mcp-servers/browser/src/gateway';
+import { renderBrowserViewHtml } from '../../mcp-servers/browser/src/viewHtml';
 import { browserCallTool, browserToolDefinitions } from '../../mcp-servers/browser/src/tools';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
@@ -30,12 +32,22 @@ jest.mock('patchright', () => ({
 describe('bundled browser MCP', () => {
   const previousOrigins = process.env.FLUJO_BROWSER_ALLOWED_ORIGINS;
   const previousPrivate = process.env.FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS;
+  const previousStream = process.env.FLUJO_BROWSER_STREAM_ENABLED;
+
+  beforeEach(() => {
+    // The live view gateway binds a real loopback listener; suites that do not
+    // exercise it opt out explicitly.
+    process.env.FLUJO_BROWSER_STREAM_ENABLED = '0';
+  });
 
   afterEach(async () => {
     if (previousOrigins === undefined) delete process.env.FLUJO_BROWSER_ALLOWED_ORIGINS;
     else process.env.FLUJO_BROWSER_ALLOWED_ORIGINS = previousOrigins;
     if (previousPrivate === undefined) delete process.env.FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS;
     else process.env.FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS = previousPrivate;
+    if (previousStream === undefined) delete process.env.FLUJO_BROWSER_STREAM_ENABLED;
+    else process.env.FLUJO_BROWSER_STREAM_ENABLED = previousStream;
+    await shutdownBrowserGateway();
     await shutdownBrowserRuntime();
     mockLaunchBrowser.mockReset();
   });
@@ -64,28 +76,55 @@ describe('bundled browser MCP', () => {
     }
   });
 
-  it('serves a self-contained MCP App with restrictive resource metadata', () => {
+  it('serves an MCP App shell that grants no origins when streaming is off', async () => {
     expect(browserListResources()).toEqual({
       resources: [expect.objectContaining({
         uri: BROWSER_APP_URI,
         mimeType: 'text/html;profile=mcp-app',
       })],
     });
-    const resource = browserReadResource(BROWSER_APP_URI).contents[0];
+    const resource = (await browserReadResource(BROWSER_APP_URI)).contents[0];
     expect(resource).toMatchObject({
       uri: BROWSER_APP_URI,
       mimeType: 'text/html;profile=mcp-app',
-      _meta: { ui: { csp: { connectDomains: [], resourceDomains: [] }, permissions: {} } },
+      _meta: {
+        ui: {
+          prefersBorder: false,
+          csp: { frameDomains: [], connectDomains: [], resourceDomains: [] },
+          permissions: {},
+        },
+      },
     });
     const html = 'text' in resource ? resource.text : '';
     expect(html).toContain('ui/initialize');
     expect(html).toContain('tools/call');
-    expect(html).toContain('browser_scroll');
-    expect(html).toContain('browser_press');
+    expect(html).toContain('browser_open');
+    // Navigation still travels the tool channel so the model observes it.
+    expect(html).toContain('browser_navigate');
     const appScript = html.match(/<script>([\s\S]*)<\/script>/)?.[1];
     expect(appScript).toBeDefined();
     expect(() => new Function(appScript!)).not.toThrow();
-    expect(() => browserReadResource('ui://browser/untrusted')).toThrow('Unknown browser resource');
+    await expect(browserReadResource('ui://browser/untrusted')).rejects.toThrow('Unknown browser resource');
+  });
+
+  it('ships a parseable live view document with real browser chrome', () => {
+    const html = renderBrowserViewHtml();
+    for (const marker of ['id="omnibox"', 'id="screen"', 'id="tabs"', 'id="progress"']) {
+      expect(html).toContain(marker);
+    }
+    // The live view must consume the stream and input endpoints directly.
+    expect(html).toContain('/stream');
+    expect(html).toContain('/events');
+    expect(html).toContain('/input');
+    // Audio is played by Web Audio in the viewer, not fetched as encoded media.
+    expect(html).toContain('/audio');
+    expect(html).toContain('createBufferSource');
+    expect(html).toContain('id="sound"');
+    // No third-party requests may leak the visited hostnames.
+    expect(html).not.toContain('google.com');
+    const viewScript = html.match(/<script>([\s\S]*)<\/script>/)?.[1];
+    expect(viewScript).toBeDefined();
+    expect(() => new Function(viewScript!)).not.toThrow();
   });
 
   it('persists screenshots and reports their full absolute file path', async () => {
@@ -97,6 +136,7 @@ describe('bundled browser MCP', () => {
       isClosed: jest.fn(() => false),
       locator: jest.fn(() => ({ innerText: jest.fn(async () => '') })),
       on: jest.fn(),
+      mainFrame: jest.fn(() => ({})),
       screenshot: jest.fn(async () => png),
       title: jest.fn(async () => 'Screenshot test'),
       url: jest.fn(() => 'https://example.com/'),
@@ -159,6 +199,7 @@ describe('bundled browser MCP', () => {
         const page = {
           isClosed: jest.fn(() => false),
           on: jest.fn(),
+          mainFrame: jest.fn(() => ({})),
           url: jest.fn(() => 'about:blank'),
         };
         const context = {
@@ -198,6 +239,7 @@ describe('bundled browser MCP', () => {
       locator: jest.fn(() => ({ innerText: jest.fn(async () => 'body') })),
       mouse,
       on: jest.fn(),
+      mainFrame: jest.fn(() => ({})),
       reload: jest.fn(async () => null),
       title: jest.fn(async () => 'Interactive test'),
       url: jest.fn(() => 'https://example.com/'),
@@ -283,6 +325,7 @@ describe('bundled browser MCP', () => {
     const closeContext = jest.fn(async () => undefined);
     const page = {
       on: jest.fn(),
+      mainFrame: jest.fn(() => ({})),
       url: jest.fn(() => 'about:blank'),
     };
     const context = {
