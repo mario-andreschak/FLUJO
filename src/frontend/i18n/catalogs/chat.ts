@@ -88,6 +88,8 @@ export const chatMessageRows = {
   'chat.history.agentRuns': ['AGENT RUNS', 'EJECUCIONES DE AGENTES', 'AGENTENLÄUFE', 'EXÉCUTIONS D’AGENTS', 'ESECUZIONI AGENTI', 'EXECUÇÕES DE AGENTES', '智能体运行'],
   'chat.history.title': ['Conversations', 'Conversaciones', 'Unterhaltungen', 'Conversations', 'Conversazioni', 'Conversas', '对话'],
   'chat.history.hide': ['Hide conversation sidebar', 'Ocultar la barra lateral de conversaciones', 'Unterhaltungsleiste ausblenden', 'Masquer la barre latérale des conversations', 'Nascondi la barra laterale delle conversazioni', 'Ocultar barra lateral de conversas', '隐藏对话侧栏'],
+  'chat.history.collapse': ['Hide conversation sidebar', 'Ocultar la barra lateral de conversaciones', 'Unterhaltungsleiste ausblenden', 'Masquer la barre latérale des conversations', 'Nascondi la barra laterale delle conversazioni', 'Ocultar barra lateral de conversas', '隐藏对话侧栏'],
+  'chat.history.expand': ['Show conversation sidebar', 'Mostrar la barra lateral de conversaciones', 'Unterhaltungsleiste einblenden', 'Afficher la barre latérale des conversations', 'Mostra la barra laterale delle conversazioni', 'Mostrar barra lateral de conversas', '显示对话侧栏'],
   'chat.history.stop': ['Stop this run', 'Detener esta ejecución', 'Diesen Lauf stoppen', 'Arrêter cette exécution', 'Interrompi questa esecuzione', 'Parar esta execução', '停止本次运行'],
   'chat.history.delete': ['Delete conversation', 'Eliminar conversación', 'Unterhaltung löschen', 'Supprimer la conversation', 'Elimina conversazione', 'Excluir conversa', '删除对话'],
   'chat.history.deleteAll': ['Delete all conversations', 'Eliminar todas las conversaciones', 'Alle Unterhaltungen löschen', 'Supprimer toutes les conversations', 'Elimina tutte le conversazioni', 'Excluir todas as conversas', '删除所有对话'],

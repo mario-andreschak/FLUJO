@@ -38,3 +38,12 @@ export function interceptNavigation(navigate: () => void): boolean {
   activeGuard(navigate);
   return true;
 }
+
+/**
+ * Whether a guard is currently registered — lets callers (e.g. a popstate
+ * handler) decide whether to bother re-pushing state before offering the
+ * navigation, without actually triggering the guard.
+ */
+export function hasNavigationGuard(): boolean {
+  return activeGuard !== null;
+}

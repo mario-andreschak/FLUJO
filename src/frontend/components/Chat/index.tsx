@@ -100,6 +100,7 @@ import { useStorage } from '@/frontend/contexts/StorageContext';
 import { useAskFlujoPage } from '@/frontend/contexts/AskFlujoContext';
 import type { AskFlujoUiAction } from '@/frontend/types/askFlujo';
 import { highlightAskFlujoElement } from '@/frontend/utils/askFlujoActions';
+import { useEntityDeepLink } from '@/frontend/hooks/useEntityDeepLink';
 import {
   latestMcpAppResultIdsByResource,
   observeNewMcpAppResultIds,
@@ -1485,17 +1486,14 @@ const Chat: React.FC = () => {
   // FlowBuilder header route here). Fires once flows have loaded so we only bind
   // to a flow that actually exists; an unknown or quick-chat id is ignored. The
   // param is cleared afterward so a refresh doesn't spawn another conversation.
-  const chatDeepLinkDone = useRef(false);
-  useEffect(() => {
-    if (chatDeepLinkDone.current || flows.length === 0) return;
-    const wanted = new URLSearchParams(window.location.search).get('flow');
-    if (!wanted) { chatDeepLinkDone.current = true; return; }
-    chatDeepLinkDone.current = true;
-    if (flows.some(f => f.id === wanted) && !isQuickChatFlowId(wanted)) {
-      createNewConversation(wanted);
-    }
-    router.replace('/chat');
-  }, [flows]);
+  useEntityDeepLink({
+    param: 'flow',
+    ready: flows.length > 0,
+    exists: (id) => flows.some(f => f.id === id) && !isQuickChatFlowId(id),
+    onResolve: (id) => createNewConversation(id),
+    consume: true,
+    replacePath: '/chat',
+  });
 
   // --- Quick Chat (issue #61): a model + optional MCP servers, no saved flow ---
   const [quickChatOpen, setQuickChatOpen] = useState<boolean>(false);
@@ -4083,6 +4081,7 @@ const Chat: React.FC = () => {
       onNewConversation={sidebarCreateNewConversation}
       onQuickChat={sidebarOpenQuickChat}
       onCollapse={toggleSidebarCollapsed}
+      collapsed={effectiveSidebarCollapsed}
     />
   );
 

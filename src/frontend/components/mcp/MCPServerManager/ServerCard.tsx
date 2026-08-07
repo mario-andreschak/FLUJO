@@ -17,6 +17,7 @@ import KeyOffIcon from "@mui/icons-material/KeyOff";
 import PublicIcon from "@mui/icons-material/Public";
 import WidgetsIcon from "@mui/icons-material/Widgets";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import CopyLinkButton from "@/frontend/components/shared/CopyLinkButton";
 import DataObjectIcon from "@mui/icons-material/DataObject";
 import DriveFileMoveOutlinedIcon from "@mui/icons-material/DriveFileMoveOutlined";
 import SystemUpdateAltIcon from "@mui/icons-material/SystemUpdateAlt";
@@ -1025,6 +1026,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
                     <DataObjectIcon fontSize="small" />
                   </IconButton>
                 </Tooltip>
+                <CopyLinkButton target={{ kind: "mcp-server", id: name }} sx={{ color: "text.secondary" }} />
               </Box>
             )}
           </Box>
@@ -1084,6 +1086,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
                       <DataObjectIcon fontSize="small" />
                     </IconButton>
                   </Tooltip>
+                  <CopyLinkButton target={{ kind: "mcp-server", id: name }} />
                 </Box>
               )}
             </Box>

@@ -6,7 +6,16 @@ const mockLoadFlows = jest.fn();
 const mockCreateNewFlow = jest.fn();
 
 jest.mock('next/navigation', () => ({
-  useRouter: () => ({ push: mockPush, replace: mockReplace }),
+  // `isEditing` is now derived from the URL (#374), so push/replace must
+  // actually move `window.location` for the component to observe the
+  // change on its next render — mirroring what next/navigation's real
+  // client-side router does.
+  useRouter: () => ({
+    push: (url: string) => { window.history.pushState({}, '', url); mockPush(url); },
+    replace: (url: string) => { window.history.replaceState({}, '', url); mockReplace(url); },
+    back: jest.fn(() => window.history.back()),
+  }),
+  useSearchParams: () => new URLSearchParams(window.location.search),
 }));
 
 jest.mock('@/frontend/services/flow', () => ({
@@ -135,7 +144,9 @@ describe('easy agent creation deep link', () => {
     expect(mockCreateNewFlow).toHaveBeenCalledWith('Untitled agent');
     expect(window.localStorage.getItem('flujo-ui:flow-builder:mode')).toBe(JSON.stringify('guided'));
     expect(screen.getByTestId('ai-generator')).toHaveTextContent('false');
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/flows'));
+    // The editor is now a real history entry (#374): entering it pushes
+    // `?flow=<id>&mode=edit` rather than a bare replace to `/flows`.
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/flows?flow=draft-assistant&mode=edit'));
   });
 
   it('offers a third creation path that starts directly in Expert view', async () => {

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useMemo, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import ServerList from './ServerList';
 import ServerModal from './Modals/ServerModal/index';
 import { SaveAndAuthenticateResult, type ServerSetupTab } from './Modals/ServerModal/types';
@@ -80,6 +81,7 @@ interface ServerManagerProps {
 }
 
 const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) => {
+  const router = useRouter();
   const { t, tp, formatNumber } = useI18n();
   const {
     servers,
@@ -166,28 +168,39 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     setDetailsServerName(serverName);
   };
 
+  // `?server=<id>` alone is the magic link (#374): opens the details modal and
+  // stays in the URL (durable) so Back/Forward and refresh keep it in sync,
+  // cleared on close. `?server=<id>&tool=<name>[&args=<json>]` is the older,
+  // one-shot tool-tester deep link — it still consumes/clears immediately.
   useEffect(() => {
     if (typeof window === 'undefined' || servers.length === 0) return;
     const query = new URLSearchParams(window.location.search);
     const serverName = query.get('server');
+    if (!serverName) return;
     const toolName = query.get('tool');
-    if (!serverName || !toolName) return;
     const server = servers.find((candidate) => candidate.name === serverName);
     if (!server || server.disabled) return;
-    let argumentsPrefill: Record<string, unknown> = {};
-    try {
-      const parsed = JSON.parse(query.get('args') || '{}');
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) argumentsPrefill = parsed;
-    } catch { /* malformed query arguments safely become an empty object */ }
-    setToolPrefill({ toolName, arguments: argumentsPrefill });
+    if (toolName) {
+      let argumentsPrefill: Record<string, unknown> = {};
+      try {
+        const parsed = JSON.parse(query.get('args') || '{}');
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) argumentsPrefill = parsed;
+      } catch { /* malformed query arguments safely become an empty object */ }
+      setToolPrefill({ toolName, arguments: argumentsPrefill });
+    }
     setDetailsServerName(serverName);
-    window.history.replaceState(window.history.state, '', '/mcp');
-  }, [servers]);
+    if (toolName) {
+      router.replace('/mcp');
+    }
+  }, [servers, router]);
 
   const handleCloseDetails = () => {
     const name = detailsServerName;
     setDetailsServerName(null);
     setToolPrefill(undefined);
+    if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('server')) {
+      router.replace('/mcp');
+    }
     // Opening the modal (Tool tester / resources) self-heals a stale connection via the
     // backend's reconnect-on-use; refresh this card's status so it stops showing a stale
     // "crashed" message without a full page reload.

@@ -29,7 +29,7 @@ import {
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
 import BoltIcon from '@mui/icons-material/Bolt';
-import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
+import ViewSidebarIcon from '@mui/icons-material/ViewSidebar';
 import StopCircleIcon from '@mui/icons-material/StopCircle';
 import SearchIcon from '@mui/icons-material/Search';
 import ClearIcon from '@mui/icons-material/Clear';
@@ -95,6 +95,10 @@ interface ChatHistoryProps {
   /** Optional: collapse/hide the sidebar. When provided, a toggle button is
    *  rendered next to the header. State is owned by the parent. */
   onCollapse?: () => void;
+  /** Whether the sidebar is currently collapsed — flips the toggle button's
+   *  tooltip/aria-label between "collapse" and "expand". Defaults to false so
+   *  existing call sites that don't pass it keep the previous "hide" wording. */
+  collapsed?: boolean;
   /** Map of flowId → flow name, so the sidebar can show which flow each
    *  conversation used (issue #147). Quick-chat pseudo-flows are detected from
    *  their id and labelled "Quick Chat" regardless of this map. */
@@ -147,6 +151,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   onNewConversation,
   onQuickChat,
   onCollapse,
+  collapsed = false,
   flowNames = {},
 }) => {
   const { t, tp, formatDate: formatLocalizedDate } = useI18n();
@@ -722,9 +727,9 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
         }}
       >
         {onCollapse && (
-          <Tooltip title={t('chat.history.hide')}>
-            <IconButton size="small" onClick={onCollapse} aria-label={t('chat.history.hide')}>
-              <ChevronLeftIcon />
+          <Tooltip title={collapsed ? t('chat.history.expand') : t('chat.history.collapse')}>
+            <IconButton size="small" onClick={onCollapse} aria-label={collapsed ? t('chat.history.expand') : t('chat.history.collapse')}>
+              <ViewSidebarIcon />
             </IconButton>
           </Tooltip>
         )}
