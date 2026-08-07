@@ -20,26 +20,47 @@ type SandboxModule = typeof import('@/backend/mcpApps/sandboxServer');
 /** The module adopts cross-bundle state from this key; drop it for a clean load. */
 const RUNTIME_STATE_KEY = Symbol.for('flujo.mcpApps.sandboxRuntimeState.v2');
 
+/**
+ * `deriveOriginKeyFromHost()` / `getSandboxPublicUrl()` read `process.env`
+ * LAZILY -- at call time, not at module-load time -- so the env vars set up
+ * by `loadSandboxModule()` below must stay in place until the *test's*
+ * assertions have run, not just until the module has finished loading.
+ * Restoring them in a `finally` block inside `loadSandboxModule()` would
+ * un-set them before the test body even gets a chance to call into the
+ * module, breaking every assertion. Instead we defer the restore to
+ * `afterEach`, which still guarantees no env leakage across tests/suites.
+ */
+const pendingEnvRestores: Array<() => void> = [];
+
+afterEach(() => {
+  while (pendingEnvRestores.length > 0) {
+    pendingEnvRestores.pop()!();
+  }
+});
+
 function loadSandboxModule(env: Record<string, string | undefined> = {}): SandboxModule {
   let mod!: SandboxModule;
   delete (globalThis as Record<symbol, unknown>)[RUNTIME_STATE_KEY];
-  jest.isolateModules(() => {
-    const previous: Record<string, string | undefined> = {};
-    for (const [key, value] of Object.entries(env)) {
-      previous[key] = process.env[key];
+
+  const previous: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(env)) {
+    previous[key] = process.env[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  // Restore after the test (see comment above), not right after the module
+  // load -- the module reads these env vars lazily at assertion time.
+  pendingEnvRestores.push(() => {
+    for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      mod = require('@/backend/mcpApps/sandboxServer') as SandboxModule;
-      mod.getRegisteredSandboxHostOrigins();
-    } finally {
-      for (const [key, value] of Object.entries(previous)) {
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-      }
-    }
+  });
+
+  jest.isolateModules(() => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    mod = require('@/backend/mcpApps/sandboxServer') as SandboxModule;
+    mod.getRegisteredSandboxHostOrigins();
   });
   return mod;
 }
