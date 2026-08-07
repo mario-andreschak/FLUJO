@@ -1,5 +1,21 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- OpenRouter multimodal chat models (e.g. `outputModalities: ["text","image"]`) were routed to the
+  dedicated `/images` / `/videos` media endpoints and failed with a route-not-found error even for
+  plain text turns (#370). Routing to the dedicated media route is now reserved for models that are
+  media-only (image/video output without text), via a single shared `resolveOpenRouterMediaRoute`
+  helper used by both execution and the model-card test.
+
+### Added
+- The model card "Test" dialog now shows which adapter/endpoint the flow engine actually resolves
+  for a model (`Adapter used by flows`) and exercises that exact adapter, so a green test result now
+  matches real chat behaviour.
+- OpenRouter media adapter errors are now mapped to an actionable message naming the model and
+  endpoint when a dedicated media route genuinely 404s.
+
 ## [0.1.3] - 2025-04-07
 
 ### Added

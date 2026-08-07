@@ -5,7 +5,13 @@ import { ModelTestAttempt, ModelTestResult } from '@/shared/types/model/response
 import { Model, normalizeMaxTokens } from '@/shared/types/model';
 import { ModelAdapter } from '@/shared/types/model/provider';
 import { createOpenAIClient, getProviderDefaultHeaders } from './openaiClient';
-import { getCompletionAdapter } from './adapters';
+import {
+  getCompletionAdapter,
+  describeCompletionAdapter,
+  resolveOpenRouterMediaRoute,
+  normalizeOutputModalities,
+} from './adapters';
+import type { OpenRouterMediaKind } from './adapters';
 
 const log = createLogger('backend/services/model/testConnection');
 
@@ -251,11 +257,10 @@ async function attemptViaAdapter(model: Model, apiKey: string): Promise<ModelTes
 async function attemptOpenRouterMediaConnection(
   model: Model,
   apiKey: string,
+  kind: OpenRouterMediaKind,
 ): Promise<ModelTestAttempt> {
   const started = Date.now();
   const base = (model.baseUrl || 'https://openrouter.ai/api/v1').replace(/\/+$/, '');
-  const output = (model.outputModalities ?? []).map(value => value.toLowerCase());
-  const kind = output.includes('video') ? 'videos' : 'images';
   const headers = {
     Authorization: `Bearer ${apiKey}`,
     ...(getProviderDefaultHeaders('openrouter') ?? {}),
@@ -396,22 +401,18 @@ export async function testModelConnection(params: {
   const { modelName, baseUrl, apiKey, provider, adapter, model } = params;
   log.info('Testing model connection', { modelName, baseUrl, provider, adapter, hasApiKey: Boolean(apiKey) });
 
-  const openRouterMedia =
-    provider === 'openrouter' &&
-    model &&
-    (model.outputModalities ?? []).some(modality =>
-      ['image', 'video'].includes(modality.toLowerCase())
-    );
-  if (openRouterMedia) {
-    const sdk = await attemptOpenRouterMediaConnection(model, apiKey);
+  const mediaRoute = model ? resolveOpenRouterMediaRoute(model) : { useMediaRoute: false as const };
+  const adapterRoute = model ? describeCompletionAdapter(model) : undefined;
+
+  if (mediaRoute.useMediaRoute && model) {
+    const kind = (mediaRoute as { kind?: OpenRouterMediaKind }).kind ?? 'images';
+    const sdk = await attemptOpenRouterMediaConnection(model, apiKey, kind);
     const axiosAttempt: ModelTestAttempt = {
       ok: sdk.ok,
       durationMs: 0,
       content: 'n/a — dedicated OpenRouter media APIs are validated without starting a billable generation.',
     };
-    const output = (model.outputModalities ?? []).some(value => value.toLowerCase() === 'video')
-      ? 'video'
-      : 'image';
+    const output = kind === 'videos' ? 'video' : 'image';
     const diagnosis = sdk.ok
       ? `Connected successfully. The API key is valid and the model is listed by OpenRouter's dedicated ${output} API. No billable generation was started.`
       : `OpenRouter ${output} API validation failed: ${sdk.error?.message ?? 'unknown error'}.`;
@@ -423,6 +424,8 @@ export async function testModelConnection(params: {
       sdk,
       axios: axiosAttempt,
       diagnosis,
+      adapterRoute,
+      adapter: sdk,
     };
   }
 
@@ -455,7 +458,17 @@ export async function testModelConnection(params: {
             ? 'OpenAI API key (or run `codex login` for a ChatGPT plan and leave the key empty)'
             : 'API key'
       }.`;
-    return { ok: sdk.ok, model: modelName, baseUrl, provider, sdk, axios: naAxios, diagnosis };
+    return {
+      ok: sdk.ok,
+      model: modelName,
+      baseUrl,
+      provider,
+      sdk,
+      axios: naAxios,
+      diagnosis,
+      adapterRoute,
+      adapter: sdk,
+    };
   }
 
   // Run both transports in parallel — they are independent and this halves the
@@ -465,6 +478,14 @@ export async function testModelConnection(params: {
     attemptViaAxios(modelName, baseUrl, apiKey, provider),
   ]);
 
+  let diagnosis = buildDiagnosis(sdk, axiosAttempt);
+  if (adapterRoute?.adapterId === 'openai' && provider === 'openrouter' && model) {
+    const outputs = normalizeOutputModalities(model);
+    if ((outputs.includes('image') || outputs.includes('video')) && outputs.includes('text')) {
+      diagnosis += ' This model also outputs image/video alongside text, so it is served by /chat/completions rather than the dedicated OpenRouter media route.';
+    }
+  }
+
   const result: ModelTestResult = {
     ok: sdk.ok,
     model: modelName,
@@ -472,7 +493,17 @@ export async function testModelConnection(params: {
     provider,
     sdk,
     axios: axiosAttempt,
-    diagnosis: buildDiagnosis(sdk, axiosAttempt),
+    diagnosis,
+    adapterRoute,
+    // Reuse the SDK attempt above rather than firing a third billable request.
+    adapter: adapterRoute
+      ? {
+          ...sdk,
+          content: sdk.ok
+            ? (sdk.content ? sdk.content : 'Same round-trip as the OpenAI SDK attempt above.')
+            : sdk.content,
+        }
+      : undefined,
   };
 
   log.info('Model connection test complete', { modelName, sdkOk: sdk.ok, axiosOk: axiosAttempt.ok });

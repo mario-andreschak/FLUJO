@@ -521,6 +521,20 @@ class ModelService {
       }
     }
 
+    // Merge the resolved overrides (name/baseUrl/provider/adapter) onto the
+    // stored model so route resolution (getCompletionAdapter /
+    // describeCompletionAdapter) sees exactly what will run, not a stale
+    // stored record when a draft edit changed provider/adapter/baseUrl.
+    const mergedModel: Model | undefined = storedModel
+      ? {
+          ...storedModel,
+          name: modelName,
+          baseUrl: baseUrl ?? storedModel.baseUrl,
+          provider: (provider ?? storedModel.provider) as Model['provider'],
+          adapter: adapter ?? storedModel.adapter,
+        }
+      : undefined;
+
     return testModelConnection({
       modelName,
       baseUrl,
@@ -528,7 +542,7 @@ class ModelService {
       provider,
       adapter,
       // Native adapters need a Model-shaped object to run via getCompletionAdapter.
-      model: storedModel ?? undefined,
+      model: mergedModel,
     });
   }
 

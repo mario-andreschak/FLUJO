@@ -124,9 +124,30 @@ export const ModelTestDialog = ({
               {result.baseUrl ? ` · ${result.baseUrl}` : ''}
               {result.provider ? ` · ${result.provider}` : ''}
             </Typography>
+            {result.adapterRoute && (
+              <Box sx={{ mb: 2 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                  <Typography variant="caption" color="text.secondary">
+                    {t('models.test.adapterRoute')}:
+                  </Typography>
+                  <Chip size="small" label={result.adapterRoute.adapterId} />
+                  <Chip
+                    size="small"
+                    variant="outlined"
+                    label={t('models.test.adapterEndpoint', { endpoint: result.adapterRoute.endpoint })}
+                  />
+                </Box>
+                <Typography variant="caption" color="text.secondary" display="block">
+                  {t('models.test.adapterReason', { reason: result.adapterRoute.reason })}
+                </Typography>
+              </Box>
+            )}
             <Divider sx={{ mb: 2 }} />
             <AttemptBlock title={sdkTitle} attempt={result.sdk} />
             <AttemptBlock title={t('models.test.axios')} attempt={result.axios} />
+            {result.adapter && (
+              <AttemptBlock title={t('models.test.adapterAttempt')} attempt={result.adapter} />
+            )}
           </>
         ) : null}
       </DialogContent>

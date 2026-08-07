@@ -5,6 +5,7 @@ import { getProviderDefaultHeaders } from '../openaiClient';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import type { CompletionAdapter, CompletionInput, CompletionResult } from './types';
 import { extractImageParts, extractText } from './messageUtils';
+import { resolveOpenRouterMediaRoute } from './openrouterMediaRouting';
 
 const log = createLogger('backend/services/model/adapters/openrouterMediaAdapter');
 const DEFAULT_OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
@@ -99,7 +100,13 @@ function safeErrorText(value: unknown): string {
   }
 }
 
-async function responseError(response: Response): Promise<Error> {
+const NO_ENDPOINT_PATTERN = /no (endpoint|allowed providers)|not found|unknown route/i;
+
+async function responseError(
+  response: Response,
+  model: CompletionInput['model'],
+  resource: 'images' | 'videos',
+): Promise<Error> {
   let detail = response.statusText || `HTTP ${response.status}`;
   try {
     const body = await response.json();
@@ -110,6 +117,13 @@ async function responseError(response: Response): Promise<Error> {
     } catch {
       // Keep the status text fallback.
     }
+  }
+  if (response.status === 404 || NO_ENDPOINT_PATTERN.test(detail)) {
+    return new Error(
+      `OpenRouter has no dedicated /${resource} route for "${model.name}". This model is served by ` +
+      `/chat/completions — remove "image"/"video" from its output modalities or re-sync the model ` +
+      `from the OpenRouter catalogue (Models → Fetch models). (provider detail: ${detail})`,
+    );
   }
   return new Error(`OpenRouter media API returned ${response.status}: ${detail}`);
 }
@@ -184,7 +198,7 @@ async function generateImage(input: CompletionInput): Promise<CompletionResult> 
         : {}),
     }),
   }, input);
-  if (!response.ok) throw await responseError(response);
+  if (!response.ok) throw await responseError(response, input.model, 'images');
   const body = await response.json() as ImageResponse;
   if (body.error) throw new Error(`OpenRouter image generation failed: ${safeErrorText(body.error)}`);
   const media: ModelMediaPart[] = (body.data ?? []).flatMap((item): ModelMediaPart[] => {
@@ -255,7 +269,7 @@ async function downloadVideo(
         headers: downloadHeaders(candidate, apiUrl, input.apiKey),
       }, input);
       if (!response.ok) {
-        lastError = await responseError(response);
+        lastError = await responseError(response, input.model, 'videos');
         continue;
       }
       const bytes = Buffer.from(await response.arrayBuffer());
@@ -296,7 +310,7 @@ async function generateVideo(input: CompletionInput): Promise<CompletionResult> 
         : {}),
     }),
   }, input);
-  if (!response.ok) throw await responseError(response);
+  if (!response.ok) throw await responseError(response, input.model, 'videos');
   let job = await response.json() as VideoJob;
   if (job.error && job.status !== 'completed') {
     throw new Error(`OpenRouter video generation failed: ${safeErrorText(job.error)}`);
@@ -307,7 +321,7 @@ async function generateVideo(input: CompletionInput): Promise<CompletionResult> 
     const poll = await observedFetch(pollingUrl, {
       headers: requestHeaders(input),
     }, input);
-    if (!poll.ok) throw await responseError(poll);
+    if (!poll.ok) throw await responseError(poll, input.model, 'videos');
     job = await poll.json() as VideoJob;
     if (!['completed', 'failed', 'cancelled', 'expired'].includes(job.status ?? 'pending')) {
       await delay(VIDEO_POLL_INTERVAL_MS, input.signal);
@@ -334,16 +348,17 @@ async function generateVideo(input: CompletionInput): Promise<CompletionResult> 
  */
 export class OpenRouterMediaAdapter implements CompletionAdapter {
   async createCompletion(input: CompletionInput): Promise<CompletionResult> {
-    const outputs = (input.model.outputModalities ?? []).map(value => value.toLowerCase());
-    if (outputs.includes('video')) return generateVideo(input);
-    if (outputs.includes('image')) return generateImage(input);
-    throw new Error('OpenRouter media adapter selected for a model without image or video output.');
+    const route = resolveOpenRouterMediaRoute(input.model);
+    if (route.kind === 'videos') return generateVideo(input);
+    if (route.kind === 'images') return generateImage(input);
+    throw new Error(
+      `OpenRouter media adapter selected for a model without a dedicated media route (${route.reason}).`,
+    );
   }
 
   async createStreamCompletion(input: CompletionInput): Promise<CompletionResult> {
     const liveMessageId = `stream_${uuidv4()}`;
-    const isVideo = (input.model.outputModalities ?? [])
-      .some(value => value.toLowerCase() === 'video');
+    const isVideo = resolveOpenRouterMediaRoute(input.model).kind === 'videos';
     input.onModelDelta?.({
       messageId: liveMessageId,
       contentDelta: isVideo ? 'Generating video…' : 'Generating image…',
