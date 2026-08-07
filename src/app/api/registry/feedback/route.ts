@@ -23,9 +23,10 @@ const feedbackSchema = z
   .refine(
     ({ notice }) => {
       const length = Array.from(notice).length;
-      return length >= 1 && length <= 255;
+      // Issue #377: an empty message is allowed; only the upper bound is enforced.
+      return length <= 255;
     },
-    { path: ['notice'], message: 'Feedback must contain 1–255 characters' },
+    { path: ['notice'], message: 'Feedback must not exceed 255 characters' },
   );
 
 export async function POST(request: NextRequest) {
@@ -46,7 +47,7 @@ export async function POST(request: NextRequest) {
   const parsed = feedbackSchema.safeParse(json);
   if (!parsed.success) {
     return NextResponse.json(
-      { error: 'Feedback and a happy/unhappy selection are required' },
+      { error: 'A happy/unhappy selection is required and feedback must not exceed 255 characters.' },
       { status: 400 },
     );
   }

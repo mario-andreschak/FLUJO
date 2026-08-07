@@ -137,7 +137,7 @@ const messageRows = {
   'feedback.yesAria': ['Yes, I am happy', 'Sí, estoy satisfecho', 'Ja, ich bin zufrieden', 'Oui, je suis satisfait', 'Sì, sono soddisfatto', 'Sim, estou satisfeito', '是的，我很满意'],
   'feedback.no': ['Not really', 'No mucho', 'Nicht wirklich', 'Pas vraiment', 'Non proprio', 'Não muito', '不太满意'],
   'feedback.noAria': ['No, I am not happy', 'No, no estoy satisfecho', 'Nein, ich bin nicht zufrieden', 'Non, je ne suis pas satisfait', 'No, non sono soddisfatto', 'Não, não estou satisfeito', '不，我不太满意'],
-  'feedback.placeholder': ['Share your feedback', 'Comparte tus comentarios', 'Teile dein Feedback', 'Partagez votre avis', 'Condividi il tuo feedback', 'Compartilhe seu feedback', '分享你的反馈'],
+  'feedback.placeholder': ['Share your feedback (optional)', 'Comparte tus comentarios (opcional)', 'Teile dein Feedback (optional)', 'Partagez votre avis (facultatif)', 'Condividi il tuo feedback (facoltativo)', 'Compartilhe seu feedback (opcional)', '分享你的反馈（可选）'],
   'feedback.inputAria': ['Feedback', 'Comentarios', 'Feedback', 'Avis', 'Feedback', 'Feedback', '反馈'],
   'feedback.send': ['Send', 'Enviar', 'Senden', 'Envoyer', 'Invia', 'Enviar', '发送'],
   'feedback.sending': ['Sending…', 'Enviando…', 'Wird gesendet…', 'Envoi…', 'Invio…', 'Enviando…', '正在发送…'],

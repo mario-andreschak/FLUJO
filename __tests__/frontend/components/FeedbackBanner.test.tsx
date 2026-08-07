@@ -58,11 +58,43 @@ describe('FeedbackBanner', () => {
     });
   });
 
-  it('requires both a sentiment and non-empty feedback', () => {
+  it('requires a sentiment; the message is optional', () => {
     render(<FeedbackBanner />);
 
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Yes, I am happy' }));
+    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+  });
+
+  it('submits an empty message when only a sentiment is selected', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ accepted: true }),
+    });
+    render(<FeedbackBanner />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, I am happy' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(fetchMock).toHaveBeenCalledWith('/api/registry/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        notice: '',
+        rating: 5,
+      }),
+    });
+    expect(await screen.findByText('Thanks for helping improve FLUJO.')).toBeInTheDocument();
+  });
+
+  it('disables Send when the message exceeds 255 characters', () => {
+    render(<FeedbackBanner />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, I am happy' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Feedback' }), {
+      target: { value: 'x'.repeat(256) },
+    });
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
   });
 
