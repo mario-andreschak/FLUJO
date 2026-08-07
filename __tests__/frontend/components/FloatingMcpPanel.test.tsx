@@ -203,12 +203,18 @@ describe('MCP App canvas docking', () => {
     fireEvent.pointerUp(window, { pointerId: 1 });
     expect(screen.queryByTestId('pointer-drag-shield')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Toggle canvas panel' }));
+    // #375: collapse and expand are no longer one toggle. The arrow for the
+    // ALREADY-active edge ('left' here) collapses the dock; while collapsed the
+    // dock renders as a rail whose only control is 'Expand canvas'.
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse canvas to this edge' }));
     await waitFor(() => expect(layouts.at(-1)).toEqual({ placement: 'left', reservedWidth: 0 }));
-    expect(screen.getByTestId('dev-canvas-dock')).toHaveStyle({ position: 'relative' });
+    // A collapsed side dock stays absolutely positioned (so it overlays rather
+    // than reserving space — reservedWidth is 0 above) but shrinks to the 40px
+    // edge rail.
+    expect(screen.getByTestId('dev-canvas-dock')).toHaveStyle({ position: 'absolute', width: '40px' });
     expect(screen.queryByRole('button', { name: 'Dock canvas right' })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Toggle canvas panel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Expand canvas' }));
     await waitFor(() => expect(layouts.at(-1)).toEqual({ placement: 'left', reservedWidth: 320 }));
   });
 
@@ -227,7 +233,7 @@ describe('MCP App canvas docking', () => {
       </ThemeProvider>,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Toggle canvas panel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse canvas to this edge' }));
     await waitFor(() => expect(firstLayouts.at(-1)?.reservedWidth).toBe(0));
     first.unmount();
 
@@ -265,7 +271,7 @@ describe('MCP App canvas docking', () => {
     const fullscreen = await screen.findByRole('button', { name: 'Toggle canvas full screen' });
     await waitFor(() => expect(fullscreen).toBeEnabled());
     fireEvent.click(fullscreen);
-    expect(screen.queryByRole('button', { name: 'Toggle canvas panel' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Collapse canvas to this edge' })).not.toBeInTheDocument();
     expect(screen.getAllByRole('separator', { name: /Resize app canvas \(/ })).toHaveLength(8);
   });
 });

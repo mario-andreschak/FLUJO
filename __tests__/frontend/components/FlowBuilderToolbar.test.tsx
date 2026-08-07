@@ -143,12 +143,12 @@ describe('FlowBuilder toolbar', () => {
     expect(screen.getByRole('button', { name: 'Check Flow' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add node' })).toBeInTheDocument();
     expect(screen.getByLabelText('Save status: Saved')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Auto-align nodes' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Tidy up layout' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Undo' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Redo' })).toBeDisabled();
 
     fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
-    expect(screen.getByRole('menuitem', { name: 'Auto-align nodes' })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('menuitem', { name: 'Tidy up layout' })).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByRole('menuitem', { name: 'Repair automatically (no model)' })).toBeEnabled();
     expect(screen.getByRole('menuitem', { name: /Repair with AI/i })).toBeEnabled();
   });
@@ -294,9 +294,9 @@ describe('FlowBuilder toolbar', () => {
     fireEvent.change(screen.getByLabelText('Flow name'), { target: { value: '' } });
     expect(screen.getByRole('button', { name: 'Save flow' })).toBeDisabled();
 
-    expect(screen.getByRole('button', { name: 'Auto-align nodes' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Tidy up layout' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
-    expect(screen.getByRole('menuitem', { name: 'Auto-align nodes' })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('menuitem', { name: 'Tidy up layout' })).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByRole('menuitem', { name: 'Repair automatically (no model)' })).toBeEnabled();
     expect(screen.getByRole('menuitem', { name: /Repair with AI/i })).toBeEnabled();
   });
@@ -449,9 +449,12 @@ describe('FlowBuilder toolbar', () => {
       />,
     );
 
+    // Mobile opening layout runs `computeAutoLayout` with `rankSep: 90`
+    // (FlowBuilder/index.tsx), so rank 1 sits at the `start` node's fallback
+    // height (84, see layoutGeometry NODE_SIZE_FALLBACK) + 90 = 174.
     await waitFor(() => {
       expect(screen.getByTestId('canvas').getAttribute('data-positions'))
-        .toContain('start:0,0|process-existing:0,170');
+        .toContain('start:0,0|process-existing:0,174');
     });
     expect(screen.getByLabelText('Save status: Saved')).toBeInTheDocument();
     Object.defineProperty(window, 'matchMedia', {
