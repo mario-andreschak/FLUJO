@@ -128,6 +128,44 @@ describe('computeTidyLayout', () => {
     expectNoOverlaps(tidy);
   });
 
+  it('resolves overlaps between satellites attached to different clusters (cluster-vs-cluster)', () => {
+    // Two process nodes, each with an MCP satellite, placed so the satellites
+    // themselves collide even though the parents do not.
+    const nodes = [
+      node('a', 'process', 0, 0),
+      node('b', 'process', 800, 0),
+      node('m1', 'mcp', 300, 0), // attached to a
+      node('m2', 'mcp', 320, 5), // attached to b, overlaps m1
+    ];
+    const edges = [mcpEdge('a', 'm1'), mcpEdge('b', 'm2')];
+
+    const tidy = computeTidyLayout(nodes, edges);
+    expectNoOverlaps(tidy);
+    // Offsets to their respective parents are preserved even though the
+    // clusters had to move apart.
+    const a = tidy.find(n => n.id === 'a')!;
+    const b = tidy.find(n => n.id === 'b')!;
+    const m1 = tidy.find(n => n.id === 'm1')!;
+    const m2 = tidy.find(n => n.id === 'm2')!;
+    expect(m1.position.x - a.position.x).toBe(300);
+    expect(m1.position.y - a.position.y).toBe(0);
+    expect(m2.position.x - b.position.x).toBe(320 - 800);
+    expect(m2.position.y - b.position.y).toBe(5);
+  });
+
+  it('resolves overlaps between satellites attached to the same parent (intra-cluster)', () => {
+    const nodes = [
+      node('a', 'process', 0, 0),
+      node('m1', 'mcp', 300, 0),
+      node('m2', 'mcp', 305, 5), // deliberately overlaps m1
+      node('m3', 'mcp', 310, 10), // deliberately overlaps m1 and m2
+    ];
+    const edges = [mcpEdge('a', 'm1'), mcpEdge('a', 'm2'), mcpEdge('a', 'm3')];
+
+    const tidy = computeTidyLayout(nodes, edges);
+    expectNoOverlaps(tidy);
+  });
+
   it('running tidy twice on the same input is deterministic (byte-identical positions)', () => {
     const nodes = [
       node('a', 'process', 0, 0),
