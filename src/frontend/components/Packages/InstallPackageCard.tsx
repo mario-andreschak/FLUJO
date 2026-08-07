@@ -36,6 +36,7 @@ import DownloadIcon from '@mui/icons-material/Download';
 import Visibility from '@mui/icons-material/Visibility';
 import VisibilityOff from '@mui/icons-material/VisibilityOff';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 import { packageService, type InstallSummary, type RegistryPackageSearchResult } from '@/frontend/services/packages';
 import { registryService } from '@/frontend/services/registry';
 import { createLogger } from '@/utils/logger';
@@ -394,14 +395,19 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
           },
         }}
       >
-        <DialogTitle sx={{ px: { xs: 2, md: 4 }, pt: { xs: 2, md: 3 }, pb: 1 }}>
-          <Typography component="span" variant="h5" fontWeight={700}>
-            {t('packages.install.title', { name: selected?.name ?? '' })}
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-            {t('packages.install.subtitle')}
-          </Typography>
-        </DialogTitle>
+        <DialogHeaderActions
+          title={(
+            <Box sx={{ minWidth: 0 }}>
+              <Typography component="span" variant="h5" fontWeight={700} sx={{ display: 'block' }}>
+                {t('packages.install.title', { name: selected?.name ?? '' })}
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                {t('packages.install.subtitle')}
+              </Typography>
+            </Box>
+          )}
+          onClose={() => { if (!loading) closeDialog(); }}
+        />
         <DialogContent sx={{ px: { xs: 2, md: 4 }, pb: 3 }}>
           {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>{error}</Alert>}
 

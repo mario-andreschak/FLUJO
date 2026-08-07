@@ -35,6 +35,7 @@ import {
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 import RegistryAccountSettings from './RegistryAccountSettings';
 import { flowService } from '@/frontend/services/flow';
 import { modelService } from '@/frontend/services/model';
@@ -1322,7 +1323,7 @@ export default function PackageWizard({ open, onClose }: Props) {
         fullScreen={fullScreen}
         PaperProps={{ sx: { height: fullScreen ? '100%' : '90vh', maxHeight: fullScreen ? '100%' : '90vh' } }}
       >
-        <DialogTitle>{t('packages.wizard.title')}</DialogTitle>
+        <DialogHeaderActions title={t('packages.wizard.title')} onClose={onClose} />
         <DialogContent dividers sx={{ overflow: 'auto' }}>
           <Stepper activeStep={activeStep} sx={{ mb: 3 }}>
             {STEP_KEYS.map((key) => (
@@ -1368,7 +1369,7 @@ export default function PackageWizard({ open, onClose }: Props) {
       </Dialog>
 
       <Dialog open={pickerOpen} onClose={() => setPickerOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>{t('packages.wizard.pickerTitle')}</DialogTitle>
+        <DialogHeaderActions title={t('packages.wizard.pickerTitle')} onClose={() => setPickerOpen(false)} />
         <DialogContent dividers>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             {t('packages.wizard.pickerHelp')}

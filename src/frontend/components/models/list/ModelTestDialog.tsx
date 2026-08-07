@@ -3,7 +3,6 @@
 import React from 'react';
 import {
   Dialog,
-  DialogTitle,
   DialogContent,
   DialogActions,
   Button,
@@ -18,6 +17,7 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import { ModelTestAttempt, ModelTestResult } from '@/shared/types/model/response';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 
 export interface ModelTestDialogProps {
   open: boolean;
@@ -103,7 +103,7 @@ export const ModelTestDialog = ({
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>{t('models.test.title', { model: modelLabel })}</DialogTitle>
+      <DialogHeaderActions title={t('models.test.title', { model: modelLabel })} onClose={onClose} />
       <DialogContent dividers>
         {loading ? (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, py: 3 }}>

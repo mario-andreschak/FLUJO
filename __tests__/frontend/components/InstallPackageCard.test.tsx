@@ -1,4 +1,15 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { mockUseAskFlujo, mockUseAskFlujoPage } from '@/frontend/__tests__/mocks/askFlujoContext';
+
+jest.mock('@/frontend/contexts/AskFlujoContext', () => ({
+  useAskFlujo: mockUseAskFlujo,
+  useAskFlujoPage: mockUseAskFlujoPage,
+}));
+
+jest.mock('@/frontend/components/BugReport/BugReportButton', () => ({
+  __esModule: true,
+  default: () => null,
+}));
 
 const searchRegistryMock = jest.fn();
 const installFromRegistryMock = jest.fn();

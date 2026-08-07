@@ -42,6 +42,8 @@ import TerminalRoundedIcon from '@mui/icons-material/TerminalRounded';
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
 import WorkspacePremiumRoundedIcon from '@mui/icons-material/WorkspacePremiumRounded';
 
+import AskFlujoButton from '@/frontend/components/AskFlujo/AskFlujoButton';
+import BugReportButton from '@/frontend/components/BugReport/BugReportButton';
 import { Model } from '@/shared/types';
 import { readNdjsonStream } from '@/frontend/utils/ndjsonReader';
 import {
@@ -772,7 +774,11 @@ export default function ModelConnectionWizard({
             <Box sx={{ flex: 1 }}>
               <LinearProgress variant="determinate" value={progress} aria-label={t('models.wizard.progressAria')} />
             </Box>
-            <IconButton onClick={onClose} aria-label={t('models.wizard.closeAria')} disabled={busy || ollamaPulling || Boolean(installTool)}><CloseRoundedIcon /></IconButton>
+            <Box display="flex" alignItems="center" gap={0.5}>
+              <AskFlujoButton />
+              <BugReportButton variant="icon" />
+              <IconButton onClick={onClose} aria-label={t('models.wizard.closeAria')} disabled={busy || ollamaPulling || Boolean(installTool)}><CloseRoundedIcon /></IconButton>
+            </Box>
           </Box>
 
           {error ? <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 2 }}>{error}</Alert> : null}
