@@ -69,8 +69,11 @@ describe('useHistoryGuard', () => {
       firePopState();
 
       // The guard took ownership: the pop is cancelled by re-pushing the
-      // guarded URL, and router.back() must NOT have run yet.
-      expect(pushStateSpy).toHaveBeenCalledWith(expect.anything(), '', '/flows?flow=1&mode=edit');
+      // guarded URL, and router.back() must NOT have run yet. The hook
+      // re-pushes whatever `window.history.state` currently holds (it does
+      // not invent a new state object) — in this fresh jsdom environment
+      // that is `null`, which is a perfectly normal `pushState` call.
+      expect(pushStateSpy).toHaveBeenCalledWith(window.history.state, '', '/flows?flow=1&mode=edit');
       expect(mockBack).not.toHaveBeenCalled();
       expect(capturedNavigate).not.toBeNull();
 
