@@ -175,6 +175,23 @@ export interface ExperimentalSettings {
    */
   claudeSessionResume?: boolean;
   /**
+   * When true, a Subflow node whose `invocationMode` property is `'tool'` is
+   * advertised to the routing model as a distinct `call_subflow_<slug>` tool
+   * (issue #385, deferred Part B of #359) instead of the usual `handoff_to_*`
+   * transition tool. Calling it runs the target Subflow's lanes INLINE inside
+   * the tool call (same bounded lane pool as a normal parallel Subflow) and
+   * returns a structured JSON result straight to the model, so the model can
+   * keep working in the SAME node instead of leaving it via a graph handoff.
+   * Off by default: tool-mode invocations are NOT resumable in v1 (no graph
+   * transition means no persist point, so a mid-call crash re-runs the lanes
+   * from scratch), so this stays opt-in until checkpointed resumability lands
+   * in a future phase. When off, a Subflow authored with `invocationMode:
+   * 'tool'` silently falls back to ordinary `'handoff'` behaviour — flipping
+   * this flag never breaks an existing flow. A missing value is treated as
+   * disabled.
+   */
+  subflowToolInvocation?: boolean;
+  /**
    * When true, MCP client connections are built on the v2 beta SDK
    * (`@modelcontextprotocol/client`, spec revision 2026-07-28) with automatic
    * version negotiation: the client probes each server and speaks the new

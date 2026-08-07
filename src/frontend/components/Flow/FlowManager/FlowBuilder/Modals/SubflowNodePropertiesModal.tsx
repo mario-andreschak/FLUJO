@@ -441,6 +441,27 @@ export const SubflowNodePropertiesModal = ({
           {t('flows.subflow.saveConversationHelp')}
         </Typography>
 
+        {/* Callable-subflow TOOL invocation (issue #385, deferred Part B of
+            #359): a small opt-in toggle. Backend-gated behind the experimental
+            "Let Subflow nodes be called as tools" setting, so leaving this on
+            with the setting off silently keeps today's handoff behaviour. */}
+        <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
+          {t('flows.subflow.invocationTitle')}
+        </Typography>
+        <FormControlLabel
+          sx={{ display: 'block' }}
+          control={
+            <Switch
+              checked={nodeData.properties?.invocationMode === 'tool'}
+              onChange={(e) => handlePropertyChange('invocationMode', e.target.checked ? 'tool' : 'handoff')}
+            />
+          }
+          label={t('flows.subflow.invocationTool')}
+        />
+        <Typography variant="body2" color="text.secondary" sx={{ ml: 4, mt: -0.5 }}>
+          {t('flows.subflow.invocationToolHelp')}
+        </Typography>
+
         <Divider sx={{ my: 3 }} />
         <CaptureFields
           value={{ captureVariable, captureResource, captureKvScope, captureKvKey }}

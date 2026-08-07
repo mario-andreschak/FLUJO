@@ -89,6 +89,17 @@ export default function ExperimentalFeaturesSettings() {
     });
   };
 
+  const handleSubflowToolInvocationChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    log.debug(`Subflow tool invocation toggled: ${event.target.checked}`);
+    updateSettings({
+      ...settings,
+      experimental: {
+        ...experimental,
+        subflowToolInvocation: event.target.checked,
+      },
+    });
+  };
+
   const handleMcpAppLaunchRestrictionChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     log.debug(`MCP App click-to-launch restriction toggled: ${event.target.checked}`);
     updateSettings({
@@ -376,6 +387,22 @@ export default function ExperimentalFeaturesSettings() {
         />
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
           {t('settings.experimental.snapshotsDescription')}
+        </Typography>
+      </FormControl>
+
+      <FormControl fullWidth sx={{ mb: 2 }}>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={experimental.subflowToolInvocation ?? false}
+              onChange={handleSubflowToolInvocationChange}
+              name="subflowToolInvocation"
+            />
+          }
+          label={t('settings.experimental.subflowToolInvocation')}
+        />
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+          {t('settings.experimental.subflowToolInvocationDescription')}
         </Typography>
       </FormControl>
 

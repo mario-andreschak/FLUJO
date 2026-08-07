@@ -50,6 +50,7 @@ import { isRunResourceToolName, executeRunResourceTool, buildReadResourceTool, W
 import { isQuestionToolName, executeQuestionTool, QUESTION_TOOL_NAME } from './runQuestionTool';
 import { isTodoToolName, executeTodoTool, TODO_TOOL_NAME } from './todoTool';
 import { isMCPResourceToolName, executeMCPResourceTool, LIST_MCP_RESOURCES_TOOL_NAME } from './mcpResourceTools';
+import { isSubflowToolName, executeSubflowToolCall } from './subflowToolInvocation';
 import type { RunResourceSettings } from '@/shared/types/runResources';
 import type { ModelStreamDelta, ToolResourceMarker } from '@/backend/services/model/adapters/types';
 import type { ModelMediaPart } from '@/shared/types/model/media';
@@ -348,6 +349,25 @@ export class ModelHandler {
       return Boolean(settings?.experimental?.claudeSessionResume);
     } catch (err) {
       log.warn('Failed to read claudeSessionResume setting; defaulting to disabled', { err });
+      return false;
+    }
+  }
+
+  /**
+   * Read the experimental `subflowToolInvocation` flag (issue #385, deferred
+   * Part B of #359) from the persisted Settings blob. Gates whether a Subflow
+   * node authored with `invocationMode: 'tool'` is advertised as a distinct
+   * `call_subflow_<slug>` tool (ProcessNode.generateHandoffTools) instead of
+   * the default `handoff_to_*` transition tool. Same best-effort pattern as
+   * `isClaudeSessionResumeEnabled`: any failure (or a missing value) reads as
+   * disabled, so an unconfigured install keeps today's handoff-only behaviour.
+   */
+  static async isSubflowToolInvocationEnabled(): Promise<boolean> {
+    try {
+      const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
+      return Boolean(settings?.experimental?.subflowToolInvocation);
+    } catch (err) {
+      log.warn('Failed to read subflowToolInvocation setting; defaulting to disabled', { err });
       return false;
     }
   }
@@ -1118,8 +1138,18 @@ export class ModelHandler {
     const hasMCPResourceTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isMCPResourceToolName(t.function.name));
     const hasQuestionTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isQuestionToolName(t.function.name));
     const hasTodoTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isTodoToolName(t.function.name));
-    const localToolExecutors =
-      (hasRunResourceTool || hasMCPResourceTool || hasQuestionTool || hasTodoTool)
+    // Issue #385: `call_subflow_<slug>` tool names are per-target-node and
+    // dynamic (unlike the fixed-name synthetic tools above), so they can't be
+    // hard-coded keys in the object literal below — collect every advertised
+    // name and attach an executor per name after the literal is built.
+    const subflowToolCallNames = conversationId
+      ? (tools ?? [])
+          .filter((t) => t.type === 'function' && isSubflowToolName(t.function.name))
+          .map((t) => t.function.name)
+      : [];
+    const hasSubflowTool = subflowToolCallNames.length > 0;
+    const localToolExecutors: Record<string, (args: Record<string, unknown>) => Promise<unknown>> | undefined =
+      (hasRunResourceTool || hasMCPResourceTool || hasQuestionTool || hasTodoTool || hasSubflowTool)
         ? {
             [WRITE_RESOURCE_TOOL_NAME]: async (args: Record<string, unknown>): Promise<unknown> => {
               const outcome = await executeRunResourceTool(WRITE_RESOURCE_TOOL_NAME, args, {
@@ -1180,6 +1210,20 @@ export class ModelHandler {
             },
           }
         : undefined;
+
+    // call_subflow_* (issue #385): one executor per ADVERTISED tool-mode
+    // Subflow name, dispatching to the same lane engine a parallel/spawn
+    // Subflow uses (`runSubflowLanes()`), inline inside this tool call. Never
+    // dispatched via processHandoffToolCalls — that only matches `handoff_to_*`.
+    if (localToolExecutors && hasSubflowTool) {
+      for (const toolName of subflowToolCallNames) {
+        localToolExecutors[toolName] = async (args: Record<string, unknown>): Promise<unknown> => {
+          const outcome = await executeSubflowToolCall(toolName, args, { conversationId, emit });
+          if (!outcome.success) throw new Error(outcome.error ?? 'call_subflow failed');
+          return outcome.data;
+        };
+      }
+    }
 
     // Resource-aware truncation markers (issue #168): build a lookup of captured
     // run resources for oversized PRIOR tool results/args, keyed by the producing
@@ -2237,6 +2281,7 @@ export class ModelHandler {
         if (isRunResourceToolName(toolName)) return LOCAL_GROUP;
         if (isQuestionToolName(toolName)) return LOCAL_GROUP;
         if (isTodoToolName(toolName)) return LOCAL_GROUP;
+        if (isSubflowToolName(toolName)) return LOCAL_GROUP;
         const decoded = decodeToolName(toolName, toolNameMap);
         return decoded ? `srv:${decoded.server}` : LOCAL_GROUP;
       };
@@ -2437,6 +2482,38 @@ export class ModelHandler {
           if (isTodoToolName(name)) {
             emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
             const outcome = await executeTodoTool(args, { conversationId, node, emit });
+            const resultContent = outcome.success
+              ? JSON.stringify(outcome.data)
+              : `Error: ${outcome.error}`;
+            emit?.({
+              type: 'tool:result',
+              toolCallId: id,
+              name,
+              result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
+              isError: !outcome.success,
+            });
+            toolCallMessages.push({
+              id: uuidv4(),
+              role: 'tool',
+              tool_call_id: id,
+              content: resultContent,
+              timestamp: Date.now(),
+            });
+            processedToolCalls.push({ name, args, id, result: resultContent });
+            return;
+          }
+
+          // call_subflow_* tool-invocation (issue #385, deferred Part B of #359):
+          // synthetic FLUJO tool that runs a tool-mode Subflow target's lanes
+          // INLINE (via runSubflowLanes(), the same bounded pool a parallel/spawn
+          // Subflow uses) and returns a structured JSON result — no graph
+          // transition. Only offered when a connected Subflow target authored
+          // `invocationMode: 'tool'` AND the experimental `subflowToolInvocation`
+          // setting is on (ProcessNode.generateHandoffTools), so this branch is
+          // inert for every existing flow.
+          if (isSubflowToolName(name)) {
+            emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
+            const outcome = await executeSubflowToolCall(name, args, { conversationId, emit });
             const resultContent = outcome.success
               ? JSON.stringify(outcome.data)
               : `Error: ${outcome.error}`;
@@ -2904,7 +2981,7 @@ export class ModelHandler {
               ? 'handoff' as const
               : isRunResourceToolName(name) || isMCPResourceToolName(name)
                 ? 'resource' as const
-                : isQuestionToolName(name) || isTodoToolName(name)
+                : isQuestionToolName(name) || isTodoToolName(name) || isSubflowToolName(name)
                   ? 'synthetic' as const
                   : decodedForUi
                     ? 'mcp' as const

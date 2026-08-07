@@ -482,6 +482,24 @@ export interface SubflowNodeProperties {
      *  Ignored if `sessionScope` is absent/per-visit. Do NOT write this into stored
      *  data unless the user explicitly changes it (issue #138). */
     sessionInputMode?: 'resume' | 'summary';
+    /** Callable-subflow invocation mode (issue #385, deferred Part B of #359):
+     *    - 'handoff' (default/absent): today's behaviour — the routing model
+     *      calls the node's `handoff_to_<slug>` tool, the engine TRANSITIONS to
+     *      this Subflow node, and it runs through the normal prep/execCore/post
+     *      lifecycle (durable, resumable when `saveConversation` is set).
+     *    - 'tool': the node is instead advertised as a distinct
+     *      `call_subflow_<slug>` tool. Calling it runs this Subflow's target
+     *      flow INLINE inside the tool call (via `runSubflowLanes()`, the same
+     *      bounded lane engine) and returns a structured JSON lane result
+     *      straight to the calling model — no graph transition, so the model
+     *      stays on its current node and can keep working with the answer.
+     *  Gated behind the experimental `subflowToolInvocation` setting (default
+     *  OFF): when the setting is off, a node authored with `'tool'` silently
+     *  falls back to `'handoff'` behaviour, so flipping the setting can never
+     *  change an existing flow's behaviour by itself. Tool-mode invocations are
+     *  NOT resumable in v1 (no graph transition means no persist point); a
+     *  mid-call crash re-runs the lanes from scratch. */
+    invocationMode?: 'handoff' | 'tool';
 }
 
 /** One resolved job in a SubflowNode queue. Legacy code and event payloads still
@@ -1008,6 +1026,16 @@ export interface SharedState {
     /** Target node types keyed by node id, populated alongside handoffNameMap so
      *  transition handling can enforce target-specific runtime contracts. */
     handoffTargetTypes?: Record<string, string>;
+    /**
+     * Model-facing `call_subflow_<slug>` tool name -> target Subflow node id
+     * (issue #385, deferred Part B of #359). Populated alongside
+     * handoffNameMap whenever a Process node generates its tool set, but kept
+     * in a SEPARATE map: a `call_subflow_*` call is dispatched to
+     * subflowToolInvocation.executeSubflowToolCall (runs the target's lanes
+     * inline and returns JSON) rather than to processHandoffToolCalls (which
+     * only ever matches `handoff_to_*` and transitions the graph).
+     */
+    subflowToolNameMap?: Record<string, string>;
 
     // --- Token / cost accounting (aggregated from per-message usage) ---
     /** Running totals of token usage and estimated cost for this conversation. */

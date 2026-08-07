@@ -14,7 +14,8 @@ import { RUN_RESOURCE_SCHEME } from '@/shared/types/runResources';
 import { buildNodeContext, scopeMessagesForInput, collapseNodeOutputs, deriveModelInputView } from '../buildNodeContext';
 import { resolveFrozenSystemPrompt } from '../systemPromptDrift';
 import { buildHandoffDescription } from '../buildHandoffDescription';
-import { buildHandoffToolNameMap } from '@/shared/utils/handoffNaming';
+import { buildHandoffToolNameMap, buildSubflowToolNameMap, SUBFLOW_TOOL_PREFIX } from '@/shared/utils/handoffNaming';
+import { buildSubflowTool } from '../handlers/subflowToolInvocation';
 import { flowService } from '@/backend/services/flow/index';
 import { modelService } from '@/backend/services/model';
 import { loadServerConfigs } from '@/backend/services/mcp/config';
@@ -28,6 +29,7 @@ import {
   ProcessNodeExecResult,
   ToolDefinition,
   HandoffToolInfo,
+  SubflowNodeProperties,
   STAY_ON_NODE_ACTION, // Keep for reference, but won't be returned directly by post
   TOOL_CALL_ACTION,    // Import new actions
   FINAL_RESPONSE_ACTION,
@@ -138,15 +140,10 @@ export class ProcessNode extends BaseNode {
       });
     }
 
-    // Human-readable, collision-free tool names (issue #38, Item A): the raw
-    // node UUID is gone from the name; SharedState.handoffNameMap keeps the
-    // name -> node-id mapping so routing still works.
-    const nameMap = buildHandoffToolNameMap(targets);
-    sharedState.handoffNameMap = sharedState.handoffNameMap || {};
-    sharedState.handoffTargetTypes = sharedState.handoffTargetTypes || {};
-
     // Load the containing flow once so descriptions can read each target's
     // user-authored description and full properties (and recurse into subflows).
+    // Loaded BEFORE the handoff/tool name maps are built (issue #385) so a
+    // Subflow target's `invocationMode` can be read while partitioning targets.
     let flowNodesById: Map<string, FlowNode> | null = null;
     try {
       const flow = await flowService.getFlow(sharedState.flowId);
@@ -157,8 +154,64 @@ export class ProcessNode extends BaseNode {
       log.warn('Could not load flow for handoff descriptions; using basic descriptions', { err });
     }
 
+    // Callable-subflow TOOL invocation (issue #385, deferred Part B of #359):
+    // a Subflow target authored with `invocationMode: 'tool'` is advertised as
+    // a distinct `call_subflow_<slug>` tool instead of a `handoff_to_<slug>`
+    // transition tool — gated behind the experimental `subflowToolInvocation`
+    // setting (default OFF) so an unconfigured install always keeps today's
+    // handoff-only behaviour regardless of what a saved flow authored.
+    const hasSubflowTargets = targets.some((t) => t.type === 'subflow');
+    const subflowToolInvocationEnabled = hasSubflowTargets
+      ? await ModelHandler.isSubflowToolInvocationEnabled()
+      : false;
+    const subflowToolTargetIds = new Set(
+      subflowToolInvocationEnabled
+        ? targets
+            .filter((t) => {
+              if (t.type !== 'subflow') return false;
+              const targetProps = flowNodesById?.get(t.id)?.data?.properties as SubflowNodeProperties | undefined;
+              return targetProps?.invocationMode === 'tool';
+            })
+            .map((t) => t.id)
+        : [],
+    );
+
+    // Human-readable, collision-free tool names (issue #38, Item A): the raw
+    // node UUID is gone from the name; SharedState.handoffNameMap keeps the
+    // name -> node-id mapping so routing still works. Tool-mode subflow targets
+    // get their OWN name map (`call_subflow_*` namespace) and never consume a
+    // `handoff_to_*` slug.
+    const nameMap = buildHandoffToolNameMap(targets.filter((t) => !subflowToolTargetIds.has(t.id)));
+    const subflowNameMap = buildSubflowToolNameMap(targets.filter((t) => subflowToolTargetIds.has(t.id)));
+    sharedState.handoffNameMap = sharedState.handoffNameMap || {};
+    sharedState.handoffTargetTypes = sharedState.handoffTargetTypes || {};
+    sharedState.subflowToolNameMap = sharedState.subflowToolNameMap || {};
+
     const handoffTools: ToolDefinition[] = [];
     for (const target of targets) {
+      const flowNodeForTarget = flowNodesById?.get(target.id);
+
+      if (subflowToolTargetIds.has(target.id)) {
+        // Tool-mode Subflow (issue #385): emit `call_subflow_<slug>` instead of
+        // a handoff tool. Dispatch happens in ModelHandler (both the
+        // request/response `processToolCalls` branch and the
+        // self-orchestrating `localToolExecutors` map) via
+        // subflowToolInvocation.executeSubflowToolCall — never through
+        // processHandoffToolCalls (that dispatch is `handoff_to_*`-only).
+        const toolName = subflowNameMap.get(target.id) || `${SUBFLOW_TOOL_PREFIX}${target.id}`;
+        sharedState.subflowToolNameMap[toolName] = target.id;
+        const description = flowNodeForTarget
+          ? await buildHandoffDescription(flowNodeForTarget)
+          : `Run ${target.label} as a callable subflow tool`;
+        const subflowToolProps = flowNodeForTarget?.data?.properties as SubflowNodeProperties | undefined;
+        const taskMandatory = !(subflowToolProps?.promptTemplate?.trim());
+        handoffTools.push(
+          buildSubflowTool(toolName, { id: target.id, label: target.label }, description, taskMandatory),
+        );
+        log.debug('Created subflow tool-invocation tool', { toolName, targetNodeId: target.id, targetNodeLabel: target.label });
+        continue;
+      }
+
       const toolName = nameMap.get(target.id) || `handoff_to_${target.id}`;
       sharedState.handoffNameMap[toolName] = target.id;
       sharedState.handoffTargetTypes[target.id] = target.type;
@@ -451,7 +504,9 @@ export class ProcessNode extends BaseNode {
       }
     }
 
-    // Generate handoff tools for each connected non-MCP node
+    // Generate handoff tools for each connected non-MCP node (also emits
+    // `call_subflow_<slug>` tool-invocation tools for tool-mode Subflow
+    // targets — issue #385 — and populates sharedState.subflowToolNameMap).
     const handoffTools = await this.generateHandoffTools(sharedState);
 
     // Add handoff tools to available tools
