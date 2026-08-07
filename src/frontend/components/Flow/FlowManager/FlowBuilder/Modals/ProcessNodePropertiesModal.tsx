@@ -1,12 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
     Dialog,
-    DialogTitle,
     DialogContent,
     DialogActions,
     Button,
     Box,
-    IconButton,
     Divider,
     Typography,
     Tabs,
@@ -16,8 +14,8 @@ import {
     useMediaQuery,
     useTheme
 } from '@mui/material';
-import CloseIcon from '@mui/icons-material/Close';
 import { FlowNode } from '@/frontend/types/flow/flow';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 import { Edge } from '@xyflow/react';
 import { PromptBuilderRef } from '@/frontend/components/shared/PromptBuilder';
 import { encodeBindingPill } from '@/utils/shared/mcpBinding';
@@ -719,16 +717,11 @@ export const ProcessNodePropertiesModal = ({
         }
       }}
     >
-      <DialogTitle component="div" sx={{ px: { xs: 2, sm: 3 }, py: { xs: 1.5, sm: 2 } }}>
-        <Box display="flex" alignItems="center" justifyContent="space-between">
-          <Typography variant="h6" sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>
-            {t('flows.modal.properties', { name: nodeData.label || t('flows.process.title') })}
-          </Typography>
-          <IconButton edge="end" color="inherit" onClick={onClose} aria-label={t('flows.modal.close')}>
-            <CloseIcon />
-          </IconButton>
-        </Box>
-      </DialogTitle>
+      <DialogHeaderActions
+        title={t('flows.modal.properties', { name: nodeData.label || t('flows.process.title') })}
+        onClose={onClose}
+        titleProps={{ sx: { minWidth: 0, overflowWrap: 'anywhere' } }}
+      />
 
       <Divider />
 

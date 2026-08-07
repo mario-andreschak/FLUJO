@@ -13,6 +13,13 @@
  *  - re-opening a saved node re-populates topic + payload (round-trip).
  */
 import { render, screen, fireEvent } from '@testing-library/react';
+import { mockUseAskFlujo, mockUseAskFlujoPage } from '@/frontend/__tests__/mocks/askFlujoContext';
+
+jest.mock('@/frontend/contexts/AskFlujoContext', () => ({
+  useAskFlujo: mockUseAskFlujo,
+  useAskFlujoPage: mockUseAskFlujoPage,
+}));
+
 import SignalNodePropertiesModal from '@/frontend/components/Flow/FlowManager/FlowBuilder/Modals/SignalNodePropertiesModal';
 
 const makeNode = (properties: Record<string, any> = {}): any => ({

@@ -28,6 +28,8 @@ import BuildRoundedIcon from '@mui/icons-material/BuildRounded';
 import ChatBubbleOutlineRoundedIcon from '@mui/icons-material/ChatBubbleOutlineRounded';
 import FactCheckRoundedIcon from '@mui/icons-material/FactCheckRounded';
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
+import AskFlujoButton from '@/frontend/components/AskFlujo/AskFlujoButton';
+import BugReportButton from '@/frontend/components/BugReport/BugReportButton';
 import type { Flow } from '@/shared/types/flow';
 import type {
   FlowPlausibilityResult,
@@ -463,13 +465,19 @@ export default function FlowAssistanceDialog({
     <Dialog open={open} onClose={busy ? undefined : onClose} fullWidth maxWidth="md">
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <AutoAwesomeRoundedIcon color="primary" />
-        {stage === 'plausibility' || stage === 'checking' || stage === 'fixing'
-          ? t('flows.assistance.plausibilityTitle')
-          : stage === 'agents' || stage === 'suggesting-agents'
-            ? t('flows.assistance.agentsTitle')
-            : stage === 'improving'
-              ? t('flows.assistance.improvePromptTitle')
-              : t('flows.assistance.toolsTitle')}
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          {stage === 'plausibility' || stage === 'checking' || stage === 'fixing'
+            ? t('flows.assistance.plausibilityTitle')
+            : stage === 'agents' || stage === 'suggesting-agents'
+              ? t('flows.assistance.agentsTitle')
+              : stage === 'improving'
+                ? t('flows.assistance.improvePromptTitle')
+                : t('flows.assistance.toolsTitle')}
+        </Box>
+        <Box display="flex" alignItems="center" gap={0.5} flexShrink={0}>
+          <AskFlujoButton />
+          <BugReportButton variant="icon" />
+        </Box>
       </DialogTitle>
       <DialogContent dividers>
         {busy && (

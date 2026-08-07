@@ -8,6 +8,13 @@
  *  - item 4: the name field auto-suggests ${res:NAME} names used elsewhere in the flow.
  */
 import { render, screen, fireEvent } from '@testing-library/react';
+import { mockUseAskFlujo, mockUseAskFlujoPage } from '@/frontend/__tests__/mocks/askFlujoContext';
+
+jest.mock('@/frontend/contexts/AskFlujoContext', () => ({
+  useAskFlujo: mockUseAskFlujo,
+  useAskFlujoPage: mockUseAskFlujoPage,
+}));
+
 import ResourceNodePropertiesModal from '@/frontend/components/Flow/FlowManager/FlowBuilder/Modals/ResourceNodePropertiesModal';
 
 // The modal reads live MCP server status and (in mcp scope) browses resources.

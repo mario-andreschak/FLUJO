@@ -1,4 +1,11 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { mockUseAskFlujo, mockUseAskFlujoPage } from '@/frontend/__tests__/mocks/askFlujoContext';
+
+jest.mock('@/frontend/contexts/AskFlujoContext', () => ({
+  useAskFlujo: mockUseAskFlujo,
+  useAskFlujoPage: mockUseAskFlujoPage,
+}));
+
 import TriggerNodePropertiesModal from '@/frontend/components/Flow/FlowManager/FlowBuilder/Modals/TriggerNodePropertiesModal';
 import { plannedExecutionsService } from '@/frontend/services/plannedExecutions';
 

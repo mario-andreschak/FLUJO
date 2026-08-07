@@ -1,5 +1,12 @@
 import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { mockUseAskFlujo, mockUseAskFlujoPage } from '@/frontend/__tests__/mocks/askFlujoContext';
+
+jest.mock('@/frontend/contexts/AskFlujoContext', () => ({
+  useAskFlujo: mockUseAskFlujo,
+  useAskFlujoPage: mockUseAskFlujoPage,
+}));
+
 import FlowAssistanceDialog from '@/frontend/components/Flow/FlowManager/FlowBuilder/FlowAssistanceDialog';
 import { flowService } from '@/frontend/services/flow';
 import type { Flow } from '@/shared/types/flow';

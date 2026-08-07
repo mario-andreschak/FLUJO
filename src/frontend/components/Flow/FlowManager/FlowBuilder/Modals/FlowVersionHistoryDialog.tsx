@@ -3,7 +3,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Dialog,
-  DialogTitle,
   DialogContent,
   DialogActions,
   Button,
@@ -22,6 +21,7 @@ import { flowService, FlowVersionSummary } from '@/frontend/services/flow';
 import { FlowPreview } from '../FlowPreview';
 import { createLogger } from '@/utils/logger';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 
 const log = createLogger('components/flow/FlowBuilder/Modals/FlowVersionHistoryDialog');
 
@@ -100,7 +100,7 @@ const FlowVersionHistoryDialog: React.FC<FlowVersionHistoryDialogProps> = ({
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth>
-      <DialogTitle>{t('flows.history.title')}</DialogTitle>
+      <DialogHeaderActions title={t('flows.history.title')} onClose={onClose} />
       <DialogContent dividers sx={{ p: 0 }}>
         <Box sx={{ display: 'flex', height: '65vh' }}>
           {/* Version list */}

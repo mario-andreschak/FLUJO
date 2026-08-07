@@ -3,7 +3,6 @@
 import React, { useState } from 'react';
 import {
   Dialog,
-  DialogTitle,
   DialogContent,
   DialogActions,
   Button,
@@ -16,14 +15,13 @@ import {
   FormControlLabel,
   Typography,
   Box,
-  IconButton,
   Divider,
   Tabs,
   Tab,
 } from '@mui/material';
 import PromptBuilder from '@/frontend/components/shared/PromptBuilder';
-import CloseIcon from '@mui/icons-material/Close';
 import { FlowNode } from '@/frontend/types/flow/flow';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 
 interface NodePropertiesModalProps {
   open: boolean;
@@ -193,16 +191,10 @@ export const NodePropertiesModal = ({ open, node, onClose, onSave }: NodePropert
         }
       }}
     >
-      <DialogTitle component="div">
-        <Box display="flex" alignItems="center" justifyContent="space-between">
-          <Typography variant="h6">
-            {nodeData.label || `${nodeTypeLabel} Node`} Properties
-          </Typography>
-          <IconButton edge="end" color="inherit" onClick={onClose} aria-label="close">
-            <CloseIcon />
-          </IconButton>
-        </Box>
-      </DialogTitle>
+      <DialogHeaderActions
+        title={`${nodeData.label || `${nodeTypeLabel} Node`} Properties`}
+        onClose={onClose}
+      />
       
       <Divider />
       

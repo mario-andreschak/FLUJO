@@ -3,7 +3,6 @@
 import React, { useState, useEffect } from 'react';
 import {
   Dialog,
-  DialogTitle,
   DialogContent,
   DialogActions,
   Button,
@@ -15,6 +14,7 @@ import {
 } from '@mui/material';
 import { FlowNode } from '@/frontend/types/flow/flow';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 
 interface SignalNodePropertiesModalProps {
   open: boolean;
@@ -82,7 +82,7 @@ export const SignalNodePropertiesModal = ({ open, node, onClose, onSave }: Signa
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>{t('flows.signal.title')}</DialogTitle>
+      <DialogHeaderActions title={t('flows.signal.title')} onClose={onClose} />
       <DialogContent>
         <Box display="flex" flexDirection="column" gap={2} mt={1}>
           <TextField

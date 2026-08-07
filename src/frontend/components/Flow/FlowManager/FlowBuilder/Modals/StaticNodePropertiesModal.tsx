@@ -3,7 +3,6 @@
 import React, { useEffect, useState } from 'react';
 import {
   Dialog,
-  DialogTitle,
   DialogContent,
   DialogActions,
   Button,
@@ -22,6 +21,7 @@ import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import { FlowNode } from '@/frontend/types/flow/flow';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 
 interface StaticNodePropertiesModalProps {
   open: boolean;
@@ -108,7 +108,7 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
-      <DialogTitle>{t('flows.static.title')}</DialogTitle>
+      <DialogHeaderActions title={t('flows.static.title')} onClose={onClose} />
       <DialogContent>
         <Box display="flex" flexDirection="column" gap={2} mt={1}>
           <Alert severity="info">{t('flows.static.info')}</Alert>

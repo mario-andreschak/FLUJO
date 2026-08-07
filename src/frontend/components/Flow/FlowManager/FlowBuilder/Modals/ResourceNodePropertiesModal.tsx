@@ -3,7 +3,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Dialog,
-  DialogTitle,
   DialogContent,
   DialogActions,
   Button,
@@ -28,6 +27,7 @@ import {
   Autocomplete,
 } from '@mui/material';
 import DescriptionIcon from '@mui/icons-material/Description';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 import { FlowNode } from '@/frontend/types/flow/flow';
 import { useServerStatus } from '@/frontend/hooks/useServerStatus';
 import { mcpService } from '@/frontend/services/mcp';
@@ -205,7 +205,7 @@ export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave, flowN
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>{t('flows.resource.title')}</DialogTitle>
+      <DialogHeaderActions title={t('flows.resource.title')} onClose={onClose} />
       <DialogContent>
         <Box display="flex" flexDirection="column" gap={2} mt={1}>
           <FormControl>
