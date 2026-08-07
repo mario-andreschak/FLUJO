@@ -33,6 +33,7 @@ import {
   closeCanvasApp,
   canvasEntries,
   canvasKey,
+  shouldOpenCanvasApp,
   type CanvasState,
   type CanvasAppInput,
 } from './canvasState';
@@ -108,6 +109,9 @@ import {
 import {
   readDismissedMcpAppKeys,
   writeMcpAppDismissed,
+  writeMcpAppsDismissed,
+  readAutoOpenSuppressed,
+  writeAutoOpenSuppressed,
 } from './mcpAppPreferences';
 
 const log = createLogger('frontend/components/Chat/index');
@@ -385,6 +389,19 @@ const Chat: React.FC = () => {
     const owner = currentConversationIdRef.current;
     if (owner) setMcpAppDismissed(owner, appKey, false);
   }, [setMcpAppDismissed]);
+  // #375: sticky "the user collapsed the whole canvas" intent. Read into React
+  // state (not ad-hoc localStorage reads) so it re-renders `shouldAutoOpen`.
+  const [mcpAppAutoOpenSuppressionVersion, setMcpAppAutoOpenSuppressionVersion] = useState(0);
+  const autoOpenMcpAppsSuppressed = useMemo(() => (
+    currentConversationId ? readAutoOpenSuppressed(currentConversationId) : false
+  ), [currentConversationId, mcpAppAutoOpenSuppressionVersion]);
+  const setAutoOpenMcpAppsSuppressed = useCallback((
+    conversationId: string,
+    suppressed: boolean,
+  ) => {
+    writeAutoOpenSuppressed(conversationId, suppressed);
+    setMcpAppAutoOpenSuppressionVersion((version) => version + 1);
+  }, []);
   const canvasTeardownsRef = useRef<Map<string, () => Promise<void>>>(new Map());
   const conversationTransitionGenerationRef = useRef(0);
   /**
@@ -3068,8 +3085,20 @@ const Chat: React.FC = () => {
     const owner = currentConversationIdRef.current;
     if (!owner) return;
     const key = canvasKey(info.serverName, info.uri);
-    if (info.automatic && readDismissedMcpAppKeys(owner).includes(key)) return;
-    if (!info.automatic) setMcpAppDismissed(owner, key, false);
+    // #375: an automatic open is gated by BOTH the per-app dismissal AND the
+    // sticky "dock is collapsed" suppression flag; a defensive `healthy`
+    // guard also blocks a frame that already failed its handshake/validation
+    // from ever reaching the canvas. A manual (user-clicked) open always wins.
+    if (!shouldOpenCanvasApp({
+      automatic: Boolean(info.automatic),
+      dismissed: readDismissedMcpAppKeys(owner).includes(key),
+      suppressed: readAutoOpenSuppressed(owner),
+      healthy: info.healthy,
+    })) return;
+    if (!info.automatic) {
+      setMcpAppDismissed(owner, key, false);
+      setAutoOpenMcpAppsSuppressed(owner, false);
+    }
     setCanvasStateOwnerId(owner);
     setCanvasState((prev) => {
       // Temporarily permit one extra mounted host; the cap effect below awaits
@@ -3077,7 +3106,50 @@ const Chat: React.FC = () => {
       const { state } = openCanvasApp(prev, info, Date.now(), Number.MAX_SAFE_INTEGER);
       return state;
     });
-  }, [setMcpAppDismissed]);
+  }, [setAutoOpenMcpAppsSuppressed, setMcpAppDismissed]);
+  /**
+   * #375: collapsing the dock is an explicit "stop auto-opening" intent, not a
+   * pure UI toggle — dismiss every currently-docked app AND suppress future
+   * automatic opens. Expanding again only lifts the suppression; individual
+   * apps stay dismissed until the user manually reopens them (manual open
+   * already clears their own dismissal above).
+   */
+  const handleCanvasCollapseChange = useCallback((collapsedNow: boolean) => {
+    const owner = currentConversationIdRef.current;
+    if (!owner) return;
+    if (collapsedNow) {
+      writeMcpAppsDismissed(owner, canvasEntries(canvasState).map((e) => e.key), true);
+      setAutoOpenMcpAppsSuppressed(owner, true);
+    } else {
+      setAutoOpenMcpAppsSuppressed(owner, false);
+    }
+  }, [canvasState, setAutoOpenMcpAppsSuppressed]);
+  /**
+   * #375: single "close all sandboxes" action — tears down every docked app
+   * (real React unmount + `teardown()`, never a bare CSS hide), dismisses
+   * them all, suppresses further automatic opens, and resets collapse so a
+   * stale collapsed flag does not linger once the dock is empty.
+   */
+  const handleCloseAllCanvas = useCallback(() => {
+    const owner = currentConversationIdRef.current;
+    if (!owner) return;
+    const keys = canvasEntries(canvasState).map((e) => e.key);
+    if (keys.length === 0) return;
+    writeMcpAppsDismissed(owner, keys, true);
+    setAutoOpenMcpAppsSuppressed(owner, true);
+    const pending = keys.map((key) => {
+      const registered = canvasTeardownsRef.current.get(`${owner} ${key}`);
+      return registered ? registered() : Promise.resolve();
+    });
+    void Promise.allSettled(pending).finally(() => {
+      if (currentConversationIdRef.current !== owner) return;
+      setCanvasState((prev) => {
+        let next = prev;
+        for (const key of keys) next = closeCanvasApp(next, key);
+        return next;
+      });
+    });
+  }, [canvasState, setAutoOpenMcpAppsSuppressed]);
   const handleSelectCanvasTab = useCallback((key: string) => {
     setCanvasState((prev) => setActiveCanvasTab(prev, key));
   }, []);
@@ -4420,6 +4492,7 @@ const Chat: React.FC = () => {
                 autoOpenMcpApps={autoOpenMcpApps}
                 autoOpenMcpAppResultIds={autoOpenMcpAppResultIds}
                 dismissedMcpAppKeys={dismissedMcpAppKeys}
+                autoOpenSuppressed={autoOpenMcpAppsSuppressed}
                 onMcpAppManualOpen={handleMcpAppManualOpen}
                 queuedMessages={getMsgQueue(queuedMessages, detailedConversation.id)}
                 queueHoldReason={translateQueueHoldReason(drainHoldReason({
@@ -4687,6 +4760,8 @@ const Chat: React.FC = () => {
           onUpdateModelContext={handleAppModelContext}
           onRegisterTeardown={handleRegisterCanvasTeardown}
           onLayoutChange={handleCanvasLayoutChange}
+          onCollapseChange={handleCanvasCollapseChange}
+          onCloseAll={handleCloseAllCanvas}
         />}
 
         {/* On phones the live run becomes an opaque dock instead of a block in

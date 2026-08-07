@@ -21,6 +21,7 @@ import {
   closeCanvasApp,
   hasUnread,
   enforceCap,
+  shouldOpenCanvasApp,
   type CanvasState,
 } from '@/frontend/components/Chat/canvasState';
 
@@ -190,6 +191,32 @@ describe('cap + LRU eviction', () => {
     s = setActiveCanvasTab(s, 'fs::ui://a', 40);
     const r = openCanvasApp(s, { serverName: 'fs', uri: 'ui://d' }, 50, 3);
     expect(r.evicted).toEqual(['fs::ui://b']);
+  });
+});
+
+describe('shouldOpenCanvasApp (issue #375 regression)', () => {
+  it('a manual open always wins, regardless of dismissed/suppressed/healthy', () => {
+    expect(shouldOpenCanvasApp({ automatic: false, dismissed: true, suppressed: true, healthy: false })).toBe(true);
+  });
+
+  it('an automatic open with no dismissal/suppression proceeds', () => {
+    expect(shouldOpenCanvasApp({ automatic: true, dismissed: false, suppressed: false })).toBe(true);
+  });
+
+  it('collapsing the dock (suppressed) blocks every further automatic open, even for a fresh app', () => {
+    expect(shouldOpenCanvasApp({ automatic: true, dismissed: false, suppressed: true })).toBe(false);
+  });
+
+  it('an individually-dismissed app stays closed for automatic opens', () => {
+    expect(shouldOpenCanvasApp({ automatic: true, dismissed: true, suppressed: false })).toBe(false);
+  });
+
+  it('an errored/unhealthy frame is never auto-docked, even if not dismissed/suppressed', () => {
+    expect(shouldOpenCanvasApp({ automatic: true, dismissed: false, suppressed: false, healthy: false })).toBe(false);
+  });
+
+  it('healthy=true (or omitted) does not itself force an open past dismissal/suppression', () => {
+    expect(shouldOpenCanvasApp({ automatic: true, dismissed: true, suppressed: false, healthy: true })).toBe(false);
   });
 });
 

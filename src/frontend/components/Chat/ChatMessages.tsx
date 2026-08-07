@@ -163,6 +163,12 @@ interface ChatMessagesProps {
   autoOpenMcpAppResultIds?: ReadonlySet<string>;
   /** Conversation-scoped App identities the user explicitly closed. */
   dismissedMcpAppKeys?: ReadonlySet<string>;
+  /**
+   * #375: true while the user has collapsed the whole canvas dock — blocks
+   * every AUTOMATIC (non-user-initiated) open until they manually re-open
+   * something or expand the dock again.
+   */
+  autoOpenSuppressed?: boolean;
   /** Clear a persisted dismissal when the user explicitly opens a launcher. */
   onMcpAppManualOpen?: (appKey: string) => void;
   /**
@@ -195,6 +201,13 @@ export interface CanvasLaunchInfo {
   updateId?: string | number;
   /** True when this handoff originated from the live-result auto-open policy. */
   automatic?: boolean;
+  /**
+   * #375: false when this frame already failed its post-handshake validation
+   * (unsupported display mode / access revoked). Defensive guard so an
+   * errored frame can never be routed into the canvas, even from a stale
+   * closure. Undefined is treated as healthy.
+   */
+  healthy?: boolean;
 }
 
 // Type guard to check if a message has tool_calls
@@ -743,6 +756,7 @@ export const ToolCallTimeline: React.FC<{
   autoOpenMcpApps?: boolean;
   autoOpenMcpAppResultIds?: ReadonlySet<string>;
   dismissedMcpAppKeys?: ReadonlySet<string>;
+  autoOpenSuppressed?: boolean;
   onMcpAppManualOpen?: (appKey: string) => void;
   /** Conversation-level ownership: only these latest results may host a live View. */
   mcpAppHostResultIds?: ReadonlySet<string>;
@@ -760,6 +774,7 @@ export const ToolCallTimeline: React.FC<{
   autoOpenMcpApps = true,
   autoOpenMcpAppResultIds,
   dismissedMcpAppKeys,
+  autoOpenSuppressed,
   onMcpAppManualOpen,
   mcpAppHostResultIds,
 }) => {
@@ -794,7 +809,10 @@ export const ToolCallTimeline: React.FC<{
           autoOpenMcpApps
           && latest.resultMessageId
           && autoOpenMcpAppResultIds?.has(latest.resultMessageId)
-          && !dismissedMcpAppKeys?.has(group.key),
+          && !dismissedMcpAppKeys?.has(group.key)
+          // #375: collapsing the dock is a sticky "stop auto-opening" intent —
+          // do not even mount an auto-docking frame while it is in effect.
+          && !autoOpenSuppressed,
         );
         const launchInfo: CanvasLaunchInfo = {
           serverName: latest.serverName,
@@ -906,6 +924,7 @@ interface MessageBubbleProps {
   autoOpenMcpApps?: boolean;
   autoOpenMcpAppResultIds?: ReadonlySet<string>;
   dismissedMcpAppKeys?: ReadonlySet<string>;
+  autoOpenSuppressed?: boolean;
   onMcpAppManualOpen?: (appKey: string) => void;
   mcpAppHostResultIds?: ReadonlySet<string>;
   /** Issue #357: cancel a single in-flight tool call. */
@@ -943,6 +962,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
   autoOpenMcpApps,
   autoOpenMcpAppResultIds,
   dismissedMcpAppKeys,
+  autoOpenSuppressed,
   onMcpAppManualOpen,
   mcpAppHostResultIds,
   onCancelToolCall,
@@ -1193,6 +1213,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
             autoOpenMcpApps={autoOpenMcpApps}
             autoOpenMcpAppResultIds={autoOpenMcpAppResultIds}
             dismissedMcpAppKeys={dismissedMcpAppKeys}
+            autoOpenSuppressed={autoOpenSuppressed}
             onMcpAppManualOpen={onMcpAppManualOpen}
             mcpAppHostResultIds={mcpAppHostResultIds}
             onCancelToolCall={onCancelToolCall}
@@ -1590,6 +1611,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   autoOpenMcpApps = true,
   autoOpenMcpAppResultIds,
   dismissedMcpAppKeys,
+  autoOpenSuppressed,
   onMcpAppManualOpen,
   queuedMessages = [], // #221: inline pending bubbles
   queueHoldReason = null,
@@ -1801,6 +1823,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
             autoOpenMcpApps={autoOpenMcpApps}
             autoOpenMcpAppResultIds={autoOpenMcpAppResultIds}
             dismissedMcpAppKeys={dismissedMcpAppKeys}
+            autoOpenSuppressed={autoOpenSuppressed}
             onMcpAppManualOpen={onMcpAppManualOpen}
             mcpAppHostResultIds={mcpAppHostResultIds}
             onCancelToolCall={onCancelToolCall}

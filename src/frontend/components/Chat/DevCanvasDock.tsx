@@ -21,8 +21,6 @@ import { Box, Typography, Tooltip, IconButton, Badge, useMediaQuery, useTheme } 
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import WidgetsIcon from '@mui/icons-material/Widgets';
 import CloseIcon from '@mui/icons-material/Close';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import FullscreenIcon from '@mui/icons-material/Fullscreen';
 import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 import ViewColumnIcon from '@mui/icons-material/ViewColumn';
@@ -74,6 +72,20 @@ interface DevCanvasDockProps {
   ) => void;
   /** Reports space that a side-docked canvas must reserve in the chat layout. */
   onLayoutChange?: (layout: CanvasDockLayout) => void;
+  /**
+   * #375: fired whenever collapse changes, so the Chat parent (single owner
+   * of dismissal policy) can make collapse a sticky "stop auto-opening"
+   * intent instead of a pure UI toggle. `true` on collapse (dismiss every
+   * currently-docked app + suppress future automatic opens), `false` on
+   * expand (lift the suppression only).
+   */
+  onCollapseChange?: (collapsed: boolean) => void;
+  /**
+   * #375: close every docked sandbox at once (real unmount + `teardown()`,
+   * never a bare CSS hide). Rendered as the top-right X; collapse now lives
+   * on the active-edge placement arrow (see `dockLeft`/`dockBottom`/`dockRight`).
+   */
+  onCloseAll?: () => void;
 }
 
 export type DockPlacement = 'bottom' | 'left' | 'right';
@@ -113,15 +125,30 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
   onUpdateModelContext,
   onRegisterTeardown,
   onLayoutChange,
+  onCollapseChange,
+  onCloseAll,
 }) => {
   const { t } = useI18n();
   const theme = useTheme();
   const compactDock = useMediaQuery(theme.breakpoints.down('md'));
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const [collapsed, setCollapsed] = useUiPreference<boolean>(
+  const [collapsed, setCollapsedPref] = useUiPreference<boolean>(
     `flujo-ui:mcp-canvas:collapsed:${conversationId}`,
     false,
   );
+  // #375: every collapse/expand goes through this so the parent's sticky
+  // dismissal/suppression policy always stays in sync with the visible state.
+  // Kept behind a ref so the wrapper's own identity is stable (other callbacks
+  // like `enterFullscreen` close over it with an intentionally empty dep list).
+  const onCollapseChangeRef = useRef(onCollapseChange);
+  useEffect(() => { onCollapseChangeRef.current = onCollapseChange; }, [onCollapseChange]);
+  const setCollapsed = useCallback((next: boolean | ((value: boolean) => boolean)) => {
+    setCollapsedPref((value) => {
+      const resolved = typeof next === 'function' ? next(value) : next;
+      if (resolved !== value) onCollapseChangeRef.current?.(resolved);
+      return resolved;
+    });
+  }, [setCollapsedPref]);
   const [fullscreen, setFullscreen] = useState(false);
   const [placement, setPlacement] = useState<DockPlacement>(() => {
     if (typeof window === 'undefined') return 'bottom';
@@ -349,7 +376,30 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
     return current;
   };
 
-  const effectivePlacement = collapsed || compactDock ? 'bottom' : placement;
+  // #375: collapse no longer forces the bottom edge — each side keeps its own
+  // narrow rail so "collapse left"/"collapse right" is visually distinct from
+  // "collapse bottom". Mobile still always renders as a bottom sheet.
+  const effectivePlacement = compactDock ? 'bottom' : placement;
+  const isRail = collapsed && !fullscreen && !compactDock && effectivePlacement !== 'bottom';
+
+  /**
+   * #375: dock-to-that-side / collapse-to-that-edge. Clicking an inactive edge
+   * docks there (expanding if currently collapsed); clicking the ALREADY
+   * active edge collapses the dock to that edge instead.
+   */
+  const handleDockButtonClick = (side: DockPlacement) => {
+    if (placement !== side) {
+      setPlacement(side);
+      if (collapsed) setCollapsed(false);
+    } else {
+      setCollapsed((value) => !value);
+    }
+  };
+
+  const handleCloseAll = () => {
+    if (fullscreen) setFullscreen(false);
+    onCloseAll?.();
+  };
 
   return (
     <>
@@ -394,7 +444,10 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
                 top: 0,
                 bottom: 0,
                 [effectivePlacement]: 0,
-                width: `min(${dockWidth}px, calc(100% - 320px))`,
+                // #375: collapsed left/right renders as a narrow edge rail
+                // instead of the full dockWidth — the body stays `display:
+                // none` (iframes remain mounted, invariant preserved).
+                width: isRail ? 40 : `min(${dockWidth}px, calc(100% - 320px))`,
                 height: 'auto',
                 zIndex: 5,
                 borderRadius: 0,
@@ -429,23 +482,43 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
           onResizeStart={startFullscreenResize}
         />
       )}
-      {/* Tab strip + dock controls */}
+      {/* Tab strip + dock controls. Collapsed left/right renders as a narrow
+          vertical rail (#375): the tab strip/placement arrows disappear and
+          only the badge + expand affordance + close-all X remain. */}
       <Box
         onPointerDown={startFullscreenDrag}
         sx={{
           display: 'flex',
+          flexDirection: isRail ? 'column' : 'row',
           alignItems: 'center',
           gap: 0.5,
-          px: 1,
+          px: isRail ? 0.5 : 1,
           py: 0.5,
           bgcolor: 'action.hover',
           cursor: fullscreen ? 'move' : 'default',
           userSelect: 'none',
         }}
       >
-        <WidgetsIcon fontSize="small" color="primary" />
+        <Tooltip title={isRail ? t('chat.canvas.expand') : ''}>
+          <span>
+            <IconButton
+              size="small"
+              sx={{ p: isRail ? 0.25 : 0 }}
+              disabled={!isRail}
+              onClick={isRail ? () => setCollapsed(false) : undefined}
+              aria-label={isRail ? t('chat.canvas.expand') : undefined}
+            >
+              <Badge color="primary" badgeContent={entries.length} max={9} invisible={!isRail || entries.length === 0}>
+                <WidgetsIcon fontSize="small" color="primary" />
+              </Badge>
+            </IconButton>
+          </span>
+        </Tooltip>
+        {!isRail && (
         <Typography variant="caption" sx={{ fontWeight: 600, mr: 1 }}>{t('chat.canvas.title')}</Typography>
+        )}
 
+        {!isRail && (
         <Box sx={{ display: 'flex', gap: 0.5, overflowX: 'auto', flex: 1, minWidth: 0 }}>
           {entries.map((e) => {
             const isActive = e.key === activeKey;
@@ -502,35 +575,39 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
             );
           })}
         </Box>
+        )}
 
-        {!fullscreen && !collapsed && !compactDock && (
+        {!fullscreen && !isRail && !compactDock && (
           <Box sx={{ display: 'flex', alignItems: 'center' }}>
-            <Tooltip title={t('chat.canvas.dockLeft')}>
+            {/* #375: an arrow docks to that edge (expanding if collapsed); the
+                ALREADY-active edge's arrow instead collapses the dock to that
+                edge. Collapse is no longer a single bottom-only chevron. */}
+            <Tooltip title={placement === 'left' ? t('chat.canvas.collapseToEdge') : t('chat.canvas.dockLeft')}>
               <IconButton
                 size="small"
                 color={placement === 'left' ? 'primary' : 'default'}
-                onClick={() => setPlacement('left')}
-                aria-label={t('chat.canvas.dockLeft')}
+                onClick={() => handleDockButtonClick('left')}
+                aria-label={placement === 'left' ? t('chat.canvas.collapseToEdge') : t('chat.canvas.dockLeft')}
               >
                 <KeyboardArrowLeftIcon fontSize="small" />
               </IconButton>
             </Tooltip>
-            <Tooltip title={t('chat.canvas.dockBottom')}>
+            <Tooltip title={placement === 'bottom' ? t('chat.canvas.collapseToEdge') : t('chat.canvas.dockBottom')}>
               <IconButton
                 size="small"
                 color={placement === 'bottom' ? 'primary' : 'default'}
-                onClick={() => setPlacement('bottom')}
-                aria-label={t('chat.canvas.dockBottom')}
+                onClick={() => handleDockButtonClick('bottom')}
+                aria-label={placement === 'bottom' ? t('chat.canvas.collapseToEdge') : t('chat.canvas.dockBottom')}
               >
                 <KeyboardArrowDownIcon fontSize="small" />
               </IconButton>
             </Tooltip>
-            <Tooltip title={t('chat.canvas.dockRight')}>
+            <Tooltip title={placement === 'right' ? t('chat.canvas.collapseToEdge') : t('chat.canvas.dockRight')}>
               <IconButton
                 size="small"
                 color={placement === 'right' ? 'primary' : 'default'}
-                onClick={() => setPlacement('right')}
-                aria-label={t('chat.canvas.dockRight')}
+                onClick={() => handleDockButtonClick('right')}
+                aria-label={placement === 'right' ? t('chat.canvas.collapseToEdge') : t('chat.canvas.dockRight')}
               >
                 <KeyboardArrowRightIcon fontSize="small" />
               </IconButton>
@@ -538,6 +615,7 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
           </Box>
         )}
 
+        {!isRail && (
         <Tooltip
           title={fullscreen
             ? t('chat.canvas.exitFullscreen')
@@ -556,14 +634,18 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
             </IconButton>
           </span>
         </Tooltip>
-        {!fullscreen && (
-          <Tooltip title={collapsed ? t('chat.canvas.expand') : t('chat.canvas.collapse')}>
+        )}
+        {/* #375: the top-right chevron is now a single X that closes every
+            sandbox (real unmount + teardown). Collapse lives on the
+            active-edge placement arrow above; the per-tab X is untouched. */}
+        {onCloseAll && (
+          <Tooltip title={t('chat.canvas.closeAll')}>
             <IconButton
               size="small"
-              onClick={() => setCollapsed((value) => !value)}
-              aria-label={t('chat.canvas.toggleCollapse')}
+              onClick={handleCloseAll}
+              aria-label={t('chat.canvas.closeAll')}
             >
-              {collapsed ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+              <CloseIcon fontSize="small" />
             </IconButton>
           </Tooltip>
         )}

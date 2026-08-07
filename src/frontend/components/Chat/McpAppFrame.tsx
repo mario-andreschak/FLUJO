@@ -852,6 +852,10 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // #375: mirrors `error` without triggering re-renders, so async continuations
+  // (handshake handoff) can cheaply check "did this frame already fail?".
+  const errorRef = useRef<string | null>(null);
+  useEffect(() => { errorRef.current = error; }, [error]);
   const [displayMode, setDisplayMode] = useState<McpUiDisplayMode>(docked ? 'pip' : 'inline');
   const [floatingRect, setFloatingRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [appDisplayModes, setAppDisplayModes] = useState<McpUiDisplayMode[]>([]);
@@ -1077,7 +1081,10 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
    * View, so two live bridges never claim the same app instance.
    */
   const handoffToDock = useCallback(() => {
-    if (dockHandoffRef.current || !onRequestDockRef.current) return;
+    // #375: a frame that has already errored (unsupported display mode, access
+    // revoked, server config changed) must never be handed off to the canvas —
+    // it would only pop the dock open to show an error alert.
+    if (dockHandoffRef.current || !onRequestDockRef.current || errorRef.current) return;
     dockHandoffRef.current = true;
     void teardown()
       .then(() => {
@@ -1215,7 +1222,10 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
         ) return;
         setError(message);
         setLoading(false);
-        void teardown();
+        // #375: a revoked/errored docked frame must not linger in the canvas.
+        void teardown().finally(() => {
+          if (dockedRef.current) onRequestCloseRef.current?.();
+        });
       };
       const bridge = new AppBridge(
         makeClientShim(serverName, ownerScope, revokeAccess),
@@ -1423,16 +1433,9 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
         onDockableRef.current?.(modes.includes('pip'));
         onAvailableDisplayModesRef.current?.([...modes]);
 
-        if (
-          autoDockRef.current
-          && modes.includes('pip')
-          && !dockedRef.current
-          && onRequestDockRef.current
-        ) {
-          setTimeout(handoffToDock, 0);
-        }
-
         initializedRef.current = true;
+        // #375: validate BEFORE scheduling any auto-dock handoff — an errored /
+        // unsupported frame must never reach the canvas just to show an alert.
         const verifiedDisplayMode = getVerifiedPostHandshakeDisplayMode(
           requestedDisplayMode,
           dockedRef.current,
@@ -1445,6 +1448,16 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
           void teardown();
           return;
         }
+
+        if (
+          autoDockRef.current
+          && modes.includes('pip')
+          && !dockedRef.current
+          && onRequestDockRef.current
+        ) {
+          setTimeout(handoffToDock, 0);
+        }
+
         displayModeRef.current = verifiedDisplayMode;
         setDisplayMode(verifiedDisplayMode);
         if (verifiedDisplayMode !== initialDisplayMode) {
