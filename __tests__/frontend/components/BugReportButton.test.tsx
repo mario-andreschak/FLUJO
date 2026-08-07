@@ -164,10 +164,12 @@ describe('BugReportButton', () => {
     fireEvent.change(descriptionInput, { target: { value: 'It broke' } });
 
     fireEvent.click(screen.getByRole('button', { name: 'common.cancel' }));
-    fireEvent.click(screen.getByRole('button', { name: 'bugReport.action' }));
+
+    const reopenButton = await screen.findByRole('button', { name: 'bugReport.action' });
+    fireEvent.click(reopenButton);
 
     const reopenedTitle = (await screen.findByLabelText('common.title')) as HTMLInputElement;
-    const reopenedDescription = screen.getByLabelText('common.description') as HTMLInputElement;
+    const reopenedDescription = (await screen.findByLabelText('common.description')) as HTMLInputElement;
     expect(reopenedTitle.value).toBe('');
     expect(reopenedDescription.value).toBe('');
   });

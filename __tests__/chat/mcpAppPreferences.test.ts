@@ -1,4 +1,8 @@
 /**
+ * @jest-environment jsdom
+ */
+
+/**
  * Unit tests for the MCP Apps canvas dismissal/suppression preference helpers
  * (issue #375: "the canvas keeps re-opening even though I collapsed it").
  *
