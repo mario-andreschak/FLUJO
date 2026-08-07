@@ -138,7 +138,16 @@ export function normalizeChatError(
     ...(code ? { code } : {}),
     ...(httpStatus !== undefined ? { httpStatus } : {}),
     ...(providerType ? { providerType } : {}),
-    errorClass: classifyStatisticsError(err),
+    // Classify using the already-extracted provider detail (status/code/type),
+    // since raw provider errors nest that data under `err.details` and the
+    // classifier only inspects top-level fields. Preserve `instanceof Error`
+    // (via a fresh Error carrying the original name) so name-based
+    // classification (e.g. cancellation/AbortError) keeps working.
+    errorClass: classifyStatisticsError(
+      err instanceof Error
+        ? Object.assign(new Error(err.message), { name: err.name, code, type: providerType })
+        : { code, type: providerType }
+    ),
     ...(ctx?.nodeId ? { nodeId: ctx.nodeId } : {}),
     ...(ctx?.nodeName ? { nodeName: ctx.nodeName } : {}),
     ...(retryAfter ? { retryAfter } : {}),
