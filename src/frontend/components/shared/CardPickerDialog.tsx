@@ -3,16 +3,13 @@
 import React from 'react';
 import {
   Dialog,
-  DialogTitle,
   DialogContent,
   DialogActions,
   Button,
-  Box,
-  IconButton,
   Typography,
   Divider,
 } from '@mui/material';
-import CloseIcon from '@mui/icons-material/Close';
+import DialogHeaderActions from './DialogHeaderActions';
 import CardPickerGrid, { CardPickerGridProps } from './CardPickerGrid';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 
@@ -58,14 +55,7 @@ const CardPickerDialog: React.FC<CardPickerDialogProps> = ({
     >
       {title !== undefined && title !== null && (
         <>
-          <DialogTitle component="div">
-            <Box display="flex" alignItems="center" justifyContent="space-between">
-              <Typography variant="h6">{title}</Typography>
-              <IconButton edge="end" color="inherit" onClick={onClose} aria-label={t('common.close')}>
-                <CloseIcon />
-              </IconButton>
-            </Box>
-          </DialogTitle>
+          <DialogHeaderActions title={title} onClose={onClose} />
           <Divider />
         </>
       )}

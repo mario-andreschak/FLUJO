@@ -27,6 +27,8 @@ import {
   useTheme,
   useMediaQuery,
 } from '@mui/material';
+import AskFlujoButton from '@/frontend/components/AskFlujo/AskFlujoButton';
+import BugReportButton from '@/frontend/components/BugReport/BugReportButton';
 import SendIcon from '@mui/icons-material/Send';
 import AttachFileIcon from '@mui/icons-material/AttachFile';
 import MicIcon from '@mui/icons-material/Mic';
@@ -1063,17 +1065,25 @@ const ChatInput: React.FC<ChatInputProps> = ({
         <DialogTitle>
           {dialogTitle}
           {!isProcessing && (
-            <IconButton
-              aria-label={t('common.close')}
-              onClick={() => setDialogOpen(false)}
+            <Box
+              display="flex"
+              alignItems="center"
+              gap={0.5}
               sx={{
                 position: 'absolute',
                 right: 8,
                 top: 8,
               }}
             >
-              <CloseIcon />
-            </IconButton>
+              <AskFlujoButton />
+              <BugReportButton variant="icon" />
+              <IconButton
+                aria-label={t('common.close')}
+                onClick={() => setDialogOpen(false)}
+              >
+                <CloseIcon />
+              </IconButton>
+            </Box>
           )}
         </DialogTitle>
         <DialogContent dividers>

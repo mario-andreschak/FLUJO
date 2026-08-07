@@ -8,12 +8,12 @@ import {
   ListItemText,
   Divider,
   Dialog,
-  DialogTitle,
   DialogContent,
   DialogActions,
   TextField,
   Button,
 } from '@mui/material';
+import DialogHeaderActions from './DialogHeaderActions';
 import CheckIcon from '@mui/icons-material/Check';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import CreateNewFolderOutlinedIcon from '@mui/icons-material/CreateNewFolderOutlined';
@@ -114,7 +114,7 @@ const FolderAssignMenu = ({
         // of the owning card in React's event tree.
         onClick={(event) => event.stopPropagation()}
       >
-        <DialogTitle>{t('folderAssign.newTitle')}</DialogTitle>
+        <DialogHeaderActions title={t('folderAssign.newTitle')} onClose={() => setNewFolderOpen(false)} />
         <DialogContent>
           <TextField
             autoFocus

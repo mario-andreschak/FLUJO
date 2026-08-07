@@ -8,12 +8,10 @@ import {
   Dialog,
   DialogActions,
   DialogContent,
-  DialogTitle,
   Divider,
   FormControl,
   FormControlLabel,
   FormHelperText,
-  IconButton,
   InputLabel,
   MenuItem,
   Select,
@@ -21,7 +19,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import CloseIcon from '@mui/icons-material/Close';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 import ScheduleIcon from '@mui/icons-material/Schedule';
 import WebhookIcon from '@mui/icons-material/Webhook';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
@@ -201,16 +199,10 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
         },
       }}
     >
-      <DialogTitle component="div">
-        <Box display="flex" alignItems="center" justifyContent="space-between">
-          <Typography variant="h6">
-            {execution ? t('automations.modal.editTitle') : t('automations.modal.newTitle')}
-          </Typography>
-          <IconButton edge="end" color="inherit" onClick={onClose} aria-label={t('automations.modal.closeAria')}>
-            <CloseIcon />
-          </IconButton>
-        </Box>
-      </DialogTitle>
+      <DialogHeaderActions
+        title={execution ? t('automations.modal.editTitle') : t('automations.modal.newTitle')}
+        onClose={onClose}
+      />
 
       <Divider />
 

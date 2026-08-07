@@ -12,7 +12,6 @@ import {
   Dialog,
   DialogActions,
   DialogContent,
-  DialogTitle,
   Divider,
   FormControl,
   FormControlLabel,
@@ -23,6 +22,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import { modelService } from '@/frontend/services/model';
@@ -188,7 +188,7 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({ open, onClose, onStar
 
   return (
     <Dialog open={open} onClose={starting ? undefined : onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>{t('chat.quick.title')}</DialogTitle>
+      <DialogHeaderActions title={t('chat.quick.title')} onClose={onClose} />
       <DialogContent>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           {t('chat.quick.help')}
