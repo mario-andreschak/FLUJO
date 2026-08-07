@@ -173,6 +173,22 @@ function screenshotRoot(): string {
   return path.resolve(dataRoot, 'screenshots', 'browser');
 }
 
+/** Persistence root for `browser_record_*` artifacts (WebM/WAV/muxed output). */
+export function recordingRoot(): string {
+  const configured = process.env.FLUJO_BROWSER_RECORD_DIR?.trim();
+  if (configured) return path.resolve(configured);
+  const dataRoot = process.env.FLUJO_DATA_DIR?.trim() || process.cwd();
+  return path.resolve(dataRoot, 'recordings', 'browser');
+}
+
+/** A fresh scratch directory under the runtime root, used for Playwright's `recordVideo` output before it is copied out. */
+export async function ensureScratchDir(prefix: string): Promise<string> {
+  const root = await ensureRuntimeRoot();
+  const dir = path.join(root, prefix);
+  await fs.mkdir(dir, { recursive: true });
+  return dir;
+}
+
 /** Persist the latest screenshot and return the absolute host path reported to MCP clients. */
 export async function writeScreenshotArtifact(
   sessionId: string,
@@ -235,7 +251,8 @@ function preferredChannel(): string | undefined {
   return process.env.FLUJO_BROWSER_EXECUTABLE_PATH ? undefined : 'chromium';
 }
 
-async function acquireBrowser(): Promise<Browser> {
+/** Exported for the recording/capture modules, which need their own contexts on the same browser instance. */
+export async function acquireBrowser(): Promise<Browser> {
   if (browser?.isConnected()) return browser;
   if (browserPromise) return browserPromise;
   browserPromise = (async () => {
@@ -412,6 +429,44 @@ export async function openSession(requestedId: unknown, signal: AbortSignal): Pr
     throw error;
   } finally {
     signal.removeEventListener('abort', onAbort);
+  }
+}
+
+/** Register a session created outside `openSession()` (used by the recording module, which owns its own context lifecycle). */
+export function registerSession(session: BrowserSession): BrowserSession {
+  sessions.set(session.id, session);
+  return touchSession(session);
+}
+
+export type CaptureContext = { context: BrowserContext; page: Page };
+
+/**
+ * An ephemeral, isolated context for still capture: not the user-facing
+ * session map, no `lastSessionId` side effects, always closed by the caller
+ * in a `finally`. `reducedMotion: 'reduce'` plus the caller's `animations:
+ * 'disabled'` screenshot option are the two halves of the determinism ladder.
+ */
+export async function createCaptureContext(
+  signal: AbortSignal,
+  viewport: { width: number; height: number; deviceScaleFactor?: number; colorScheme?: 'light' | 'dark' },
+): Promise<CaptureContext> {
+  if (signal.aborted) throw new BrowserMcpError('CANCELLED', 'The browser request was cancelled.');
+  const activeBrowser = await acquireBrowser();
+  if (signal.aborted) throw new BrowserMcpError('CANCELLED', 'The browser request was cancelled.');
+  const context = await activeBrowser.newContext({
+    viewport: { width: viewport.width, height: viewport.height },
+    deviceScaleFactor: viewport.deviceScaleFactor ?? 1,
+    colorScheme: viewport.colorScheme ?? 'light',
+    reducedMotion: 'reduce',
+    acceptDownloads: false,
+  });
+  try {
+    const page = await context.newPage();
+    if (signal.aborted) throw new BrowserMcpError('CANCELLED', 'The browser request was cancelled.');
+    return { context, page };
+  } catch (error) {
+    await context.close().catch(() => undefined);
+    throw error;
   }
 }
 

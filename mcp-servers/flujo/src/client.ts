@@ -44,9 +44,7 @@ const SERVER_TOOLS = new Set([
   'call_mcp_tool',
   'restart_mcp_server',
   'set_mcp_server_enabled',
-  'browser_capture_page',
-  'browser_capture_element_metrics',
-  'browser_capture_region',
+  'system_screenshot',
 ]);
 const AUTOMATION_TOOLS = new Set([
   'list_models',

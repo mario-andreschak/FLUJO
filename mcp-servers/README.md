@@ -48,6 +48,14 @@ Every session uses a new incognito context inside a lazily launched, shared Chro
 
 Navigation permits only HTTP(S), rejects URL credentials, and blocks localhost/private-network destinations (including DNS resolutions, memoised for one minute so a media-heavy page does not pay a lookup per subresource) unless `FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS=1` is explicitly set. Set `FLUJO_BROWSER_ALLOWED_ORIGINS` to a comma-separated exact-origin allowlist for a narrower policy. Only top-level documents count against the redirect cap, so embed-heavy pages are not blocked by their tenth iframe.
 
+### Deterministic capture and recording (#366)
+
+`browser_capture_page`, `browser_capture_region`, and `browser_capture_element_metrics` capture a page, an inline HTML fragment, or a local file deterministically: viewport is fixed, animations/caret are disabled, `document.fonts.ready` is awaited, and an optional `waitFor` (CSS selector or JS predicate, its result is boolean-coerced and never returned) gates the capture. Still captures assert a single stable PNG color type rather than silently emitting mixed formats. `file://`/localhost/private-host sources are refused unless **all** of the following hold: `allowLocal: true` on the call, `FLUJO_BROWSER_ALLOW_LOCAL_CAPTURE=1`, and the resolved realpath is inside the FLUJO data directory or `FLUJO_BROWSER_LOCAL_CAPTURE_ROOTS` — ordinary `browser_open`/`browser_navigate` policy is untouched.
+
+`browser_record_start`/`browser_record_stop`/`browser_record_status` record a dedicated session (drivable with the ordinary browser tools while recording) to WebM via Patchright's `recordVideo`, with an optional WAV audio sidecar from the existing Web Audio tap. If an `ffmpeg` binary is discoverable (`FLUJO_FFMPEG_PATH` or `PATH`) the two are muxed into one file; otherwise both artifacts are returned separately with `muxed: false` — ffmpeg is never downloaded or installed. `FLUJO_BROWSER_RECORD_DIR` and `FLUJO_BROWSER_RECORD_MAX_MS` control where artifacts land and the hard duration cap.
+
+This is deliberately separate from `system_screenshot` (below): browser capture renders *a page*, while `system_screenshot` captures *the host desktop*, including unrelated windows. Use browser capture to verify rendered HTML.
+
 ### Live view
 
 The MCP App at `ui://browser/view` is a thin shell that performs the MCP handshake, opens the session, and then frames the browser UI served by a loopback gateway the server starts itself — the same pattern the VS Code MCP App uses to embed OpenVSCode. Because that UI runs on a real HTTP origin instead of inside the host's app sandbox, it is not bound by the app CSP and can behave like an actual browser window: tab strip, omnibox with a security indicator, loading bar, back/forward/reload, and full-screen handoff.
@@ -93,6 +101,12 @@ so they do not clutter model tool context. The terminal uses ConPTY on Windows
 and a pseudoterminal on macOS/Linux, renders ANSI/VT output with xterm, accepts
 keyboard and pasted input, and negotiates terminal size through app-only tools.
 As with a normal terminal, stdout and stderr share the PTY stream.
+
+## System screenshot (internal `flujo` server, #366)
+
+`system_screenshot` captures the host desktop — full virtual screen, a specific display, or a pixel region — using OS-native commands only (PowerShell/`System.Drawing` on Windows, `/usr/sbin/screencapture` on macOS, `grim`/`import`/`spectacle`/`gnome-screenshot` probing on Linux). It is unrelated to the browser server: it captures *whatever is on the machine*, including unrelated windows and applications, and is not a way to verify rendered HTML (use the browser server's `browser_capture_page` for that).
+
+It is genuinely a new capability class, so it is **default off** and, when disabled, is not advertised at all rather than returning a policy error — set `FLUJO_SYSTEM_SCREENSHOT_ENABLED=1` to enable it. It also refuses to run when no interactive desktop session is detectable (headless Linux with no `DISPLAY`/`WAYLAND_DISPLAY`; a Windows session with no `SESSIONNAME`). Every OS command is spawned as an argv array — never a shell string — so no caller-supplied value can change what executes; on Windows, per-call parameters (mode, display index, region) flow through environment variables into a single fixed PowerShell script rather than being interpolated into script text.
 
 ## Roots and operator policy
 

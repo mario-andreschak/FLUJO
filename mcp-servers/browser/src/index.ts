@@ -12,11 +12,14 @@ import { browserCallTool, browserToolDefinitions } from './tools.js';
 import { browserListResources, browserReadResource } from './resources.js';
 import { shutdownBrowserRuntime } from './runtime.js';
 import { shutdownBrowserGateway } from './gateway.js';
+import { shutdownAllRecordings } from './recording.js';
 
 export * from './tools.js';
 export * from './resources.js';
 export * from './runtime.js';
 export * from './gateway.js';
+export * from './capture.js';
+export * from './recording.js';
 
 const server = new Server(
   { name: '@mario.andreschak/mcp-browser', version: '3.42.1' },
@@ -37,6 +40,7 @@ async function shutdown(): Promise<void> {
   if (closing) return;
   closing = true;
   await shutdownBrowserGateway();
+  await shutdownAllRecordings();
   await shutdownBrowserRuntime();
   await server.close().catch(() => undefined);
 }

@@ -66,6 +66,12 @@ describe('bundled browser MCP', () => {
       'browser_press',
       'browser_scroll',
       'browser_screenshot',
+      'browser_capture_page',
+      'browser_capture_element_metrics',
+      'browser_capture_region',
+      'browser_record_start',
+      'browser_record_stop',
+      'browser_record_status',
       'browser_close',
     ]);
     for (const tool of tools) {

@@ -81,7 +81,9 @@ export function shippedServerEnv(
     'SSL_CERT_FILE',
   ]);
 
-  if (descriptor.defaultName === 'filesystem') {
+  if (descriptor.defaultName === 'flujo') {
+    forwarded.add('FLUJO_SYSTEM_SCREENSHOT_ENABLED');
+  } else if (descriptor.defaultName === 'filesystem') {
     forwarded.add('FLUJO_FS_ROOTS');
     forwarded.add('FLUJO_ALLOW_PROTECTED_PATHS');
   } else if (descriptor.defaultName === 'bash') {
@@ -120,6 +122,13 @@ export function shippedServerEnv(
       'FLUJO_BROWSER_AUDIO',
       'FLUJO_BROWSER_ALLOW_SERVICE_WORKERS',
       'PLAYWRIGHT_BROWSERS_PATH',
+      // Deterministic capture (#366): local-source gating, output roots, and
+      // the optional recording/muxing pipeline.
+      'FLUJO_BROWSER_ALLOW_LOCAL_CAPTURE',
+      'FLUJO_BROWSER_LOCAL_CAPTURE_ROOTS',
+      'FLUJO_BROWSER_RECORD_DIR',
+      'FLUJO_BROWSER_RECORD_MAX_MS',
+      'FLUJO_FFMPEG_PATH',
     ]) forwarded.add(key);
   }
 
