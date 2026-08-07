@@ -1,6 +1,13 @@
 import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
+import { mockUseAskFlujo, mockUseAskFlujoPage } from '@/frontend/__tests__/mocks/askFlujoContext';
+
+jest.mock('@/frontend/contexts/AskFlujoContext', () => ({
+  useAskFlujo: mockUseAskFlujo,
+  useAskFlujoPage: mockUseAskFlujoPage,
+}));
+
 import McpAppsDashboard from '@/frontend/components/mcp/McpAppsDashboard';
 import { mcpService } from '@/frontend/services/mcp';
 
