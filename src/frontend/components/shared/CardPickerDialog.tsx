@@ -41,9 +41,15 @@ const CardPickerDialog: React.FC<CardPickerDialogProps> = ({
   description,
   maxWidth = 'md',
   fullScreen = false,
+  autoFocusSearch: autoFocusSearchProp,
+  autoFocusDelayMs: autoFocusDelayMsProp,
   ...gridProps
 }) => {
   const { t } = useI18n();
+  // #372: re-trigger auto-focus every time this dialog opens; the delay lets
+  // MUI's Dialog focus trap settle first so the two don't fight over focus.
+  const autoFocusSearch = autoFocusSearchProp ?? open;
+  const autoFocusDelayMs = autoFocusDelayMsProp ?? 120;
   return (
     <Dialog
       open={open}
@@ -65,7 +71,11 @@ const CardPickerDialog: React.FC<CardPickerDialogProps> = ({
             {description}
           </Typography>
         )}
-        <CardPickerGrid {...gridProps} />
+        <CardPickerGrid
+          {...gridProps}
+          autoFocusSearch={autoFocusSearch}
+          autoFocusDelayMs={autoFocusDelayMs}
+        />
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>{t('common.cancel')}</Button>

@@ -64,8 +64,10 @@ import {
   TRIGGER_TYPE_LABELS,
 } from '@/utils/shared/plannedExecutionGrouping';
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
+import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
 import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCardSection';
 import PageHeader from '@/frontend/components/shared/PageHeader';
+import StickySearchBar from '@/frontend/components/shared/StickySearchBar';
 import { useThemeUtils } from '@/frontend/utils/theme';
 import ExecutionCard from './ExecutionCard';
 import ExecutionModal from './ExecutionModal';
@@ -93,6 +95,9 @@ const PlannedExecutionsManager = () => {
   // the next poll (issue #118).
   const [toggleError, setToggleError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  // #372: caret placed automatically; this page scrolls the document, so the
+  // search toolbar also needs to stay pinned while scrolling (see wrapper below).
+  const searchInputRef = useAutoFocusSearch();
   const [statusFilter, setStatusFilter] = useUiPreference<PlannedExecutionFilter>(
     'flujo-ui:planned-executions:filter',
     'all',
@@ -335,6 +340,7 @@ const PlannedExecutionsManager = () => {
 
       {entries.length > 0 && (
         <>
+          <StickySearchBar mode="page">
           <Paper elevation={0} variant="outlined" sx={{ mb: 1.5, p: 1.2, borderRadius: 3 }}>
             <Box
               sx={{
@@ -352,6 +358,7 @@ const PlannedExecutionsManager = () => {
                 fullWidth
                 value={searchTerm}
                 onChange={(event) => setSearchTerm(event.target.value)}
+                inputRef={searchInputRef}
                 InputProps={{
                   startAdornment: (
                     <InputAdornment position="start">
@@ -443,6 +450,7 @@ const PlannedExecutionsManager = () => {
               </Box>
             </Box>
           </Paper>
+          </StickySearchBar>
 
           <Box
             sx={{

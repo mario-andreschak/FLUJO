@@ -64,6 +64,7 @@ import {
 } from '@/utils/shared/cardGrouping';
 import { ServerSortOption, deriveServerSortGroup, sortServersFavoritesFirst } from '@/utils/shared/serverGrouping';
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
+import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
 import { useScrollRestoration } from '@/frontend/hooks/useScrollRestoration';
 import BackToTopButton from '@/frontend/components/shared/BackToTopButton';
 import { useI18n } from '@/frontend/contexts/I18nContext';
@@ -221,6 +222,10 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   // Toolbar state. The view preferences (#93) persist across navigation via
   // localStorage; search + the transient menu anchors stay session-scoped.
   const [searchTerm, setSearchTerm] = useState('');
+  // #372: place the caret in the search field automatically. This toolbar Paper
+  // sits outside the inner scroll container below, so it stays visible without
+  // a sticky wrapper — only auto-focus is needed here.
+  const searchInputRef = useAutoFocusSearch();
   const [sortOption, setSortOption] = useUiPreference<ServerSortOption>('flujo-ui:mcp:sort', 'name-asc');
   const [filterOption, setFilterOption] = useUiPreference<FilterOption>('flujo-ui:mcp:filter', 'all');
   const [sortAnchorEl, setSortAnchorEl] = useState<null | HTMLElement>(null);
@@ -768,6 +773,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
             fullWidth
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
+            inputRef={searchInputRef}
             InputProps={{
               startAdornment: (
                 <InputAdornment position="start">

@@ -27,6 +27,8 @@ import ModelModal from '@/frontend/components/models/modal';
 import ModelConnectionWizard, {
   GuidedCreationResult,
 } from '@/frontend/components/models/ModelConnectionWizard';
+import StickySearchBar from '@/frontend/components/shared/StickySearchBar';
+import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
 import { createLogger } from '@/utils/logger';
 import { Model } from '@/shared/types';
 import { getModelService, ModelResult } from '@/frontend/services/model';
@@ -47,6 +49,9 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
   const searchParams = useSearchParams();
   const [models, setModels] = useState(initialModels);
   const [searchTerm, setSearchTerm] = useState('');
+  // #372: caret placed automatically; this page scrolls the document, so the
+  // search toolbar also needs to stay pinned while scrolling (see wrapper below).
+  const searchInputRef = useAutoFocusSearch();
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [serviceReady, setServiceReady] = useState(false);
@@ -350,6 +355,7 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
   return (
     <>
       {/* Toolbar with search + add, matching the Flows/MCP list toolbars */}
+      <StickySearchBar mode="page">
       <Paper
         elevation={0}
         variant="outlined"
@@ -370,6 +376,7 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
             size="small"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
+            inputRef={searchInputRef}
             InputProps={{
               startAdornment: (
                 <InputAdornment position="start">
@@ -414,6 +421,7 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
           </>
         </Box>
       </Paper>
+      </StickySearchBar>
 
       {error && (
         <Box sx={{ mb: 2 }}>

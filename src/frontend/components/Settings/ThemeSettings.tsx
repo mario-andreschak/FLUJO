@@ -20,6 +20,7 @@ import { ThemeMode, useTheme } from '@/frontend/contexts/ThemeContext';
 import { VisualThemeStyle } from '@/frontend/utils/muiTheme';
 import { createLogger } from '@/utils/logger';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 import type { TranslationKey } from '@/frontend/i18n';
 
 const log = createLogger('frontend/components/Settings/ThemeSettings');
@@ -88,6 +89,11 @@ export default function ThemeSettings() {
   } = useTheme();
   const theme = useMuiTheme();
   const { t } = useI18n();
+  // #372 §3.4: escape hatch for search-field auto-focus, default on.
+  const [autoFocusSearch, setAutoFocusSearch] = useUiPreference<boolean>(
+    'flujo-ui:search:autoFocus',
+    true,
+  );
 
   log.debug(`Rendering ThemeSettings with preset: ${visualStyle}/${isDarkMode ? 'dark' : 'light'}`);
 
@@ -219,6 +225,32 @@ export default function ThemeSettings() {
         />
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
           {t('settings.theme.animatedLandscapeDescription')}
+        </Typography>
+      </FormControl>
+
+      <FormControl
+        fullWidth
+        sx={{
+          mt: 2,
+          p: 2,
+          border: '1px solid',
+          borderColor: 'divider',
+          borderRadius: visualStyle === 'legacy' ? 2 : 3,
+          bgcolor: alpha(theme.palette.background.paper, 0.58),
+        }}
+      >
+        <FormControlLabel
+          control={(
+            <Switch
+              checked={autoFocusSearch}
+              onChange={(event) => setAutoFocusSearch(event.target.checked)}
+              name="autoFocusSearch"
+            />
+          )}
+          label={t('settings.theme.autoFocusSearch')}
+        />
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+          {t('settings.theme.autoFocusSearchDescription')}
         </Typography>
       </FormControl>
     </Box>

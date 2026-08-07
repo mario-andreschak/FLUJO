@@ -43,6 +43,7 @@ import {
 } from '@/utils/shared/cardGrouping';
 import { FlowSortOption, deriveFlowSortGroup, sortFlowsFavoritesFirst } from '@/utils/shared/flowGrouping';
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
+import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
 import { useScrollRestoration } from '@/frontend/hooks/useScrollRestoration';
 import BackToTopButton from '@/frontend/components/shared/BackToTopButton';
 import { Flow } from '@/frontend/types/flow/flow';
@@ -87,6 +88,10 @@ const FlowDashboard = ({
 }: FlowDashboardProps) => {
   const { t, tp, formatNumber } = useI18n();
   const [searchTerm, setSearchTerm] = useState('');
+  // #372: place the caret in the search field automatically. The toolbar Paper
+  // already sits outside the inner scroll container below, so it stays visible
+  // without a sticky wrapper — only auto-focus is needed here.
+  const searchInputRef = useAutoFocusSearch();
   // Persisted view preferences (#93): survive navigating away and back. Search
   // is intentionally NOT persisted (session-scoped), and the transient menu
   // anchors stay ephemeral.
@@ -318,6 +323,7 @@ const FlowDashboard = ({
             fullWidth
             value={searchTerm}
             onChange={handleSearchChange}
+            inputRef={searchInputRef}
             InputProps={{
               startAdornment: (
                 <InputAdornment position="start">
