@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation';
 import { createLogger } from '@/utils/logger';
 import {
   Dialog,
-  DialogTitle,
   DialogContent,
   DialogActions,
   TextField,
@@ -43,7 +42,7 @@ import type { TranslationKey } from '@/frontend/i18n/messages';
 import { useAskFlujoPage } from '@/frontend/contexts/AskFlujoContext';
 import type { AskFlujoUiAction } from '@/frontend/types/askFlujo';
 import { highlightAskFlujoElement } from '@/frontend/utils/askFlujoActions';
-import AskFlujoButton from '@/frontend/components/AskFlujo/AskFlujoButton';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 
 const log = createLogger('frontend/components/models/modal');
 
@@ -497,10 +496,10 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         onSubmit={handleSubmit}
         style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}
       >
-        <DialogTitle sx={{ display: 'flex', flexShrink: 0, alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
-          <span>{model.name ? t('models.modal.editTitle') : t('models.modal.createTitle')}</span>
-          <AskFlujoButton />
-        </DialogTitle>
+        <DialogHeaderActions
+          title={model.name ? t('models.modal.editTitle') : t('models.modal.createTitle')}
+          onClose={onClose}
+        />
         <DialogContent
           sx={{
             display: 'flex',

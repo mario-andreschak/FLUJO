@@ -144,7 +144,17 @@ export default function BugReportButton({ variant = 'icon' }: BugReportButtonPro
         </Button>
       )}
 
-      <Dialog open={open} onClose={handleClose} maxWidth="md" fullWidth>
+      {/*
+       * This Dialog is sometimes mounted inside another modal (e.g. a
+       * DialogHeaderActions header nested in a config modal). MUI stacks
+       * same-level Modals by DOM order, which is normally enough, but Ask
+       * FLUJO's dock explicitly bumps its z-index above `theme.zIndex.modal`
+       * for the same nested-dialog scenario (see AskFlujoDock.tsx). Mirror
+       * that here so the bug-report dialog reliably layers above a parent
+       * modal regardless of mount order; this is a no-op for the standalone
+       * navigation-bar usage since there is no other modal to layer above.
+       */}
+      <Dialog open={open} onClose={handleClose} maxWidth="md" fullWidth sx={{ zIndex: (theme) => theme.zIndex.modal + 10 }}>
         <DialogTitle>{t('bugReport.title')}</DialogTitle>
         <DialogContent dividers>
           <Stack spacing={2}>
