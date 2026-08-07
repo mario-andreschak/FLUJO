@@ -783,7 +783,34 @@ export async function ensureSandboxForOriginKey(
 ): Promise<{ port: number; token: string } | undefined> {
   const state = getOrInitRuntimeState();
 
+  // Hosted single-origin deployments (Mode C): a configured public URL WITHOUT
+  // an `{app}` placeholder means every app is reached through one hostname, and
+  // the reverse proxy in front of it forwards to exactly ONE listener — the
+  // base port. Allocating a per-app listener here would put it on
+  // `basePort + N`, unreachable, while the token handed to the browser is
+  // scoped to that app's originKey. The proxied request still lands on the
+  // base-port listener, which validates against a DIFFERENT originKey and
+  // answers 403 — deterministically, for every app.
+  //
+  // Per-app ORIGIN isolation is impossible behind a single hostname anyway, so
+  // do not pretend to offer it: returning `undefined` makes the caller fall
+  // back to the shared origin and its matching shared token. The sandbox stays
+  // cross-origin with FLUJO, which is the property the spec actually requires.
+  // Real per-app isolation needs wildcard DNS plus `{app}` templating.
+  const configuredPublicUrl = getSandboxPublicUrl();
+  if (originKey && configuredPublicUrl && !configuredPublicUrl.includes('{app}')) {
+    log.debug(
+      `Sandbox: single configured public origin, serving app "${originKey}" from the shared listener`,
+    );
+    return undefined;
+  }
+
   // Mode B (hosted with hostname templating): reuse the singleton listener.
+  // NOTE: that listener validates tokens against the originKey it was STARTED
+  // with, while this returns a token for the requested app — the same mismatch
+  // described above. Hostname templating therefore needs the listener to derive
+  // the originKey from the request's Host label before it can serve apps; it is
+  // not wired to any deployment today. See issue #362 follow-up.
   if (getSandboxPublicUrl()?.includes('{app}')) {
     const existing = state.entries.get('');
     if (existing?.status === 'listening') {
