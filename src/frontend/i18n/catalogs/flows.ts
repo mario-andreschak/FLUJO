@@ -304,7 +304,12 @@ export const flowMessageRows = {
   'flows.builder.easy': ['Easy', 'Fácil', 'Einfach', 'Simple', 'Semplice', 'Fácil', '简单'],
   'flows.builder.addNode': ['Add node', 'Añadir nodo', 'Knoten hinzufügen', 'Ajouter un nœud', 'Aggiungi nodo', 'Adicionar nó', '添加节点'],
   'flows.builder.addNodeHelp': ['Choose a node type and add it after the selected node', 'Elige un tipo de nodo y añádelo después del nodo seleccionado', 'Wähle einen Knotentyp und füge ihn nach dem ausgewählten Knoten hinzu', 'Choisissez un type de nœud et ajoutez-le après le nœud sélectionné', 'Scegli un tipo di nodo e aggiungilo dopo il nodo selezionato', 'Escolha um tipo de nó e adicione-o após o nó selecionado', '选择节点类型并将其添加到所选节点之后'],
-  'flows.builder.autoAlign': ['Auto-align nodes', 'Alinear nodos automáticamente', 'Knoten automatisch ausrichten', 'Aligner automatiquement les nœuds', 'Allinea automaticamente i nodi', 'Alinhar nós automaticamente', '自动对齐节点'],
+  // Issue #373: repurposed for the position-preserving "tidy up" pass — the
+  // default toolbar action now only resolves overlaps in place instead of
+  // discarding the user's layout. The old destructive behaviour lives on as
+  // `flows.builder.relayout`, an explicit opt-in action.
+  'flows.builder.autoAlign': ['Tidy up layout', 'Ordenar diseño', 'Layout aufräumen', 'Ranger la disposition', 'Ordina il layout', 'Organizar layout', '整理布局'],
+  'flows.builder.relayout': ['Re-layout top-to-bottom', 'Reorganizar de arriba a abajo', 'Neu anordnen (von oben nach unten)', 'Réorganiser de haut en bas', 'Riorganizza dall\'alto verso il basso', 'Reorganizar de cima para baixo', '自上而下重新布局'],
   'flows.builder.undo': ['Undo', 'Deshacer', 'Rückgängig', 'Annuler', 'Annulla', 'Desfazer', '撤销'],
   'flows.builder.redo': ['Redo', 'Rehacer', 'Wiederholen', 'Rétablir', 'Ripeti', 'Refazer', '重做'],
   'flows.builder.save': ['Save', 'Guardar', 'Speichern', 'Enregistrer', 'Salva', 'Salvar', '保存'],

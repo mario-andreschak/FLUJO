@@ -50,6 +50,7 @@ import { modelService } from '@/frontend/services/model';
 import { createEdgeFromConnection, validateConnection } from './Canvas/utils/edgeUtils';
 import { defaultTargetHandleFor } from './Canvas/utils/connectionRules';
 import { computeAutoLayout } from './Canvas/utils/autoLayout';
+import { computeTidyLayout } from './Canvas/utils/tidyLayout';
 import { migrateHandoffPills } from './utils/handoffPillMigration';
 import { Canvas } from './Canvas/index';
 import { NodePalette } from './NodePalette';
@@ -1691,14 +1692,29 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     if (changes.length > 0) onNodesChange(changes);
   }, [nodes, onNodesChange]);
 
-  // Auto-Align (issue #100): re-arrange nodes into a clean top-to-bottom
-  // layered layout. Uses the functional setNodes so it stacks on the latest
-  // state; because positions change outside a drag gesture, the history effect
-  // records it as a single undoable step and flags the flow unsaved. Nothing
-  // is persisted until the user hits Save. fitView re-frames after the new
-  // positions are applied.
-  const handleAutoAlign = useCallback(() => {
-    log.debug('handleAutoAlign: auto-arranging flow nodes');
+  // Tidy up (issue #373 fix for #100's Auto-Align): a bounded, position-
+  // preserving pass that keeps every node roughly where the user put it and
+  // only resolves actual collisions (dragging MCP/resource satellites along
+  // with their parent). This is now the DEFAULT toolbar action so a clean,
+  // hand-arranged flow is no longer scrambled by a click. Uses the functional
+  // setNodes so it stacks on the latest state; because positions change
+  // outside a drag gesture, the history effect records it as a single
+  // undoable step and flags the flow unsaved. Nothing is persisted until the
+  // user hits Save. The user's viewport is already meaningful for a
+  // position-preserving pass, so this intentionally does NOT fitView (unlike
+  // the destructive re-layout below).
+  const handleTidyLayout = useCallback(() => {
+    log.debug('handleTidyLayout: resolving node overlaps in place');
+    setNodes(prev => computeTidyLayout(prev, edges));
+  }, [edges]);
+
+  // Re-layout top-to-bottom (issue #100, fixed for #373): discard existing
+  // coordinates and repack the graph into a clean layered layout. Explicit,
+  // opt-in action (kept out of the primary toolbar; reachable from the
+  // overflow "more actions" menu) since it no longer doubles as the default
+  // de-overlap action. fitView re-frames after the new positions are applied.
+  const handleRelayout = useCallback(() => {
+    log.debug('handleRelayout: re-arranging flow nodes top-to-bottom');
     setNodes(prev => computeAutoLayout(prev, edges));
     requestAnimationFrame(() => reactFlowInstance?.fitView({ padding: 0.2 }));
   }, [edges, reactFlowInstance]);
@@ -2127,7 +2143,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
                   <span>
                     <IconButton
                       aria-label={t('flows.builder.autoAlign')}
-                      onClick={handleAutoAlign}
+                      onClick={handleTidyLayout}
                       disabled={nodes.length <= 1}
                       color="primary"
                       size="small"
@@ -2209,10 +2225,21 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
                   disabled={nodes.length <= 1}
                   onClick={() => {
                     setMoreActionsMenuAnchor(null);
-                    handleAutoAlign();
+                    handleTidyLayout();
                   }}
                 >
                   {t('flows.builder.autoAlign')}
+                </MenuItem>
+              )}
+              {authoringMode === 'advanced' && (
+                <MenuItem
+                  disabled={nodes.length <= 1}
+                  onClick={() => {
+                    setMoreActionsMenuAnchor(null);
+                    handleRelayout();
+                  }}
+                >
+                  {t('flows.builder.relayout')}
                 </MenuItem>
               )}
               {authoringMode === 'advanced' && (
