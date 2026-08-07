@@ -1512,6 +1512,44 @@ const Chat: React.FC = () => {
     replacePath: '/chat',
   });
 
+  // Deep link: `?conversation=<id>` selects an existing conversation (issue
+  // #374 — `magicLink.ts` has built this link since Phase 1, but nothing
+  // consumed it). Durable (not consumed): kept in the URL so refresh/Back
+  // keep pointing at the same conversation, mirroring the `?flow=<id>&mode=edit`
+  // pattern in `/flows`. Fires once the conversation list has loaded so an
+  // unknown id is reliably rejected rather than raced.
+  useEntityDeepLink({
+    param: 'conversation',
+    ready: !isLoadingHistory,
+    exists: (id) => conversationList.some((c) => c.id === id),
+    onResolve: (id) => setCurrentConversationId(id),
+  });
+
+  // #374: `?message=<id>` (optionally alongside `?conversation=<id>`) scrolls
+  // to and briefly highlights a specific message once the selected
+  // conversation's messages have loaded. One-shot: cleared from the URL after
+  // resolving so it doesn't keep re-triggering the scroll on every refresh.
+  const [anchorMessageId, setAnchorMessageId] = useState<string | null>(null);
+  useEntityDeepLink({
+    param: 'message',
+    ready: !isLoadingDetails && !!detailedConversation && detailedConversation.id === currentConversationId,
+    exists: (id) => !!detailedConversation?.messages?.some((m) => m.id === id),
+    onResolve: (id) => setAnchorMessageId(id),
+    consume: true,
+    replacePath: '/chat',
+  });
+
+  // Clear the highlight a couple of seconds after landing so it doesn't linger
+  // forever, and reset it whenever the viewed conversation changes.
+  useEffect(() => {
+    if (!anchorMessageId) return;
+    const timeout = window.setTimeout(() => setAnchorMessageId(null), 4000);
+    return () => window.clearTimeout(timeout);
+  }, [anchorMessageId]);
+  useEffect(() => {
+    setAnchorMessageId(null);
+  }, [currentConversationId]);
+
   // --- Quick Chat (issue #61): a model + optional MCP servers, no saved flow ---
   const [quickChatOpen, setQuickChatOpen] = useState<boolean>(false);
 
@@ -4494,6 +4532,7 @@ const Chat: React.FC = () => {
                 dismissedMcpAppKeys={dismissedMcpAppKeys}
                 autoOpenSuppressed={autoOpenMcpAppsSuppressed}
                 onMcpAppManualOpen={handleMcpAppManualOpen}
+                anchorMessageId={anchorMessageId} // #374: `?message=<id>` magic link target
                 queuedMessages={getMsgQueue(queuedMessages, detailedConversation.id)}
                 queueHoldReason={translateQueueHoldReason(drainHoldReason({
                   running: runningConvs.has(detailedConversation.id),

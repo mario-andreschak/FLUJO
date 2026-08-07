@@ -53,7 +53,10 @@ import ThumbDownIcon from '@mui/icons-material/ThumbDown'; // For Reject
 import ArrowRightAltIcon from '@mui/icons-material/ArrowRightAlt'; // For handoff marker
 import RestoreIcon from '@mui/icons-material/Restore';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import LinkRoundedIcon from '@mui/icons-material/LinkRounded';
 import { ChatMessage } from './index';
+import { magicLinkUrl } from '@/frontend/utils/magicLink';
+import { copyText } from '@/frontend/components/shared/CopyLinkButton';
 import RevertPreviewDialog from './RevertPreviewDialog';
 import { FEATURES } from '@/config/features';
 import type { QueuedMessage } from './chatQueue'; // #221: inline pending bubbles
@@ -171,6 +174,12 @@ interface ChatMessagesProps {
   autoOpenSuppressed?: boolean;
   /** Clear a persisted dismissal when the user explicitly opens a launcher. */
   onMcpAppManualOpen?: (appKey: string) => void;
+  /**
+   * #374: a specific message to scroll to and briefly highlight (from a
+   * `?conversation=<id>&message=<id>` magic link). Expands the render window
+   * if the target message is currently outside it.
+   */
+  anchorMessageId?: string | null;
   /**
    * #221: messages the user submitted while a run was in flight (queued).
    * Rendered as dimmed pending bubbles after the last real message so the user
@@ -937,6 +946,8 @@ interface MessageBubbleProps {
   hoistedHandoffs?: OpenAI.ChatCompletionMessageFunctionToolCall[];
   /** True while THIS message is being edited in the ChatInput (dims the bubble). */
   isBeingEdited?: boolean;
+  /** #374: true for the message targeted by a `?message=<id>` magic link — briefly highlighted. */
+  isAnchor?: boolean;
   onMenuOpen: (event: React.MouseEvent<HTMLElement>, messageId: string) => void;
   onToggleRaw: (messageId: string, checked: boolean) => void;
 }
@@ -968,6 +979,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
   onCancelToolCall,
   hoistedHandoffs,
   isBeingEdited,
+  isAnchor,
   onMenuOpen,
   onToggleRaw,
 }) {
@@ -989,6 +1001,13 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
           borderLeft: '2px solid',
           borderColor: 'divider',
           ml: 1,
+        }),
+        // #374: brief highlight for the target of a `?message=<id>` magic link.
+        ...(isAnchor && {
+          outline: '2px solid',
+          outlineColor: 'primary.main',
+          borderRadius: 1,
+          transition: 'outline-color 2s ease-out',
         }),
       }}
     >
@@ -1615,6 +1634,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   onMcpAppManualOpen,
   queuedMessages = [], // #221: inline pending bubbles
   queueHoldReason = null,
+  anchorMessageId,
 }) => {
   const { t, tp } = useI18n();
   // Issue #247: per-tool-call rejection feedback text (keyed by tool-call id),
@@ -1633,6 +1653,27 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
     () => (Array.isArray(messages) ? (hiddenCount > 0 ? messages.slice(hiddenCount) : messages) : []),
     [messages, hiddenCount]
   );
+
+  // #374: `?message=<id>` magic link target. Expand the render window (if
+  // needed) so the anchor is actually mounted, then scroll it into view once
+  // it is; the highlight itself is driven by `isAnchor` on MessageBubble.
+  useEffect(() => {
+    if (!anchorMessageId || !Array.isArray(messages)) return;
+    const idx = messages.findIndex((m) => m.id === anchorMessageId);
+    if (idx === -1) return;
+    const neededVisible = totalCount - idx;
+    if (neededVisible > visibleCount) {
+      setVisibleCount(neededVisible);
+      return; // re-run after the window has expanded to include it
+    }
+    if (typeof document === 'undefined' || typeof window === 'undefined') return;
+    const raf = window.requestAnimationFrame(() => {
+      document
+        .querySelector(`[data-ask-flujo-message-id="${anchorMessageId}"]`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [anchorMessageId, messages, totalCount, visibleCount]);
 
   // #95 (follow-up): group each contiguous assistant run's (non-handoff) tool
   // calls onto ONE anchor bubble — the run's narration message — so the
@@ -1748,6 +1789,19 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
     }
   };
 
+  // #374: shareable `/chat?conversation=<id>&message=<id>` magic link — ids only.
+  const handleCopyMessageLink = () => {
+    if (activeMessageId) {
+      const url = magicLinkUrl({
+        kind: 'message',
+        id: activeMessageId,
+        extra: conversationId ? { conversation: conversationId } : undefined,
+      });
+      void copyText(url);
+    }
+    handleMenuClose();
+  };
+
   // Resolve node ids to display labels once per availableNodes change.
   const nodeLabelById = useMemo(() => {
     const map = new Map<string, string>();
@@ -1829,6 +1883,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
             onCancelToolCall={onCancelToolCall}
             hoistedHandoffs={renderHandoffsById.get(message.id)}
             isBeingEdited={!!editingMessageId && message.id === editingMessageId}
+            isAnchor={!!anchorMessageId && message.id === anchorMessageId}
             onMenuOpen={handleMenuOpen}
             onToggleRaw={handleToggleRaw}
           />
@@ -1926,6 +1981,10 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
             <ListItemText>{t('chat.actions.revert')}</ListItemText>
           </MenuItem>
         ) : null}
+        <MenuItem onClick={handleCopyMessageLink}>
+          <ListItemIcon><LinkRoundedIcon fontSize="small" /></ListItemIcon>
+          <ListItemText>{t('magicLink.copy')}</ListItemText>
+        </MenuItem>
       </Menu>
 
       {FEATURES.ENABLE_REVERT_TO_HERE && conversationId && (

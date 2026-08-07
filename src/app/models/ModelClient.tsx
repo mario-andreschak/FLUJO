@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Alert,
@@ -60,6 +60,11 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
   // user clicks Save, which replaces the old approach of writing a "preliminary" model record
   // immediately and cleaning it up on cancel.
   const [newModelDraft, setNewModelDraft] = useState<Model | null>(null);
+  // #374: whether THIS instance pushed the current `?edit=`/`?add=` history
+  // entry (vs. it being present on initial load from a deep link) — lets
+  // closing prefer `router.back()` (a clean history stack) over `router.push`
+  // while still falling back safely for a direct deep link.
+  const modalPushedByUsRef = useRef(false);
 
   useAskFlujoPage({
     scopeId: 'models:dashboard',
@@ -154,7 +159,12 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
 
         // Close modal by removing query param
         setNewModelDraft(null);
-        router.push('/models');
+        if (modalPushedByUsRef.current) {
+          modalPushedByUsRef.current = false;
+          router.back();
+        } else {
+          router.push('/models');
+        }
         return { success: true, model: result.model };
       } else {
         setError(result.error || t('models.saveFailed'));
@@ -171,7 +181,9 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
   
   const handleEdit = async (model: Model): Promise<ModelResult> => {
     log.info('Editing model', { modelId: model.id, modelName: model.name });
-    // Open modal by adding query param
+    // Open modal by adding query param — a real history entry (#374) so Back
+    // closes the modal instead of leaving `/models`.
+    modalPushedByUsRef.current = true;
     router.push(`/models?edit=${model.id}`);
     return { success: true };
   };
@@ -179,6 +191,7 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
   const handleAdd = async () => {
     log.info('Opening guided model connection wizard');
     setAddMenuAnchor(null);
+    modalPushedByUsRef.current = true;
     router.push('/models?add=1');
   };
 
@@ -186,6 +199,7 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
     log.info('Opening manual add-model modal');
     setAddMenuAnchor(null);
     // The draft lives in memory until the user saves.
+    modalPushedByUsRef.current = true;
     router.push('/models?add=manual');
   };
 
@@ -337,7 +351,16 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
   const handleCloseModal = async () => {
     // Nothing to clean up: an unsaved new model only ever lived in memory.
     setNewModelDraft(null);
-    router.push('/models');
+    if (modalPushedByUsRef.current) {
+      // Pop the entry this instance pushed when it opened, so Back afterwards
+      // leaves `/models` instead of re-opening the modal.
+      modalPushedByUsRef.current = false;
+      router.back();
+    } else {
+      // Opened from a deep link (e.g. a CopyLinkButton'd `/models?edit=<id>`
+      // URL) with nothing safe to pop back to.
+      router.replace('/models');
+    }
   };
 
   // Filter models by name/displayName for the search box (consistent with the

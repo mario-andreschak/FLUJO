@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import { magicLinkPath } from '@/frontend/utils/magicLink';
 import ServerList from './ServerList';
 import ServerModal from './Modals/ServerModal/index';
 import { SaveAndAuthenticateResult, type ServerSetupTab } from './Modals/ServerModal/types';
@@ -113,6 +114,9 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   const [importMenuAnchor, setImportMenuAnchor] = useState<null | HTMLElement>(null);
   // Name of the server whose details modal (Tools/Resources/Prompts/Env) is open.
   const [detailsServerName, setDetailsServerName] = useState<string | null>(null);
+  // #374: whether THIS instance pushed the `?server=` history entry (vs. it
+  // being present on initial load from a deep link) — see handleOpenDetails.
+  const detailsPushedByUsRef = useRef(false);
   const [toolPrefill, setToolPrefill] = useState<ToolTesterPrefill | undefined>();
   const [showAppsDashboard, setShowAppsDashboard] = useState(false);
   // Git update status per repository rootPath (locally cloned stdio servers).
@@ -167,7 +171,30 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
       return;
     }
     setDetailsServerName(serverName);
+    // #374: opening the modal is a real history entry, so Back closes it
+    // instead of leaving the page. `detailsPushedByUsRef` remembers whether
+    // this instance pushed the entry (vs. it being the initial deep-linked
+    // URL) so handleCloseDetails knows whether router.back() is safe.
+    detailsPushedByUsRef.current = true;
+    router.push(magicLinkPath({ kind: 'mcp-server', id: serverName }));
   };
+
+  // While the details modal is open, a browser Back should close it (and only
+  // it) rather than leaving `/mcp` entirely — mirrors the FlowBuilder's
+  // history-guarded editor (#374).
+  useEffect(() => {
+    if (typeof window === 'undefined' || !detailsServerName) return;
+    const handlePopState = () => {
+      const query = new URLSearchParams(window.location.search);
+      if (!query.get('server')) {
+        detailsPushedByUsRef.current = false;
+        setDetailsServerName(null);
+        setToolPrefill(undefined);
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [detailsServerName]);
 
   // `?server=<id>` alone is the magic link (#374): opens the details modal and
   // stays in the URL (durable) so Back/Forward and refresh keep it in sync,
@@ -199,7 +226,13 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     const name = detailsServerName;
     setDetailsServerName(null);
     setToolPrefill(undefined);
-    if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('server')) {
+    if (detailsPushedByUsRef.current) {
+      // Pop the entry this instance pushed when it opened the modal, so Back
+      // afterwards leaves `/mcp` instead of re-opening it.
+      detailsPushedByUsRef.current = false;
+      router.back();
+    } else if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('server')) {
+      // The modal was opened from a deep link with nothing safe to pop back to.
       router.replace('/mcp');
     }
     // Opening the modal (Tool tester / resources) self-heals a stale connection via the

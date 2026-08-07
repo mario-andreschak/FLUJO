@@ -41,7 +41,12 @@ Rules:
   intercepted top-nav clicks.
 - `src/frontend/components/shared/CopyLinkButton.tsx` — a small "copy a
   shareable link to this entity" `IconButton`, with a `document.execCommand`
-  fallback for non-secure origins where the Clipboard API is unavailable.
+  fallback for non-secure origins where the Clipboard API is unavailable (also
+  exports the underlying `copyText()` helper for call sites, like the
+  per-message "Copy link" menu item, that need a `MenuItem`/non-`IconButton`
+  affordance instead). Present on flows, MCP servers, conversations
+  (`ChatHistory.tsx`), models (`ModelCard.tsx`), and messages (the per-message
+  menu in `ChatMessages.tsx`).
 
 ## Back means Back in the FlowBuilder
 
@@ -62,12 +67,32 @@ its own `useState`. Pressing Back:
    `router.replace('/flows')` instead of `router.back()`, so Back can never
    leave the app entirely.
 
+## Back means Back for the MCP server & model-editor modals
+
+Opening the MCP server details modal (`handleOpenDetails` in
+`MCPServerManager/index.tsx`) and the model edit/add modal (`ModelClient.tsx`)
+both `router.push()` their `?server=<id>` / `?edit=<id>` / `?add=<...>` URL, so
+opening is a real history entry, not just local `useState`. Each tracks
+whether *it* pushed the current entry (`detailsPushedByUsRef` /
+`modalPushedByUsRef`) so closing prefers `router.back()` (popping that same
+entry) and only falls back to `router.replace()`/`router.push('/models')` when
+the modal was opened from a deep link with nothing safe to pop back to. The
+MCP server modal additionally listens for `popstate` while open so pressing
+Back (not just the in-modal close button) clears the local `detailsServerName`
+state in step with the URL. `ModelClient.tsx`'s `isModalOpen`/`currentModel`
+are still derived directly from `searchParams.get('edit'|'add')` on every
+render (like `isEditing` in `/flows`) rather than resolved once via
+`useEntityDeepLink` — that hook is for one-shot/durable *resolution into a
+separate state*, and this modal's open/closed-ness already has the URL as its
+single source of truth, so migrating it would add a redundant copy of state
+rather than remove one.
+
 ## Known follow-ups (out of scope for this pass)
 
-- `ModelClient.tsx`'s `?edit=`/`?add=` handling was left on its existing
-  `prev ?? {...}` pattern rather than migrated onto `useEntityDeepLink` —
-  it's a continuously-derived modal state rather than a one-shot resolve, and
-  migrating it safely needs more room than this pass allowed.
-- Message-level anchors/highlight (`?message=<id>`) and a conversation-level
-  `CopyLinkButton` in `ChatHistory.tsx` are not yet wired.
-- `/waves` and `/executions` were not touched.
+- `/waves` and `/executions` have no URL state at all. Low priority per the
+  issue — neither page has a single "open thing" that a link obviously points
+  to the way a flow/conversation/model/server does.
+- The MCP Apps dashboard's "open tool tester" shortcut
+  (`onOpenToolTester` in `MCPServerManager/index.tsx`) still opens the details
+  modal via local `useState` only, without pushing a history entry — a much
+  narrower path than the main server-card click handler covered above.

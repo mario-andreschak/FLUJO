@@ -48,6 +48,7 @@ import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded';
 import AccessTimeRoundedIcon from '@mui/icons-material/AccessTimeRounded';
 import { ConversationListItem } from './index'; // Import ConversationListItem instead
 import { isQuickChatFlowId } from '@/utils/shared/quickChat';
+import CopyLinkButton from '@/frontend/components/shared/CopyLinkButton';
 import { recencyBucket } from '@/utils/shared/flowGrouping';
 import { groupItems, CardGroup } from '@/utils/shared/cardGrouping';
 import {
@@ -488,6 +489,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                 </IconButton>
               </Tooltip>
             )}
+            <CopyLinkButton target={{ kind: 'conversation', id: conversation.id }} />
             <Tooltip title={t('chat.history.delete')}>
               <IconButton
                 edge="end"

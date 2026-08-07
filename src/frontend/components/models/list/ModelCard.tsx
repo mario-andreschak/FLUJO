@@ -29,6 +29,7 @@ import { getModelService } from '@/frontend/services/model';
 import { createLogger } from '@/utils/logger';
 import ModelTestDialog from './ModelTestDialog';
 import FolderAssignMenu from '@/frontend/components/shared/FolderAssignMenu';
+import CopyLinkButton from '@/frontend/components/shared/CopyLinkButton';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useThemeUtils } from '@/frontend/utils/theme';
 import type { SxProps, Theme } from '@mui/material/styles';
@@ -481,6 +482,7 @@ export const ModelCard = ({
                 </IconButton>
               </Tooltip>
             )}
+            <CopyLinkButton target={{ kind: 'model', id: model.id }} size="small" sx={{ color: 'text.secondary' }} />
             <Tooltip title={t('models.card.editAria')} arrow>
               <IconButton
                 size="small"
@@ -522,6 +524,7 @@ export const ModelCard = ({
           <IconButton aria-label={t('models.card.deleteAria')} onClick={onDelete}>
             <DeleteIcon />
           </IconButton>
+          <CopyLinkButton target={{ kind: 'model', id: model.id }} />
           {onSetFolder && (
             <Tooltip title={t('models.card.moveTooltip')} arrow>
               <IconButton
