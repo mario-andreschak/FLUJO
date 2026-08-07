@@ -51,6 +51,8 @@ export const MAX_SUBFLOW_DEPTH = 3;
 export const MAX_GENERATED_FLOWS = 8;
 /** Sanity ceiling for a process node's `maxTurns` override (no hard runtime cap exists). */
 export const MAX_PROCESS_MAX_TURNS = 1000;
+/** Cap on a static node's `entries` array so a generated spec cannot balloon a flow definition. */
+export const MAX_STATIC_ENTRIES = 200;
 
 function clamp(value: number | undefined, min: number, max: number, fallback: number): number {
   if (typeof value !== 'number' || Number.isNaN(value)) return fallback;
@@ -60,6 +62,16 @@ function clamp(value: number | undefined, min: number, max: number, fallback: nu
 // ---------------------------------------------------------------------------
 // FlowSpec — the DSL the generator model emits
 // ---------------------------------------------------------------------------
+
+/**
+ * Static node (issue #358/#380) entry shape for FlowSpec authoring. Structurally mirrors
+ * the runtime `StaticEntry` (src/backend/execution/flow/types.ts) — duplicated rather than
+ * imported because this module is shared with the browser and must not import from
+ * `src/backend/**`. Keep the two definitions in sync if the runtime shape changes.
+ */
+export type FlowSpecStaticEntry =
+  | { kind: 'message'; role: 'system' | 'user' | 'assistant'; content: string }
+  | { kind: 'toolCall'; toolName: string; argumentsJson: string; result: string };
 
 /** An MCP server a process step may call tools on. */
 export interface FlowSpecServerRef {
@@ -72,11 +84,28 @@ export interface FlowSpecServerRef {
 export interface FlowSpecNode {
   /** Spec-local handle other nodes' edges refer to. Must be unique. */
   key: string;
-  /** 'mcp' is deliberately NOT accepted — servers are attached via `servers`.
-   *  'resource' (Tier 3) is a data artifact: an edge resource→process means the
-   *  step READS it; process→resource means the step's output is SAVED to it
-   *  (run artifacts only). */
-  type: 'start' | 'process' | 'finish' | 'subflow' | 'resource' | 'signal';
+  /**
+   * Inclusion policy (issue #380 decision record:
+   * docs/architecture/flowspec-node-inclusion-policy.md) — a node type is in this union
+   * when it is a graph-visible control node reached by ordinary edges, its full semantics
+   * are expressible as declarative serializable properties, and an author could reasonably
+   * choose it when describing intent.
+   *
+   * 'mcp' is deliberately NOT accepted — it is an ATTACHMENT configured through a process
+   * node's `servers` list, not a step an author places on the graph. 'trigger' is likewise
+   * excluded — it is an externally-triggered entry point configured outside the flow graph.
+   * Both stay out by design; see the policy doc for the full exclusion rationale.
+   *
+   * 'resource' (Tier 3) is a data artifact: an edge resource→process means the
+   * step READS it; process→resource means the step's output is SAVED to it
+   * (run artifacts only).
+   *
+   * 'static' (issue #358/#380) is an ordinary pass-through control node whose entire
+   * semantics fit in serializable `entries`/`injectOnce` properties, so it IS included —
+   * omitting it silently dropped static nodes on flowToSpec (AI-Improve data loss), the
+   * same class of bug previously fixed for 'signal' (#117) and 'resource'.
+   */
+  type: 'start' | 'process' | 'finish' | 'subflow' | 'resource' | 'signal' | 'static';
   label?: string;
   /** Free-text description; lands on FlowNode.data.description (wins verbatim in handoff synthesis). */
   description?: string;
@@ -121,6 +150,15 @@ export interface FlowSpecNode {
   /** signal only (issue #117): the payload template emitted with the signal;
    *  \${var:NAME} is resolved from run variables at emit time. */
   payloadTemplate?: string;
+  /**
+   * static only (issue #358/#380): pre-authored entries injected onto the conversation
+   * when the node is traversed — either a plain message or a synthetic tool-call + result
+   * pair. Mirrors the runtime `StaticEntry` shape (src/backend/execution/flow/types.ts).
+   * Untrusted input: sanitised field-by-field at compile time, never spread verbatim.
+   */
+  entries?: FlowSpecStaticEntry[];
+  /** static only (issue #358/#380): inject only the first time the node is traversed in a run. */
+  injectOnce?: boolean;
   /** subflow only: target flow name OR id of an EXISTING flow — resolved against the context. */
   flow?: string;
   /**
@@ -621,7 +659,7 @@ export function compileFlowSpec(
         );
         continue;
       }
-      if (type !== 'start' && type !== 'process' && type !== 'finish' && type !== 'subflow' && type !== 'resource' && type !== 'signal') {
+      if (type !== 'start' && type !== 'process' && type !== 'finish' && type !== 'subflow' && type !== 'resource' && type !== 'signal' && type !== 'static') {
         error('unknown-node-type', `Node "${key}" has unknown type "${String(type)}".`, key);
         continue;
       }
@@ -810,6 +848,55 @@ export function compileFlowSpec(
           // Back-compat authoring convenience: `prompt` doubles as the payload.
           properties.payloadTemplate = prompt;
         }
+      } else if (type === 'static') {
+        // Static node (issue #358/#380): pre-authored conversation injection; a pass-through
+        // control node whose payload is fully declarative. Sanitise field-by-field — `entries`
+        // is untrusted spec input and must never be spread verbatim into node properties.
+        const rawEntries = Array.isArray(specNode.entries) ? specNode.entries : [];
+        const clean: FlowSpecStaticEntry[] = [];
+        for (let i = 0; i < rawEntries.length && clean.length < MAX_STATIC_ENTRIES; i++) {
+          const entry = rawEntries[i] as Record<string, unknown> | null | undefined;
+          if (!entry || typeof entry !== 'object') {
+            warn('static-invalid-entry', `Node "${key}": entry #${i + 1} is not an object; dropped.`, key);
+            continue;
+          }
+          if (entry.kind === 'message') {
+            const role = entry.role;
+            const content = entry.content;
+            if ((role === 'system' || role === 'user' || role === 'assistant') && typeof content === 'string') {
+              clean.push({ kind: 'message', role, content });
+            } else {
+              warn('static-invalid-entry', `Node "${key}": message entry #${i + 1} has an invalid role/content; dropped.`, key);
+            }
+          } else if (entry.kind === 'toolCall') {
+            const toolName = entry.toolName;
+            const argumentsJson = entry.argumentsJson;
+            const result = entry.result;
+            if (typeof toolName === 'string' && toolName.trim() && typeof argumentsJson === 'string' && typeof result === 'string') {
+              clean.push({ kind: 'toolCall', toolName, argumentsJson, result });
+              if (argumentsJson.trim()) {
+                try {
+                  JSON.parse(argumentsJson);
+                } catch {
+                  warn('static-toolcall-invalid-json', `Node "${key}": tool-call entry #${i + 1} has invalid JSON arguments.`, key);
+                }
+              }
+            } else {
+              warn('static-invalid-entry', `Node "${key}": tool-call entry #${i + 1} is missing toolName/argumentsJson/result; dropped.`, key);
+            }
+          } else {
+            warn('static-invalid-entry', `Node "${key}": entry #${i + 1} has unknown kind "${String((entry as { kind?: unknown }).kind)}"; dropped.`, key);
+          }
+        }
+        if (rawEntries.length > MAX_STATIC_ENTRIES) {
+          warn('static-too-many-entries', `Node "${key}": only the first ${MAX_STATIC_ENTRIES} entries were kept.`, key);
+        }
+        if (clean.length > 0) {
+          properties.entries = clean;
+        } else {
+          warn('static-no-entries', `Node "${key}": a static node has no entries; it injects nothing.`, key);
+        }
+        if (specNode.injectOnce === true) properties.injectOnce = true;
       }
       // finish: no properties.
 
@@ -1334,7 +1421,7 @@ export function flowToSpec(flow: Flow): FlowSpec {
   for (const node of nodes) {
     if (node.type === 'mcp') continue; // folded into `servers`
     const type = node.type;
-    if (type !== 'start' && type !== 'process' && type !== 'finish' && type !== 'subflow' && type !== 'resource' && type !== 'signal') continue;
+    if (type !== 'start' && type !== 'process' && type !== 'finish' && type !== 'subflow' && type !== 'resource' && type !== 'signal' && type !== 'static') continue;
     const props = (node.data?.properties ?? {}) as Record<string, any>;
     const specNode: FlowSpecNode = {
       key: node.id,
@@ -1429,6 +1516,10 @@ export function flowToSpec(flow: Flow): FlowSpec {
       // Issue #117: round-trip topic/payload so AI-Improve never drops signal nodes.
       if (typeof props.topic === 'string' && props.topic) specNode.topic = props.topic;
       if (typeof props.payloadTemplate === 'string' && props.payloadTemplate) specNode.payloadTemplate = props.payloadTemplate;
+    } else if (type === 'static') {
+      // Issue #358/#380: round-trip entries so AI-Improve never drops static nodes.
+      if (Array.isArray(props.entries) && props.entries.length > 0) specNode.entries = props.entries;
+      if (props.injectOnce === true) specNode.injectOnce = true;
     }
     // finish: no properties to carry.
     specNodes.push(specNode);

@@ -25,3 +25,9 @@ This section provides technical architecture and design documentation for Flujo.
 - **Model Integration**: How Flujo integrates with AI models
 - **MCP Integration**: Model Context Protocol integration
 - **External Service Integration**: Integration with external services
+
+## Decision Records
+
+- [FlowSpec node-type inclusion policy](./flowspec-node-inclusion-policy.md): which
+  ReactFlow node types belong in the FlowSpec authoring contract, why, and the
+  checklist for classifying future node types (issue #380).

@@ -56,6 +56,10 @@ export function flowUsesAdvancedFeatures(flow: Pick<Flow, 'nodes' | 'edges' | 'p
     [...guidedSubagentPairs].map(pair => pair.split('\u0000')[1]),
   );
   for (const node of flow.nodes ?? []) {
+    // Guided allow-list (issue #380 decision record: docs/architecture/flowspec-node-inclusion-policy.md).
+    // Any node type NOT in this list — including 'static', 'resource', 'signal', 'trigger' — flags the
+    // flow as advanced. This is intentional: those types are Advanced/FlowSpec-only by design, not an
+    // oversight, so do not "fix" this list by adding them without updating the policy doc first.
     if (!['start', 'process', 'finish', 'subflow', 'mcp'].includes(node.type ?? '')) return true;
     const properties = node.data?.properties ?? {};
     const keys = Object.keys(properties);

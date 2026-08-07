@@ -23,7 +23,9 @@ edges, and common input/output defaults are inferred.
 
 Advanced is opt-in and preserves the complete FlowSpec and builder surface:
 
-- MCP, Resource, Signal, and Trigger nodes.
+- MCP, Resource, Signal, Trigger, and Static nodes (see
+  `docs/architecture/flowspec-node-inclusion-policy.md` for why each node type
+  is Guided vs. Advanced vs. excluded from FlowSpec entirely).
 - Prompt composition and input/output modes.
 - Conditional/bidirectional edges.
 - Variables, subflow resource capture, persistent KV state, and explicit
