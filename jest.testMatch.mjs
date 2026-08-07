@@ -7,12 +7,16 @@
 // because the matcher only listed `.test.ts`.
 
 // Glob patterns relative to the repo root, posix separators.
-// The jsdom project owns component/render tests.
-export const JSDOM_TEST_GLOBS = ['__tests__/frontend/components/**/*.test.{ts,tsx}'];
+// The jsdom project owns component/render tests, plus hook tests that need a
+// real DOM (e.g. useAutoFocusSearch's focus()/matchMedia assertions).
+export const JSDOM_TEST_GLOBS = [
+  '__tests__/frontend/components/**/*.test.{ts,tsx}',
+  '__tests__/frontend/hooks/**/*.test.{ts,tsx}',
+];
 // The node project owns everything else (backend/engine/util tests).
 export const NODE_TEST_GLOBS = ['__tests__/**/*.test.{ts,tsx}'];
-// The node project must not also run the jsdom-scoped folder (would run twice).
-export const NODE_IGNORE_GLOBS = ['__tests__/frontend/components/'];
+// The node project must not also run the jsdom-scoped folders (would run twice).
+export const NODE_IGNORE_GLOBS = ['__tests__/frontend/components/', '__tests__/frontend/hooks/'];
 
 const withRoot = (globs) => globs.map((g) => `<rootDir>/${g}`);
 
