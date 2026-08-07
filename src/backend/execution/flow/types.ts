@@ -8,6 +8,7 @@ import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import OpenAI from 'openai';
 import type { VisualCompactionDiagnostic } from '@/shared/types/visualArchive';
 import type { ModelMediaPart } from '@/shared/types/model/media';
+import type { NormalizedChatError } from '@/shared/types/execution/errors';
 
 // --- Custom Chat Message Type is now imported from shared/types/chat.ts ---
 
@@ -821,6 +822,15 @@ export interface SharedState {
     flowSnapshot?: Flow;
     // Last response from the model
     lastResponse?: string | Record<string, unknown>;
+    /** Issue #383: normalized terminal error, kept in sync with `lastResponse`
+     *  by `emitErrorOnce()`/the derive fallback so the chat error message +
+     *  code survive a page reload. Cleared wherever `lastResponse` is cleared
+     *  for a new turn. */
+    lastError?: NormalizedChatError;
+    /** Issue #383: per-run dedupe guard so the (now several) terminal error
+     *  paths cannot double-emit an `error` event for the same run. Cleared
+     *  alongside `lastError`/`lastResponse` at the start of a new turn. */
+    errorEventEmitted?: boolean;
     /**
      * Tier 2c (named variables): a run-scoped scratchpad of string values a node
      * can CAPTURE (`captureVariable`) and any later step can INJECT via

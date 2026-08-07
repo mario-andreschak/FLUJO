@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { FlujoChatMessage } from '@/shared/types/chat';
+import type { NormalizedChatError } from '@/shared/types/execution/errors';
 
 /** Additive, durable recovery semantics. Existing SharedState.status values stay
  * unchanged so older snapshots and clients remain readable. */
@@ -229,6 +230,9 @@ export interface RunDoneEvent extends ExecutionEventBase {
   // agentic-turn budget with a forced text-only summary — a success-like
   // terminal state, distinct from 'error', so the UI can show it differently.
   status: 'completed' | 'error' | 'capped';
+  /** Issue #383: normalized terminal error, set when status === 'error' so a
+   *  client that missed the mid-stream `error` event still learns why. */
+  error?: NormalizedChatError;
 }
 export interface RecoveryCheckpointEvent extends ExecutionEventBase {
   type: 'recovery:checkpoint';
@@ -475,6 +479,8 @@ export interface ErrorEvent extends ExecutionEventBase {
   type: 'error';
   node?: NodeRef;
   message: string;
+  /** Issue #383: normalized error detail (code/status/class/redacted body). */
+  error?: NormalizedChatError;
 }
 
 export type ExecutionEvent =

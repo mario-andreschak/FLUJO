@@ -21,6 +21,7 @@ import { deleteRunResources } from '@/backend/services/runResources';
 import { markConversationDeleted, unmarkConversationDeleted } from '@/backend/execution/flow/cancellation';
 import { deleteCollectionItem } from '@/utils/storage/backend';
 import { reconcileInterruptedRecovery } from '@/backend/execution/flow/recoveryCheckpoint';
+import { deriveLastErrorFromLastResponse } from '@/backend/execution/flow/normalizeError';
 import {
   deleteConversationSummary,
   persistConversationSummary,
@@ -209,6 +210,14 @@ export async function GET(
         // revisited instead of accidentally replacing persisted context with
         // an empty map on navigation.
         mcpAppContexts: sharedState.mcpAppContexts,
+        // Issue #383 (gap 2): the full normalized error, so the message + code
+        // survive a reload or picking an older errored conversation from the
+        // sidebar. `lastError` is populated for every run started after this
+        // change; `deriveLastErrorFromLastResponse` is a read-time fallback for
+        // conversations persisted before it existed — no migration needed.
+        ...(sharedState.status === 'error'
+          ? { lastError: sharedState.lastError ?? deriveLastErrorFromLastResponse(sharedState.lastResponse) }
+          : {}),
       };
 
       // Return the full conversation data

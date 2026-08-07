@@ -8,9 +8,14 @@ import {
   writeFileAtomic,
 } from '@/utils/storage/backend';
 import type { SharedState } from './types';
+import { deriveLastErrorFromLastResponse } from './normalizeError';
+import type { NormalizedChatError } from '@/shared/types/execution/errors';
 
 const log = createLogger('backend/execution/flow/conversationSummaryStore');
-const SUMMARY_VERSION = 2;
+// Issue #383: bumped to 3 so every summary is rebuilt and picks up the new
+// compact `lastError` projection (stale v2 summaries lack the field, which is
+// fine since it's optional, but a rebuild lets the sidebar show it sooner).
+const SUMMARY_VERSION = 3;
 const SUMMARY_READ_CONCURRENCY = 32;
 
 export type ConversationStatus = NonNullable<SharedState['status']>;
@@ -29,6 +34,13 @@ export interface ConversationSummary {
   recovery?: SharedState['recovery'];
   /** Durable invocation origin used by the chat sidebar's origin filter/chip. */
   source?: SharedState['source'] | null;
+  /**
+   * Issue #383: a COMPACT error projection only — message/code/class, never
+   * the redacted provider `details` blob or a stack trace — so bulk sidebar
+   * listing stays small. The full `NormalizedChatError` (with `details`) is
+   * only ever served by the single-conversation GET route.
+   */
+  lastError?: { message: string; code?: string; errorClass?: NormalizedChatError['errorClass'] };
 }
 
 interface IndexedConversationSummary extends ConversationSummary {
@@ -67,6 +79,12 @@ export function summarizeConversation(state: SharedState, fallbackId: string): C
     ...(state.rootConversationId !== undefined ? { rootConversationId: state.rootConversationId } : {}),
     ...(state.recovery ? { recovery: state.recovery } : {}),
     ...(state.source !== undefined ? { source: state.source } : {}),
+    ...(state.status === 'error' ? (() => {
+      const err = state.lastError ?? deriveLastErrorFromLastResponse(state.lastResponse);
+      return err
+        ? { lastError: { message: err.message, ...(err.code ? { code: err.code } : {}), ...(err.errorClass ? { errorClass: err.errorClass } : {}) } }
+        : {};
+    })() : {}),
   };
 }
 

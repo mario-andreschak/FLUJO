@@ -14,6 +14,7 @@ import { modelService } from '@/backend/services/model';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { requireFunctionToolCalls } from '@/shared/types/openai';
 import { projectLazyToolPayloads } from '@/backend/execution/flow/lazyToolPayloads';
+import { normalizeChatError, deriveLastErrorFromLastResponse } from '@/backend/execution/flow/normalizeError';
 
 const log = createLogger('app/v1/chat/completions/chatCompletionService');
 
@@ -108,13 +109,24 @@ async function processChatCompletionInternal(
     const errorMessage = result.error?.message ?? 'Unknown error during execution';
     const errorDetails = result.error?.details ?? { message: errorMessage };
     const statusCode = result.error?.statusCode ?? 500;
+    // Issue #383 (gap 3/4): source the envelope from the same normalizer that
+    // shapes the SSE `error` event and the persisted `lastError`, so the
+    // code/type/status/errorClass reported by the OpenAI-compatible API can
+    // never drift from what the chat UI shows for the same failure.
+    const normalized =
+      result.sharedState?.lastError
+      ?? deriveLastErrorFromLastResponse(result.sharedState?.lastResponse)
+      ?? normalizeChatError(errorMessage);
     log.error(`Returning error response for conv ${result.conversationId}`, { errorMessage, errorDetails, statusCode });
     return NextResponse.json({
       error: {
-        message: errorMessage,
-        type: errorDetails.type || 'api_error',
-        code: errorDetails.code || 'internal_error',
+        message: normalized.message || errorMessage,
+        type: normalized.providerType || errorDetails.type || 'api_error',
+        code: normalized.code || errorDetails.code || 'internal_error',
         param: errorDetails.param,
+        status: normalized.httpStatus ?? errorDetails.status,
+        error_class: normalized.errorClass,
+        retry_after: normalized.retryAfter,
         details: errorDetails,
       },
     }, { status: statusCode });
@@ -229,6 +241,13 @@ export async function processChatCompletion(
             success: false,
             error: error instanceof Error ? error.message : String(error)
           };
+          // Issue #383: keep lastError in sync for this background-catch failure
+          // (a throw that escaped runFlow entirely) so the GET route / summary
+          // still has a message + code for it.
+          if (!errorState.errorEventEmitted) {
+            errorState.errorEventEmitted = true;
+            errorState.lastError = normalizeChatError(error);
+          }
           FlowExecutor.conversationStates.set(effectiveConvId, errorState);
 
           // Also save to storage
@@ -242,7 +261,11 @@ export async function processChatCompletion(
         // the run threw before emitting run:done (runFlow emits run:done on its
         // own error paths, but a throw before/around it would otherwise hang the
         // stream).
-        executionEventBus.emitterFor(effectiveConvId)({ type: 'run:done', status: 'error' });
+        executionEventBus.emitterFor(effectiveConvId)({
+          type: 'run:done',
+          status: 'error',
+          ...(errorState?.lastError ? { error: errorState.lastError } : {}),
+        });
       });
 
     // Return streaming response immediately

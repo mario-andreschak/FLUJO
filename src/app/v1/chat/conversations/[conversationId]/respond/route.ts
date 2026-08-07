@@ -159,6 +159,10 @@ export async function POST(
 
     // 5. Save updated state
     sharedState.lastResponse = undefined; // Clear last response before potentially resuming
+    // Issue #383: clear the stale error alongside lastResponse so a resumed
+    // turn doesn't keep reporting the previous failure.
+    sharedState.lastError = undefined;
+    sharedState.errorEventEmitted = false;
     FlowExecutor.conversationStates.set(conversationId, sharedState); // Update memory map
     await persistConversationState(storageKey, sharedState); // Save to storage (trace stripped)
     // Fold this request's appended messages into the conversation log so the

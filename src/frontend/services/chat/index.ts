@@ -115,6 +115,23 @@ async function parse<T>(response: Response): Promise<T> {
       `Request failed with status ${response.status}`;
     throw new ChatApiError(message, response.status, body);
   }
+  // Issue #383 (gap 4): the OpenAI-compatible chat-completions envelope
+  // returns HTTP 200 even on a provider/flow error, so a non-streaming
+  // client stays spec-compliant. Detect that shape here (body.error present
+  // AND no choices, so a legitimate completion whose CONTENT merely mentions
+  // the word "error" is never mistaken for a failure) and throw the same
+  // ChatApiError callers already handle for a non-2xx response.
+  if (
+    body
+    && typeof body === 'object'
+    && body.error
+    && typeof body.error === 'object'
+    && !Array.isArray(body.choices)
+  ) {
+    const message = typeof body.error.message === 'string' ? body.error.message : 'Request failed.';
+    const status = typeof body.error.status === 'number' ? body.error.status : response.status;
+    throw new ChatApiError(message, status, body);
+  }
   return body as T;
 }
 

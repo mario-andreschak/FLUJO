@@ -11,6 +11,7 @@ import {
   createStatisticsEvent,
   recordStatisticsEvent,
 } from '@/backend/services/statistics';
+import { emitErrorOnce } from './normalizeError';
 
 // Create a logger instance for this file
 const log = createLogger('backend/execution/flow/FlowExecutor');
@@ -210,6 +211,23 @@ export class FlowExecutor {
       // --- Filesystem snapshot: END capture + changed-files emit (issue #250) ---
       await captureAfterAndEmit(node, snapshotCtx, sharedState, emit);
 
+      // Issue #383 (gap 1): a handler can RETURN `{ success: false, error }`
+      // and resolve to ERROR_ACTION without ever throwing (e.g. ProcessNode's
+      // non-critical execCore failure path). That never reaches the catch
+      // block below, so without this the UI never learns why the run stopped.
+      // `post()` already set sharedState.lastResponse before returning here.
+      if (action === ERROR_ACTION) {
+        const priorResponse = sharedState.lastResponse as { error?: string; errorDetails?: Record<string, unknown> } | string | undefined;
+        const priorMessage = typeof priorResponse === 'string' ? priorResponse : priorResponse?.error;
+        const priorDetails = typeof priorResponse === 'object' ? priorResponse?.errorDetails : undefined;
+        emitErrorOnce(
+          sharedState,
+          emit,
+          Object.assign(new Error(priorMessage || 'Node execution failed.'), priorDetails ? { details: priorDetails } : {}),
+          { nodeId: node.id, nodeName: node.name }
+        );
+      }
+
       emit?.({ type: 'node:exit', node: { nodeId: node.id, nodeName: node.name, nodeType: node.type }, action });
 
       log.debug(`Node ${node.id} finished with action: ${action} for conversation ${conversationId}`);
@@ -286,10 +304,9 @@ export class FlowExecutor {
       // Keep track of where the error occurred
       sharedState.currentNodeId = attemptedNodeId;
 
-      emit?.({
-        type: 'error',
-        node: attemptedNodeId ? { nodeId: attemptedNodeId } : undefined,
-        message: error instanceof Error ? error.message : String(error),
+      emitErrorOnce(sharedState, emit, error, {
+        nodeId: attemptedNodeId,
+        nodeName: attemptedNodeName,
       });
 
       // --- Add error step to trace (only if debug mode is enabled) ---

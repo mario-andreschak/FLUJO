@@ -27,6 +27,7 @@ import type { ModelMediaPart } from '@/shared/types/model/media';
 import { requireFunctionToolCalls } from '@/shared/types/openai';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { isInternalToolName } from '@/backend/execution/flow/handlers/toolNamespace';
+import { emitErrorOnce, emitNormalizedErrorOnce, deriveLastErrorFromLastResponse } from '@/backend/execution/flow/normalizeError';
 import { flowService } from '@/backend/services/flow/index';
 import type { FlowService as FlowServiceType } from '@/backend/services/flow/index';
 import { Flow } from '@/shared/types/flow';
@@ -494,6 +495,8 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       resumingAfterError = sharedState.status === 'error';
       sharedState.status = 'running';
       sharedState.lastResponse = undefined;
+      sharedState.lastError = undefined;
+      sharedState.errorEventEmitted = false;
       sharedState.isCancelled = false;
       if (stateSource === 'storage') {
         FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
@@ -507,6 +510,8 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       sharedState.currentNodeId = data.processNodeId;
       sharedState.status = 'running';
       sharedState.lastResponse = undefined;
+      sharedState.lastError = undefined;
+      sharedState.errorEventEmitted = false;
       sharedState.pendingToolCalls = undefined;
       sharedState.handoffRequested = undefined;
       sharedState.isCancelled = false;
@@ -2000,6 +2005,12 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
           : undefined,
       };
       currentAction = ERROR_ACTION;
+      // Issue #383 (gap 1): this loop-level catch previously set lastResponse
+      // but never emitted an `error` event, so a failure caught here (as
+      // opposed to inside FlowExecutor.executeStep) was silent on a live run.
+      emitErrorOnce(sharedState, emit, loopError, {
+        nodeId: sharedState.currentNodeId,
+      });
     }
   }
 
@@ -2016,6 +2027,22 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   // Reconcile status with the terminal action BEFORE the final persist.
   if (currentAction === ERROR_ACTION && sharedState.status !== 'error') {
     sharedState.status = 'error';
+  }
+
+  // Issue #383 (gap 1) backstop: guarantee that EVERY run ending in 'error'
+  // produces at least one `error` event, even if none of the specific emit
+  // sites above happened to fire for this particular failure shape. Skipped
+  // for user cancellation (`isCancelled`) — a stop is not an error and must
+  // keep rendering as the neutral "stopped" banner.
+  if (
+    currentAction === ERROR_ACTION
+    && !sharedState.errorEventEmitted
+    && !sharedState.isCancelled
+  ) {
+    const derived = deriveLastErrorFromLastResponse(sharedState.lastResponse);
+    if (derived) {
+      emitNormalizedErrorOnce(sharedState, emit, derived, { nodeId: sharedState.currentNodeId });
+    }
   }
 
   // --- 3. Finalize ---
@@ -2061,7 +2088,11 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   // Flush any trailing messages and signal terminal completion to live consumers.
   emitNewMessages();
   if (finalStatus === 'completed' || finalStatus === 'error' || finalStatus === 'capped') {
-    emit({ type: 'run:done', status: finalStatus });
+    emit({
+      type: 'run:done',
+      status: finalStatus,
+      ...(finalStatus === 'error' && sharedState.lastError ? { error: sharedState.lastError } : {}),
+    });
     // Flow-run event bus (issue #116): announce terminal runs so `flow-event`
     // triggers can react to chat/API/manual runs. Scheduler-fired runs are
     // announced by SchedulerService.fire() instead (de-dup), and subflow stages

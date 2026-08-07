@@ -9,6 +9,7 @@ import { StorageKey } from '@/shared/types/storage';
 import { processChatCompletion } from '@/app/v1/chat/completions/chatCompletionService';
 import { ChatCompletionRequest } from '@/app/v1/chat/completions/requestParser';
 import { flowService } from '@/backend/services/flow/index';
+import { normalizeChatError } from '@/backend/execution/flow/normalizeError';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/debug/step/route');
 
@@ -90,6 +91,8 @@ export async function POST(
       const errorMessage = error instanceof Error ? error.message : 'Unknown error during debug step processing';
       state.status = 'error';
       state.lastResponse = { success: false, error: errorMessage };
+      // Issue #383: keep lastError in sync for this route-level failure.
+      state.lastError = normalizeChatError(error);
       FlowExecutor.conversationStates.set(conversationId, state);
       try { await persistConversationState(storageKey, state); } catch { /* ignore save error */ }
     }

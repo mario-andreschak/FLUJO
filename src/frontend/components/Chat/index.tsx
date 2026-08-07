@@ -65,6 +65,8 @@ import ExecutedFlowPanel from './ExecutedFlowPanel';
 import { ATTACH_BREAKPOINT } from '@/utils/shared/debugBreakpoints';
 import { isQuickChatFlowId } from '@/utils/shared/quickChat';
 import type { RecoveryRecord } from '@/shared/types/execution/events';
+import type { NormalizedChatError } from '@/shared/types/execution/errors';
+import ChatErrorDetails from './ChatErrorDetails';
 import { getStartNode } from '@/utils/shared/getStartNode';
 import Spinner from '@/frontend/components/shared/Spinner';
 import { v4 as uuidv4 } from 'uuid';
@@ -260,6 +262,10 @@ export interface Conversation {
   };
   /** Latest persisted future-turn context from each MCP App View. */
   mcpAppContexts?: McpAppModelContextMap;
+  /** Issue #383: normalized terminal error, present when status === 'error'.
+   *  Served by GET /v1/chat/conversations/[id] so the message + code survive
+   *  a reload. */
+  lastError?: NormalizedChatError;
 }
 
 // Represents the summary item shown in the list
@@ -290,6 +296,10 @@ export interface ConversationListItem {
   /** Top-level conversation of this chain (computed at creation) -- issue #182.
    *  Lets the sidebar bucket a whole chain by its root in O(1). */
   rootConversationId?: string | null;
+  /** Issue #383: COMPACT error projection (message/code/class only, no
+   *  redacted provider details/stack) so the sidebar's bulk listing stays
+   *  small. Present when status === 'error'. */
+  lastError?: { message: string; code?: string; errorClass?: NormalizedChatError['errorClass'] };
 }
 
 /** Field-wise list equality, so the periodic silent refresh can keep the
@@ -474,6 +484,11 @@ const Chat: React.FC = () => {
   // Guards the drain effect against re-entrancy (one dequeue per idle window).
   const drainingRef = useRef<boolean>(false);
   const [error, setError] = useState<string | null>(null); // General error display
+  // Issue #383: normalized error (message + code/status/class/redacted
+  // details) kept alongside `error` rather than replacing it, so this stays a
+  // small additive diff across a ~5100-line file. `error` (the plain string)
+  // keeps driving any existing consumer; `errorInfo` feeds ChatErrorDetails.
+  const [errorInfo, setErrorInfo] = useState<NormalizedChatError | null>(null);
   const [subflowRecoveryOptions, setSubflowRecoveryOptions] = useState<SubflowRecoveryOptions | null>(null);
   const [subflowRecoveryScope, setSubflowRecoveryScope] = useState<SubflowRecoveryScope | null>(null);
 
@@ -1145,6 +1160,15 @@ const Chat: React.FC = () => {
         );
       }
       setDetailedConversation(conversation);
+      // Issue #383 (gap 2): rehydrate the error message + code from the
+      // server so it survives a reload or re-selecting an older errored
+      // conversation from the sidebar — previously only a live SSE `error`
+      // event ever populated this.
+      if (conversation.status === 'error' && conversation.lastError) {
+        setErrorInfo(conversation.lastError);
+      } else if (conversation.status !== 'error') {
+        setErrorInfo(null);
+      }
       // Reconcile the sidebar summary with server truth. The backend derives a
       // title from the first user message during a run, but completion/SSE
       // responses don't echo it — without this the list keeps showing
@@ -1425,6 +1449,7 @@ const Chat: React.FC = () => {
   const createNewConversation = async (explicitFlowId?: string) => {
     log.debug('Attempting to create new conversation');
     setError(null); // Clear previous errors
+    setErrorInfo(null); // Issue #383: keep errorInfo in sync with error
 
     // Determine the flowId - backend requires a non-null string.
     // An explicit flow (the "Start conversation" deep link from the Flow
@@ -1558,6 +1583,7 @@ const Chat: React.FC = () => {
   // send path (the engine resolves the flow from the snapshot on the state).
   const startQuickChat = async (selection: QuickChatStartSelection) => {
     setError(null);
+    setErrorInfo(null); // Issue #383: keep errorInfo in sync with error
     const conversationId = uuidv4();
     // Throws on failure → surfaced by the dialog's own error state.
     const { flow } = await chatService.synthesizeQuickChat({
@@ -1980,6 +2006,11 @@ const Chat: React.FC = () => {
           markConvRunning(event.conversationId, false);
           patchConversationStatus(event.conversationId, event.status);
         }
+        // Issue #383: a client that missed the mid-stream `error` event (e.g.
+        // reconnected mid-run) still learns why, straight from `run:done`.
+        if (event.status === 'error' && event.error && event.conversationId === currentConversationIdRef.current) {
+          setErrorInfo(event.error);
+        }
         // Clear any pending elicitation/question when the run completes.
         if (event.conversationId === currentConversationIdRef.current) {
           setPendingElicitation(null);
@@ -2016,6 +2047,11 @@ const Chat: React.FC = () => {
         break;
       case 'error':
         setError(event.message || t('chat.page.executionError'));
+        // Issue #383: carry the normalized code/status/class alongside the
+        // plain message, when the backend sent one (older events without
+        // `error` still work — errorInfo just stays null and the transient
+        // alert falls back to the plain message).
+        setErrorInfo(event.error ?? { message: event.message || t('chat.page.executionError') });
         break;
       default:
         touch({});
@@ -2093,6 +2129,7 @@ const Chat: React.FC = () => {
   const deleteConversation = async (conversationId: string) => {
     log.debug('Attempting to delete conversation', { conversationId });
     setError(null); // Clear previous general errors
+    setErrorInfo(null); // Issue #383: keep errorInfo in sync with error
 
     // Store current selection and list in case we need to revert
     const previousSelectionId = currentConversationId;
@@ -2175,6 +2212,7 @@ const Chat: React.FC = () => {
   const bulkDeleteConversations = async (ids: string[]) => {
     if (!ids.length) return;
     setError(null);
+    setErrorInfo(null); // Issue #383: keep errorInfo in sync with error
     const idSet = new Set(ids);
     const previousList = conversationList;
     const previousSelectionId = currentConversationId;
@@ -2264,6 +2302,7 @@ const Chat: React.FC = () => {
   const applyFlowSelect = async (flowId: string) => {
     log.debug('Flow selected, attempting to update', { flowId, currentConversationId });
     setError(null); // Clear previous errors
+    setErrorInfo(null); // Issue #383: keep errorInfo in sync with error
 
     if (!currentConversationId) {
       log.warn('Cannot update flow: No conversation selected.');
@@ -2701,6 +2740,7 @@ const Chat: React.FC = () => {
            markConversationStopped(conversationId, true);
            // Don't wipe an error banner that may belong to another conversation.
            if (isTracked || isViewed) setError(null);
+           setErrorInfo(null); // Issue #383: keep errorInfo in sync with error
            log.info('API Response/Polling: Execution cancelled by user', { conversationId });
          } else {
            setError(errorMessage);
@@ -2777,6 +2817,7 @@ const Chat: React.FC = () => {
     // Reset pending calls and error before sending
     setPendingToolCalls(null);
     setError(null);
+    setErrorInfo(null); // Issue #383: keep errorInfo in sync with error
     setIsLoading(true); // Set loading true for the API call itself
     setLoadingConversationId(conversation.id); // Scope the live indicator to this conversation
     markConvRunning(conversation.id, true);
@@ -2973,6 +3014,7 @@ const Chat: React.FC = () => {
           setLoadingConversationId(null);
           closeEventStream();
           setError(null);
+          setErrorInfo(null); // Issue #383: keep errorInfo in sync with error
         }
         return success;
       }
@@ -3356,6 +3398,7 @@ const Chat: React.FC = () => {
       // Call the API with the updated metadata
       if (!openaiRef.current) return;
       setError(null);
+      setErrorInfo(null); // Issue #383: keep errorInfo in sync with error
       setIsLoading(true);
       setLoadingConversationId(updatedDetailedConv.id);
       markConvRunning(updatedDetailedConv.id, true);
@@ -3530,6 +3573,7 @@ const Chat: React.FC = () => {
     setLoadingConversationId(currentConversationId);
     markConvRunning(currentConversationId, true);
     setError(null);
+    setErrorInfo(null); // Issue #383: keep errorInfo in sync with error
     await openEventStream(currentConversationId);
 
     try {
@@ -3660,6 +3704,7 @@ const Chat: React.FC = () => {
     setLoadingConversationId(currentConversationId);
     markConvRunning(currentConversationId, true);
     setError(null);
+    setErrorInfo(null); // Issue #383: keep errorInfo in sync with error
     await openEventStream(currentConversationId);
     try {
       const data = await chatService.debugStep(currentConversationId);
@@ -3683,6 +3728,7 @@ const Chat: React.FC = () => {
     setLoadingConversationId(currentConversationId);
     markConvRunning(currentConversationId, true);
     setError(null);
+    setErrorInfo(null); // Issue #383: keep errorInfo in sync with error
     setIsDebugPaused(false); // No longer paused — running until the next pause/end.
     // Keep debugState + debugSessionActive so the panel stays open and shows live
     // progress while continuing (it repopulates on the next pause); previously
@@ -3807,6 +3853,7 @@ const Chat: React.FC = () => {
     setLoadingConversationId(currentConversationId);
     markConvRunning(currentConversationId, true);
     setError(null);
+    setErrorInfo(null); // Issue #383: keep errorInfo in sync with error
     await openEventStream(currentConversationId);
     try {
       for (let i = 0; i < 50; i++) {
@@ -3845,6 +3892,7 @@ const Chat: React.FC = () => {
     closeEventStream();
     setPendingToolCalls(null);
     setError(null); // a deliberate Stop is not an error to surface
+    setErrorInfo(null); // Issue #383: keep errorInfo in sync with error
 
     try {
       await chatService.cancel(currentConversationId);
@@ -3886,6 +3934,7 @@ const Chat: React.FC = () => {
     const conversationId = currentConversationId;
     setSubflowRecoveryScope(scope);
     setError(null);
+    setErrorInfo(null); // Issue #383: keep errorInfo in sync with error
     try {
       const result = await chatService.retrySubflowRecovery(conversationId, scope);
       if (result.failed.length > 0) {
@@ -4654,7 +4703,10 @@ const Chat: React.FC = () => {
                       </Button>
                     )}
                   >
-                    {t('chat.page.endedError')}
+                    <ChatErrorDetails
+                      error={detailedConversation?.lastError ?? errorInfo}
+                      fallbackMessage={t('chat.page.endedError')}
+                    />
                   </Alert>
                 </Box>
               )}
@@ -4717,7 +4769,7 @@ const Chat: React.FC = () => {
                     </Button>
                   }
                 >
-                  {error}
+                  <ChatErrorDetails error={errorInfo} fallbackMessage={error} compact />
                 </Alert>
               )}
             </>
