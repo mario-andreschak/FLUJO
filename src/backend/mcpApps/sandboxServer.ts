@@ -35,7 +35,7 @@ import http from 'node:http';
 import { randomBytes, timingSafeEqual, createHmac } from 'node:crypto';
 import { createLogger } from '@/utils/logger';
 import { getExposureMode } from '@/utils/http/exposureMode';
-import { MAX_SANDBOX_ORIGINS } from '@/shared/utils/mcpAppOrigin';
+import { MAX_SANDBOX_ORIGINS, isValidMcpAppDomain } from '@/shared/utils/mcpAppOrigin';
 import {
   canonicalizeLoopbackCspOrigin,
   isLoopbackCspOrigin,
@@ -806,11 +806,11 @@ export async function ensureSandboxForOriginKey(
   }
 
   // Mode B (hosted with hostname templating): reuse the singleton listener.
-  // NOTE: that listener validates tokens against the originKey it was STARTED
-  // with, while this returns a token for the requested app — the same mismatch
-  // described above. Hostname templating therefore needs the listener to derive
-  // the originKey from the request's Host label before it can serve apps; it is
-  // not wired to any deployment today. See issue #362 follow-up.
+  // The listener itself is started with originKey '' (see startSandboxServer),
+  // but handleSandboxRequest() re-derives the real per-app originKey from the
+  // request's Host header (see deriveOriginKeyFromHost) before validating the
+  // token, so the token minted here for `originKey` is checked against THAT
+  // app's key rather than the listener's nominal ''. See issue #362/#387.
   if (getSandboxPublicUrl()?.includes('{app}')) {
     const existing = state.entries.get('');
     if (existing?.status === 'listening') {
@@ -1049,8 +1049,62 @@ export function getAllowedFrameAncestors(req: http.IncomingMessage): string[] {
 }
 
 /**
+ * Resolve the originKey that a Mode B (hostname-templated) request is actually
+ * targeting, by matching the request's `Host` header against the single
+ * `{app}` placeholder in the configured public URL template.
+ *
+ * Returns `undefined` when Mode B templating is not configured, or when the
+ * Host header does not match the template shape at all -- callers MUST fall
+ * back to the listener's own originKey in that case, which keeps Mode A
+ * (desktop port pool) and Mode C (single shared origin) behaviour unchanged.
+ *
+ * The extracted label is re-validated with {@link isValidMcpAppDomain} so a
+ * malformed/hostile `Host` header can never produce an originKey that was not
+ * itself a valid, DNS-safe label (defence in depth beyond the regex capture
+ * group itself).
+ */
+export function deriveOriginKeyFromHost(hostHeader: string | undefined): string | undefined {
+  const template = getSandboxPublicUrl();
+  if (!template || !template.includes('{app}')) return undefined;
+  if (!hostHeader) return undefined;
+
+  let templateHostname: string;
+  try {
+    templateHostname = new URL(template).hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+  const parts = templateHostname.split('{app}');
+  // Exactly one placeholder is the only supported (and only ever produced)
+  // template shape; anything else cannot be reversed unambiguously.
+  if (parts.length !== 2) return undefined;
+  const [prefix, suffix] = parts;
+
+  // Strip an optional port from the Host header before matching; DNS labels
+  // never contain ':' so this cannot smuggle extra characters into the match.
+  const requestHostname = hostHeader.split(':')[0]?.trim().toLowerCase();
+  if (!requestHostname) return undefined;
+
+  const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(
+    `^${escapeRegExp(prefix)}([a-z0-9]([a-z0-9-]*[a-z0-9])?)${escapeRegExp(suffix)}$`,
+  );
+  const match = pattern.exec(requestHostname);
+  const candidate = match?.[1];
+  if (!candidate || !isValidMcpAppDomain(candidate)) return undefined;
+  return candidate;
+}
+
+/**
  * Request handler for sandbox proxy documents. Validates the authentication token
  * scoped to the originKey, and serves the sandbox proxy HTML with CSP headers.
+ *
+ * `originKey` is the key the listener was STARTED with (Mode A: the app's own
+ * key; Mode B/C: the shared default `''`). When Mode B hostname templating is
+ * configured, the request's `Host` header carries the REAL per-app key as a
+ * label, and {@link deriveOriginKeyFromHost} takes priority over the listener's
+ * nominal key -- this is what makes per-app tokens actually scoped per app
+ * instead of every app validating against the same shared '' key (issue #387).
  */
 function handleSandboxRequest(
   req: http.IncomingMessage,
@@ -1066,9 +1120,14 @@ function handleSandboxRequest(
     return;
   }
 
+  // Resolve the effective originKey: Host-header-derived label wins in Mode B
+  // (hostname templating); otherwise fall back to the listener's own key,
+  // preserving Mode A/C behaviour exactly.
+  const effectiveOriginKey = deriveOriginKeyFromHost(req.headers.host) ?? originKey;
+
   // Validate token scoped to this originKey.
   const token = url.searchParams.get(SANDBOX_AUTH_QUERY_PARAM);
-  if (!isSandboxTokenValidForOriginKey(token, originKey)) {
+  if (!isSandboxTokenValidForOriginKey(token, effectiveOriginKey)) {
     res.statusCode = 403;
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
