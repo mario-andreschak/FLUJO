@@ -12,18 +12,15 @@ import RemoteTab from './tabs/RemoteTab';
 import { useThemeUtils } from '@/frontend/utils/theme';
 import {
   Dialog,
-  DialogTitle,
   DialogContent,
   DialogActions,
   Button,
-  IconButton,
   Tabs,
   Tab,
-  Box,
-  Typography
+  Box
 } from '@mui/material';
-import CloseIcon from '@mui/icons-material/Close';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 
 const ServerModal: React.FC<ServerModalProps> = ({
   isOpen,
@@ -114,31 +111,12 @@ const ServerModal: React.FC<ServerModalProps> = ({
         }
       }}
     >
-      <DialogTitle 
-        component="div"
-        sx={{ 
-          display: 'flex', 
-          justifyContent: 'space-between', 
-          alignItems: 'center',
-          borderBottom: 1,
-          borderColor: 'divider',
-          pb: 1
-        }}
-      >
-        <Typography variant="h6">
-          {initialConfig
-            ? t('mcp.modal.editTitle', { name: initialConfig.name })
-            : t('mcp.modal.addTitle')}
-        </Typography>
-        <IconButton
-          edge="end"
-          color="inherit"
-          onClick={handleClose}
-          aria-label={t('mcp.modal.close')}
-        >
-          <CloseIcon />
-        </IconButton>
-      </DialogTitle>
+      <DialogHeaderActions
+        title={initialConfig
+          ? t('mcp.modal.editTitle', { name: initialConfig.name })
+          : t('mcp.modal.addTitle')}
+        onClose={handleClose}
+      />
 
       <DialogContent sx={{ p: 0 }}>
         {/* Only show tabs in creation mode, not in edit mode */}

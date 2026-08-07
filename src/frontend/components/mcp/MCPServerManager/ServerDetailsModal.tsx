@@ -7,12 +7,11 @@ import {
   DialogContent,
   Box,
   Typography,
-  IconButton,
   Tabs,
   Tab,
   Divider,
 } from '@mui/material';
-import CloseIcon from '@mui/icons-material/Close';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 import ToolManager from '../MCPToolManager';
 import type { ToolTesterPrefill } from '../MCPToolManager/ToolTester';
 import CapabilitiesManager from '../MCPCapabilitiesManager';
@@ -115,21 +114,21 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
         },
       }}
     >
-      <DialogTitle component="div" sx={{ pb: 0 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.5 }}>
-            <Typography variant="h6">{serverName}</Typography>
+      <DialogHeaderActions
+        title={(
+          <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.5, minWidth: 0 }}>
+            <Typography variant="h6" sx={{ overflowWrap: 'anywhere' }}>{serverName}</Typography>
             {server && (
               <Typography variant="body2" sx={{ color: statusColor(server.status) }}>
                 {statusLabel(server.status)}
               </Typography>
             )}
           </Box>
-          <IconButton edge="end" onClick={onClose} aria-label={t('mcp.details.close')}>
-            <CloseIcon />
-          </IconButton>
-        </Box>
-        <Tabs value={tab} onChange={(_, v: DetailsTab) => setTab(v)} sx={{ mt: 1 }}>
+        )}
+        onClose={onClose}
+      />
+      <DialogTitle component="div" sx={{ pt: 0, pb: 0 }}>
+        <Tabs value={tab} onChange={(_, v: DetailsTab) => setTab(v)} sx={{ mt: 0 }}>
           <Tab label={t('mcp.details.tools')} value="tools" />
           <Tab label={t('mcp.details.resources')} value="resources" />
           <Tab label={t('mcp.details.prompts')} value="prompts" />

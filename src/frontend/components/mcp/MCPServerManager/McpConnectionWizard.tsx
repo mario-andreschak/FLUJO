@@ -27,6 +27,8 @@ import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { ServerSetupTab } from './Modals/ServerModal/types';
 import McpAiConnectionPanel from './McpAiConnectionPanel';
+import AskFlujoButton from '@/frontend/components/AskFlujo/AskFlujoButton';
+import BugReportButton from '@/frontend/components/BugReport/BugReportButton';
 
 type WizardStep = 'welcome' | 'ai' | 'discovery' | 'source';
 
@@ -335,9 +337,13 @@ export default function McpConnectionWizard({
             <Box sx={{ flex: 1 }}>
               <LinearProgress variant="determinate" value={progress} aria-label={t('mcp.wizard.progressAria')} />
             </Box>
-            <IconButton onClick={onClose} aria-label={t('mcp.modal.close')}>
-              <CloseRoundedIcon />
-            </IconButton>
+            <Box display="flex" alignItems="center" gap={0.5} flexShrink={0}>
+              <AskFlujoButton />
+              <BugReportButton variant="icon" />
+              <IconButton onClick={onClose} aria-label={t('mcp.modal.close')}>
+                <CloseRoundedIcon />
+              </IconButton>
+            </Box>
           </Box>
 
           <Box

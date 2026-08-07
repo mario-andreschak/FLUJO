@@ -13,7 +13,6 @@ import {
   Dialog,
   DialogActions,
   DialogContent,
-  DialogTitle,
   Divider,
   IconButton,
   Stack,
@@ -23,8 +22,8 @@ import {
 import AppsIcon from '@mui/icons-material/Apps';
 import BuildIcon from '@mui/icons-material/Build';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import CloseIcon from '@mui/icons-material/Close';
 import McpAppFrame from '@/frontend/components/Chat/McpAppFrame';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 import { mcpService } from '@/frontend/services/mcp';
 import { MCPServerConfig } from '@/shared/types/mcp';
 import {
@@ -270,26 +269,31 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
         },
       }}
     >
-      <DialogTitle id="mcp-apps-dashboard-title" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-        <AppsIcon color="primary" />
-        {t('mcp.apps.title')}
-        <Box sx={{ flex: 1 }} />
-        <Tooltip title={t('mcp.apps.refresh')}>
-          <span>
-            <IconButton
-              aria-label={t('mcp.apps.refresh')}
-              onClick={() => void discover(true)}
-              disabled={loading || refreshing}
-              size="small"
-            >
-              {refreshing ? <CircularProgress size={20} /> : <RefreshIcon fontSize="small" />}
-            </IconButton>
-          </span>
-        </Tooltip>
-        <IconButton aria-label={t('mcp.apps.closeAria')} onClick={onClose} size="small">
-          <CloseIcon fontSize="small" />
-        </IconButton>
-      </DialogTitle>
+      <DialogHeaderActions
+        title={(
+          <Box display="flex" alignItems="center" gap={1} minWidth={0}>
+            <AppsIcon color="primary" />
+            <Typography id="mcp-apps-dashboard-title" variant="h6" sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+              {t('mcp.apps.title')}
+            </Typography>
+          </Box>
+        )}
+        onClose={onClose}
+        additionalActions={(
+          <Tooltip title={t('mcp.apps.refresh')}>
+            <span>
+              <IconButton
+                aria-label={t('mcp.apps.refresh')}
+                onClick={() => void discover(true)}
+                disabled={loading || refreshing}
+                size="small"
+              >
+                {refreshing ? <CircularProgress size={20} /> : <RefreshIcon fontSize="small" />}
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
+      />
       <Divider />
 
       <DialogContent sx={{ p: 0, flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
