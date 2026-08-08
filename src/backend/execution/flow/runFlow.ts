@@ -1,6 +1,15 @@
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
+import {
+  forget as forgetConversationCacheEntry,
+  markTerminal as markConversationTerminal,
+  noteWrite as noteConversationWrite,
+} from '@/backend/execution/flow/conversationStateCache';
+import {
+  ownerScopeForRun,
+  releaseRunOwnedBashSessions,
+} from '@/backend/services/mcp/ownerScope';
 import { reconcileConversationLog, recoverMessagesFromLog, repairDanglingToolCalls, appendRawForState } from '@/backend/execution/flow/conversationLog';
 import {
   steeringCount,
@@ -48,6 +57,7 @@ import {
   createStatisticsEvent,
   recordStatisticsEvent,
 } from '@/backend/services/statistics';
+import { statisticsRevisionId } from '@/backend/services/statistics/metadata';
 import {
   classifyRecoveryFailure,
   commitRecoveryCheckpoint,
@@ -687,6 +697,11 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
         name: sharedState.statisticsPlannedExecutionName,
       }
     : undefined;
+  // Lineage: the spawning run's logical id travels with every lifecycle record
+  // so a child run can be rolled up under its parent without in-memory state.
+  const runRevisions = () => (sharedState.statisticsFlowRevisionId
+    ? { flowRevisionId: sharedState.statisticsFlowRevisionId }
+    : undefined);
   const ensureRunStarted = () => {
     if (sharedState.statisticsRunStarted) return;
     recordStatisticsEvent(createStatisticsEvent({
@@ -696,6 +711,8 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       flow: flowSnapshot(),
       plannedExecution,
       conversationId: effectiveConvId,
+      parentRunId: sharedState.parentRunId,
+      revisions: runRevisions(),
     }));
     sharedState.statisticsRunStarted = true;
   };
@@ -712,6 +729,8 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
         plannedExecution,
         pauseKind: result.status === 'paused_debug' ? 'debug' : 'approval',
         durationMs,
+        parentRunId: sharedState.parentRunId,
+        revisions: runRevisions(),
       }));
     } else if (!sharedState.statisticsRunFinished) {
       const outcome = sharedState.isCancelled
@@ -729,6 +748,8 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
         plannedExecution,
         outcome,
         durationMs,
+        parentRunId: sharedState.parentRunId,
+        revisions: runRevisions(),
         errorClass: outcome === 'error' ? classifyStatisticsError(result.error) : undefined,
         usage: result.usage ? {
           inputTokens: result.usage.promptTokens,
@@ -910,9 +931,23 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     }
   }
 
-  if (!sharedState.statisticsFlowName && sharedState.flowId) {
+  if (
+    sharedState.flowId
+    && (!sharedState.statisticsFlowName || !sharedState.statisticsFlowRevisionId)
+  ) {
     try {
-      sharedState.statisticsFlowName = (await flowService.getFlow(sharedState.flowId))?.name;
+      const savedFlow = await flowService.getFlow(sharedState.flowId);
+      sharedState.statisticsFlowName ??= savedFlow?.name;
+      // Opaque, installation-local fingerprint of the SAVED flow configuration
+      // (graph plus node configuration). The configuration itself is never
+      // persisted; the fingerprint only makes revisions comparable over time.
+      if (savedFlow && !sharedState.statisticsFlowRevisionId) {
+        sharedState.statisticsFlowRevisionId = await statisticsRevisionId('flow', {
+          id: savedFlow.id,
+          nodes: savedFlow.nodes,
+          edges: savedFlow.edges,
+        });
+      }
     } catch {
       // Snapshot names are best-effort; the stable flow id remains authoritative.
     }
@@ -2298,6 +2333,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     }
   }
 
+  let finalSnapshotPersisted = false;
   try {
     sharedState.updatedAt = Date.now();
     if (isDefaultConversationTitle(sharedState.title) && sharedState.messages.length > 0) {
@@ -2308,6 +2344,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       }
     }
     await persistState(storageKey, sharedState); // chokepoint refuses ephemeral + deleted states
+    finalSnapshotPersisted = true;
     log.debug(`Saved final state for conversation ${effectiveConvId} before returning.`);
   } catch (error) {
     log.error(`Failed to save final state for conversation ${effectiveConvId}:`, error);
@@ -2318,8 +2355,42 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   // descendant subflows walking the ancestor chain — could observe the cancel).
   if (isConversationDeleted(effectiveConvId)) {
     FlowExecutor.conversationStates.delete(effectiveConvId);
+    forgetConversationCacheEntry(effectiveConvId);
   } else {
     FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+    noteConversationWrite(effectiveConvId, sharedState);
+  }
+
+  // --- Run-owned resource release + bounded conversation memory (issue #413) ---
+  // A terminal run must not leave anything of its own alive. Two distinct leaks
+  // were fixed here:
+  //  1. Bash background/PTY sessions the run started stayed alive for the
+  //     process lifetime, because nothing ever told the Bash server the owning
+  //     run had ended. `release_owner` kills the run's non-detached sessions and
+  //     their descendant trees; a session explicitly started `detached` survives
+  //     on purpose.
+  //  2. The conversation stayed in the global state map forever. Marking it
+  //     terminal makes it evictable ONLY after its durable snapshot exists, so a
+  //     later resume/inspect transparently reloads it from storage.
+  // Both are best-effort and deliberately not awaited: neither may delay or fail
+  // the run's result.
+  const terminalStatus =
+    sharedState.status === 'completed' ||
+    sharedState.status === 'error' ||
+    sharedState.status === 'capped';
+  if (terminalStatus) {
+    const runOwnerScope = ownerScopeForRun({
+      runId: sharedState.logicalRunId,
+      conversationId: sharedState.conversationId || effectiveConvId,
+    });
+    void releaseRunOwnedBashSessions(runOwnerScope);
+    if (!isConversationDeleted(effectiveConvId) && !ephemeral) {
+      void markConversationTerminal(effectiveConvId, sharedState, async () => {
+        // The snapshot above already succeeded in the normal case; only retry it
+        // when that write failed, so persist-before-evict still holds.
+        if (!finalSnapshotPersisted) await persistState(storageKey, sharedState);
+      });
+    }
   }
 
   // An ephemeral run is transient: drop it from the in-memory map once it
@@ -2327,6 +2398,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   const cleanupEphemeral = () => {
     if (ephemeral && (sharedState.status === 'completed' || sharedState.status === 'error')) {
       FlowExecutor.conversationStates.delete(effectiveConvId);
+      forgetConversationCacheEntry(effectiveConvId);
     }
   };
 

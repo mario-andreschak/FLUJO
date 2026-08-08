@@ -131,6 +131,22 @@ import {
 import { TestConnectionEvent } from "@/shared/types/streaming";
 import { loadServerConfigs, saveConfig } from "./config";
 import {
+  beginConnect,
+  beginTeardown,
+  getLifecycleDiagnostics,
+  markConnectFailed,
+  markConnected,
+} from "./lifecycleCoordinator";
+import {
+  acquireLease,
+  enforceWarmCapacity,
+  getPoolDiagnostics,
+  pinServer,
+  sweepIdleServers,
+  unpinServer,
+  type AcquireResult,
+} from "./mcpLeasePool";
+import {
   listServerTools as listTools,
   callTool as callToolFunction,
   ToolCallProgress,
@@ -774,19 +790,64 @@ export class MCPService {
     const serverName =
       typeof configOrName === "string" ? configOrName : configOrName.name;
 
-    const inFlight = this.inFlightConnects.get(serverName);
-    if (inFlight) {
-      log.debug(
-        `connectServer: reusing in-flight connection attempt for ${serverName}`,
-      );
-      return inFlight;
-    }
-
-    const attempt = this.connectServerInternal(configOrName).finally(() => {
-      this.inFlightConnects.delete(serverName);
+    // Issue #413: de-duplication and teardown ordering now live in the
+    // process-wide lifecycle coordinator rather than in this instance's map.
+    // `inFlightConnects` was INSTANCE-local, so two Next.js module instances each
+    // believed they were the only connector and forked two child trees for one
+    // config. beginConnect also awaits any pending teardown first, so a
+    // replacement connection can never be built while its predecessor's child is
+    // still exiting.
+    return beginConnect(serverName, async () => {
+      // Keep the legacy instance-local map populated: existing tests and
+      // status/diagnostic call sites still read it.
+      const attempt = this.connectServerInternal(configOrName).finally(() => {
+        this.inFlightConnects.delete(serverName);
+      });
+      this.inFlightConnects.set(serverName, attempt);
+      const result = await attempt;
+      if (result.success) {
+        markConnected(serverName, this.configFingerprint(configOrName));
+      } else {
+        // A transport that is still registered while no client landed means the
+        // failure happened DURING the handshake (post-spawn), which is the case
+        // that leaks a half-initialized child if teardown is skipped.
+        const handshakeFailure =
+          this.activeTransports.has(serverName) && !this.clients.has(serverName);
+        markConnectFailed(
+          serverName,
+          result.error ?? "unknown connection failure",
+          handshakeFailure,
+        );
+      }
+      return result;
     });
-    this.inFlightConnects.set(serverName, attempt);
-    return attempt;
+  }
+
+  /**
+   * Cheap identity fingerprint of the configuration a runtime was built from.
+   *
+   * Used only to detect that a runtime belongs to a superseded configuration
+   * generation, so it never needs to be stable across processes or reversible.
+   * Never includes resolved secrets: only the shape that decides WHAT is spawned.
+   */
+  private configFingerprint(configOrName: MCPServerConfig | string): string | undefined {
+    if (typeof configOrName === "string") return undefined;
+    const config = configOrName as MCPServerConfig & {
+      command?: string;
+      args?: string[];
+      url?: string;
+      websocketUrl?: string;
+      rootPath?: string;
+    };
+    return [
+      config.transport,
+      config.command ?? "",
+      (config.args ?? []).join(" "),
+      config.url ?? "",
+      config.websocketUrl ?? "",
+      config.rootPath ?? "",
+      config.disabled ? "disabled" : "enabled",
+    ].join(" ");
   }
 
   private async connectServerInternal(
@@ -1638,8 +1699,14 @@ export class MCPService {
       // Get the server config to pass to safelyCloseClient
       const config = await this.getServerConfig(serverName);
 
-      // Close the client following the MCP shutdown sequence
-      await safelyCloseClient(client, serverName, config || undefined);
+      // Issue #413: run the close through the ONE idempotent, awaitable teardown
+      // so overlapping shouts of "close it" (transport error + disable + shutdown
+      // arriving together) fold onto a single close instead of racing each other
+      // into a double-close that orphans grandchildren.
+      await beginTeardown(serverName, "disconnect", async () => {
+        const closed = await safelyCloseClient(client, serverName, config || undefined);
+        return { forced: closed.forced };
+      });
 
       log.info(`disconnectServer: Disconnected server ${serverName}`);
       return { success: true };
@@ -1653,6 +1720,108 @@ export class MCPService {
         error: `Failed to disconnect server: ${error instanceof Error ? error.message : "Unknown error"}`,
       };
     }
+  }
+
+  /**
+   * Tear down EVERY live MCP connection, awaiting each child's exit (issue #413).
+   *
+   * FLUJO had no process-wide MCP shutdown at all: the only teardown was
+   * per-server and user-initiated, so on SIGTERM/SIGINT (or a container stop) the
+   * whole fleet of stdio servers — and everything they had spawned — was left to
+   * the OS, which reparents rather than kills. Repeated start/stop cycles
+   * therefore accumulated server trees until the machine was rebooted.
+   *
+   * Idempotent: each per-server teardown folds onto its coordinator promise, so
+   * calling this from several signal handlers at once is safe. Never rejects — a
+   * shutdown path must not be derailed by one uncooperative server.
+   */
+  async disconnectAll(reason: string): Promise<{ closed: string[]; failed: string[] }> {
+    const closed: string[] = [];
+    const failed: string[] = [];
+    // Snapshot the names first: closing mutates the shared registry.
+    const serverNames = Array.from(new Set(Array.from(this.clients.keys())));
+    log.info(`disconnectAll: tearing down ${serverNames.length} MCP server(s) (${reason})`);
+
+    for (const serverName of serverNames) {
+      // Retry timers must die first, or a pending retry fires mid-shutdown and
+      // re-forks the very server we just closed.
+      this.clearRetryTimer(serverName);
+      this.connectionRetryAttempts.delete(serverName);
+      try {
+        const result = await this.disconnectServer(serverName);
+        if (result.success) closed.push(serverName);
+        else failed.push(serverName);
+      } catch (error) {
+        log.warn(
+          `disconnectAll: teardown of ${serverName} threw: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        failed.push(serverName);
+      }
+    }
+
+    // Any record still holding a retry timer (a server that was cold but
+    // scheduled to retry) must be silenced too, or the process cannot exit.
+    for (const [serverName] of Array.from(this.connectionRetryTimers)) {
+      this.clearRetryTimer(serverName);
+      this.connectionRetryAttempts.delete(serverName);
+    }
+
+    log.info(
+      `disconnectAll: closed=${closed.length} failed=${failed.length} (${reason})`,
+    );
+    return { closed, failed };
+  }
+
+  /**
+   * Bounded lifecycle/pool diagnostics (issue #413).
+   *
+   * Counters, states and sizes only: never stderr, command lines or provider
+   * payloads, so the report is safe to log and cheap to keep.
+   */
+  getLifecycleReport(): {
+    runtimes: ReturnType<typeof getLifecycleDiagnostics>;
+    pool: ReturnType<typeof getPoolDiagnostics>;
+    liveClients: number;
+  } {
+    return {
+      runtimes: getLifecycleDiagnostics(),
+      pool: getPoolDiagnostics(),
+      liveClients: this.clients.size,
+    };
+  }
+
+  /**
+   * Close warm servers nothing is using, honouring leases and pins.
+   *
+   * Exposed so a caller (an idle sweep cron, a suspend hook) can reclaim memory
+   * without knowing about the pool module. Never warms a cold server.
+   */
+  async sweepIdleMcpServers(): Promise<string[]> {
+    const closed = await sweepIdleServers(this);
+    const evicted = await enforceWarmCapacity(this);
+    return [...closed, ...evicted];
+  }
+
+  /**
+   * Acquire a lease on a server, connecting it lazily if it is cold.
+   *
+   * Consumers should prefer this over `connectServer` + `getClient`: while the
+   * lease is held the idle sweep and LRU eviction cannot close the server, and
+   * `lease.isStale()` reports a config-generation replacement so a caller can
+   * never keep using a client that is being torn down.
+   */
+  acquireServerLease(serverName: string): Promise<AcquireResult> {
+    return acquireLease(this, serverName);
+  }
+
+  /** Pin a server against idle/LRU closure (subscriptions, MCP App sessions, tasks). */
+  pinServer(serverName: string, pin: string): void {
+    pinServer(serverName, pin);
+  }
+
+  /** Release a named pin. */
+  unpinServer(serverName: string, pin: string): void {
+    unpinServer(serverName, pin);
   }
 
   /**
@@ -1848,75 +2017,84 @@ export class MCPService {
     // statusCode 404, none of which mean the connection is dead. A dead-but-present client
     // (e.g. expired HTTP session) is healed by the listServerTools reconnect that the flow
     // path runs before calling tools.
-    if (!client) {
+    // Issue #413: hold a LEASE for the duration of the call. An in-flight tool
+    // call is demand, so while it runs neither the idle sweep nor LRU eviction may
+    // close the server underneath it. Acquiring also connects a cold server on
+    // demand, which is what makes lazy pooling transparent here.
+    const acquired = await this.acquireServerLease(serverName);
+    const lease = acquired.lease;
+    if (lease) {
+      client = lease.client;
+    } else if (!client) {
       log.warn(
-        `callTool: No client for ${serverName}; forcing reconnect before calling ${toolName}`,
+        `callTool: Lease acquisition for ${serverName} failed: ${acquired.error}`,
       );
-      const reconnect = await this.forceReconnect(serverName);
-      if (reconnect.success) {
-        client = this.clients.get(serverName);
-      } else {
-        log.warn(
-          `callTool: Reconnect for ${serverName} failed: ${reconnect.error}`,
-        );
-      }
     }
 
-    // Fail closed before invoking a side-effecting tool. This gate is shared by
-    // chat, normal flows, scheduled runs, polls, and MCP Apps, so a background
-    // execution can never discover account setup by opening UI after the fact.
-    if (client && serverSupportsExternalAuthorization(client)) {
-      try {
-        const authorization = await getExternalAuthorizationStatus(
-          client,
-          serverName,
-          { force: true },
-        );
-        if (authorization.blockingAuthorization) {
-          const requiredAuthorization = authorization.blockingAuthorization;
-          const error =
-            requiredAuthorization.message ||
-            `${requiredAuthorization.label} authorization is required. Open the MCP page to authenticate before running this flow.`;
-          log.warn(`callTool: blocked ${serverName}/${toolName}: ${error}`);
+    // Everything below runs while the lease is held, and the lease is released in
+    // ONE `finally` covering every exit path (including the authorization gate's
+    // early returns). An early return that skipped the release would leave a
+    // phantom lease pinning the server warm for the process lifetime.
+    try {
+      // Fail closed before invoking a side-effecting tool. This gate is shared by
+      // chat, normal flows, scheduled runs, polls, and MCP Apps, so a background
+      // execution can never discover account setup by opening UI after the fact.
+      if (client && serverSupportsExternalAuthorization(client)) {
+        try {
+          const authorization = await getExternalAuthorizationStatus(
+            client,
+            serverName,
+            { force: true },
+          );
+          if (authorization.blockingAuthorization) {
+            const requiredAuthorization = authorization.blockingAuthorization;
+            const error =
+              requiredAuthorization.message ||
+              `${requiredAuthorization.label} authorization is required. Open the MCP page to authenticate before running this flow.`;
+            log.warn(`callTool: blocked ${serverName}/${toolName}: ${error}`);
+            return {
+              success: false,
+              error,
+              errorType: "stdio-oauth-required",
+              statusCode: 428,
+              requiresAuthentication: true,
+            };
+          }
+        } catch (authorizationError) {
+          const detail =
+            authorizationError instanceof Error
+              ? authorizationError.message
+              : String(authorizationError);
+          log.warn(
+            `callTool: mcp-stdio-oauth readiness check failed for ${serverName}: ${detail}`,
+          );
           return {
             success: false,
-            error,
-            errorType: "stdio-oauth-required",
-            statusCode: 428,
-            requiresAuthentication: true,
+            error: `Could not verify account readiness for '${serverName}': ${detail}`,
+            errorType: "stdio-oauth-status",
+            statusCode: 503,
           };
         }
-      } catch (authorizationError) {
-        const detail =
-          authorizationError instanceof Error
-            ? authorizationError.message
-            : String(authorizationError);
-        log.warn(
-          `callTool: mcp-stdio-oauth readiness check failed for ${serverName}: ${detail}`,
-        );
-        return {
-          success: false,
-          error: `Could not verify account readiness for '${serverName}': ${detail}`,
-          errorType: "stdio-oauth-status",
-          statusCode: 503,
-        };
       }
-    }
 
-    const result = await callToolFunction(
-      client,
-      serverName,
-      toolName,
-      args,
-      timeout,
-      onProgress,
-      signal,
-      source,
-      callerNodeId,
-      ownerScope,
-    );
-    log.info(`callTool: Called tool ${toolName} on ${serverName}`);
-    return result;
+      const result = await callToolFunction(
+        client,
+        serverName,
+        toolName,
+        args,
+        timeout,
+        onProgress,
+        signal,
+        source,
+        callerNodeId,
+        ownerScope,
+      );
+      log.info(`callTool: Called tool ${toolName} on ${serverName}`);
+      return result;
+    } finally {
+      // Idempotent release: safe even when acquisition failed and this is undefined.
+      lease?.release();
+    }
   }
 
   /**
@@ -2824,7 +3002,17 @@ export class MCPService {
   }
 
   /**
-   * Start all enabled servers
+   * Start all enabled servers.
+   *
+   * Issue #413: with `FLUJO_MCP_LAZY_START` the sweep only DISCOVERS
+   * configuration (so the MCP page and every tool/resource manifest consumer
+   * still sees every enabled server) and warms nothing. Servers are then
+   * connected on first use through `acquireServerLease`, which is the point of
+   * the lazy pool: a dozen configured-but-unused servers cost nothing.
+   *
+   * The flag defaults OFF because eager startup may only be retired once every
+   * consumer acquires a lease before use — the migration gate in the plan. Servers
+   * marked always-on are warmed and pinned in either mode.
    */
   async startEnabledServers(): Promise<void> {
     log.info("Starting all enabled servers");
@@ -2844,9 +3032,28 @@ export class MCPService {
       }
 
       // Find all enabled servers
-      const enabledServers = configs.filter((config) => !config.disabled);
-      log.info(`Found ${enabledServers.length} enabled servers to start`);
-      log.debug(`${enabledServers}`);
+      const allEnabledServers = configs.filter((config) => !config.disabled);
+      const lazyStart = /^(1|true|yes)$/i.test(
+        process.env.FLUJO_MCP_LAZY_START ?? "",
+      );
+      // An always-on server is pinned: it is exempt from idle/LRU closure and is
+      // warmed even in lazy mode (long-lived subscriptions/triggers need it live).
+      const alwaysOn = allEnabledServers.filter(
+        (config) => (config as { alwaysOn?: boolean }).alwaysOn === true,
+      );
+      for (const config of alwaysOn) {
+        pinServer(config.name, "always-on");
+      }
+      const enabledServers = lazyStart ? alwaysOn : allEnabledServers;
+      if (lazyStart) {
+        log.info(
+          `Lazy MCP start: ${allEnabledServers.length} enabled server(s) discovered, ` +
+            `warming only ${alwaysOn.length} always-on server(s)`,
+        );
+      } else {
+        log.info(`Found ${enabledServers.length} enabled servers to start`);
+        log.debug(`${enabledServers}`);
+      }
 
       // Mark every enabled server as "connecting" up front so the MCP page shows a
       // spinner for all of them while the sweep runs. connectServer() clears each

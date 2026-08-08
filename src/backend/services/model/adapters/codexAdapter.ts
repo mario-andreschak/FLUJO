@@ -6,6 +6,7 @@ import { promises as fs } from 'fs';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
+import { ownerScopeForRun } from '@/backend/services/mcp/ownerScope';
 import { getRunResourceSettings } from '@/backend/services/runResources';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
 import { splitToolResultMedia } from '@/backend/services/runResources/toolResultMedia';
@@ -434,6 +435,11 @@ export class CodexAdapter implements CompletionAdapter {
               callerNodeId,
               abortController.signal,
               'model',
+              // Issue #413: the self-orchestrating adapters must derive the SAME
+              // run owner key as the normal ModelHandler path. Without it a
+              // Codex-driven Bash session landed under `caller:<nodeId>` and was
+              // never released when the run ended.
+              ownerScopeForRun({ runId, conversationId }),
             );
             if (runId) {
               const cancelled = Boolean(abortController.signal.aborted || toolCancellationReason(result));

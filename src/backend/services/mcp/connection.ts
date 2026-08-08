@@ -26,6 +26,7 @@ import {
 import { ChildProcess } from "child_process";
 import { createOAuthClientProvider } from "./oauth";
 import { isClientConnectionClosed } from "@/utils/mcp/utils";
+import { killProcessTreeAndWait } from "@/utils/process/killProcessTree";
 import { resolveServerCwd } from "@/utils/mcp/resolveServerCwd";
 import { resolveNodeCommand } from "@/utils/mcp/resolveNodeCommand";
 import { getWorkspaceDataDir } from "@/utils/workspace";
@@ -924,6 +925,16 @@ export interface SafeCloseOptions {
   killEscalationMs?: number;
 }
 
+/** What actually happened during a close — reported so teardown is verifiable (#413). */
+export interface SafeCloseResult {
+  /** The child process (and its group/tree) is gone, or there was no child. */
+  exited: boolean;
+  /** Termination needed signals/taskkill rather than a voluntary exit. */
+  forced: boolean;
+  /** Total time spent tearing the child down, ms. */
+  durationMs: number;
+}
+
 /**
  * Safely close a client connection following the MCP shutdown sequence.
  *
@@ -941,10 +952,13 @@ export async function safelyCloseClient(
   serverName: string,
   config?: MCPServerConfig,
   options?: SafeCloseOptions,
-): Promise<void> {
+): Promise<SafeCloseResult> {
   log.debug("Entering safelyCloseClient method");
+  const startedAt = Date.now();
   const gracePeriodMs = options?.gracePeriodMs ?? 15000;
   const killEscalationMs = options?.killEscalationMs ?? 5000;
+  let exited = true;
+  let forced = false;
   try {
     // Check if the transport is stdio. Duck-typed on the private _process field
     // (present on both the v1 and v2-beta StdioClientTransport) instead of a v1
@@ -965,30 +979,34 @@ export async function safelyCloseClient(
           log.warn(`Error closing stdin for ${serverName}:`, stdinError);
         }
 
-        let exited = await waitForExit(child, gracePeriodMs);
+        exited = await waitForExit(child, gracePeriodMs);
 
         if (!exited) {
+          // Issue #413: escalate against the whole process TREE, not just the
+          // immediate child. Most stdio servers are launched through a shell /
+          // `npx` wrapper, so `child.kill()` only ever reached the wrapper and
+          // left the real server (and anything it spawned — a browser, a
+          // language server, a python venv) running as an orphan for the
+          // lifetime of the machine. The awaiting variant also VERIFIES exit, so
+          // a replacement connection can never be built on top of a predecessor
+          // that is still holding its port/profile/lock.
           log.warn(
-            `Process did not exit within ${gracePeriodMs}ms after stdin close, sending SIGTERM for ${serverName}`,
+            `Process did not exit within ${gracePeriodMs}ms after stdin close; escalating to a tree kill for ${serverName}`,
           );
-          try {
-            child.kill("SIGTERM");
-          } catch (termError) {
-            log.error(`Error sending SIGTERM for ${serverName}:`, termError);
-          }
-          // On Windows SIGTERM is already TerminateProcess, so this second wait
-          // resolves almost immediately; on POSIX it gives handlers a chance.
-          exited = await waitForExit(child, killEscalationMs);
-        }
-
-        if (!exited) {
-          log.warn(
-            `Process did not respond to SIGTERM, sending SIGKILL for ${serverName}`,
-          );
-          try {
-            child.kill("SIGKILL");
-          } catch (killError) {
-            log.error(`Error sending SIGKILL for ${serverName}:`, killError);
+          const killed = await killProcessTreeAndWait(child, {
+            graceMs: killEscalationMs,
+            finalWaitMs: killEscalationMs,
+          });
+          exited = killed.exited;
+          forced = killed.forced;
+          if (!exited) {
+            log.error(
+              `Process tree for ${serverName} (pid ${killed.pid ?? "unknown"}) did not exit after forced escalation`,
+            );
+          } else {
+            log.warn(
+              `Process tree for ${serverName} force-terminated after ${killed.durationMs}ms`,
+            );
           }
         } else {
           log.info(`Process exited gracefully for ${serverName}`);
@@ -1004,4 +1022,5 @@ export async function safelyCloseClient(
     log.warn(`Error closing client for ${serverName}:`, error);
     // We continue even if close fails
   }
+  return { exited, forced, durationMs: Date.now() - startedAt };
 }

@@ -7,6 +7,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { SDKPartialAssistantMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
+import { ownerScopeForRun } from '@/backend/services/mcp/ownerScope';
 import { getRunResourceSettings } from '@/backend/services/runResources';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
 import { splitToolResultMedia } from '@/backend/services/runResources/toolResultMedia';
@@ -599,6 +600,9 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             callerNodeId,
             abortController.signal,
             'model',
+            // Issue #413: same canonical run owner key as the ModelHandler and
+            // Codex paths, so run-owned Bash sessions are releasable here too.
+            ownerScopeForRun({ runId, conversationId }),
           );
           if (runId) {
             const cancelled = Boolean(abortController.signal.aborted || toolCancellationReason(result));

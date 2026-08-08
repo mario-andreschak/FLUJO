@@ -59,12 +59,47 @@ const MAX_OUTPUT_CHARS = 100_000;
 const MAX_SESSIONS = 25;
 const MAX_TERMINAL_OUTPUT_CHARS = 2_000_000;
 /**
- * Lifecycle: live sessions end only by process exit, explicit kill, or Bash
- * server shutdown. Finished owner-scoped records remain readable for ten
- * minutes, then are reaped. An MCP View teardown may be an inline→dock handoff,
- * so it is not treated as an owner disconnect signal.
+ * Lifecycle (issue #413): a live session ends by process exit, explicit kill,
+ * OWNER RELEASE when its run finishes, idle/max-lifetime expiry, or Bash server
+ * shutdown. Finished owner-scoped records remain readable for ten minutes, then
+ * are reaped. An MCP View teardown may be an inline-to-dock handoff, so it is
+ * still not treated as an owner disconnect signal.
+ *
+ * Owner release is what closes the original leak: nothing used to tell this
+ * server that the run which started a background command had ended, so a
+ * `start`ed process (and its whole descendant tree) outlived its run and stayed
+ * resident for the lifetime of the FLUJO process.
  */
 const SESSION_TTL_MS = 10 * 60_000;
+/**
+ * Host-wide cap across background AND terminal sessions. The per-owner cap alone
+ * could not bound the machine: N concurrent runs each stayed under their own
+ * limit while together they forked an unbounded number of live trees.
+ */
+const MAX_LIVE_SESSIONS_HOST = 50;
+/** A live session with no reads/writes/output for this long is expired. */
+const SESSION_IDLE_TIMEOUT_MS = 60 * 60_000;
+/** Absolute ceiling on a live session's age, idle or not. */
+const SESSION_MAX_LIFETIME_MS = 12 * 60 * 60_000;
+/** How often the expiry sweep runs. */
+const SESSION_SWEEP_INTERVAL_MS = 60_000;
+
+function positiveEnvNumber(name: string, fallback: number): number {
+  const raw = Number(process.env[name]);
+  return Number.isFinite(raw) && raw > 0 ? raw : fallback;
+}
+
+function maxLiveSessionsHost(): number {
+  return Math.floor(positiveEnvNumber('FLUJO_BASH_MAX_LIVE_SESSIONS', MAX_LIVE_SESSIONS_HOST));
+}
+
+function sessionIdleTimeoutMs(): number {
+  return positiveEnvNumber('FLUJO_BASH_SESSION_IDLE_MS', SESSION_IDLE_TIMEOUT_MS);
+}
+
+function sessionMaxLifetimeMs(): number {
+  return positiveEnvNumber('FLUJO_BASH_SESSION_MAX_LIFETIME_MS', SESSION_MAX_LIFETIME_MS);
+}
 
 type ShellKind = 'default' | 'pwsh' | 'bash' | 'cmd';
 type EffectiveShell = 'pwsh' | 'powershell' | 'bash' | 'cmd' | 'sh';
@@ -384,6 +419,14 @@ interface BashSession {
   reapTimer?: NodeJS.Timeout;
   /** Preflight found a command head that cannot be resolved on PATH. */
   missingExecutableWarning?: boolean;
+  /**
+   * Explicit opt-in to surviving owner release (issue #413). Default false: a
+   * session outliving its run must be a deliberate choice, not the accident that
+   * made every `start` a permanent process.
+   */
+  detached?: boolean;
+  /** Last output/read/write — drives idle expiry. */
+  lastActivityAt: number;
 }
 
 interface TerminalSession {
@@ -400,6 +443,10 @@ interface TerminalSession {
   startedAt: number;
   endedAt?: number;
   reapTimer?: NodeJS.Timeout;
+  /** Explicit opt-in to surviving owner release (issue #413). */
+  detached?: boolean;
+  /** Last output/read/write — drives idle expiry. */
+  lastActivityAt: number;
 }
 
 // Process-global so all Next.js module-graph instances share one session table
@@ -413,6 +460,8 @@ declare global {
   var __flujo_bash_foreground_children: Set<ChildProcess> | undefined;
   // eslint-disable-next-line no-var
   var __flujo_bash_cleanup_registered: boolean | undefined;
+  // eslint-disable-next-line no-var
+  var __flujo_bash_sweep_timer: NodeJS.Timeout | undefined;
 }
 
 function sessions(): Map<string, BashSession> {
@@ -444,12 +493,229 @@ function ownedSession(id: string, ownerScope: string): BashSession | undefined {
   return session?.ownerScope === ownerScope ? session : undefined;
 }
 
+/** Mark a session as active so the idle sweep leaves it alone. */
+function touchSession(session: { lastActivityAt: number }): void {
+  session.lastActivityAt = Date.now();
+}
+
+/** Live sessions across BOTH tables — the quantity the host cap bounds. */
+function liveSessionCount(): number {
+  let count = 0;
+  for (const session of sessions().values()) if (session.running) count += 1;
+  for (const terminal of terminalSessions().values()) if (terminal.running) count += 1;
+  return count;
+}
+
+/** Live sessions for one owner across both tables. */
+function ownerLiveSessionCount(ownerScope: string): number {
+  let count = 0;
+  for (const session of sessions().values()) {
+    if (session.running && session.ownerScope === ownerScope) count += 1;
+  }
+  for (const terminal of terminalSessions().values()) {
+    if (terminal.running && terminal.ownerScope === ownerScope) count += 1;
+  }
+  return count;
+}
+
+/** Terminate one background session's whole process tree and drop its timers. */
+function terminateSession(session: BashSession): void {
+  if (session.running) {
+    try {
+      session.cancelEscalation = killProcessTree(session.child);
+    } catch {
+      /* best-effort */
+    }
+  }
+  if (session.reapTimer) {
+    clearTimeout(session.reapTimer);
+    session.reapTimer = undefined;
+  }
+}
+
+/** Terminate one PTY session and drop its timers. */
+function terminateTerminal(terminal: TerminalSession): void {
+  try {
+    if (terminal.running) {
+      terminal.running = false;
+      terminal.pty.kill();
+    }
+  } catch {
+    /* best-effort */
+  }
+  if (terminal.reapTimer) {
+    clearTimeout(terminal.reapTimer);
+    terminal.reapTimer = undefined;
+  }
+}
+
+export interface OwnerReleaseResult {
+  ownerScope: string;
+  /** Background session ids that were killed. */
+  killedSessions: string[];
+  /** PTY session ids that were closed. */
+  closedTerminals: string[];
+  /** Sessions deliberately left alive because they opted into `detached`. */
+  retainedDetached: string[];
+}
+
+/**
+ * Atomically remove and terminate every NON-DETACHED session of one owner.
+ *
+ * Called when the owning FLUJO run reaches a terminal state. Removing the map
+ * entry BEFORE killing means a concurrent release (or a second call from a retry
+ * path) cannot observe the same session twice, so the operation is idempotent -
+ * repeated releases of the same scope are a no-op instead of a double kill
+ * against a possibly-recycled pid.
+ */
+export function releaseOwnerScope(ownerScope: string): OwnerReleaseResult {
+  const result: OwnerReleaseResult = {
+    ownerScope,
+    killedSessions: [],
+    closedTerminals: [],
+    retainedDetached: [],
+  };
+
+  for (const [id, session] of Array.from(sessions())) {
+    if (session.ownerScope !== ownerScope) continue;
+    if (session.detached) {
+      if (session.running) result.retainedDetached.push(id);
+      continue;
+    }
+    sessions().delete(id);
+    if (session.running) result.killedSessions.push(id);
+    terminateSession(session);
+  }
+
+  for (const [id, terminal] of Array.from(terminalSessions())) {
+    if (terminal.ownerScope !== ownerScope) continue;
+    if (terminal.detached) {
+      if (terminal.running) result.retainedDetached.push(id);
+      continue;
+    }
+    terminalSessions().delete(id);
+    if (terminal.running) result.closedTerminals.push(id);
+    terminateTerminal(terminal);
+  }
+
+  if (result.killedSessions.length || result.closedTerminals.length) {
+    log.info('Released owner-scoped bash sessions', {
+      ownerScope,
+      killed: result.killedSessions.length,
+      closedTerminals: result.closedTerminals.length,
+      retainedDetached: result.retainedDetached.length,
+    });
+  }
+  return result;
+}
+
+/**
+ * Expire live sessions that exceeded the idle timeout or the absolute lifetime.
+ *
+ * Detached sessions are exempt from IDLE expiry (being idle is often the point of
+ * a detached watcher) but NOT from the absolute lifetime ceiling - otherwise
+ * `detached` would be an unbounded leak with extra steps.
+ */
+export function expireStaleSessions(now = Date.now()): string[] {
+  const idleLimit = sessionIdleTimeoutMs();
+  const lifetimeLimit = sessionMaxLifetimeMs();
+  const expired: string[] = [];
+
+  for (const [id, session] of Array.from(sessions())) {
+    if (!session.running) continue;
+    const tooOld = now - session.startedAt >= lifetimeLimit;
+    const tooIdle = !session.detached && now - session.lastActivityAt >= idleLimit;
+    if (!tooOld && !tooIdle) continue;
+    sessions().delete(id);
+    terminateSession(session);
+    expired.push(id);
+  }
+
+  for (const [id, terminal] of Array.from(terminalSessions())) {
+    if (!terminal.running) continue;
+    const tooOld = now - terminal.startedAt >= lifetimeLimit;
+    const tooIdle = !terminal.detached && now - terminal.lastActivityAt >= idleLimit;
+    if (!tooOld && !tooIdle) continue;
+    terminalSessions().delete(id);
+    terminateTerminal(terminal);
+    expired.push(id);
+  }
+
+  if (expired.length) log.info('Expired stale bash sessions', { count: expired.length });
+  return expired;
+}
+
+/** Bounded per-session diagnostics: identity/state only, never output. */
+export function bashSessionDiagnostics(): {
+  liveSessions: number;
+  maxLiveSessions: number;
+  sessions: Array<{
+    sessionId: string;
+    type: 'background' | 'terminal';
+    ownerScope: string;
+    running: boolean;
+    detached: boolean;
+    ageMs: number;
+    idleMs: number;
+  }>;
+} {
+  const now = Date.now();
+  const rows: Array<{
+    sessionId: string;
+    type: 'background' | 'terminal';
+    ownerScope: string;
+    running: boolean;
+    detached: boolean;
+    ageMs: number;
+    idleMs: number;
+  }> = [];
+  for (const session of sessions().values()) {
+    rows.push({
+      sessionId: session.id,
+      type: 'background',
+      ownerScope: session.ownerScope,
+      running: session.running,
+      detached: session.detached === true,
+      ageMs: now - session.startedAt,
+      idleMs: now - session.lastActivityAt,
+    });
+  }
+  for (const terminal of terminalSessions().values()) {
+    rows.push({
+      sessionId: terminal.id,
+      type: 'terminal',
+      ownerScope: terminal.ownerScope,
+      running: terminal.running,
+      detached: terminal.detached === true,
+      ageMs: now - terminal.startedAt,
+      idleMs: now - terminal.lastActivityAt,
+    });
+  }
+  return {
+    liveSessions: liveSessionCount(),
+    maxLiveSessions: maxLiveSessionsHost(),
+    sessions: rows,
+  };
+}
+
 function terminalMeta(visibility: Array<'model' | 'app'> = ['model', 'app']): Tool['_meta'] {
   return { ui: { resourceUri: BASH_TERMINAL_APP_URI, visibility } };
 }
 
-/** Kill every live session's process tree — used on FLUJO process exit. */
+/**
+ * Kill every live session's process tree - used on Bash server shutdown and on
+ * FLUJO process exit.
+ *
+ * Idempotent and DETACHED-INCLUSIVE: a detached session survives owner release,
+ * but nothing survives the death of the server that owns its pipes. Timers are
+ * cleared too, so a repeated call cannot leave a handle keeping the event loop
+ * alive after "shutdown".
+ */
 export function shutdownBashSessions(): void {
+  if (global.__flujo_bash_sweep_timer) {
+    clearInterval(global.__flujo_bash_sweep_timer);
+    global.__flujo_bash_sweep_timer = undefined;
+  }
   for (const child of foregroundChildren()) {
     try {
       killProcessTree(child);
@@ -465,7 +731,10 @@ export function shutdownBashSessions(): void {
         /* best-effort */
       }
     }
-    if (s.reapTimer) clearTimeout(s.reapTimer);
+    if (s.reapTimer) {
+      clearTimeout(s.reapTimer);
+      s.reapTimer = undefined;
+    }
   }
   for (const terminal of terminalSessions().values()) {
     try {
@@ -476,11 +745,27 @@ export function shutdownBashSessions(): void {
     } catch {
       /* best-effort */
     }
-    if (terminal.reapTimer) clearTimeout(terminal.reapTimer);
+    if (terminal.reapTimer) {
+      clearTimeout(terminal.reapTimer);
+      terminal.reapTimer = undefined;
+    }
   }
 }
 
 function registerExitCleanup(): void {
+  if (!global.__flujo_bash_sweep_timer) {
+    // Idle/max-lifetime expiry needs a periodic sweep: a session that simply
+    // stops producing output never fires an event we could hang the check on.
+    const timer = setInterval(() => {
+      try {
+        expireStaleSessions();
+      } catch {
+        /* a sweep failure must never crash the server */
+      }
+    }, SESSION_SWEEP_INTERVAL_MS);
+    timer.unref?.();
+    global.__flujo_bash_sweep_timer = timer;
+  }
   if (global.__flujo_bash_cleanup_registered) return;
   global.__flujo_bash_cleanup_registered = true;
   const handler = () => shutdownBashSessions();
@@ -1437,6 +1722,11 @@ export function bashToolDefinitions(): Tool[] {
           env: envProp,
           cols: { type: 'number', description: 'Initial terminal columns (20-400, default 100).' },
           rows: { type: 'number', description: 'Initial terminal rows (5-200, default 30).' },
+          detached: {
+            type: 'boolean',
+            description:
+              'Keep the terminal alive after the run that opened it finishes (default false). Still bounded by the host session cap and the absolute max lifetime.',
+          },
         },
       },
     },
@@ -1524,6 +1814,11 @@ export function bashToolDefinitions(): Tool[] {
           encoding: encodingProp,
           maxOutputChars: maxOutputCharsProp,
           outputFile: outputFileProp,
+          detached: {
+            type: 'boolean',
+            description:
+              'Survive the end of the run that started it (default false). Detached sessions are still bounded by the host session cap and the absolute max lifetime, and are always killed when the bash server shuts down.',
+          },
         },
         required: ['command'],
       },
@@ -1573,7 +1868,13 @@ export function bashToolDefinitions(): Tool[] {
     },
     {
       name: 'list_sessions',
-      description: 'List background sessions owned by this caller scope. Returns { sessions: [{ sessionId, command, running, exitCode, startedAt, endedAt }] }.',
+      description: 'List background sessions owned by this caller scope. Returns { sessions: [{ sessionId, command, running, exitCode, detached, startedAt, endedAt }] }.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'release_owner',
+      description:
+        'Kill and forget every non-detached background and terminal session owned by this caller scope. Idempotent. Sessions started with "detached": true are retained. FLUJO calls this when a run finishes; the scope is host-derived, so a caller can only release its own sessions. Returns { ownerScope, killedSessions, closedTerminals, retainedDetached }.',
       inputSchema: { type: 'object', properties: {} },
     },
   ];
@@ -1889,6 +2190,24 @@ async function startTool(
   if (table.size >= MAX_SESSIONS) {
     return textResult({ error: `Too many active background sessions (max ${MAX_SESSIONS}). Kill some first.` }, true);
   }
+  // Issue #413: the HOST-wide live cap spans background and terminal sessions.
+  // A per-owner limit alone let N concurrent runs each stay legal while together
+  // forking an unbounded number of live process trees on one machine. Expire
+  // stale sessions first so the cap is measured against genuinely live work.
+  expireStaleSessions();
+  const hostLimit = maxLiveSessionsHost();
+  if (liveSessionCount() >= hostLimit) {
+    return textResult({
+      error: `Too many live sessions on this host (max ${hostLimit} across background and terminal sessions). Wait for one to finish or kill one first.`,
+      liveSessions: liveSessionCount(),
+    }, true);
+  }
+  if (ownerLiveSessionCount(ownerScope) >= MAX_SESSIONS) {
+    return textResult({ error: `Too many live sessions for this caller (max ${MAX_SESSIONS}). Kill some first.` }, true);
+  }
+
+  // Surviving the owning run must be an explicit choice (see releaseOwnerScope).
+  const detached = args.detached === true || args.persistAfterRun === true;
 
   registerExitCleanup();
 
@@ -1942,6 +2261,8 @@ async function startTool(
     running: true,
     exitCode: null,
     startedAt: Date.now(),
+    lastActivityAt: Date.now(),
+    ...(detached ? { detached: true } : {}),
   };
   table.set(id, session);
 
@@ -1955,12 +2276,14 @@ async function startTool(
   const decodeStderr = createStreamDecoder(encodingMode);
   child.stdout?.on('data', (d: Buffer) => {
     const chunk = decodeStdout(d);
+    touchSession(session);
     append(chunk);
     spool.write(chunk);
   });
   child.stderr?.on('data', (d: Buffer) => {
     const chunk = decodeStderr(d);
     session.stderrChars = (session.stderrChars ?? 0) + chunk.length;
+    touchSession(session);
     append(chunk);
     spool.write(chunk);
   });
@@ -1985,6 +2308,7 @@ async function startTool(
     cwd,
     requestedShell,
     shell: effectiveShell,
+    ...(detached ? { detached: true } : {}),
     ...(shellSubstitution ? { shellSubstitution } : {}),
     ...(selection.autoSelected ? { shellAutoSelected: true } : {}),
     ...(dialectWarnings.length ? { dialectWarnings } : {}),
@@ -2093,6 +2417,7 @@ function killTool(args: Record<string, unknown>, ownerScope: string): CallToolRe
   if (session.running) {
     session.cancelEscalation = killProcessTree(session.child);
   }
+  touchSession(session);
   return textResult({ sessionId: id, killed: true });
 }
 
@@ -2104,10 +2429,28 @@ function listSessionsTool(ownerScope: string): CallToolResult {
       command: s.command,
       running: s.running,
       exitCode: s.exitCode,
+      detached: s.detached === true,
       startedAt: new Date(s.startedAt).toISOString(),
       endedAt: s.endedAt ? new Date(s.endedAt).toISOString() : undefined,
     }));
   return textResult({ sessions: list });
+}
+
+/**
+ * Release every non-detached session of the CALLING scope.
+ *
+ * The scope is host-derived (`_meta.flujo.ownerScope`), never a tool argument, so
+ * a caller can only ever release its own sessions - releasing by arbitrary scope
+ * would be a cross-run kill primitive.
+ */
+function releaseOwnerTool(ownerScope: string): CallToolResult {
+  const released = releaseOwnerScope(ownerScope);
+  return textResult({
+    ownerScope: released.ownerScope,
+    killedSessions: released.killedSessions,
+    closedTerminals: released.closedTerminals,
+    retainedDetached: released.retainedDetached,
+  });
 }
 
 function terminalSnapshot(session: TerminalSession): Record<string, unknown> {
@@ -2152,6 +2495,20 @@ async function openTerminalTool(
   if (ownedRunning.length >= MAX_SESSIONS) {
     return textResult({ error: `Too many active terminal sessions (max ${MAX_SESSIONS}). Close one first.` }, true);
   }
+  // Issue #413: PTY sessions count against the SAME host-wide live cap as
+  // background sessions - a terminal is just as much a live process tree.
+  expireStaleSessions();
+  const hostLimit = maxLiveSessionsHost();
+  if (liveSessionCount() >= hostLimit) {
+    return textResult({
+      error: `Too many live sessions on this host (max ${hostLimit} across background and terminal sessions). Close one first.`,
+      liveSessions: liveSessionCount(),
+    }, true);
+  }
+  if (ownerLiveSessionCount(ownerScope) >= MAX_SESSIONS) {
+    return textResult({ error: `Too many live sessions for this caller (max ${MAX_SESSIONS}). Close one first.` }, true);
+  }
+  registerExitCleanup();
 
   const cwd = await resolveCwd(args.cwd, roots);
   const plan = buildPtySpawn(shellValidation.shell);
@@ -2201,9 +2558,14 @@ async function openTerminalTool(
     running: true,
     exitCode: null,
     startedAt: Date.now(),
+    lastActivityAt: Date.now(),
+    ...(args.detached === true || args.persistAfterRun === true ? { detached: true } : {}),
   };
   terminalSessions().set(id, session);
-  pty.onData((chunk) => appendTerminalOutput(session, chunk));
+  pty.onData((chunk) => {
+    touchSession(session);
+    appendTerminalOutput(session, chunk);
+  });
   pty.onExit(({ exitCode }) => {
     session.running = false;
     session.exitCode = exitCode;
@@ -2222,6 +2584,7 @@ function readTerminalTool(args: Record<string, unknown>, ownerScope: string): Ca
   const id = String(args.sessionId ?? '');
   const session = ownedTerminal(id, ownerScope);
   if (!session) return textResult({ error: `No terminal session with id "${id}".` }, true);
+  touchSession(session);
   const requested = Number.isFinite(args.cursor) ? Math.max(0, Math.floor(Number(args.cursor))) : session.outputStart;
   const reset = requested < session.outputStart || requested > session.nextCursor;
   const cursor = reset ? session.outputStart : requested;
@@ -2241,6 +2604,7 @@ function writeTerminalTool(args: Record<string, unknown>, ownerScope: string): C
   const data = typeof args.data === 'string' ? args.data : '';
   if (data.length > 65_536) return textResult({ error: 'Terminal input is limited to 65,536 characters per write.' }, true);
   try {
+    touchSession(session);
     session.pty.write(data);
     return textResult({ sessionId: id, written: Buffer.byteLength(data, 'utf8') });
   } catch (error) {
@@ -2334,6 +2698,8 @@ export async function bashCallTool(
         return killTool(args, scope);
       case 'list_sessions':
         return listSessionsTool(scope);
+      case 'release_owner':
+        return releaseOwnerTool(scope);
       default:
         return textResult({ error: `Unknown tool on the built-in bash server: ${toolName}` }, true);
     }

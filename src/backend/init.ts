@@ -45,6 +45,89 @@ declare global {
   // original globals, so existing callers and tests are untouched.
   var __flujo_workspace_init_promises: Map<string, Promise<void>> | undefined;
   var __flujo_workspace_secret_promises: Map<string, Promise<void>> | undefined;
+  // Issue #413: process shutdown hooks are armed once per process, and the
+  // teardown itself is memoized so several signals arriving together (SIGINT then
+  // SIGTERM from a supervisor) share ONE teardown instead of racing two.
+  var __flujo_shutdown_hooks_registered: boolean | undefined;
+  var __flujo_shutdown_promise: Promise<void> | undefined;
+}
+
+/** Hard cap on how long MCP teardown may delay process exit. */
+const SHUTDOWN_TIMEOUT_MS = 20_000;
+
+/**
+ * Tear down process-owned background services (issue #413).
+ *
+ * Before this existed FLUJO had no MCP shutdown at all: on SIGTERM/SIGINT every
+ * stdio server child - and everything those had spawned - was simply abandoned to
+ * the OS, which reparents rather than kills. Repeated start/stop cycles therefore
+ * accumulated orphaned server trees until the machine was rebooted.
+ *
+ * Every workspace is torn down, because MCP runtimes are workspace-scoped (#406).
+ * Memoized and never rejects: shutdown must be safe to call from several signal
+ * handlers at once and must not be derailed by one uncooperative server.
+ */
+export function shutdownBackendServices(reason: string): Promise<void> {
+  if (global.__flujo_shutdown_promise) return global.__flujo_shutdown_promise;
+  const promise = (async () => {
+    log.info(`Shutting down backend services (${reason})`);
+    let workspaces: string[];
+    try {
+      workspaces = (await listWorkspaces()).map(w => w.name);
+    } catch {
+      workspaces = [DEFAULT_WORKSPACE];
+    }
+    for (const workspace of workspaces) {
+      try {
+        await runWithWorkspace(workspace, () => mcpService.disconnectAll(reason));
+      } catch (error) {
+        log.warn(`MCP teardown failed for workspace ${workspace}:`, error);
+      }
+    }
+  })().catch(error => {
+    log.warn('Backend shutdown encountered an error:', error);
+  });
+  global.__flujo_shutdown_promise = promise;
+  return promise;
+}
+
+/**
+ * Arm SIGINT/SIGTERM/SIGHUP handlers that tear down MCP servers before exit.
+ *
+ * The handlers exit the process themselves: installing a signal listener
+ * suppresses Node's default terminate behaviour, so failing to exit would turn
+ * Ctrl+C into "nothing happens". The timeout race guarantees a wedged server can
+ * delay exit but never prevent it - shutdown that hangs forever is worse than
+ * shutdown that force-exits with one orphan.
+ */
+function registerProcessShutdownHooks(): void {
+  if (global.__flujo_shutdown_hooks_registered) return;
+  global.__flujo_shutdown_hooks_registered = true;
+
+  const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM'];
+  // SIGHUP is not deliverable on every platform; arming it is best-effort.
+  if (process.platform !== 'win32') signals.push('SIGHUP');
+
+  for (const signal of signals) {
+    try {
+      process.once(signal, () => {
+        log.info(`Received ${signal}; tearing down MCP servers before exit`);
+        const timeout = new Promise<void>(resolve => {
+          const timer = setTimeout(() => {
+            log.warn(`Shutdown exceeded ${SHUTDOWN_TIMEOUT_MS}ms; exiting anyway`);
+            resolve();
+          }, SHUTDOWN_TIMEOUT_MS);
+          timer.unref?.();
+        });
+        void Promise.race([shutdownBackendServices(signal), timeout]).finally(() => {
+          process.exit(0);
+        });
+      });
+    } catch (error) {
+      log.debug(`Could not arm ${signal} shutdown hook:`, error);
+    }
+  }
+  log.info(`Armed process shutdown hooks (${signals.join(', ')})`);
 }
 
 // --- Per-workspace startup memos --------------------------------------------
@@ -176,6 +259,10 @@ async function runInitialization(): Promise<void> {
   // rejects on an unresolvable source/destination conflict, which correctly
   // aborts startup rather than risking two divergent copies of the user's data.
   await migrateWorkspaceLayout();
+
+  // Arm shutdown BEFORE anything spawns a child process, so an early Ctrl+C
+  // during a slow startup sweep still tears down whatever already connected.
+  registerProcessShutdownHooks();
 
   // Verify storage first - if this throws, callers (e.g. the route) surface it.
   await verifyStorage();

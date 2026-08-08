@@ -15,6 +15,7 @@ import { toApiMessages } from '../buildNodeContext';
 import { compactForWire, couldCompact, wireHasRunResourceUri } from './compactForWire';
 import OpenAI from 'openai';
 import { modelService } from '@/backend/services/model';
+import { ownerScopeForRun } from '@/backend/services/mcp/ownerScope';
 import {
   filterUnsupportedMediaInputs,
   hydrateRunResourceMedia,
@@ -86,6 +87,12 @@ import {
   credentialFingerprint,
   recordStatisticsEvent,
 } from '@/backend/services/statistics';
+import {
+  newStatisticsInvocationId,
+  statisticsAttemptId,
+  statisticsCacheOutcomeFromUsage,
+  statisticsPayloadMetadata,
+} from '@/backend/services/statistics/metadata';
 
 const log = createLogger('backend/flow/execution/handlers/ModelHandler'
   // , LOG_LEVEL.VERBOSE // override for the current file
@@ -1903,6 +1910,9 @@ export class ModelHandler {
         : null;
       const opaqueCredentialId = await credentialFingerprint(decryptedApiKey).catch(() => undefined);
       let providerAttemptOrdinal = 0;
+      // One LOGICAL provider call; every retry below reuses this invocation id
+      // and gets its own attempt id, so retries never look like separate calls.
+      const providerInvocationId = newStatisticsInvocationId();
       const usageFromProviderResult = (value: unknown) => {
         if (!value || typeof value !== 'object') return undefined;
         const raw = (value as { usage?: Record<string, unknown> }).usage;
@@ -1936,6 +1946,9 @@ export class ModelHandler {
       }) => {
         if (!opts?.runId) return;
         try {
+          const attemptOrdinal = ++providerAttemptOrdinal;
+          const attemptUsage = observation.usage ?? usageFromProviderResult(observation.result)
+            ?? (model.contextWindow ? { contextWindow: model.contextWindow } : undefined);
           recordStatisticsEvent(createStatisticsEvent({
             type: 'model.attempt',
             runId: opts.runId,
@@ -1946,14 +1959,23 @@ export class ModelHandler {
               name: model.adapter || model.provider,
             },
             credentialId: opaqueCredentialId,
-            attempt: ++providerAttemptOrdinal,
+            attempt: attemptOrdinal,
+            invocationId: providerInvocationId,
+            attemptId: statisticsAttemptId(providerInvocationId, attemptOrdinal),
             outcome: observation.outcome,
             durationMs: observation.durationMs,
+            // Provider phase == the measured provider/network call for THIS
+            // attempt. Nothing is inferred when a boundary is unavailable.
+            phases: { provider: observation.durationMs },
             errorClass: observation.outcome === 'error'
               ? classifyStatisticsError(observation.error)
               : undefined,
-            usage: observation.usage ?? usageFromProviderResult(observation.result)
-              ?? (model.contextWindow ? { contextWindow: model.contextWindow } : undefined),
+            // Cache semantics are only claimed for a completed call: a failed or
+            // cancelled attempt reports no cache outcome at all.
+            cacheOutcome: observation.outcome === 'completed'
+              ? statisticsCacheOutcomeFromUsage(attemptUsage)
+              : undefined,
+            usage: attemptUsage,
           }));
         } catch {
           // Metadata instrumentation is never allowed to affect a provider call.
@@ -2553,6 +2575,9 @@ export class ModelHandler {
         const toolCallMessages: FlujoChatMessage[] = [];
         const processedToolCalls: ProcessedToolCall[] = [];
         const toolStartedAt = Date.now();
+        // Stable identity for this LOGICAL tool invocation, so a duplicate
+        // observation of the same call is deduplicated during aggregation.
+        const toolInvocationId = newStatisticsInvocationId();
 
         try {
           // Cancellation check BEFORE starting this call (issue #109/#252): once
@@ -2951,6 +2976,10 @@ export class ModelHandler {
           // inbound signal from the caller; released in the finally below so
           // controllers never leak.
           const cancelScope = conversationId ?? runId;
+          // Issue #413: ONE canonical owner key per run for MCP-side resources
+          // (Bash sessions). `run:<runId>` is preferred because the run is the
+          // lifetime whose end must release them; a conversation outlives it.
+          const runOwnerScope = ownerScopeForRun({ runId, conversationId });
           const perCallController = cancelScope ? registerToolCall(cancelScope, id) : undefined;
           const callSignal = combineAbortSignals(signal, perCallController?.signal);
           let result: Awaited<ReturnType<typeof mcpService.callTool>>;
@@ -2971,7 +3000,7 @@ export class ModelHandler {
               decoded.nodeId,
               callSignal,
               'model',
-              conversationId ? `conversation:${conversationId}` : undefined,
+              runOwnerScope,
             );
           } finally {
             if (cancelScope) releaseToolCall(cancelScope, id);
@@ -3275,8 +3304,13 @@ export class ModelHandler {
               node: node ? { id: node.nodeId, name: node.nodeName } : undefined,
               tool: { id: decodedForUi?.tool ?? name, name, kind },
               provider: decodedForUi ? { id: decodedForUi.server } : undefined,
+              invocationId: toolInvocationId,
               outcome: cancelled ? 'cancelled' : failed ? 'error' : 'completed',
               durationMs: Math.max(0, Date.now() - toolStartedAt),
+              phases: { tool: Math.max(0, Date.now() - toolStartedAt) },
+              // Metadata ONLY: byte/character counts and a normalized shape
+              // category. Arguments and results themselves are never recorded.
+              payload: statisticsPayloadMetadata(argsString, content),
               errorClass: failed ? classifyStatisticsError(cancelled ? { type: 'cancelled' } : { type: 'tool' }) : undefined,
             }));
           }

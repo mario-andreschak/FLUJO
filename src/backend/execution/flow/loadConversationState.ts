@@ -9,6 +9,7 @@ import {
   markDanglingToolEffectsUnknown,
   reconcileInterruptedRecovery,
 } from './recoveryCheckpoint';
+import { coalesceLoad, noteRead, noteWrite } from './conversationStateCache';
 
 const log = createLogger('backend/execution/flow/loadConversationState');
 
@@ -22,6 +23,11 @@ const log = createLogger('backend/execution/flow/loadConversationState');
  * (respond, debug/step, debug/continue, breakpoints, edit-state) each repeated.
  * NOTE: the cancel route deliberately keeps its own load (it treats a storage
  * read error as a hard 500 rather than "not found"), so it does not use this.
+ *
+ * Issue #413: the durable half is COALESCED per conversation id. Once the bounded
+ * cache may evict a completed conversation, several control routes can miss at
+ * the same instant; without coalescing each would independently replay the log
+ * and re-persist the same dangling-tool repair.
  */
 export async function loadConversationState(conversationId: string): Promise<SharedState | undefined> {
   // Path-traversal guard (issue #126): the conversationId becomes a filesystem
@@ -35,8 +41,19 @@ export async function loadConversationState(conversationId: string): Promise<Sha
   }
   if (FlowExecutor.conversationStates.has(conversationId)) {
     log.debug('Loaded state from memory', { conversationId });
+    noteRead(conversationId, true);
     return FlowExecutor.conversationStates.get(conversationId);
   }
+  noteRead(conversationId, false);
+  return coalesceLoad(conversationId, () => loadFromDurableStorage(conversationId));
+}
+
+/**
+ * The durable half of the load: snapshot -> conversation-log replay ->
+ * interrupted-recovery reconciliation -> dangling-tool repair -> cache adoption.
+ * Extracted so `coalesceLoad` can guarantee exactly one execution per id.
+ */
+async function loadFromDurableStorage(conversationId: string): Promise<SharedState | undefined> {
   const storageKey = `conversations/${conversationId}` as StorageKey;
   try {
     const state = await loadItemBackend<SharedState>(storageKey, undefined as any);
@@ -72,6 +89,7 @@ export async function loadConversationState(conversationId: string): Promise<Sha
         log.warn('Failed to repair dangling tool calls on load; continuing', { conversationId, repairError });
       }
       FlowExecutor.conversationStates.set(conversationId, state);
+      noteWrite(conversationId, state);
       return state;
     }
   } catch (error) {
