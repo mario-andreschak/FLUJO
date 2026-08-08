@@ -1156,7 +1156,16 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
                 {(message.content as any[]).map((part, partIndex) => {
                   if (part?.type === 'text') {
                     return (
-                      <ReactMarkdown key={partIndex} remarkPlugins={[remarkGfm]}>
+                      // Same renderer map as the string-content path above: it
+                      // routes anchors through MarkdownLink, so multipart text
+                      // links consume the bubble's `--flujo-link-color` instead
+                      // of the UA default (invisible violet-on-violet in the
+                      // light modern theme).
+                      <ReactMarkdown
+                        key={partIndex}
+                        remarkPlugins={[remarkGfm]}
+                        components={MARKDOWN_COMPONENTS}
+                      >
                         {part.text}
                       </ReactMarkdown>
                     );

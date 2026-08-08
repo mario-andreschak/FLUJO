@@ -112,4 +112,13 @@ describe('light modern theme — the reported surface', () => {
       contrast(surfaceLinkColor(theme), theme.palette.background.paper),
     ).toBeGreaterThanOrEqual(7);
   });
+
+  it('system/other bubbles (info.light fill) also inherit a readable foreground', () => {
+    // Roles other than assistant/tool are accent-filled too (info.light), so they
+    // take the same `inherit` treatment; the brand tint would be a regression there.
+    const bubble = theme.palette.info.light;
+    const inherited = theme.palette.info.contrastText;
+    expect(contrast(inherited, bubble)).toBeGreaterThan(contrast(theme.palette.primary.main, bubble));
+    expect(contrast(inherited, bubble)).toBeGreaterThanOrEqual(3);
+  });
 });
