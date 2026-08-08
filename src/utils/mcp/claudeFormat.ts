@@ -105,6 +105,9 @@ export function toClaudeFormat(
         break;
       }
       case 'streamable': {
+        // NOTE (#392): a `launch` spec is deliberately NOT exported. It is
+        // FLUJO-specific lifecycle metadata with no Claude equivalent; Claude
+        // would be handed a URL it cannot reach and nothing to start behind it.
         entry.type = 'http';
         entry.url = server.serverUrl;
         if (server.headers && Object.keys(server.headers).length > 0) {

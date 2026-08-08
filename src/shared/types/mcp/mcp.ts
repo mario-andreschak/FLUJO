@@ -185,12 +185,35 @@ export type MCPStdioConfig = StdioServerParameters & MCPManagerConfig & {
   transport: 'stdio';
 };
 
+/**
+ * Launch-and-connect (#392): the process FLUJO would start before connecting to
+ * `serverUrl`. Deliberately ORTHOGONAL to `transport` — the discriminant keeps
+ * answering "how do we talk to it", while `launch` answers "who starts it".
+ * Modelling this as a fifth union member would force a review of ~67 transport
+ * discriminant checks across 15+ files; as an optional field every existing
+ * check keeps its exact meaning and code that ignores `launch` behaves as today.
+ *
+ * NOTE (Phase 1): FLUJO does NOT spawn this process yet. The spec is persisted
+ * and displayed read-only so the user can start it themselves; owning the
+ * process lifecycle (readiness polling, teardown, orphan reaping) is Phase 2.
+ */
+export type MCPLaunchSpec = {
+  command: string;
+  args?: string[];
+  env?: Record<string, EnvVarValue>;
+  cwd?: string;
+  /** How long to poll serverUrl before declaring failure (Phase 2). Default 30_000. */
+  readyTimeoutMs?: number;
+};
+
 export type MCPSSEConfig = SSEClientTransportOptions & MCPManagerConfig & {
   transport: 'sse';
   serverUrl: string;
   // Custom HTTP headers sent on every request (e.g. Authorization, X-SAP-System-Id).
   // Values may be secret (masked/encrypted) or bound to a global variable (#84).
   headers?: Record<string, MCPHeaderValue>;
+  /** Optional launch-and-connect spec (#392). Not spawned by FLUJO yet. */
+  launch?: MCPLaunchSpec;
 };
 
 export type MCPStreamableConfig = StreamableHTTPClientTransportOptions & MCPManagerConfig & {
@@ -209,6 +232,8 @@ export type MCPStreamableConfig = StreamableHTTPClientTransportOptions & MCPMana
   oauthTokens?: OAuthTokens;
   oauthCodeVerifier?: string;
   authorizationUrl?: string; // OAuth authorization URL when authentication is required
+  /** Optional launch-and-connect spec (#392). Not spawned by FLUJO yet. */
+  launch?: MCPLaunchSpec;
 };
 
 export type MCPWebSocketConfig = MCPManagerConfig & {

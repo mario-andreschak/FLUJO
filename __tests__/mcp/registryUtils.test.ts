@@ -15,7 +15,7 @@ import {
   serverIconUrl
 } from '@/utils/mcp/registry';
 import { normalizeSpotlightSource } from '@/shared/config/spotlightServers';
-import { MCPStdioConfig, MCPStreamableConfig, MCPSSEConfig } from '@/shared/types/mcp/mcp';
+import { MCPServerConfig, MCPStdioConfig, MCPStreamableConfig, MCPSSEConfig } from '@/shared/types/mcp/mcp';
 
 const baseServer = (overrides: Partial<RegistryServer>): RegistryServer => ({
   name: 'io.github.example/weather-mcp',
@@ -132,12 +132,70 @@ describe('getInstallOptions', () => {
     expect(getInstallOptions(server)).toHaveLength(1);
   });
 
-  it('omits packages that expose an HTTP endpoint instead of stdio', () => {
+  // #392: these used to be hidden outright. They are now surfaced as
+  // manual-launch options (FLUJO describes them, the user starts them).
+  it('surfaces packages that expose an HTTP endpoint as manual-launch options', () => {
     const server = baseServer({
       packages: [{
         registryType: 'npm',
         identifier: '@example/weather-mcp',
-        transport: { type: 'streamable-http', url: 'http://localhost:{--port}/mcp' }
+        transport: { type: 'streamable-http', url: 'http://localhost:{--port}/mcp' },
+        packageArguments: [{ type: 'named', name: '--port', value: '8088' }]
+      }]
+    });
+    const options = getInstallOptions(server);
+    expect(options).toHaveLength(1);
+    const option = options[0];
+    expect(option.kind).toBe('manual-launch');
+    if (option.kind !== 'manual-launch') throw new Error('expected a manual-launch option');
+    expect(option.transport).toBe('streamable');
+    expect(option.resolvedUrl).toBe('http://localhost:8088/mcp');
+    expect(option.runLine).toContain('npx');
+    expect(option.runLine).toContain('@example/weather-mcp');
+  });
+
+  it('sorts manual-launch options after everything FLUJO can install itself', () => {
+    const server = baseServer({
+      packages: [
+        {
+          registryType: 'npm',
+          identifier: '@example/http-mcp',
+          transport: { type: 'streamable-http', url: 'http://127.0.0.1:9000/mcp' }
+        },
+        { registryType: 'npm', identifier: '@example/stdio-mcp', transport: { type: 'stdio' } }
+      ]
+    });
+    const options = getInstallOptions(server);
+    expect(options.map(option => option.kind)).toEqual(['package', 'manual-launch']);
+  });
+
+  it('builds a launch-and-connect config carrying the launch spec', () => {
+    const server = baseServer({
+      packages: [{
+        registryType: 'oci',
+        identifier: 'example/weather-mcp',
+        version: '1.0.0',
+        transport: { type: 'streamable-http', url: 'http://localhost:{PORT}/mcp' },
+        environmentVariables: [{ name: 'PORT', default: '8088' }]
+      }]
+    });
+    const option = getInstallOptions(server)[0];
+    const config = buildConfigFromOption(server, option) as Partial<MCPServerConfig> & {
+      serverUrl?: string;
+      launch?: { command: string; args?: string[] };
+    };
+    expect(config.transport).toBe('streamable');
+    expect(config.serverUrl).toBe('http://localhost:8088/mcp');
+    expect(config.launch?.command).toBe('docker');
+    expect(config.launch?.args).toContain('example/weather-mcp:1.0.0');
+  });
+
+  it('still omits packages whose transport FLUJO does not understand', () => {
+    const server = baseServer({
+      packages: [{
+        registryType: 'npm',
+        identifier: '@example/weather-mcp',
+        transport: { type: 'carrier-pigeon' }
       }]
     });
     expect(getInstallOptions(server)).toHaveLength(0);

@@ -7,6 +7,7 @@ This section provides detailed documentation for Flujo's features.
 - **[Overview](./mcp/overview.md)**: Introduction to the Model Context Protocol
 - **[Local Servers](./mcp/local-servers.md)**: Running local MCP servers
 - **[GitHub Servers](./mcp/github-servers.md)**: Using GitHub MCP servers
+- **[Launch-and-connect servers](./mcp/launch-and-connect.md)**: Registry packages you run locally but talk to over HTTP — the `launch` field, loopback-only URL templating, and the ServerModal flow (Issue #392)
 
 ## Flows
 

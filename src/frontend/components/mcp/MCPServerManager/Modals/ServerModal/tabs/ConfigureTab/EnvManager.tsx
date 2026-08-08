@@ -15,7 +15,7 @@ import {
 } from '@mui/material';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 
-const log = createLogger('frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/LocalServerTab/EnvManager');
+const log = createLogger('frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/ConfigureTab/EnvManager');
 
 interface EnvManagerProps {
   env: Record<string, string>;

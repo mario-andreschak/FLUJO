@@ -417,8 +417,9 @@ export interface McpValidationResult {
 /**
  * Validate + pack the selected MCP servers by reference. Local-only servers
  * (no `source`, or `source.type === 'local'`) HARD-ABORT with a clear error —
- * their untrusted code cannot be packaged (#193). Everything else becomes a
- * by-reference entry carrying only env/header declarations.
+ * their untrusted code cannot be packaged (#193). Launch-and-connect servers
+ * (#392) hard-abort too: the format cannot carry a `launch` spec. Everything
+ * else becomes a by-reference entry carrying only env/header declarations.
  */
 export function validateMcpSelection(
   serverNames: string[],
@@ -438,6 +439,16 @@ export function validateMcpSelection(
     if (!installOrigin) {
       errors.push(
         `MCP server "${name}" is a local server and cannot be packaged. Re-install it from GitHub, the registry, the marketplace, or as a remote server, then try again.`,
+      );
+      continue;
+    }
+    // #392: a launch-and-connect server carries a `launch` spec describing a
+    // local process that must be running behind its URL. The package format has
+    // no representation for that, and silently dropping it would export a
+    // package that installs an endpoint nobody starts. Reject explicitly.
+    if ((config as { launch?: unknown }).launch) {
+      errors.push(
+        `MCP server "${name}" is a launch-and-connect server (it runs locally but speaks HTTP). Packages cannot carry its launch command yet, so it cannot be exported.`,
       );
       continue;
     }

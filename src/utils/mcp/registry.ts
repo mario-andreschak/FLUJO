@@ -8,11 +8,17 @@
  *  - remotes:  connect to a hosted endpoint (streamable-http / sse)
  *
  * This module turns those into Partial<MCPServerConfig> objects that the
- * ServerModal's LocalServerTab can finalize (fill in required env vars, test,
+ * ServerModal's ConfigureTab can finalize (fill in required env vars, test,
  * save) — the same handoff the GitHub/Remote/Reference tabs use.
+ *
+ * A third shape exists (#392): packages whose `transport.type` is
+ * `streamable-http` / `sse` — you launch them locally but talk to them over
+ * HTTP. FLUJO does not own that process lifecycle yet, so those surface as
+ * `manual-launch` options: visible, with the exact command line to run and the
+ * loopback URL to connect to, but never executed by FLUJO.
  */
 
-import { MCPServerConfig, EnvVarValue, MCPServerIcon, MCPServerSource } from '@/shared/types/mcp/mcp';
+import { MCPServerConfig, EnvVarValue, MCPServerIcon, MCPServerSource, MCPLaunchSpec } from '@/shared/types/mcp/mcp';
 
 // ---------------------------------------------------------------------------
 // Registry API shapes (subset of server.schema.json that we consume)
@@ -127,9 +133,41 @@ export interface RegistryListResponse {
 // Install options
 // ---------------------------------------------------------------------------
 
+/**
+ * A registry package that exposes an HTTP endpoint when run locally (#392).
+ * FLUJO can describe it exactly — command line and loopback URL — but does not
+ * start it (Phase 2). The UI renders these disabled-but-visible with a copyable
+ * run command, so users can see the entry instead of it silently vanishing.
+ */
+export interface ManualLaunchOption {
+  kind: 'manual-launch';
+  label: string;
+  pkg: RegistryPackage;
+  /** How FLUJO would talk to it once the user has started it. */
+  transport: 'streamable' | 'sse';
+  /** Loopback-verified endpoint, absent when the template could not be resolved safely. */
+  resolvedUrl?: string;
+  /** Why `resolvedUrl` is absent, when it is. */
+  urlError?: 'missing-url' | 'unresolved-placeholder' | 'non-loopback' | 'invalid-url';
+  /** Human detail for `urlError` (unbound placeholder name, rejected host, …). */
+  urlErrorDetail?: string;
+  /** The exact command line the user must run themselves. Displayed, NEVER executed. */
+  runLine: string;
+}
+
 export type InstallOption =
   | { kind: 'package'; label: string; pkg: RegistryPackage }
-  | { kind: 'remote'; label: string; remote: RegistryRemote };
+  | { kind: 'remote'; label: string; remote: RegistryRemote }
+  | ManualLaunchOption;
+
+/**
+ * True for options FLUJO can install without the user starting anything by
+ * hand. Headless install paths (registryInstall, the MCP assistant) filter on
+ * this so a `manual-launch` entry is never silently chosen for them.
+ */
+export function isAutoInstallable(option: InstallOption): boolean {
+  return option.kind !== 'manual-launch';
+}
 
 const PACKAGE_RUNNERS: Record<string, string> = {
   npm: 'npx',
@@ -151,37 +189,104 @@ export function registryTypeLabel(registryType: string): string {
   return REGISTRY_TYPE_LABELS[registryType] || registryType;
 }
 
-function isPackageSupported(pkg: RegistryPackage): boolean {
+/**
+ * Why FLUJO can (or cannot) one-click install a registry package. A bare
+ * boolean loses the distinction between "we have no idea how to run this" and
+ * "we know exactly how to run it, we just don't own the process yet" — and the
+ * UI needs that distinction to degrade gracefully instead of hiding the entry.
+ */
+export type PackageSupport =
+  | { supported: true }
+  | {
+      supported: false;
+      reason:
+        | 'no-identifier'
+        | 'unknown-runner'
+        /** Launch locally, connect over HTTP (#392) — describable, not yet spawnable. */
+        | 'launch-and-connect'
+        | 'unknown-transport';
+    };
+
+export function packageSupport(pkg: RegistryPackage): PackageSupport {
   // A package we can only run if we know a runner for its registry type
   // (or the publisher told us one explicitly via runtimeHint).
-  if (!pkg.identifier) return false;
-  if (!PACKAGE_RUNNERS[pkg.registryType] && !pkg.runtimeHint) return false;
-  // Packages that expose an HTTP endpoint when run locally (transport
-  // streamable-http with a url template) need a run-then-connect flow FLUJO
-  // doesn't have; only plain stdio packages are one-click installable.
+  if (!pkg.identifier) return { supported: false, reason: 'no-identifier' };
+  if (!PACKAGE_RUNNERS[pkg.registryType] && !pkg.runtimeHint) {
+    return { supported: false, reason: 'unknown-runner' };
+  }
   const transportType = pkg.transport?.type;
-  if (transportType && transportType !== 'stdio') return false;
-  return true;
+  if (!transportType || transportType === 'stdio') return { supported: true };
+  // Packages that expose an HTTP endpoint when run locally need a
+  // spawn-then-poll flow FLUJO doesn't have yet; they are surfaced as
+  // manual-launch options rather than dropped.
+  if (transportType === 'streamable-http' || transportType === 'sse') {
+    return { supported: false, reason: 'launch-and-connect' };
+  }
+  return { supported: false, reason: 'unknown-transport' };
+}
+
+/** Thin boolean wrapper over {@link packageSupport}. */
+export function isPackageSupported(pkg: RegistryPackage): boolean {
+  return packageSupport(pkg).supported;
 }
 
 function isRemoteSupported(remote: RegistryRemote): boolean {
   return Boolean(remote.url) && (remote.type === 'streamable-http' || remote.type === 'sse');
 }
 
+/** Quote a token for display in a copyable shell command line. */
+function shellToken(token: string): string {
+  return /[\s"'$`\\]/.test(token) ? `"${token.replace(/(["$`\\])/g, '\\$1')}"` : token;
+}
+
+/** The exact command line a user would type to start a manual-launch package. */
+export function runCommandLine(command: string, args: string[]): string {
+  return [command, ...args].map(shellToken).join(' ');
+}
+
+/** Build the `manual-launch` option for a launch-and-connect package (#392). */
+function manualLaunchOption(pkg: RegistryPackage): ManualLaunchOption {
+  const { command, args } = packageCommandAndArgs(pkg);
+  const transport: 'streamable' | 'sse' = pkg.transport?.type === 'sse' ? 'sse' : 'streamable';
+  const template = pkg.transport?.url;
+  const base: ManualLaunchOption = {
+    kind: 'manual-launch',
+    label: `${registryTypeLabel(pkg.registryType)}: ${pkg.identifier} (manual start)`,
+    pkg,
+    transport,
+    runLine: runCommandLine(command, args)
+  };
+  if (!template) return { ...base, urlError: 'missing-url', urlErrorDetail: 'no transport.url declared' };
+  const resolution = resolveTransportUrl(template, {
+    env: environmentBindings(pkg.environmentVariables),
+    args: {
+      ...argumentBindings(pkg.runtimeArguments),
+      ...argumentBindings(pkg.packageArguments)
+    }
+  });
+  if ('url' in resolution) return { ...base, resolvedUrl: resolution.url };
+  return { ...base, urlError: resolution.error, urlErrorDetail: resolution.detail };
+}
+
 /**
- * All install options FLUJO can act on for a registry entry, packages first.
- * Unsupported entries (unknown package type, non-stdio package transport,
- * unknown remote type) are silently omitted.
+ * All install options for a registry entry: packages first, then hosted
+ * remotes, then launch-and-connect packages the user must start themselves.
+ * Entries FLUJO genuinely cannot describe (unknown package type, unknown
+ * transport, unknown remote type) are still omitted.
  */
 export function getInstallOptions(server: RegistryServer): InstallOption[] {
   const options: InstallOption[] = [];
+  const manual: InstallOption[] = [];
   for (const pkg of server.packages ?? []) {
-    if (isPackageSupported(pkg)) {
+    const support = packageSupport(pkg);
+    if (support.supported) {
       options.push({
         kind: 'package',
         label: `${registryTypeLabel(pkg.registryType)}: ${pkg.identifier}`,
         pkg
       });
+    } else if (support.reason === 'launch-and-connect') {
+      manual.push(manualLaunchOption(pkg));
     }
   }
   for (const remote of server.remotes ?? []) {
@@ -193,7 +298,9 @@ export function getInstallOptions(server: RegistryServer): InstallOption[] {
       });
     }
   }
-  return options;
+  // Manual-launch entries come last: every existing caller that just takes
+  // options[0] keeps preferring something FLUJO can actually install.
+  return [...options, ...manual];
 }
 
 // ---------------------------------------------------------------------------
@@ -302,6 +409,97 @@ function argumentsToTokens(args?: RegistryArgument[]): string[] {
   return (args ?? []).flatMap(argumentToTokens);
 }
 
+/**
+ * Name → value map for NAMED arguments, preserving what `argumentsToTokens()`
+ * necessarily destroys (it flattens `--port 8088` into a token vector). Needed
+ * to resolve `{--port}` style URL templates. Deliberately a sibling: the token
+ * function has callers and tests that depend on its exact behaviour.
+ */
+export function argumentBindings(args?: RegistryArgument[]): Record<string, string> {
+  const bindings: Record<string, string> = {};
+  for (const arg of args ?? []) {
+    if (arg.type !== 'named' || !arg.name) continue;
+    const value = arg.value ?? arg.default;
+    if (value === undefined || value === '') continue;
+    bindings[arg.name] = value;
+  }
+  return bindings;
+}
+
+/** Name → value map for declared environment variables (`value ?? default`). */
+export function environmentBindings(vars?: RegistryKeyValueInput[]): Record<string, string> {
+  const bindings: Record<string, string> = {};
+  for (const v of vars ?? []) {
+    if (!v.name) continue;
+    const value = v.value ?? v.default;
+    if (value === undefined || value === '') continue;
+    bindings[v.name] = value;
+  }
+  return bindings;
+}
+
+export type TransportUrlResolution =
+  | { url: string }
+  | { error: 'unresolved-placeholder' | 'non-loopback' | 'invalid-url'; detail: string };
+
+/**
+ * Loopback per RFC 5735 / RFC 4291: `localhost`, the whole 127.0.0.0/8 block,
+ * and `::1`. `URL.hostname` brackets IPv6 literals, so strip those first.
+ */
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
+  if (host === 'localhost' || host === '::1' || host === '0:0:0:0:0:0:0:1') return true;
+  const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!match) return false;
+  const octets = match.slice(1, 5).map(Number);
+  if (octets.some(octet => octet > 255)) return false;
+  return octets[0] === 127;
+}
+
+/**
+ * Resolve a registry `Package.transport.url` template against the entry's own
+ * declarations. `{DEVICESHELF_API_PORT}` binds against environment-variable
+ * names, `{--host}` / `{--port}` against named-argument names.
+ *
+ * SECURITY (#392): a launch-and-connect entry means "FLUJO starts this process
+ * on your machine". A live scan of the registry found publishers templating
+ * this field to PUBLIC endpoints, which would point a config the user believes
+ * is local at a third party. Any host that is not loopback is therefore
+ * rejected outright; such entries fall back to the plain remote path, which
+ * carries the marketplace trust gate.
+ */
+export function resolveTransportUrl(
+  urlTemplate: string,
+  bindings: { env: Record<string, string>; args: Record<string, string> }
+): TransportUrlResolution {
+  const unbound: string[] = [];
+  const substituted = urlTemplate.replace(/\{([^{}]+)\}/g, (_match, name: string) => {
+    const value = bindings.args[name] ?? bindings.env[name];
+    if (value === undefined || value === '') {
+      unbound.push(name);
+      return '';
+    }
+    return value;
+  });
+  if (unbound.length > 0) {
+    return { error: 'unresolved-placeholder', detail: unbound.join(', ') };
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(substituted);
+  } catch {
+    return { error: 'invalid-url', detail: substituted };
+  }
+  if (!/^https?:$/.test(parsed.protocol)) {
+    return { error: 'invalid-url', detail: substituted };
+  }
+  if (!isLoopbackHost(parsed.hostname)) {
+    return { error: 'non-loopback', detail: parsed.hostname };
+  }
+  return { url: parsed.toString() };
+}
+
 function buildEnvRecord(vars?: RegistryKeyValueInput[]): Record<string, EnvVarValue> {
   const env: Record<string, EnvVarValue> = {};
   for (const v of vars ?? []) {
@@ -361,7 +559,16 @@ function ociImage(pkg: RegistryPackage): string {
   return !hasTagOrDigest && pkg.version ? `${pkg.identifier}:${pkg.version}` : pkg.identifier;
 }
 
-function buildPackageConfig(server: RegistryServer, pkg: RegistryPackage): Partial<MCPServerConfig> {
+/**
+ * The runner command + argument vector for a package, shared by the stdio
+ * builder and the launch-and-connect builder so both describe the *same*
+ * process (one FLUJO spawns, one the user spawns).
+ */
+function packageCommandAndArgs(pkg: RegistryPackage): {
+  command: string;
+  args: string[];
+  env: Record<string, EnvVarValue>;
+} {
   const command = pkg.runtimeHint || PACKAGE_RUNNERS[pkg.registryType];
   const packageTokens = argumentsToTokens(pkg.packageArguments);
   const runtimeTokens = argumentsToTokens(pkg.runtimeArguments);
@@ -393,6 +600,11 @@ function buildPackageConfig(server: RegistryServer, pkg: RegistryPackage): Parti
       break;
   }
 
+  return { command, args, env };
+}
+
+function buildPackageConfig(server: RegistryServer, pkg: RegistryPackage): Partial<MCPServerConfig> {
+  const { command, args, env } = packageCommandAndArgs(pkg);
   return {
     ...baseConfig(server),
     transport: 'stdio',
@@ -401,6 +613,37 @@ function buildPackageConfig(server: RegistryServer, pkg: RegistryPackage): Parti
     env,
     // Package runners fetch published packages; no local checkout exists or is
     // needed, so run from the app root.
+    rootPath: '.'
+  } as Partial<MCPServerConfig>;
+}
+
+/**
+ * Launch-and-connect config (#392): an ordinary streamable/sse config whose
+ * `launch` field records the process that has to be running behind it.
+ *
+ * Phase 1 produces and PERSISTS this shape; nothing spawns it. `serverUrl` is
+ * empty when the registry's URL template could not be resolved to a verified
+ * loopback endpoint — the user fills it in in the Configure tab, exactly as
+ * with any other placeholder the registry left behind.
+ */
+function buildLaunchAndConnectConfig(
+  server: RegistryServer,
+  option: ManualLaunchOption
+): Partial<MCPServerConfig> {
+  const { command, args, env } = packageCommandAndArgs(option.pkg);
+  const launch: MCPLaunchSpec = {
+    command,
+    ...(args.length > 0 ? { args } : {}),
+    ...(Object.keys(env).length > 0 ? { env } : {})
+  };
+  return {
+    ...baseConfig(server),
+    transport: option.transport,
+    serverUrl: option.resolvedUrl ?? '',
+    headers: {},
+    env,
+    launch,
+    // The package runner fetches a published package; there is no checkout.
     rootPath: '.'
   } as Partial<MCPServerConfig>;
 }
@@ -428,7 +671,7 @@ function buildRemoteConfig(server: RegistryServer, remote: RegistryRemote): Part
 
 /**
  * Build a FLUJO server config from a registry entry + chosen install option.
- * The result is a Partial<MCPServerConfig> meant to pre-fill LocalServerTab;
+ * The result is a Partial<MCPServerConfig> meant to pre-fill ConfigureTab;
  * required-but-unknown values are left as visible `<placeholders>` / empty
  * env values for the user to fill in before saving.
  */
@@ -438,12 +681,16 @@ export function buildConfigFromOption(
 ): Partial<MCPServerConfig> {
   const config = option.kind === 'package'
     ? buildPackageConfig(server, option.pkg)
-    : buildRemoteConfig(server, option.remote);
+    : option.kind === 'manual-launch'
+      ? buildLaunchAndConnectConfig(server, option)
+      : buildRemoteConfig(server, option.remote);
   // Install-origin (#193): every server built from a registry entry carries a
   // `registry` source so package export can serialize it by reference. Both the
   // Marketplace and Spotlight tabs (and the headless installRegistryServer) funnel
   // through here, so setting it once covers all registry-backed install paths.
-  const version = option.kind === 'package' ? (option.pkg.version ?? server.version) : server.version;
+  const version = option.kind === 'remote'
+    ? server.version
+    : (option.pkg.version ?? server.version);
   const source: MCPServerSource = {
     type: 'registry',
     registryName: server.name,
@@ -499,10 +746,10 @@ export function verificationStatusOf(result: RegistryServerResult | null | undef
 
 /** Required env-var / header NAMES an option declares (regardless of whether a value exists). */
 export function requiredInputNames(option: InstallOption): string[] {
-  if (option.kind === 'package') {
-    return (option.pkg.environmentVariables ?? []).filter(v => v.isRequired && v.name).map(v => v.name);
+  if (option.kind === 'remote') {
+    return (option.remote.headers ?? []).filter(h => h.isRequired && h.name).map(h => h.name);
   }
-  return (option.remote.headers ?? []).filter(h => h.isRequired && h.name).map(h => h.name);
+  return (option.pkg.environmentVariables ?? []).filter(v => v.isRequired && v.name).map(v => v.name);
 }
 
 /**
@@ -652,12 +899,12 @@ export function missingRequiredInputs(
   option: InstallOption,
   envOverrides?: Record<string, string>
 ): string[] {
-  if (option.kind === 'package') {
-    return (option.pkg.environmentVariables ?? [])
-      .filter(v => v.isRequired && !(v.value ?? v.default) && !envOverrides?.[v.name])
-      .map(v => v.name);
+  if (option.kind === 'remote') {
+    return (option.remote.headers ?? [])
+      .filter(h => h.isRequired && !(h.value ?? h.default) && !envOverrides?.[h.name])
+      .map(h => h.name);
   }
-  return (option.remote.headers ?? [])
-    .filter(h => h.isRequired && !(h.value ?? h.default) && !envOverrides?.[h.name])
-    .map(h => h.name);
+  return (option.pkg.environmentVariables ?? [])
+    .filter(v => v.isRequired && !(v.value ?? v.default) && !envOverrides?.[v.name])
+    .map(v => v.name);
 }
