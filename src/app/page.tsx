@@ -7,8 +7,10 @@ import {
   Chip,
   CircularProgress,
   Container,
+  IconButton,
   Paper,
   Stack,
+  Tooltip,
   Typography,
   useTheme,
 } from '@mui/material';
@@ -19,15 +21,14 @@ import {
   AutoAwesomeRounded,
   ChatBubbleRounded,
   CheckCircleRounded,
+  CloseRounded,
   HubRounded,
   LockRounded,
   MemoryRounded,
   ShieldRounded,
-  VisibilityOffRounded,
-  VisibilityRounded,
 } from '@mui/icons-material';
 import Link from 'next/link';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import FeedbackBanner from '@/frontend/components/FeedbackBanner';
 import { TicketsSection } from '@/frontend/components/Tickets/TicketsSection';
@@ -37,12 +38,18 @@ import { useTour } from '@/frontend/contexts/TourContext';
 import { chatService } from '@/frontend/services/chat';
 import { flowService } from '@/frontend/services/flow';
 import { modelService } from '@/frontend/services/model';
+import {
+  DASHBOARD_CARD_IDS,
+  LEGACY_HIDDEN_DASHBOARD_CARD_IDS,
+  isDashboardCardId,
+  type DashboardCardId,
+} from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('app/page');
 
 interface SetupStep {
-  id: 'ai' | 'assistant' | 'talk';
+  id: Exclude<DashboardCardId, 'connectedApps'>;
   number: number;
   title: string;
   description: string;
@@ -256,24 +263,58 @@ export default function HomePage() {
       action: !aiReady ? t('home.talk.finishAi') : assistantReady ? t('home.talk.start') : t('home.talk.createFirst'),
     },
   ];
-  const setupComplete = setupSteps.every((step) => step.complete);
-  const setupCardsHidden = settings.onboarding?.dashboardCardsHidden === true;
-  const showSetupCards = !setupCardsHidden || !setupComplete;
+  const persistedDismissedCards = useMemo<DashboardCardId[]>(() => {
+    const onboarding = settings.onboarding;
+    const stored = onboarding?.dashboardDismissedCards;
+    if (Array.isArray(stored)) {
+      // Explicit per-card state always wins; unknown values are ignored so a
+      // future or corrupted entry cannot hide an unrelated card.
+      return stored.filter(isDashboardCardId);
+    }
+    // Legacy collective flag only ever hid the three setup cards.
+    return onboarding?.dashboardCardsHidden === true ? [...LEGACY_HIDDEN_DASHBOARD_CARD_IDS] : [];
+  }, [settings.onboarding]);
 
-  const setSetupCardsHidden = (hidden: boolean) => {
+  // Dismissals applied in this session are merged with the persisted list so a
+  // quick sequence of clicks cannot overwrite an earlier dismissal while the
+  // asynchronous settings write is still in flight.
+  const [sessionDismissedCards, setSessionDismissedCards] = useState<DashboardCardId[]>([]);
+  const dismissedCards = useMemo(
+    () => new Set<DashboardCardId>([...persistedDismissedCards, ...sessionDismissedCards]),
+    [persistedDismissedCards, sessionDismissedCards],
+  );
+
+  const persistDismissedCards = (nextDismissed: Set<DashboardCardId>) => {
     void updateSettings({
       ...settings,
       onboarding: {
         ...(settings.onboarding ?? {}),
         completed: settings.onboarding?.completed ?? false,
-        dashboardCardsHidden: hidden,
+        // Neutralize the legacy collective flag once explicit state exists.
+        dashboardCardsHidden: false,
+        dashboardDismissedCards: DASHBOARD_CARD_IDS.filter((id) => nextDismissed.has(id)),
       },
     });
   };
 
+  const dismissDashboardCard = (cardId: DashboardCardId) => {
+    if (dismissedCards.has(cardId)) return;
+    setSessionDismissedCards((current) => (current.includes(cardId) ? current : [...current, cardId]));
+    persistDismissedCards(new Set<DashboardCardId>([...dismissedCards, cardId]));
+  };
+
+  const visibleSetupSteps = setupSteps.filter((step) => !dismissedCards.has(step.id));
+  const showConnectedAppsCard = !dismissedCards.has('connectedApps');
+
   const handleStartTour = () => {
-    if (!showSetupCards) {
-      setSetupCardsHidden(false);
+    // The guided tour points at the setup cards, so restore them before it runs.
+    const restored = new Set<DashboardCardId>(dismissedCards);
+    const restoredAny = LEGACY_HIDDEN_DASHBOARD_CARD_IDS.filter((id) => restored.delete(id)).length > 0;
+    if (restoredAny) {
+      setSessionDismissedCards((current) =>
+        current.filter((id) => !LEGACY_HIDDEN_DASHBOARD_CARD_IDS.includes(id)),
+      );
+      persistDismissedCards(restored);
     }
     startTour();
   };
@@ -335,15 +376,6 @@ export default function HomePage() {
               </Typography>
             </Box>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="stretch">
-              {!showSetupCards && (
-                <Button
-                  variant="text"
-                  onClick={() => setSetupCardsHidden(false)}
-                  startIcon={<VisibilityRounded />}
-                >
-                  {t('home.showSetupSteps')}
-                </Button>
-              )}
               <Button variant="outlined" onClick={handleStartTour} startIcon={<AutoAwesomeRounded />}>
                 {t('home.openGuide')}
               </Button>
@@ -351,30 +383,17 @@ export default function HomePage() {
           </Stack>
         </Box>
 
-        {setupComplete && showSetupCards && (
-          <Stack direction="row" justifyContent="flex-end" sx={{ mb: 1.5 }}>
-            <Button
-              size="small"
-              color="inherit"
-              onClick={() => setSetupCardsHidden(true)}
-              startIcon={<VisibilityOffRounded />}
-              sx={{ color: 'text.secondary' }}
-            >
-              {t('home.hideSetupSteps')}
-            </Button>
-          </Stack>
-        )}
-
+        {visibleSetupSteps.length > 0 && (
         <Box
           component="section"
           aria-label={t('home.gettingStarted')}
           sx={{
-            display: showSetupCards ? 'grid' : 'none',
-            gridTemplateColumns: { xs: '1fr', lg: 'repeat(3, minmax(0, 1fr))' },
+            display: 'grid',
+            gridTemplateColumns: { xs: '1fr', lg: `repeat(${Math.min(visibleSetupSteps.length, 3)}, minmax(0, 1fr))` },
             gap: 2,
           }}
         >
-          {setupSteps.map((step) => {
+          {visibleSetupSteps.map((step) => {
             const Icon = step.icon;
             const highlighted = step.available && !step.complete;
             return (
@@ -435,12 +454,24 @@ export default function HomePage() {
                   >
                     {step.complete ? <CheckCircleRounded /> : <Icon />}
                   </Box>
-                  <Chip
-                    size="small"
-                    color={step.complete ? 'success' : highlighted ? 'primary' : 'default'}
-                    variant="outlined"
-                    label={step.status}
-                  />
+                  <Stack direction="row" alignItems="center" spacing={0.5}>
+                    <Chip
+                      size="small"
+                      color={step.complete ? 'success' : highlighted ? 'primary' : 'default'}
+                      variant="outlined"
+                      label={step.status}
+                    />
+                    <Tooltip title={t(`home.dismissCard.${step.id}`)} disableInteractive>
+                      <IconButton
+                        size="small"
+                        aria-label={t(`home.dismissCard.${step.id}`)}
+                        onClick={() => dismissDashboardCard(step.id)}
+                        sx={{ color: 'text.secondary' }}
+                      >
+                        <CloseRounded fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                  </Stack>
                 </Stack>
 
                 <Typography variant="overline" color="text.secondary" sx={{ mt: 3 }}>
@@ -482,9 +513,11 @@ export default function HomePage() {
             );
           })}
         </Box>
+        )}
 
         <TicketsSection />
 
+        {showConnectedAppsCard && (
         <Paper
           component="section"
           elevation={0}
@@ -521,10 +554,23 @@ export default function HomePage() {
               {t('home.apps.description')}
             </Typography>
           </Box>
-          <Button component={Link} href="/mcp" variant="text" endIcon={<ArrowForwardRounded />}>
-            {t('nav.connectedApps')}
-          </Button>
+          <Stack direction="row" alignItems="center" spacing={0.5}>
+            <Button component={Link} href="/mcp" variant="text" endIcon={<ArrowForwardRounded />}>
+              {t('nav.connectedApps')}
+            </Button>
+            <Tooltip title={t('home.dismissCard.connectedApps')} disableInteractive>
+              <IconButton
+                size="small"
+                aria-label={t('home.dismissCard.connectedApps')}
+                onClick={() => dismissDashboardCard('connectedApps')}
+                sx={{ color: 'text.secondary' }}
+              >
+                <CloseRounded fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </Stack>
         </Paper>
+        )}
 
         <Stack
           direction={{ xs: 'column', sm: 'row' }}

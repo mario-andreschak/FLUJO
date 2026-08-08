@@ -123,13 +123,41 @@ export interface UpdateSettings {
 }
 
 /**
+ * Stable identifiers for the individually dismissible dashboard cards. These
+ * never depend on translated titles or array positions so persisted state stays
+ * valid across copy and layout changes.
+ */
+export type DashboardCardId = 'ai' | 'assistant' | 'talk' | 'connectedApps';
+
+/** Canonical order used when persisting dismissed dashboard cards. */
+export const DASHBOARD_CARD_IDS: readonly DashboardCardId[] = ['ai', 'assistant', 'talk', 'connectedApps'];
+
+/**
+ * Cards covered by the removed collective "hide completed setup steps" toggle.
+ * The legacy flag never hid the connected-apps notice, so it must not be
+ * migrated as if it did.
+ */
+export const LEGACY_HIDDEN_DASHBOARD_CARD_IDS: readonly DashboardCardId[] = ['ai', 'assistant', 'talk'];
+
+/** Type guard used when reading persisted values that may predate this type. */
+export function isDashboardCardId(value: unknown): value is DashboardCardId {
+  return typeof value === 'string' && (DASHBOARD_CARD_IDS as readonly string[]).includes(value);
+}
+
+/**
  * Onboarding / guided-tour settings interface
  */
 export interface OnboardingSettings {
   /** True once the user has finished or skipped the first-run guided tour. */
   completed: boolean;
-  /** Hide the completed three-card setup journey on the dashboard. */
+  /**
+   * Legacy collective hide flag for the three-card setup journey. Kept only so
+   * existing installs keep their hidden cards hidden; new dismissals are stored
+   * in `dashboardDismissedCards`.
+   */
   dashboardCardsHidden?: boolean;
+  /** Dashboard cards the user dismissed individually via their X control. */
+  dashboardDismissedCards?: DashboardCardId[];
 }
 
 /**

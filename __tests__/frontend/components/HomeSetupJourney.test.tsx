@@ -7,7 +7,7 @@ const mockStartTour = jest.fn();
 const mockUpdateSettings = jest.fn();
 let mockSettings: {
   update: { checkOnStartup: boolean };
-  onboarding?: { completed: boolean; dashboardCardsHidden?: boolean };
+  onboarding?: { completed: boolean; dashboardCardsHidden?: boolean; dashboardDismissedCards?: string[] };
 };
 
 jest.mock('@/frontend/services/model', () => ({
@@ -50,6 +50,18 @@ const okJson = (body: object) => ({
   json: async () => body,
 });
 
+const dismissLabels = {
+  ai: 'Dismiss Connect your AI card',
+  assistant: 'Dismiss Create an agent card',
+  talk: 'Dismiss Talk to your agent card',
+  connectedApps: 'Dismiss connected apps notice',
+};
+
+const lastDismissedCards = () => {
+  const call = mockUpdateSettings.mock.calls.at(-1)?.[0];
+  return call?.onboarding?.dashboardDismissedCards as string[] | undefined;
+};
+
 describe('setup-first home journey', () => {
   beforeEach(() => {
     mockTryLoadModels.mockReset();
@@ -79,6 +91,16 @@ describe('setup-first home journey', () => {
     jest.restoreAllMocks();
     Reflect.deleteProperty(globalThis, 'fetch');
   });
+
+  const renderCompletedDashboard = async () => {
+    mockTryLoadModels.mockResolvedValue([{ id: 'model-1' }]);
+    mockLoadFlows.mockResolvedValue([{ id: 'assistant-1' }]);
+    mockCountConversations.mockResolvedValue(1);
+
+    const result = render(<HomePage />);
+    await waitFor(() => expect(screen.getByText('Completed')).toBeInTheDocument());
+    return result;
+  };
 
   it('requires AI setup before agent creation or chat', async () => {
     mockTryLoadModels.mockResolvedValue([]);
@@ -120,29 +142,96 @@ describe('setup-first home journey', () => {
       '/flows?create=assistant',
     );
     expect(screen.getByRole('link', { name: 'Start talking' })).toHaveAttribute('href', '/chat');
-    expect(screen.queryByRole('button', { name: 'Hide completed setup steps' })).not.toBeInTheDocument();
   });
 
-  it('marks Talk complete and offers to hide the setup cards when chats exist', async () => {
+  it('no longer offers the collective hide/show toggle', async () => {
+    await renderCompletedDashboard();
+
+    expect(screen.queryByRole('button', { name: 'Hide completed setup steps' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Show setup steps' })).not.toBeInTheDocument();
+  });
+
+  it('exposes an accessible dismiss control on every dashboard card', async () => {
+    await renderCompletedDashboard();
+
+    for (const label of Object.values(dismissLabels)) {
+      expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
+    }
+  });
+
+  it('dismisses only the selected setup card and preserves unrelated settings', async () => {
+    await renderCompletedDashboard();
+
+    fireEvent.click(screen.getByRole('button', { name: dismissLabels.assistant }));
+
+    expect(screen.queryByRole('button', { name: dismissLabels.assistant })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: dismissLabels.ai })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: dismissLabels.talk })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: dismissLabels.connectedApps })).toBeInTheDocument();
+    expect(screen.queryByText('Create an agent')).not.toBeInTheDocument();
+
+    expect(mockUpdateSettings).toHaveBeenCalledWith(expect.objectContaining({
+      update: { checkOnStartup: false },
+      onboarding: expect.objectContaining({
+        completed: true,
+        dashboardDismissedCards: ['assistant'],
+      }),
+    }));
+  });
+
+  it('dismisses the connected apps card without touching the setup cards', async () => {
+    await renderCompletedDashboard();
+
+    fireEvent.click(screen.getByRole('button', { name: dismissLabels.connectedApps }));
+
+    expect(screen.queryByText('Connected Apps are optional')).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Getting started' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: dismissLabels.ai })).toBeInTheDocument();
+    expect(lastDismissedCards()).toEqual(['connectedApps']);
+  });
+
+  it('keeps earlier dismissals when several cards are dismissed in sequence', async () => {
+    await renderCompletedDashboard();
+
+    fireEvent.click(screen.getByRole('button', { name: dismissLabels.ai }));
+    expect(lastDismissedCards()).toEqual(['ai']);
+
+    fireEvent.click(screen.getByRole('button', { name: dismissLabels.talk }));
+    expect(lastDismissedCards()).toEqual(['ai', 'talk']);
+
+    fireEvent.click(screen.getByRole('button', { name: dismissLabels.connectedApps }));
+    expect(lastDismissedCards()).toEqual(['ai', 'talk', 'connectedApps']);
+  });
+
+  it('keeps persisted dismissals hidden after a reload', async () => {
+    mockSettings = {
+      update: { checkOnStartup: false },
+      onboarding: { completed: true, dashboardDismissedCards: ['talk', 'connectedApps'] },
+    };
+
+    await renderCompletedDashboard();
+
+    expect(screen.getByRole('button', { name: dismissLabels.ai })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: dismissLabels.talk })).not.toBeInTheDocument();
+    expect(screen.queryByText('Connected Apps are optional')).not.toBeInTheDocument();
+  });
+
+  it('renders no empty setup grid once every setup card is dismissed', async () => {
+    mockSettings = {
+      update: { checkOnStartup: false },
+      onboarding: { completed: true, dashboardDismissedCards: ['ai', 'assistant', 'talk'] },
+    };
     mockTryLoadModels.mockResolvedValue([{ id: 'model-1' }]);
     mockLoadFlows.mockResolvedValue([{ id: 'assistant-1' }]);
     mockCountConversations.mockResolvedValue(1);
 
     render(<HomePage />);
 
-    await waitFor(() => expect(screen.getByText('Completed')).toBeInTheDocument());
-    const hideButton = screen.getByRole('button', { name: 'Hide completed setup steps' });
-    fireEvent.click(hideButton);
-
-    expect(mockUpdateSettings).toHaveBeenCalledWith(expect.objectContaining({
-      onboarding: expect.objectContaining({
-        completed: true,
-        dashboardCardsHidden: true,
-      }),
-    }));
+    await waitFor(() => expect(screen.getByText('Connected Apps are optional')).toBeInTheDocument());
+    expect(screen.queryByRole('region', { name: 'Getting started' })).not.toBeInTheDocument();
   });
 
-  it('keeps hidden setup cards reversible after completion', async () => {
+  it('honors the legacy collective hidden flag without hiding connected apps', async () => {
     mockSettings = {
       update: { checkOnStartup: false },
       onboarding: { completed: true, dashboardCardsHidden: true },
@@ -153,13 +242,32 @@ describe('setup-first home journey', () => {
 
     render(<HomePage />);
 
-    const showButton = await screen.findByRole('button', { name: 'Show setup steps' });
+    await waitFor(() => expect(screen.getByText('Connected Apps are optional')).toBeInTheDocument());
     expect(screen.queryByRole('region', { name: 'Getting started' })).not.toBeInTheDocument();
 
-    fireEvent.click(showButton);
+    fireEvent.click(screen.getByRole('button', { name: dismissLabels.connectedApps }));
+
     expect(mockUpdateSettings).toHaveBeenCalledWith(expect.objectContaining({
-      onboarding: expect.objectContaining({ dashboardCardsHidden: false }),
+      onboarding: expect.objectContaining({
+        completed: true,
+        dashboardCardsHidden: false,
+        dashboardDismissedCards: ['ai', 'assistant', 'talk', 'connectedApps'],
+      }),
     }));
+  });
+
+  it('allows dismissing an incomplete setup card without triggering its action', async () => {
+    mockTryLoadModels.mockResolvedValue([]);
+    mockLoadFlows.mockResolvedValue([]);
+
+    render(<HomePage />);
+
+    await waitFor(() => expect(screen.getByText('Required')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: dismissLabels.ai }));
+
+    expect(screen.queryByRole('link', { name: 'Connect AI' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: dismissLabels.assistant })).toBeInTheDocument();
+    expect(lastDismissedCards()).toEqual(['ai']);
   });
 
   it('does not mislabel a failed model check as missing setup', async () => {
