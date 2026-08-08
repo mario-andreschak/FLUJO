@@ -48,6 +48,43 @@ describe('chatService REST methods', () => {
     expect(result).toEqual(list);
   });
 
+  it('getConversationChains: GET the read-only chain projection (#405)', async () => {
+    const chains = {
+      chains: [{ rootId: 'r', title: 'R', updatedAt: 2, activeNodeCount: 1, totalNodeCount: 1, truncated: false, nodes: [] }],
+      totalChains: 1,
+      truncated: false,
+      activeStatuses: ['running'],
+      generatedAt: 5,
+    };
+    fetchMock.mockResolvedValueOnce(makeResponse(200, chains));
+
+    const result = await chatService.getConversationChains();
+
+    expect(fetchMock).toHaveBeenCalledWith('/v1/chat/conversation-chains', undefined);
+    expect(result).toEqual(chains);
+  });
+
+  it('getConversationChains: encodes the root filter and forwards an abort signal', async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse(200, { chains: [], totalChains: 0, truncated: false, activeStatuses: [], generatedAt: 1 }));
+    const controller = new AbortController();
+
+    await chatService.getConversationChains({ rootId: 'a b&c', limit: 3, signal: controller.signal });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/v1/chat/conversation-chains?root=a+b%26c&limit=3',
+      { signal: controller.signal },
+    );
+  });
+
+  it('getConversationChains: maps a non-2xx response to ChatApiError', async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse(400, { error: 'Invalid root conversation id' }));
+
+    await expect(chatService.getConversationChains({ rootId: 'nope' })).rejects.toMatchObject({
+      name: 'ChatApiError',
+      status: 400,
+    });
+  });
+
   it('listConversationPage: sends the cursor paging contract', async () => {
     const page = {
       items: [{ id: 'a', title: 'A', flowId: null, createdAt: 1, updatedAt: 2 }],
