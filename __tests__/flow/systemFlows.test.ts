@@ -13,6 +13,7 @@ import {
   ensureVendoredFlowGenerator,
   FLOW_GENERATOR_ID,
   FLOW_GENERATOR_ROLE,
+  FLOW_GENERATOR_VERSION,
   restoreVendoredFlowGenerator,
 } from '@/backend/services/flow/systemFlows';
 
@@ -31,13 +32,13 @@ describe('vendored Flow Generator', () => {
       expect.objectContaining({
         systemRole: FLOW_GENERATOR_ROLE,
         systemStage: 'architect',
-        systemFlowVersion: 3,
+        systemFlowVersion: FLOW_GENERATOR_VERSION,
         maxTurns: 12,
       }),
       expect.objectContaining({
         systemRole: FLOW_GENERATOR_ROLE,
         systemStage: 'compiler',
-        systemFlowVersion: 3,
+        systemFlowVersion: FLOW_GENERATOR_VERSION,
         maxTurns: 16,
       }),
     ]);
@@ -66,6 +67,22 @@ describe('vendored Flow Generator', () => {
     );
   });
 
+  // #338/A3: generated flows must hand values over with run-scoped ${var:}
+  // rather than minting persistent KV state, which needs an explicit author
+  // decision about scope and retention. The guidance lives in the vendored
+  // prompts, so a version bump is what ships it to existing installs.
+  it('tells the architect to use run variables and never author KV state', () => {
+    const flow = buildVendoredFlowGenerator();
+    const architect = flow.nodes.find(
+      (node) => node.type === 'process' && node.data.properties?.systemStage === 'architect',
+    );
+    const prompt = String(architect?.data.properties?.promptTemplate ?? '');
+    expect(prompt).toContain('${var:NAME}');
+    expect(prompt).toContain('captureVariable');
+    expect(prompt).toContain('Do not generate captureKv');
+    expect(prompt).toContain('${kv:...}');
+  });
+
   it('seeds only when missing and never overwrites an edited flow', async () => {
     const edited = { ...buildVendoredFlowGenerator(), description: 'my edited generator' };
     getFlowMock.mockResolvedValueOnce(edited);
@@ -78,7 +95,7 @@ describe('vendored Flow Generator', () => {
     expect(saveFlowMock).toHaveBeenCalledTimes(1);
   });
 
-  it.each([1, 2])('upgrades incomplete v%s through the versioned save path', async (version) => {
+  it.each([1, 2, 3])('upgrades incomplete v%s through the versioned save path', async (version) => {
     const legacy = buildVendoredFlowGenerator();
     for (const stage of legacy.nodes.filter((node) => node.type === 'process')) {
       stage.data.properties = {

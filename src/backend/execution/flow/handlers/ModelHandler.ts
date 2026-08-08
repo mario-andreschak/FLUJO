@@ -1770,7 +1770,12 @@ export class ModelHandler {
           }
           const refittedMessages = compactForWire(apiMessages, {
             resourceMarkers: budgetMarkers,
-            canUseTools: (sanitizedTools?.length ?? 0) > 0,
+            // The refit ARMS read_resource itself (ensureReadResourceArmed just
+            // below), so a `flujo://run/...` marker minted here is always
+            // dereferenceable — even for a step that was offered no tools at
+            // all. Deriving this from the pre-arming tool list would suppress
+            // the URI and make the refit silently unrecoverable (#338).
+            canUseTools: true,
             compactRecentToolResults: true,
             toolResultHeadChars: ModelHandler.OVERFLOW_TOOL_RESULT_HEAD_CHARS,
           });
@@ -2231,7 +2236,10 @@ export class ModelHandler {
         }
         const refitMessages = compactForWire(apiMessages, {
           resourceMarkers: refitMarkers,
-          canUseTools: (sanitizedTools?.length ?? 0) > 0,
+          // Same as the proactive refit above: read_resource is armed on the
+          // retry, so the URI marker must be emitted regardless of how many
+          // tools the original request carried (#338).
+          canUseTools: true,
           compactRecentToolResults: true,
           allowLossyTruncation: true,
           toolResultHeadChars: ModelHandler.OVERFLOW_TOOL_RESULT_HEAD_CHARS,
