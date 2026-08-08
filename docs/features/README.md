@@ -10,9 +10,8 @@ This section provides detailed documentation for Flujo's features.
 
 ## Flows
 
-- **[Node reference](./flows/README.md)**: Reference guides for individual FlowBuilder nodes
+- **[Flow Node Types](./flows/README.md)**: Reference guides for individual FlowBuilder nodes
 - **[Static node](./flows/static-node.md)**: Inject authored messages and synthetic tool exchanges into a conversation
-- **[Creating Flows](./flows/creating-flows.md)**: How to create and design flows
 - **[Running Flows](./flows/running-flows.md)**: How to run and monitor flows
 - **[FlowSpec ↔ FlowBuilder UI Coverage](./flowspec-ui-coverage.md)**: Which DSL capabilities the visual FlowBuilder can author vs. what still requires the generator / `POST /api/flow/compile` (Issue #186)
 - **[Flow Templates](./flows/templates.md)**: Using and creating flow templates
