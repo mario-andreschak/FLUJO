@@ -72,6 +72,8 @@ import {
 } from './conversationCardPalette';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { chatService } from '@/frontend/services/chat';
+import StickySearchBar from '@/frontend/components/shared/StickySearchBar';
+import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
 
 interface ChatHistoryProps {
   conversations: ConversationListItem[]; // Use ConversationListItem[]
@@ -163,6 +165,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   // Search text is intentionally ephemeral (not persisted): a stale filter
   // silently hiding conversations after a reload would be surprising.
   const [search, setSearch] = React.useState('');
+  const searchInputRef = useAutoFocusSearch();
   // Confirmation dialog state for bulk delete (Delete All / Delete Visible).
   const [bulkDeleteDialog, setBulkDeleteDialog] = React.useState<{
     open: boolean; ids: string[]; label: string;
@@ -847,39 +850,42 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
           bgcolor: modern ? alpha(muiTheme.palette.background.paper, 0.22) : 'rgba(127,127,160,.035)',
         }}
       >
-        <Box sx={{ display: 'flex', gap: 1 }}>
-        <TextField
-          size="small"
-          sx={{ flex: 1 }}
-          placeholder={searchDimension === 'content' ? t('chat.history.searchContent') : t('chat.history.searchTitle')}
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon fontSize="small" />
-              </InputAdornment>
-            ),
-            endAdornment: search ? (
-              <InputAdornment position="end">
-                <IconButton size="small" aria-label={t('chat.history.clearSearch')} onClick={() => setSearch('')}>
-                  <ClearIcon fontSize="small" />
-                </IconButton>
-              </InputAdornment>
-            ) : undefined,
-          }}
-        />
-        <FormControl size="small" sx={{ minWidth: 100 }}>
-          <Select
-            value={searchDimension}
-            onChange={(e) => setSearchDimension(e.target.value as 'title' | 'content')}
-            aria-label={t('chat.history.searchDimension')}
-          >
-            <MenuItem value="title">{t('chat.history.searchTitleOption')}</MenuItem>
-            <MenuItem value="content">{t('chat.history.searchContentOption')}</MenuItem>
-          </Select>
-        </FormControl>
-        </Box>
+        <StickySearchBar mode="container">
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <TextField
+              size="small"
+              sx={{ flex: 1 }}
+              inputRef={searchInputRef}
+              placeholder={searchDimension === 'content' ? t('chat.history.searchContent') : t('chat.history.searchTitle')}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon fontSize="small" />
+                  </InputAdornment>
+                ),
+                endAdornment: search ? (
+                  <InputAdornment position="end">
+                    <IconButton size="small" aria-label={t('chat.history.clearSearch')} onClick={() => setSearch('')}>
+                      <ClearIcon fontSize="small" />
+                    </IconButton>
+                  </InputAdornment>
+                ) : undefined,
+              }}
+            />
+            <FormControl size="small" sx={{ minWidth: 100 }}>
+              <Select
+                value={searchDimension}
+                onChange={(e) => setSearchDimension(e.target.value as 'title' | 'content')}
+                aria-label={t('chat.history.searchDimension')}
+              >
+                <MenuItem value="title">{t('chat.history.searchTitleOption')}</MenuItem>
+                <MenuItem value="content">{t('chat.history.searchContentOption')}</MenuItem>
+              </Select>
+            </FormControl>
+          </Box>
+        </StickySearchBar>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
           <FormControl size="small" sx={{ minWidth: 128, flex: '1 1 128px' }}>
             <Select
