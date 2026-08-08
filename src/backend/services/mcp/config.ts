@@ -217,20 +217,47 @@ export async function loadServerRoots(serverName: string): Promise<string[]> {
 }
 
 /**
+ * Keys `loadServerConfigs()` materialises as an empty placeholder when the
+ * stored record does not have them. Writing those placeholders back would make
+ * every load → save cycle grow the stored JSON with phantom keys, so an empty
+ * value is persisted as "absent" — exactly how it was read (#392). Load re-adds
+ * the same empty default, so this is lossless.
+ */
+const EMPTY_IS_ABSENT_KEYS = [
+  '_buildCommand',
+  '_installCommand',
+  'oauthClientId',
+  'oauthClientSecret'
+] as const;
+
+/**
+ * Storage form of one config: no `name` (it is the record key), no `undefined`
+ * values, and no empty load-time placeholders. Keeps save(load(x)) === x, which
+ * matters for additive optional fields such as `launch` (#392) and for diffing
+ * `db/mcp_servers.json`.
+ */
+function toStoredConfig(config: MCPServerConfig): Record<string, unknown> {
+  // Remove the name property since it is represented by the storage key.
+  // Every server, including shipped package installs, uses this same path.
+  const { name: _, ...configWithoutName } = config;
+  const stored: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(configWithoutName)) {
+    if (value === undefined) continue;
+    if (value === '' && (EMPTY_IS_ABSENT_KEYS as readonly string[]).includes(key)) continue;
+    stored[key] = value;
+  }
+  return stored;
+}
+
+/**
  * Save MCP server configurations to storage
  */
 export async function saveConfig(configs: Map<string, MCPServerConfig>): Promise<MCPServiceResponse> {
   log.debug('Entering saveConfig method');
   try {
     const mcpServers = Object.fromEntries(
-      Array.from(configs.entries()).map(([name, config]) => {
-        // Remove the name property since it is represented by the storage key.
-        // Every server, including shipped package installs, uses this same path.
-        const { name: _, ...configWithoutName } = config;
-
-        // Return the entry with the server name as the key
-        return [name, configWithoutName];
-      })
+      // Return each entry with the server name as the key
+      Array.from(configs.entries()).map(([name, config]) => [name, toStoredConfig(config)])
     );
 
     await saveItem(StorageKey.MCP_SERVERS, mcpServers);

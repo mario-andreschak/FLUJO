@@ -154,6 +154,39 @@ describe('getInstallOptions', () => {
     expect(option.runLine).toContain('@example/weather-mcp');
   });
 
+  // #392 regression: the manual-launch line is COPIED INTO A SHELL that has
+  // none of the config env, so a bare `-e PORT` would never reach the
+  // container. Declared values are inlined; a secret is a placeholder, never a
+  // value, and the spawned config keeps the by-name pass-through form.
+  it('renders a copyable docker line with env values inlined and secrets masked', () => {
+    const server = baseServer({
+      packages: [{
+        registryType: 'oci',
+        identifier: 'example/weather-mcp',
+        version: '1.0.0',
+        transport: { type: 'streamable-http', url: 'http://localhost:{PORT}/mcp' },
+        environmentVariables: [
+          { name: 'PORT', default: '8088' },
+          { name: 'WEATHER_API_KEY', isRequired: true, isSecret: true }
+        ]
+      }]
+    });
+    const option = getInstallOptions(server)[0];
+    if (option.kind !== 'manual-launch') throw new Error('expected a manual-launch option');
+
+    expect(option.runLine).toBe(
+      'docker run -i --rm -e PORT=8088 -e "WEATHER_API_KEY=<WEATHER_API_KEY>" example/weather-mcp:1.0.0'
+    );
+    expect(option.runLine).not.toMatch(/-e PORT(?![=])/);
+
+    // The persisted launch spec still names env vars only: the config env stays
+    // the single source of truth for the process FLUJO would spawn.
+    const config = buildConfigFromOption(server, option) as Partial<MCPStreamableConfig>;
+    expect(config.launch?.args).toEqual([
+      'run', '-i', '--rm', '-e', 'PORT', '-e', 'WEATHER_API_KEY', 'example/weather-mcp:1.0.0'
+    ]);
+  });
+
   it('sorts manual-launch options after everything FLUJO can install itself', () => {
     const server = baseServer({
       packages: [

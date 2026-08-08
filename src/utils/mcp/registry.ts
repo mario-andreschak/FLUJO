@@ -234,9 +234,14 @@ function isRemoteSupported(remote: RegistryRemote): boolean {
   return Boolean(remote.url) && (remote.type === 'streamable-http' || remote.type === 'sse');
 }
 
-/** Quote a token for display in a copyable shell command line. */
+/**
+ * Quote a token for display in a copyable shell command line. Anything outside
+ * the conventional "safe" set is quoted — including `<`/`>`, which appear in the
+ * `<PLACEHOLDER>` values we render and would otherwise be shell redirections.
+ */
 function shellToken(token: string): string {
-  return /[\s"'$`\\]/.test(token) ? `"${token.replace(/(["$`\\])/g, '\\$1')}"` : token;
+  if (token !== '' && /^[A-Za-z0-9_@%+=:,./-]+$/.test(token)) return token;
+  return `"${token.replace(/(["$`\\])/g, '\\$1')}"`;
 }
 
 /** The exact command line a user would type to start a manual-launch package. */
@@ -246,7 +251,9 @@ export function runCommandLine(command: string, args: string[]): string {
 
 /** Build the `manual-launch` option for a launch-and-connect package (#392). */
 function manualLaunchOption(pkg: RegistryPackage): ManualLaunchOption {
-  const { command, args } = packageCommandAndArgs(pkg);
+  // Display form: the user's shell has none of the config env, so the command
+  // line must carry the values itself (see `envFlags: 'inline'`).
+  const { command, args } = packageCommandAndArgs(pkg, { envFlags: 'inline' });
   const transport: 'streamable' | 'sse' = pkg.transport?.type === 'sse' ? 'sse' : 'streamable';
   const template = pkg.transport?.url;
   const base: ManualLaunchOption = {
@@ -564,7 +571,40 @@ function ociImage(pkg: RegistryPackage): string {
  * builder and the launch-and-connect builder so both describe the *same*
  * process (one FLUJO spawns, one the user spawns).
  */
-function packageCommandAndArgs(pkg: RegistryPackage): {
+/**
+ * Env flags for a command line a HUMAN copies and runs (#392 manual launch).
+ *
+ * The pass-through form (`-e NAME`) only works when the process that runs
+ * docker already has NAME in its environment — true when FLUJO spawns it with
+ * the config env, false for a user pasting the line into a shell, where a bare
+ * `-e PORT` silently never reaches the container. So the displayed line inlines
+ * the value the registry declared, and shows an explicit `<NAME>` placeholder
+ * where there is nothing to inline. Secrets are NEVER inlined: they are the
+ * user's to supply, and a copyable command is a very easy way to leak one.
+ */
+function inlineEnvFlags(vars?: RegistryKeyValueInput[]): string[] {
+  const flags: string[] = [];
+  for (const v of vars ?? []) {
+    if (!v.name) continue;
+    const value = v.value ?? v.default;
+    const inlineable = !v.isSecret && value !== undefined && value !== '';
+    flags.push('-e', `${v.name}=${inlineable ? value : `<${v.name}>`}`);
+  }
+  return flags;
+}
+
+function packageCommandAndArgs(
+  pkg: RegistryPackage,
+  options: {
+    /**
+     * `passthrough` (default) names env vars only (`-e NAME`) so the values in
+     * the server config — which the user can still edit afterwards — stay the
+     * single source of truth for the process FLUJO spawns. `inline` renders a
+     * self-contained line for display/copying.
+     */
+    envFlags?: 'passthrough' | 'inline';
+  } = {}
+): {
   command: string;
   args: string[];
   env: Record<string, EnvVarValue>;
@@ -586,7 +626,10 @@ function packageCommandAndArgs(pkg: RegistryPackage): {
       // docker run -i --rm [runtime args] [-e VAR ...] image [package args]
       // Env vars are declared with bare -e flags so the values FLUJO passes to
       // the spawned docker process (from the config's env) reach the container.
-      const envFlags = Object.keys(env).flatMap(name => ['-e', name]);
+      const envFlags =
+        options.envFlags === 'inline'
+          ? inlineEnvFlags(pkg.environmentVariables)
+          : Object.keys(env).flatMap(name => ['-e', name]);
       const base = runtimeTokens[0] === 'run' ? [] : ['run', '-i', '--rm'];
       args = [...base, ...runtimeTokens, ...envFlags, ociImage(pkg), ...packageTokens];
       break;

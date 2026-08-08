@@ -116,7 +116,15 @@ const ManualLaunchRow: React.FC<{
         </Typography>
       ) : null}
       {onConfigureAsRemote ? (
-        <Button size="small" sx={{ mt: 1 }} disabled={disabled} onClick={() => onConfigureAsRemote(option)}>
+        <Button
+          size="small"
+          sx={{ mt: 1 }}
+          disabled={disabled}
+          onClick={() => {
+            if (disabled) return;
+            onConfigureAsRemote(option);
+          }}
+        >
           {t('mcp.registry.manualLaunch.configureAsRemote')}
         </Button>
       ) : null}
@@ -141,7 +149,20 @@ export const InstallOptionList: React.FC<InstallOptionListProps> = ({
         {installable.map((option, index) => {
           const missing = missingRequiredInputs(option, envDefaults);
           return (
-            <ListItemButton key={index} disabled={disabled} onClick={() => onSelect(option)}>
+            <ListItemButton
+              key={index}
+              disabled={disabled}
+              aria-disabled={disabled || undefined}
+              onClick={() => {
+                // The trust gate is a security boundary, so it is enforced in
+                // the handler rather than left to `disabled` alone: MUI renders
+                // a disabled ListItemButton as a <div> that is only made
+                // unclickable by `pointer-events: none`, which a synthetic
+                // event (or a user stylesheet) walks straight through (#392).
+                if (disabled) return;
+                onSelect(option);
+              }}
+            >
               <ListItemIcon>
                 {option.kind === 'package' ? <TerminalIcon /> : <CloudIcon />}
               </ListItemIcon>

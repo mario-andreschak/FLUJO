@@ -49,7 +49,11 @@ describe('InstallOptionList', () => {
     render(<InstallOptionList options={getInstallOptions(manualServer)} onSelect={jest.fn()} />);
 
     expect(screen.getByText(/Needs a manual start/i)).toBeInTheDocument();
-    expect(screen.getByText(/docker run -i --rm example\/weather-mcp:1\.0\.0/)).toBeInTheDocument();
+    // The line is copied into a shell that has no PORT, so the value is inlined
+    // rather than passed by name only (#392).
+    expect(
+      screen.getByText('docker run -i --rm -e PORT=8088 example/weather-mcp:1.0.0'),
+    ).toBeInTheDocument();
     expect(screen.getByText('http://localhost:8088/mcp')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /copy command/i })).toBeInTheDocument();
   });
