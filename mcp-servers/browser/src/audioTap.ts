@@ -20,13 +20,14 @@
  * silences the device sink, so the graph still carries real samples and the
  * host machine still stays quiet.
  */
-export function audioTapSource(binding: string): string {
+export function audioTapSource(binding: string, initiallyMuted = false): string {
+  const muted = initiallyMuted ? 'true' : 'false';
   return `(function(){
-  if (window.__flujoAudioTap) { window.__flujoAudioMuted = false; return; }
+  if (window.__flujoAudioTap) { window.__flujoAudioMuted = ${muted}; return; }
   var NativeCtx = window.AudioContext || window.webkitAudioContext;
   if (!NativeCtx) return;
   window.__flujoAudioTap = true;
-  window.__flujoAudioMuted = false;
+  window.__flujoAudioMuted = ${muted};
   var CHUNK = 4096;
   var SILENCE = 1 / 32768;
 
@@ -119,5 +120,27 @@ export function audioTapSource(binding: string): string {
     var target = event.target;
     if (target && (target.tagName === "AUDIO" || target.tagName === "VIDEO")) attach(target);
   }, true);
+
+  // Installing the tap after a session was opened must still recover media
+  // whose play event already fired. The pre-navigation install is the normal
+  // path; this scan is the fallback for reused sessions and dynamically added
+  // elements that began playing before they entered the document.
+  function attachPlaying(root){
+    if (!root) return;
+    if ((root.tagName === "AUDIO" || root.tagName === "VIDEO") && !root.paused && !root.ended) attach(root);
+    if (typeof root.querySelectorAll !== "function") return;
+    var media = root.querySelectorAll("audio,video");
+    for (var i = 0; i < media.length; i++) {
+      if (!media[i].paused && !media[i].ended) attach(media[i]);
+    }
+  }
+  attachPlaying(document);
+  if (window.MutationObserver) {
+    new MutationObserver(function(records){
+      for (var i = 0; i < records.length; i++) {
+        for (var j = 0; j < records[i].addedNodes.length; j++) attachPlaying(records[i].addedNodes[j]);
+      }
+    }).observe(document.documentElement || document, { childList: true, subtree: true });
+  }
 })();`;
 }

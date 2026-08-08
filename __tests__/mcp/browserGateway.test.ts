@@ -101,6 +101,14 @@ describe('browser live view gateway', () => {
     expect(source).toContain('createMediaElementSource');
     // Digital silence must never reach the wire.
     expect(source).toContain('if (silent) return;');
+    // Reused sessions recover media whose play event fired before attachment.
+    expect(source).toContain('attachPlaying(document)');
+    expect(source).toContain('MutationObserver');
+  });
+
+  it('can preinstall the tap muted before the first navigation', () => {
+    const source = audioTapSource('__flujoTest', true);
+    expect(source).toContain('window.__flujoAudioMuted = true');
   });
 
   it('rejects an unknown session on the streaming endpoints', async () => {

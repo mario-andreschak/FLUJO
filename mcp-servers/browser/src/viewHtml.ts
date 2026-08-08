@@ -280,7 +280,7 @@ body.audio-blocked #sound{color:var(--accent)}
   function setAudioState(){
     document.body.classList.toggle("audio-on", audioWanted && !!audioCtx && audioCtx.state === "running");
     document.body.classList.toggle("audio-blocked", audioWanted && !!audioCtx && audioCtx.state !== "running");
-    soundBtn.title = audioWanted ? "Mute this session" : "Play this session's audio";
+    soundBtn.title = audioWanted && !!audioCtx && audioCtx.state === "running" ? "Mute this session" : "Play this session's audio";
   }
   function stopAudio(){
     audioWanted = false;
@@ -297,7 +297,13 @@ body.audio-blocked #sound{color:var(--accent)}
     if (!audioAbort) pumpAudio();
     setAudioState();
   }
-  soundBtn.onclick = function(){ if (audioWanted) stopAudio(); else startAudio(); };
+  soundBtn.onclick = function(){
+    if (audioWanted && audioCtx && audioCtx.state === "suspended") {
+      audioCtx.resume().then(setAudioState, setAudioState);
+      return;
+    }
+    if (audioWanted) stopAudio(); else startAudio();
+  };
   // A click anywhere in the view is the gesture an autoplay-blocked context needs.
   document.addEventListener("pointerdown", function(){
     if (audioWanted && audioCtx && audioCtx.state === "suspended") audioCtx.resume().then(setAudioState, setAudioState);
@@ -382,12 +388,14 @@ body.audio-blocked #sound{color:var(--accent)}
     if (data.viewport && data.viewport.width) viewport = data.viewport;
     if (data.audio && audioSupported() && !audioAvailable){
       audioAvailable = true;
-      soundBtn.hidden = false;
       setAudioState();
       // Sound is part of "live", so try immediately; a blocked context simply
       // waits for the first click instead of failing silently.
       startAudio();
     }
+    // Configuration means the capture path may be used; a non-silent PCM
+    // chunk is the first truthful proof that this page actually has audio.
+    soundBtn.hidden = !(data.audio && data.audioSignal);
     setLoading(data.phase === "loading");
     var url = data.url && data.url !== "about:blank" ? data.url : "";
     if (!editing) urlEl.value = url;

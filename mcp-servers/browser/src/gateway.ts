@@ -67,6 +67,9 @@ type SessionChannel = {
   cdp?: CDPSession;
   screencasting: boolean;
   audioTapped: boolean;
+  audioPreparePromise?: Promise<void>;
+  audioExecutionContexts: Set<number>;
+  audioSignal: boolean;
   lastFrame?: Buffer;
   inputChain: Promise<unknown>;
   disposed: boolean;
@@ -184,15 +187,23 @@ function resolveChannel(sessionId: string): SessionChannel {
     audioClients: new Set(),
     screencasting: false,
     audioTapped: false,
+    audioExecutionContexts: new Set(),
+    audioSignal: false,
     inputChain: Promise.resolve(),
     disposed: false,
     dispose: () => undefined,
   };
   const onClose = () => disposeChannel(channel);
   const onNavigated = (frame: unknown) => {
-    if (frame === session.page.mainFrame()) void emitState(channel, 'loading');
+    if (frame === session.page.mainFrame()) {
+      channel.audioSignal = false;
+      void emitState(channel, 'loading');
+    }
   };
-  const onLoad = () => void emitState(channel, 'idle');
+  const onLoad = () => {
+    void emitState(channel, 'idle');
+    if (channel.audioClients.size > 0) void setAudioMuted(channel, false);
+  };
   session.page.once('close', onClose);
   session.page.on('framenavigated', onNavigated);
   session.page.on('domcontentloaded', onLoad);
@@ -221,6 +232,8 @@ function disposeChannel(channel: SessionChannel): void {
   channel.cdp = undefined;
   channel.screencasting = false;
   channel.audioTapped = false;
+  channel.audioPreparePromise = undefined;
+  channel.audioExecutionContexts.clear();
   void cdp?.detach().catch(() => undefined);
 }
 
@@ -237,6 +250,7 @@ async function emitState(channel: SessionChannel, phase: 'loading' | 'idle'): Pr
     phase,
     viewport: channel.session.page.viewportSize(),
     audio: audioEnabled(),
+    audioSignal: channel.audioSignal,
   });
   for (const client of channel.eventClients) {
     client.write(`event: state\ndata: ${payload}\n\n`);
@@ -305,34 +319,81 @@ function audioEnabled(): boolean {
   return /^(1|true|yes|on)$/i.test(raw);
 }
 
-async function startAudio(channel: SessionChannel): Promise<void> {
-  if (channel.disposed || !audioEnabled()) return;
-  const cdp = await ensureCdp(channel);
-  if (channel.audioTapped) {
-    await cdp.send('Runtime.evaluate', {
-      expression: 'window.__flujoAudioMuted = false;',
-    }).catch(() => undefined);
+async function evaluateInAudioContexts(channel: SessionChannel, expression: string): Promise<void> {
+  const cdp = channel.cdp;
+  if (!cdp) return;
+  const contextIds = [...channel.audioExecutionContexts];
+  if (contextIds.length === 0) {
+    await cdp.send('Runtime.evaluate', { expression }).catch(() => undefined);
     return;
   }
-  channel.audioTapped = true;
-  const source = audioTapSource(AUDIO_BINDING);
-  cdp.on('Runtime.bindingCalled', (event) => {
-    if (event.name !== AUDIO_BINDING) return;
-    broadcastAudio(channel, event.payload);
-  });
-  await cdp.send('Runtime.enable');
-  await cdp.send('Runtime.addBinding', { name: AUDIO_BINDING });
-  await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source });
-  // The current document already exists, so install the tap there too.
-  await cdp.send('Runtime.evaluate', { expression: source }).catch(() => undefined);
+  await Promise.all(contextIds.map(async (contextId) => {
+    const result = await cdp.send('Runtime.evaluate', { expression, contextId }).catch(() => undefined);
+    if (result && 'exceptionDetails' in result && result.exceptionDetails) {
+      channel.audioExecutionContexts.delete(contextId);
+    }
+  }));
+}
+
+async function prepareAudio(channel: SessionChannel): Promise<void> {
+  if (channel.disposed || !audioEnabled() || channel.audioTapped) return;
+  if (channel.audioPreparePromise) return channel.audioPreparePromise;
+  channel.audioPreparePromise = (async () => {
+    const cdp = await ensureCdp(channel);
+    cdp.on('Runtime.executionContextCreated', (event) => {
+      const isDefault = (event.context.auxData as Record<string, unknown> | undefined)?.isDefault;
+      if (isDefault !== true && isDefault !== 'true') return;
+      channel.audioExecutionContexts.add(event.context.id);
+      if (channel.audioClients.size > 0) {
+        void cdp.send('Runtime.evaluate', {
+          expression: 'window.__flujoAudioMuted = false;',
+          contextId: event.context.id,
+        }).catch(() => undefined);
+      }
+    });
+    cdp.on('Runtime.executionContextDestroyed', (event) => {
+      channel.audioExecutionContexts.delete(event.executionContextId);
+    });
+    cdp.on('Runtime.executionContextsCleared', () => channel.audioExecutionContexts.clear());
+    cdp.on('Runtime.bindingCalled', (event) => {
+      if (event.name !== AUDIO_BINDING) return;
+      broadcastAudio(channel, event.payload);
+    });
+    // The hook must exist before the first page navigation. It stays muted until
+    // /audio has a listener, so an idle live session pays no base64/CDP cost.
+    const source = audioTapSource(AUDIO_BINDING, true);
+    await cdp.send('Runtime.enable');
+    await cdp.send('Runtime.addBinding', { name: AUDIO_BINDING });
+    await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source });
+    // Also recover the current document (for reused sessions and about:blank).
+    await evaluateInAudioContexts(channel, source);
+    channel.audioTapped = true;
+  })();
+  try {
+    await channel.audioPreparePromise;
+  } finally {
+    channel.audioPreparePromise = undefined;
+  }
+}
+
+async function setAudioMuted(channel: SessionChannel, muted: boolean): Promise<void> {
+  if (!channel.audioTapped) return;
+  await evaluateInAudioContexts(
+    channel,
+    `window.__flujoAudioMuted = ${muted ? 'true' : 'false'};`,
+  );
+}
+
+async function startAudio(channel: SessionChannel): Promise<void> {
+  if (channel.disposed || !audioEnabled()) return;
+  await prepareAudio(channel);
+  await setAudioMuted(channel, false);
 }
 
 /** Leave the tap installed but stop paying for chunks nobody is listening to. */
 async function stopAudio(channel: SessionChannel): Promise<void> {
   if (!channel.audioTapped) return;
-  await channel.cdp?.send('Runtime.evaluate', {
-    expression: 'window.__flujoAudioMuted = true;',
-  }).catch(() => undefined);
+  await setAudioMuted(channel, true);
 }
 
 /**
@@ -355,6 +416,10 @@ function broadcastAudio(channel: SessionChannel, payload: string): void {
     return;
   }
   if (!pcm.length || rate < 8_000 || rate > 192_000) return;
+  if (!channel.audioSignal) {
+    channel.audioSignal = true;
+    void emitState(channel, 'idle');
+  }
   const header = Buffer.alloc(12);
   header.writeUInt32LE(rate, 0);
   header.writeUInt32LE(2, 4);
@@ -634,6 +699,21 @@ export async function ensureBrowserGateway(): Promise<BrowserGatewayEndpoint | u
 /** Current endpoint, or `undefined` when the gateway has not started. */
 export function browserGatewayEndpoint(): BrowserGatewayEndpoint | undefined {
   return endpoint;
+}
+
+/**
+ * Install the main-world audio interception before a navigation can create an
+ * AudioContext or fire a media element's play event. Capture remains muted
+ * until a client opens /audio. Failure is intentionally non-fatal: browser
+ * navigation and the screenshot stream must continue when audio is unavailable.
+ */
+export async function prepareBrowserAudioStream(sessionId: string): Promise<void> {
+  if (!streamEnabled() || !audioEnabled()) return;
+  try {
+    await prepareAudio(resolveChannel(sessionId));
+  } catch {
+    // Audio is an optional live-view capability.
+  }
 }
 
 export async function shutdownBrowserGateway(): Promise<void> {

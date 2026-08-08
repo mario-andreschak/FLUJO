@@ -32,6 +32,7 @@ import {
   writeCaptureArtifact,
 } from './capture.js';
 import { recordingStatus, startRecording, stopRecording } from './recording.js';
+import { prepareBrowserAudioStream } from './gateway.js';
 
 const MAX_TEXT_CHARS = 50_000;
 const MAX_SELECTOR_CHARS = 2_000;
@@ -672,6 +673,10 @@ async function pageState(
 
 async function navigate(session: BrowserSession, rawUrl: string, timeout: number, signal: AbortSignal): Promise<Record<string, unknown>> {
   const url = await assertNavigationAllowed(rawUrl);
+  // Install the main-world audio hook before page.goto: once a page has created
+  // its AudioContext or fired a media play event, it cannot be intercepted
+  // retroactively.
+  await prepareBrowserAudioStream(session.id);
   resetNavigationCounter(session);
   return runCancellable(session, signal, async () => {
     try {
