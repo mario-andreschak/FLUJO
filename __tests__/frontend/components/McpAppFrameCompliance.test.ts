@@ -29,6 +29,7 @@ import {
   getVerifiedPostHandshakeDisplayMode,
   jsonUtf8ByteLength,
   MAX_MCP_APP_CONTEXT_BYTES,
+  mcpAppDeliveryIdentity,
   normalizeStableAppMessage,
   sanitizeGrantedCsp,
   sanitizeGrantedPermissions,
@@ -46,6 +47,15 @@ Object.assign(globalThis, { TextDecoder, TextEncoder });
 
 const URI = 'ui://example/app';
 const MIME = 'text/html;profile=mcp-app';
+
+describe('MCP App delivery identity', () => {
+  it('treats linked-tool changes as a new View delivery', () => {
+    expect(mcpAppDeliveryIdentity('tool-a', undefined, undefined, undefined, undefined, undefined))
+      .not.toBe(mcpAppDeliveryIdentity('tool-b', undefined, undefined, undefined, undefined, undefined));
+    expect(mcpAppDeliveryIdentity('tool-a', 7, undefined, undefined, undefined, undefined))
+      .toBe(mcpAppDeliveryIdentity('tool-a', 7, 'ignored when versioned', undefined, undefined, undefined));
+  });
+});
 
 describe('MCP App resource validation', () => {
   it('selects only the exact requested URI with the stable MIME type', () => {

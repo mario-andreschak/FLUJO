@@ -80,6 +80,11 @@ const AskFlujoDock = dynamic(() => import('./AskFlujo/AskFlujoDock'), {
   loading: () => null,
 });
 
+const GlobalMcpAppsHost = dynamic(() => import('./mcp/GlobalMcpAppsHost'), {
+  ssr: false,
+  loading: () => null,
+});
+
 // Error boundary component to catch chunk loading errors
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -194,6 +199,9 @@ function LocalizedAppShell({ children }: { children: React.ReactNode }) {
       <main id="main-content" className="app-main" tabIndex={-1}>
         <RouteStage>{children}</RouteStage>
       </main>
+      {/* Persistent owner for Quick Actions MCP Apps. It remains mounted across
+          route changes, so a live iframe/bridge is never reparented or lost. */}
+      <GlobalMcpAppsHost />
       <TourOverlay />
     </div>
   );

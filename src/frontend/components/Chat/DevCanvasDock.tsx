@@ -26,12 +26,13 @@ import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 import ViewColumnIcon from '@mui/icons-material/ViewColumn';
 import KeyboardArrowLeftIcon from '@mui/icons-material/KeyboardArrowLeft';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
+import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import type {
   McpUiDisplayMode,
   McpUiUpdateModelContextRequest,
 } from '@modelcontextprotocol/ext-apps/app-bridge';
-import { useUiPreference } from '@/frontend/hooks/useUiPreference';
+import { useWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
 import McpAppFrame from './McpAppFrame';
 import type { CanvasAppEntry } from './canvasState';
 import {
@@ -47,8 +48,20 @@ import {
 } from './floatingPanel';
 
 interface DevCanvasDockProps {
-  /** Conversation that owns every frame in this dock. */
-  conversationId: string;
+  /** Optional conversation attached to every frame in this dock. */
+  conversationId?: string;
+  /**
+   * Stable owner for persisted dock UI and teardown registration. Standalone
+   * shell hosts should provide this instead of inventing a conversation id.
+   */
+  persistenceId?: string;
+  /** Stable app owner prefix shared by inline and docked shell presentations. */
+  appOwnerScopePrefix?: string;
+  /**
+   * Anchor this same mounted host to the viewport below the app navigation.
+   * Presentation changes remain CSS-only, so no live iframe is reparented.
+   */
+  viewportDocked?: boolean;
   /** Docked apps in stable tab order. Empty → the dock renders nothing. */
   entries: CanvasAppEntry[];
   /** Currently-focused tab key, or null. */
@@ -66,11 +79,11 @@ interface DevCanvasDockProps {
   ) => boolean | Promise<boolean>;
   /** Register a frame's bounded graceful-teardown callback with the owner. */
   onRegisterTeardown?: (
-    conversationId: string,
+    ownerId: string,
     appKey: string,
     teardown: (() => Promise<void>) | null,
   ) => void;
-  /** Reports space that a side-docked canvas must reserve in the chat layout. */
+  /** Reports horizontal or vertical space the dock consumer must reserve. */
   onLayoutChange?: (layout: CanvasDockLayout) => void;
   /**
    * #375: fired whenever collapse changes, so the Chat parent (single owner
@@ -83,15 +96,16 @@ interface DevCanvasDockProps {
   /**
    * #375: close every docked sandbox at once (real unmount + `teardown()`,
    * never a bare CSS hide). Rendered as the top-right X; collapse now lives
-   * on the active-edge placement arrow (see `dockLeft`/`dockBottom`/`dockRight`).
+   * on the active-edge placement arrow (see `dockLeft`/`dockTop`/`dockBottom`/`dockRight`).
    */
   onCloseAll?: () => void;
 }
 
-export type DockPlacement = 'bottom' | 'left' | 'right';
+export type DockPlacement = 'top' | 'bottom' | 'left' | 'right';
 export interface CanvasDockLayout {
   placement: DockPlacement;
   reservedWidth: number;
+  reservedHeight: number;
 }
 
 const clamp = (value: number, min: number, max: number): number => (
@@ -117,6 +131,9 @@ export function canFullscreenCanvas(
 
 const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
   conversationId,
+  persistenceId,
+  appOwnerScopePrefix,
+  viewportDocked = false,
   entries,
   activeKey,
   onSelectTab,
@@ -132,8 +149,20 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
   const theme = useTheme();
   const compactDock = useMediaQuery(theme.breakpoints.down('md'));
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const [collapsed, setCollapsedPref] = useUiPreference<boolean>(
-    `flujo-ui:mcp-canvas:collapsed:${conversationId}`,
+  const ownerId = persistenceId ?? conversationId ?? 'standalone';
+  // Chat retains the legacy global keys. A shell-level persistent host gets an
+  // independent namespace so moving it cannot overwrite the chat presentation.
+  const placementPreferenceKey = persistenceId
+    ? `flujo-mcp-canvas-placement:${persistenceId}`
+    : 'flujo-mcp-canvas-placement';
+  const heightPreferenceKey = persistenceId
+    ? `flujo-mcp-canvas-height:${persistenceId}`
+    : 'flujo-mcp-canvas-height';
+  const widthPreferenceKey = persistenceId
+    ? `flujo-mcp-canvas-width:${persistenceId}`
+    : 'flujo-mcp-canvas-width';
+  const [collapsed, setCollapsedPref] = useWorkspaceUiPreference<boolean>(
+    `flujo-ui:mcp-canvas:collapsed:${ownerId}`,
     false,
   );
   // #375: every collapse/expand goes through this so the parent's sticky
@@ -152,17 +181,17 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
   const [fullscreen, setFullscreen] = useState(false);
   const [placement, setPlacement] = useState<DockPlacement>(() => {
     if (typeof window === 'undefined') return 'bottom';
-    const stored = window.localStorage.getItem('flujo-mcp-canvas-placement');
-    return stored === 'left' || stored === 'right' ? stored : 'bottom';
+    const stored = window.localStorage.getItem(placementPreferenceKey);
+    return stored === 'top' || stored === 'left' || stored === 'right' ? stored : 'bottom';
   });
   const [dockHeight, setDockHeight] = useState(() => {
     if (typeof window === 'undefined') return 440;
-    const stored = Number(window.localStorage.getItem('flujo-mcp-canvas-height'));
+    const stored = Number(window.localStorage.getItem(heightPreferenceKey));
     return Number.isFinite(stored) && stored >= 240 ? stored : 440;
   });
   const [dockWidth, setDockWidth] = useState(() => {
     if (typeof window === 'undefined') return 560;
-    const stored = Number(window.localStorage.getItem('flujo-mcp-canvas-width'));
+    const stored = Number(window.localStorage.getItem(widthPreferenceKey));
     return Number.isFinite(stored) && stored >= 320 ? stored : 560;
   });
   const [floatingRect, setFloatingRect] = useState<FloatingRect | null>(null);
@@ -204,24 +233,41 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    window.localStorage.setItem('flujo-mcp-canvas-placement', placement);
-  }, [placement]);
+    window.localStorage.setItem(placementPreferenceKey, placement);
+  }, [placement, placementPreferenceKey]);
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    window.localStorage.setItem('flujo-mcp-canvas-height', String(Math.round(dockHeight)));
-  }, [dockHeight]);
+    window.localStorage.setItem(heightPreferenceKey, String(Math.round(dockHeight)));
+  }, [dockHeight, heightPreferenceKey]);
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    window.localStorage.setItem('flujo-mcp-canvas-width', String(Math.round(dockWidth)));
-  }, [dockWidth]);
+    window.localStorage.setItem(widthPreferenceKey, String(Math.round(dockWidth)));
+  }, [dockWidth, widthPreferenceKey]);
   useEffect(() => {
+    const layoutPlacement = viewportDocked && compactDock ? 'bottom' : placement;
+    const visibleDock = entries.length > 0
+      && !fullscreen
+      && !collapsed
+      && (!compactDock || viewportDocked);
+    const reservesWidth = layoutPlacement === 'left' || layoutPlacement === 'right';
+    const reservesHeight = layoutPlacement === 'top'
+      || (viewportDocked && layoutPlacement === 'bottom');
     onLayoutChange?.({
-      placement,
-      reservedWidth: entries.length > 0 && !fullscreen && !collapsed && !compactDock && placement !== 'bottom'
-        ? dockWidth
-        : 0,
+      placement: layoutPlacement,
+      reservedWidth: visibleDock && reservesWidth ? dockWidth : 0,
+      reservedHeight: visibleDock && reservesHeight ? dockHeight : 0,
     });
-  }, [collapsed, compactDock, dockWidth, entries.length, fullscreen, onLayoutChange, placement]);
+  }, [
+    collapsed,
+    compactDock,
+    dockHeight,
+    dockWidth,
+    entries.length,
+    fullscreen,
+    onLayoutChange,
+    placement,
+    viewportDocked,
+  ]);
 
   useEffect(() => {
     if (!fullscreen || typeof window === 'undefined') return undefined;
@@ -263,22 +309,26 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
 
   const startDockResize = useCallback((event: React.PointerEvent) => {
     if (fullscreen || !rootRef.current) return;
+    const resizePlacement: DockPlacement = compactDock ? 'bottom' : placement;
     const startX = event.clientX;
     const startY = event.clientY;
     const startRect = rootRef.current.getBoundingClientRect();
     const parentRect = rootRef.current.parentElement?.getBoundingClientRect();
     const maxHeight = Math.max(240, (parentRect?.height ?? window.innerHeight) * 0.82);
     const maxWidth = Math.max(320, (parentRect?.width ?? window.innerWidth) - 320);
-    startPointerDrag(event, placement === 'bottom' ? 'ns-resize' : 'ew-resize', (move) => {
-      if (placement === 'bottom') {
+    const horizontalDock = resizePlacement === 'top' || resizePlacement === 'bottom';
+    startPointerDrag(event, horizontalDock ? 'ns-resize' : 'ew-resize', (move) => {
+      if (resizePlacement === 'bottom') {
         setDockHeight(clamp(startRect.height + startY - move.clientY, 240, maxHeight));
-      } else if (placement === 'left') {
+      } else if (resizePlacement === 'top') {
+        setDockHeight(clamp(startRect.height + move.clientY - startY, 240, maxHeight));
+      } else if (resizePlacement === 'left') {
         setDockWidth(clamp(startRect.width + move.clientX - startX, 320, maxWidth));
       } else {
         setDockWidth(clamp(startRect.width + startX - move.clientX, 320, maxWidth));
       }
     });
-  }, [fullscreen, placement, startPointerDrag]);
+  }, [compactDock, fullscreen, placement, startPointerDrag]);
 
   const startFullscreenDrag = useCallback((event: React.PointerEvent) => {
     if (!fullscreen || !rootRef.current) return;
@@ -329,8 +379,8 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
     });
   }, [fullscreen, startPointerDrag]);
 
-  // #371: translate viewport geometry into the containing block established by
-  // any `backdrop-filter`/`transform` ancestor.
+  // #371: translate floating viewport geometry into the containing block
+  // established by any `backdrop-filter`/`transform` ancestor.
   const fixedOffset = useFixedOriginOffset(rootRef, fullscreen);
 
   if (entries.length === 0) return null;
@@ -350,6 +400,27 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
       setFullscreen(false);
     }
     onSelectTab(key);
+  };
+
+  const handleTabKeyDown = (
+    event: React.KeyboardEvent<HTMLButtonElement>,
+    key: string,
+  ) => {
+    const currentIndex = entries.findIndex((entry) => entry.key === key);
+    if (currentIndex < 0) return;
+    let nextIndex: number | null = null;
+    if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + entries.length) % entries.length;
+    else if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % entries.length;
+    else if (event.key === 'Home') nextIndex = 0;
+    else if (event.key === 'End') nextIndex = entries.length - 1;
+    if (nextIndex === null || nextIndex === currentIndex) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const tabs = event.currentTarget
+      .closest('[role="tablist"]')
+      ?.querySelectorAll<HTMLElement>('[role="tab"]');
+    tabs?.[nextIndex]?.focus();
+    selectTab(entries[nextIndex].key);
   };
 
   const requestDisplayMode = (
@@ -378,9 +449,12 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
 
   // #375: collapse no longer forces the bottom edge — each side keeps its own
   // narrow rail so "collapse left"/"collapse right" is visually distinct from
-  // "collapse bottom". Mobile still always renders as a bottom sheet.
+  // a collapsed horizontal top/bottom dock. Mobile still renders as a bottom sheet.
   const effectivePlacement = compactDock ? 'bottom' : placement;
-  const isRail = collapsed && !fullscreen && !compactDock && effectivePlacement !== 'bottom';
+  const isRail = collapsed
+    && !fullscreen
+    && !compactDock
+    && (effectivePlacement === 'left' || effectivePlacement === 'right');
 
   /**
    * #375: dock-to-that-side / collapse-to-that-edge. Clicking an inactive edge
@@ -400,6 +474,10 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
     if (fullscreen) setFullscreen(false);
     onCloseAll?.();
   };
+
+  const navigationOffset = 'calc(var(--app-bar-height) + var(--active-subnav-height))';
+  const viewportAvailableHeight = 'calc(100dvh - var(--app-bar-height) - var(--active-subnav-height))';
+  const viewportDockHeight = `min(${dockHeight}px, ${viewportAvailableHeight})`;
 
   return (
     <>
@@ -429,6 +507,34 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
               borderRadius: 1,
               boxShadow: 6,
             }
+          : viewportDocked
+            ? effectivePlacement === 'left' || effectivePlacement === 'right'
+              ? {
+                  position: 'fixed',
+                  top: navigationOffset,
+                  bottom: 0,
+                  [effectivePlacement]: 0,
+                  width: isRail ? 40 : `min(${dockWidth}px, calc(100vw - 320px))`,
+                  height: 'auto',
+                  zIndex: theme.zIndex.appBar - 1,
+                  borderRadius: 0,
+                  boxShadow: 'none',
+                  ...(effectivePlacement === 'left' ? { borderLeft: 0 } : { borderRight: 0 }),
+                }
+              : {
+                  position: 'fixed',
+                  left: 0,
+                  right: 0,
+                  [effectivePlacement]: effectivePlacement === 'top' ? navigationOffset : 0,
+                  width: '100%',
+                  height: collapsed ? 'auto' : viewportDockHeight,
+                  maxHeight: viewportAvailableHeight,
+                  zIndex: theme.zIndex.appBar - 1,
+                  borderRadius: 0,
+                  boxShadow: 'none',
+                  borderLeft: 0,
+                  borderRight: 0,
+                }
           : effectivePlacement === 'bottom'
             ? {
                 position: 'relative',
@@ -439,7 +545,22 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
                 borderLeft: 0,
                 borderRight: 0,
               }
-            : {
+            : effectivePlacement === 'top'
+              ? {
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  width: '100%',
+                  height: collapsed ? 'auto' : dockHeight,
+                  maxHeight: '82vh',
+                  zIndex: 5,
+                  borderRadius: 0,
+                  boxShadow: 'none',
+                  borderLeft: 0,
+                  borderRight: 0,
+                }
+              : {
                 position: 'absolute',
                 top: 0,
                 bottom: 0,
@@ -460,7 +581,7 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
         <Box
           role="separator"
           tabIndex={0}
-          aria-orientation={effectivePlacement === 'bottom' ? 'horizontal' : 'vertical'}
+          aria-orientation={effectivePlacement === 'top' || effectivePlacement === 'bottom' ? 'horizontal' : 'vertical'}
           aria-label={t('chat.canvas.resize')}
           onPointerDown={startDockResize}
           sx={{
@@ -468,6 +589,8 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
             zIndex: 4,
             ...(effectivePlacement === 'bottom'
               ? { top: 0, left: 0, right: 0, height: 7, cursor: 'row-resize' }
+              : effectivePlacement === 'top'
+                ? { bottom: 0, left: 0, right: 0, height: 7, cursor: 'row-resize' }
               : effectivePlacement === 'left'
                 ? { right: 0, top: 0, bottom: 0, width: 7, cursor: 'col-resize' }
                 : { left: 0, top: 0, bottom: 0, width: 7, cursor: 'col-resize' }),
@@ -519,14 +642,17 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
         )}
 
         {!isRail && (
-        <Box sx={{ display: 'flex', gap: 0.5, overflowX: 'auto', flex: 1, minWidth: 0 }}>
+        <Box
+          role="tablist"
+          aria-label={t('chat.canvas.title')}
+          sx={{ display: 'flex', gap: 0.5, overflowX: 'auto', flex: 1, minWidth: 0 }}
+        >
           {entries.map((e) => {
             const isActive = e.key === activeKey;
             const inSplit = activeSplit.includes(e.key);
             return (
               <Box
                 key={e.key}
-                onClick={() => selectTab(e.key)}
                 sx={{
                   display: 'flex',
                   alignItems: 'center',
@@ -534,7 +660,6 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
                   px: 1,
                   py: 0.25,
                   borderRadius: 1,
-                  cursor: 'pointer',
                   whiteSpace: 'nowrap',
                   border: 1,
                   borderColor: isActive ? 'primary.main' : 'divider',
@@ -542,14 +667,43 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
                 }}
                 title={`${e.serverName} — ${e.uri}`}
               >
-                <Badge color="primary" variant="dot" invisible={!e.unread}>
-                  <Typography variant="caption" sx={{ fontWeight: isActive ? 600 : 400 }}>
-                    {shortResource(e.uri)}
+                <Box
+                  component="button"
+                  type="button"
+                  role="tab"
+                  tabIndex={isActive ? 0 : -1}
+                  aria-selected={isActive}
+                  onClick={() => selectTab(e.key)}
+                  onKeyDown={(event) => handleTabKeyDown(event, e.key)}
+                  sx={{
+                    appearance: 'none',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 0.5,
+                    minWidth: 0,
+                    p: 0,
+                    border: 0,
+                    color: 'inherit',
+                    bgcolor: 'transparent',
+                    font: 'inherit',
+                    cursor: 'pointer',
+                    '&:focus-visible': {
+                      outline: '2px solid',
+                      outlineColor: 'primary.main',
+                      outlineOffset: 1,
+                      borderRadius: 0.5,
+                    },
+                  }}
+                >
+                  <Badge color="primary" variant="dot" invisible={!e.unread}>
+                    <Typography variant="caption" sx={{ fontWeight: isActive ? 600 : 400 }}>
+                      {shortResource(e.uri)}
+                    </Typography>
+                  </Badge>
+                  <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
+                    {e.serverName}
                   </Typography>
-                </Badge>
-                <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
-                  {e.serverName}
-                </Typography>
+                </Box>
                 <Tooltip title={inSplit ? t('chat.canvas.removeSplit') : t('chat.canvas.addSplit')}>
                   <IconButton
                     size="small"
@@ -590,6 +744,16 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
                 aria-label={placement === 'left' ? t('chat.canvas.collapseToEdge') : t('chat.canvas.dockLeft')}
               >
                 <KeyboardArrowLeftIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title={placement === 'top' ? t('chat.canvas.collapseToEdge') : t('chat.canvas.dockTop')}>
+              <IconButton
+                size="small"
+                color={placement === 'top' ? 'primary' : 'default'}
+                onClick={() => handleDockButtonClick('top')}
+                aria-label={placement === 'top' ? t('chat.canvas.collapseToEdge') : t('chat.canvas.dockTop')}
+              >
+                <KeyboardArrowUpIcon fontSize="small" />
               </IconButton>
             </Tooltip>
             <Tooltip title={placement === 'bottom' ? t('chat.canvas.collapseToEdge') : t('chat.canvas.dockBottom')}>
@@ -697,6 +861,7 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
                 docked
                 visible={isVisible}
                 conversationId={conversationId}
+                ownerScopeId={appOwnerScopePrefix ? `${appOwnerScopePrefix}:${e.key}` : undefined}
                 serverName={e.serverName}
                 uri={e.uri}
                 toolName={e.toolName}
@@ -721,7 +886,7 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
                 onRequestDisplayMode={(mode, modes) => requestDisplayMode(e.key, mode, modes)}
                 onRequestClose={() => onCloseTab(e.key)}
                 onRegisterTeardown={(appKey, callback) => {
-                  onRegisterTeardown?.(conversationId, appKey, callback);
+                  onRegisterTeardown?.(ownerId, appKey, callback);
                 }}
               />
             </Box>

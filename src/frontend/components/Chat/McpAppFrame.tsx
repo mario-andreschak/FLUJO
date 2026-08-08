@@ -73,6 +73,12 @@ const MAX_APP_DIMENSION_PX = 6_000;
 export interface McpAppFrameProps {
   /** Conversation that owns app-created server state, when hosted from chat. */
   conversationId?: string;
+  /**
+   * Stable host-local identity for a standalone app instance. This preserves
+   * server-backed state across the intentional inline -> pip View handoff; it
+   * is an ownership namespace, not authorization or a chat attachment.
+   */
+  ownerScopeId?: string;
   /** Server that owns the `ui://` resource. */
   serverName: string;
   /** The `ui://…` resource URI to read and render. */
@@ -772,6 +778,25 @@ export function clampInlineSize(
   return result;
 }
 
+/**
+ * A Stable MCP App View receives one tool invocation context. Selecting a
+ * different linked tool is therefore a new delivery even when there are no
+ * arguments/results yet (as with a Quick Actions launch).
+ */
+export function mcpAppDeliveryIdentity(
+  toolName: string | undefined,
+  updateId: string | number | undefined,
+  args: string | undefined,
+  resultContent: string | undefined,
+  cancelledReason: string | undefined,
+  isError: boolean | undefined,
+): string {
+  const invocation = updateId === undefined
+    ? `${args ?? ''}\u0000${resultContent ?? ''}\u0000${cancelledReason ?? ''}\u0000${isError ?? ''}`
+    : `${typeof updateId}:${String(updateId)}`;
+  return `${toolName ?? ''}\u0000${invocation}`;
+}
+
 function measureHostDimensions(
   element: HTMLElement,
   docked: boolean,
@@ -823,6 +848,7 @@ export async function resolveHostToolInfo(
  */
 const McpAppFrame: React.FC<McpAppFrameProps> = ({
   conversationId,
+  ownerScopeId,
   serverName,
   uri,
   toolName,
@@ -854,8 +880,10 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   const ownerScope = useMemo(
     () => conversationId
       ? `conversation:${conversationId}`
-      : `app:${serverName}:${uri}:${frameInstanceId}`,
-    [conversationId, frameInstanceId, serverName, uri],
+      : ownerScopeId?.trim()
+        ? `app:${ownerScopeId.trim().slice(0, 500)}`
+        : `app:${serverName}:${uri}:${frameInstanceId}`,
+    [conversationId, frameInstanceId, ownerScopeId, serverName, uri],
   );
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [loading, setLoading] = useState(false);
@@ -921,9 +949,12 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   const appDisplayModesRef = useRef<McpUiDisplayMode[]>([]);
   const displayModeRef = useRef<McpUiDisplayMode>(effectiveDisplayMode);
   const hostDisplayModesRef = useRef(hostDisplayModes);
+  const toolNameRef = useRef(toolName);
+  const previousToolNameRef = useRef(toolName);
   const toolDeliveryChainRef = useRef<Promise<void>>(Promise.resolve());
   const lastDeliveryRef = useRef<string | number | undefined>(undefined);
   const latestToolDeliveryRef = useRef({
+    toolName,
     args: toolArgs,
     resultContent: toolResultContent,
     cancelledReason: toolCancelledReason,
@@ -1021,12 +1052,14 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   const fixedOffset = useFixedOriginOffset(frameRootRef, displayMode === 'fullscreen' && !docked);
 
   latestToolDeliveryRef.current = {
+    toolName,
     args: toolArgs,
     resultContent: toolResultContent,
     cancelledReason: toolCancelledReason,
     isError: toolIsError,
     updateId: toolUpdateId,
   };
+  toolNameRef.current = toolName;
   // Always call the latest callback without remounting the bridge on prop change.
   const onAppMessageRef = useRef(onAppMessage);
   useEffect(() => { onAppMessageRef.current = onAppMessage; }, [onAppMessage]);
@@ -1164,7 +1197,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       // 1. Read the app HTML + CSP/permissions.
       const [read, toolInfo] = await Promise.all([
         mcpService.readResourceFromApp(serverName, uri),
-        resolveHostToolInfo(serverName, uri, toolName),
+        resolveHostToolInfo(serverName, uri, toolNameRef.current),
       ]);
       if (!isCurrentMount()) return;
       if (read?.httpStatus === 403) {
@@ -1519,8 +1552,14 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
         }
 
         const delivery = latestToolDeliveryRef.current;
-        const deliveryKey = delivery.updateId
-          ?? `${delivery.args ?? ''}\u0000${delivery.resultContent ?? ''}\u0000${delivery.cancelledReason ?? ''}\u0000${delivery.isError ?? ''}`;
+        const deliveryKey = mcpAppDeliveryIdentity(
+          delivery.toolName,
+          delivery.updateId,
+          delivery.args,
+          delivery.resultContent,
+          delivery.cancelledReason,
+          delivery.isError,
+        );
         lastDeliveryRef.current = deliveryKey;
         if (
           delivery.args !== undefined
@@ -1559,7 +1598,6 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
     serverName,
     teardown,
     theme.palette.mode,
-    toolName,
     uri,
     t,
   ]);
@@ -1626,12 +1664,32 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
     iframe.style.borderRadius = chromeless ? '0' : '4px';
   }, [chromeless, docked, effectiveDisplayMode]);
 
+  // A linked-tool switch can happen while the initial handshake is still in
+  // flight. Restart that in-flight View as well as an initialized one; every
+  // (even older) restart callback reads toolNameRef so it mounts the latest
+  // requested tool context after the shared teardown settles.
+  useEffect(() => {
+    if (previousToolNameRef.current === toolName) return;
+    previousToolNameRef.current = toolName;
+    if (!mountedRef.current && !teardownPromiseRef.current) return;
+    void teardown().then(() => {
+      if (!componentAliveRef.current) return;
+      if (dockedRef.current || expanded) void mount();
+    });
+  }, [expanded, mount, teardown, toolName]);
+
   // Stable MCP Apps delivers at most one input/outcome pair to a View. A later
   // invocation for the same canvas identity therefore gets a fresh View, after
   // the prior one completes its bounded graceful teardown.
   useEffect(() => {
-    const deliveryKey = toolUpdateId
-      ?? `${toolArgs ?? ''}\u0000${toolResultContent ?? ''}\u0000${toolCancelledReason ?? ''}\u0000${toolIsError ?? ''}`;
+    const deliveryKey = mcpAppDeliveryIdentity(
+      toolName,
+      toolUpdateId,
+      toolArgs,
+      toolResultContent,
+      toolCancelledReason,
+      toolIsError,
+    );
     if (!initializedRef.current || !bridgeRef.current) return;
     if (deliveryKey === lastDeliveryRef.current) return;
     lastDeliveryRef.current = deliveryKey;
@@ -1646,6 +1704,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
     toolArgs,
     toolCancelledReason,
     toolIsError,
+    toolName,
     toolResultContent,
     toolUpdateId,
   ]);

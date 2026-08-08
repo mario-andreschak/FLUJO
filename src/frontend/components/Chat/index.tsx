@@ -3319,10 +3319,13 @@ const Chat: React.FC = () => {
   const [canvasDockLayout, setCanvasDockLayout] = useState<CanvasDockLayout>({
     placement: 'bottom',
     reservedWidth: 0,
+    reservedHeight: 0,
   });
   const handleCanvasLayoutChange = useCallback((next: CanvasDockLayout) => {
     setCanvasDockLayout((current) => (
-      current.placement === next.placement && current.reservedWidth === next.reservedWidth
+      current.placement === next.placement
+      && current.reservedWidth === next.reservedWidth
+      && current.reservedHeight === next.reservedHeight
         ? current
         : next
     ));
@@ -3440,7 +3443,7 @@ const Chat: React.FC = () => {
   useEffect(() => {
     setCanvasStateOwnerId(currentConversationId);
     setCanvasState(emptyCanvasState);
-    setCanvasDockLayout({ placement: 'bottom', reservedWidth: 0 });
+    setCanvasDockLayout({ placement: 'bottom', reservedWidth: 0, reservedHeight: 0 });
   }, [currentConversationId]);
 
   // Later results replace an already-open canvas View. New apps remain inline
@@ -4455,7 +4458,13 @@ const Chat: React.FC = () => {
     <Box
       sx={{
         display: 'flex',
-        height: 'calc(100dvh - var(--app-bar-height))',
+        height: `calc(
+          100dvh
+          - var(--app-bar-height)
+          - var(--active-subnav-height)
+          - var(--global-mcp-dock-top)
+          - var(--global-mcp-dock-bottom)
+        )`,
         minHeight: 0,
         overflow: 'hidden',
         position: 'relative',
@@ -4593,6 +4602,9 @@ const Chat: React.FC = () => {
             : 0,
           pr: canvasDockLayout.placement === 'right' && canvasDockLayout.reservedWidth > 0
             ? `min(${canvasDockLayout.reservedWidth}px, calc(100% - 320px))`
+            : 0,
+          pt: canvasDockLayout.placement === 'top' && canvasDockLayout.reservedHeight > 0
+            ? `min(${canvasDockLayout.reservedHeight}px, calc(100% - 240px))`
             : 0,
         }}>
           {/* Conversation title header + inline rename (issue #134, item 2).
