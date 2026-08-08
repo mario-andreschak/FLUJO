@@ -100,8 +100,11 @@ export async function loadEffectiveRoots(
   envVarNames: string | string[],
   callerNodeId?: string
 ): Promise<string[]> {
-  const { getDataDir } = await import('@/utils/paths');
-  const dataDir = getDataDir();
+  // The confinement fallback root is the SELECTED workspace's data root (#406),
+  // never the parent installation root — otherwise a server in workspace A would
+  // fall back to a root that also contains workspace B.
+  const { getWorkspaceDataDir } = await import('@/utils/workspace');
+  const dataDir = getWorkspaceDataDir();
   const env = envRoots(envVarNames);
 
   const candidates: string[] = [];

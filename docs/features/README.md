@@ -2,6 +2,10 @@
 
 This section provides detailed documentation for Flujo's features.
 
+## Workspaces
+
+- **[Workspaces](./workspaces.md)**: Independent sets of flows, models, conversations and MCP servers inside one installation — on-disk layout, migration from a pre-workspace install, the optional `workspace` API parameter, and the navbar tabs (Issue #406)
+
 ## Model Context Protocol (MCP)
 
 - **[Overview](./mcp/overview.md)**: Introduction to the Model Context Protocol

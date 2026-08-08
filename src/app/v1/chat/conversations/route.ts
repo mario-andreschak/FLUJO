@@ -7,7 +7,8 @@ import { createLogger } from '@/utils/logger';
 import { SharedState } from '@/backend/execution/flow/types';
 import { Flow } from '@/shared/types/flow';
 import { saveCollectionItem, assertSafeCollectionId, deleteCollectionItem } from '@/utils/storage/backend';
-import { getDataDir } from '@/utils/paths';
+import { getWorkspaceDataDir } from '@/utils/workspace';
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { markConversationDeleted, unmarkConversationDeleted } from '@/backend/execution/flow/cancellation';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
@@ -91,7 +92,7 @@ interface CreateConversationPayload {
 
 
 // --- GET Handler (Existing) ---
-export async function GET(request: NextRequest) {
+async function GET_handler(request: NextRequest) {
   const _lock = await assertUnlocked({ openai: true });
   if (_lock) return _lock;
   // Defense-in-depth localhost / DNS-rebinding guard (#143). Middleware guards
@@ -131,7 +132,7 @@ export async function GET(request: NextRequest) {
     pageLimit = parsed;
   }
 
-  const conversationsDir = path.join(getDataDir(), 'db', 'conversations');
+  const conversationsDir = path.join(getWorkspaceDataDir(), 'db', 'conversations');
   log.debug('Conversations directory path', { requestId, path: conversationsDir });
 
   try {
@@ -368,7 +369,7 @@ export async function GET(request: NextRequest) {
 
 
 // --- POST Handler (New) ---
-export async function POST(req: NextRequest) {
+async function POST_handler(req: NextRequest) {
   const _lock = await assertUnlocked({ openai: true });
   if (_lock) return _lock;
   // Defense-in-depth localhost / DNS-rebinding guard (#143).
@@ -425,7 +426,7 @@ export async function POST(req: NextRequest) {
   // Explicitly creating a conversation under an id clears any deleted-id
   // tombstone (which would otherwise silently block its persistence).
   unmarkConversationDeleted(conversationId);
-  const conversationsDir = path.join(getDataDir(), 'db', 'conversations');
+  const conversationsDir = path.join(getWorkspaceDataDir(), 'db', 'conversations');
   const filePath = path.join(conversationsDir, `${conversationId}.json`);
 
   try {
@@ -514,7 +515,7 @@ export async function POST(req: NextRequest) {
 // conversation log, run-resources, and quick-chat compiled-flow cache. Bad
 // ids are counted as errors (not fatal) so one malformed id can't abort the
 // whole batch. Returns { deleted, errors }.
-export async function DELETE(req: NextRequest) {
+async function DELETE_handler(req: NextRequest) {
   const _lock = await assertUnlocked({ openai: true });
   if (_lock) return _lock;
   const notLocal = assertLocalRequest(req);
@@ -565,3 +566,12 @@ export async function DELETE(req: NextRequest) {
   log.info('Bulk DELETE complete', { requestId, deleted, errors });
   return NextResponse.json({ deleted, errors }, { status: 200 });
 }
+
+
+// Workspaces (#406): conversations are workspace-owned, so each handler runs
+// inside the requested workspace. Omitting `?workspace=` selects
+// `default-workspace`, which is byte-for-byte the pre-workspace behaviour for
+// every existing client.
+export const GET = withWorkspaceRoute(GET_handler);
+export const POST = withWorkspaceRoute(POST_handler);
+export const DELETE = withWorkspaceRoute(DELETE_handler);

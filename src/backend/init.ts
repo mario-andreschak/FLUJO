@@ -11,6 +11,13 @@ import { ensureVendoredFlowGenerator } from '@/backend/services/flow/systemFlows
 import { migrateShippedMcpServers } from '@/backend/services/mcp/shippedServerMigration';
 import { sweepOldMcpRemoteTasks } from '@/backend/services/mcp/remoteTaskStore';
 import { resumeRemoteMcpTasks } from '@/backend/services/mcp/remoteTaskResume';
+import { migrateWorkspaceLayout } from '@/backend/services/workspace/migration';
+import {
+  DEFAULT_WORKSPACE,
+  getCurrentWorkspace,
+  listWorkspaces,
+  runWithWorkspace,
+} from '@/utils/workspace';
 
 const log = createLogger('backend/init');
 
@@ -22,7 +29,7 @@ declare global {
   // The in-flight (or settled) secret-dependent startup promise (MCP sweep +
   // scheduler arm). Global-backed and memoized so that both the boot path
   // (runInitialization) and the unlock transition (onUnlocked) drive it exactly
-  // once per process ÔÇö neither double-starts servers nor double-arms triggers.
+  // once per process — neither double-starts servers nor double-arms triggers.
   // Deliberately NOT captured by __flujo_init_promise: while USER encryption is
   // locked this work is skipped at boot and only runs later, at unlock.
   var __flujo_secret_services_promise: Promise<void> | undefined;
@@ -33,6 +40,47 @@ declare global {
   var __flujo_subflow_task_retention_cron: Cron | undefined;
   // Hourly retention/expiry sweep for durable REMOTE MCP task records (#404).
   var __flujo_mcp_remote_task_retention_cron: Cron | undefined;
+  // Workspaces (#406): per-workspace copies of the two memos above, for every
+  // workspace OTHER than the default. The default workspace keeps using the
+  // original globals, so existing callers and tests are untouched.
+  var __flujo_workspace_init_promises: Map<string, Promise<void>> | undefined;
+  var __flujo_workspace_secret_promises: Map<string, Promise<void>> | undefined;
+}
+
+// --- Per-workspace startup memos --------------------------------------------
+// Startup is per workspace: each one has its own MCP servers to connect and its
+// own planned executions to arm. Reading/writing the memo through these helpers
+// keeps the default workspace on the original global (so
+// `global.__flujo_init_promise = undefined` still resets it) while giving any
+// other workspace an independent, equally memoized startup.
+
+function getMemo(kind: 'init' | 'secret'): Promise<void> | undefined {
+  const workspace = getCurrentWorkspace();
+  if (workspace === DEFAULT_WORKSPACE) {
+    return kind === 'init'
+      ? global.__flujo_init_promise
+      : global.__flujo_secret_services_promise;
+  }
+  const map =
+    kind === 'init'
+      ? global.__flujo_workspace_init_promises
+      : global.__flujo_workspace_secret_promises;
+  return map?.get(workspace);
+}
+
+function setMemo(kind: 'init' | 'secret', promise: Promise<void> | undefined): void {
+  const workspace = getCurrentWorkspace();
+  if (workspace === DEFAULT_WORKSPACE) {
+    if (kind === 'init') global.__flujo_init_promise = promise;
+    else global.__flujo_secret_services_promise = promise;
+    return;
+  }
+  const map =
+    kind === 'init'
+      ? (global.__flujo_workspace_init_promises ??= new Map())
+      : (global.__flujo_workspace_secret_promises ??= new Map());
+  if (promise) map.set(workspace, promise);
+  else map.delete(workspace);
 }
 
 /**
@@ -45,27 +93,45 @@ declare global {
 function armRetentionSweep(): void {
   if (!global.__flujo_retention_cron) {
     global.__flujo_retention_cron = new Cron('0 * * * *', { unref: true }, () => {
-      sweepOldRunResources().catch(error =>
-        log.warn('Run-resource retention sweep failed:', error)
-      );
+      void sweepEveryWorkspace('run-resource', () => sweepOldRunResources());
     });
     log.info('Armed run-resource retention sweep (hourly)');
   }
   if (!global.__flujo_subflow_task_retention_cron) {
     global.__flujo_subflow_task_retention_cron = new Cron('0 * * * *', { unref: true }, () => {
-      sweepOldSubflowTasks().catch(error =>
-        log.warn('Detached subflow task retention sweep failed:', error)
-      );
+      void sweepEveryWorkspace('detached subflow task', () => sweepOldSubflowTasks());
     });
   }
-  // Remote MCP task records (#404): the sweep both fails expired non-terminal
-  // records closed and prunes old terminal ones.
+  // Remote MCP task records (#404) are workspace-owned too: the sweep both
+  // fails expired non-terminal records closed and prunes old terminal ones.
   if (!global.__flujo_mcp_remote_task_retention_cron) {
     global.__flujo_mcp_remote_task_retention_cron = new Cron('0 * * * *', { unref: true }, () => {
-      sweepOldMcpRemoteTasks().catch(error =>
-        log.warn('Remote MCP task retention sweep failed:', error)
-      );
+      void sweepEveryWorkspace('remote MCP task', () => sweepOldMcpRemoteTasks());
     });
+  }
+}
+
+/**
+ * Run a retention sweep once per workspace (#406).
+ *
+ * The crons are process-wide (armed once), but the data they prune is
+ * workspace-owned, so the sweep is executed inside each workspace's context in
+ * turn. One workspace's failure must not stop the others from being swept.
+ */
+async function sweepEveryWorkspace(label: string, sweep: () => Promise<unknown>): Promise<void> {
+  let workspaces: string[];
+  try {
+    workspaces = (await listWorkspaces()).map(w => w.name);
+  } catch (error) {
+    log.warn(`Could not enumerate workspaces for the ${label} retention sweep:`, error);
+    workspaces = [DEFAULT_WORKSPACE];
+  }
+  for (const workspace of workspaces) {
+    try {
+      await runWithWorkspace(workspace, sweep);
+    } catch (error) {
+      log.warn(`${label} retention sweep failed for workspace ${workspace}:`, error);
+    }
   }
 }
 
@@ -80,18 +146,37 @@ function armRetentionSweep(): void {
  * can retry.
  */
 export function ensureBackendInitialized(): Promise<void> {
-  if (!global.__flujo_init_promise) {
-    global.__flujo_init_promise = runInitialization().catch(error => {
-      // Allow a subsequent call (e.g. the /api/init route) to retry after a
-      // failed startup instead of being stuck with a permanently rejected memo.
-      global.__flujo_init_promise = undefined;
-      throw error;
-    });
-  }
-  return global.__flujo_init_promise;
+  const existing = getMemo('init');
+  if (existing) return existing;
+  const promise = runInitialization().catch(error => {
+    // Allow a subsequent call (e.g. the /api/init route) to retry after a
+    // failed startup instead of being stuck with a permanently rejected memo.
+    setMemo('init', undefined);
+    throw error;
+  });
+  setMemo('init', promise);
+  return promise;
+}
+
+/**
+ * Initialize a specific workspace (#406). The default workspace is initialized
+ * at process startup; any other workspace is initialized lazily the first time a
+ * request selects it, so its MCP servers connect and its triggers arm without
+ * requiring a restart — and without a workspace nobody uses costing anything.
+ */
+export function ensureWorkspaceInitialized(workspace: string): Promise<void> {
+  return runWithWorkspace(workspace, () => ensureBackendInitialized());
 }
 
 async function runInitialization(): Promise<void> {
+  // Workspaces (#406): move/create <data root>/workspaces/default-workspace/*
+  // BEFORE anything opens a path. Every storage, MCP and scheduler path is now
+  // resolved inside a workspace, so running this first is what guarantees no
+  // component ever reads or writes the legacy root layout mid-migration. It
+  // rejects on an unresolvable source/destination conflict, which correctly
+  // aborts startup rather than risking two divergent copies of the user's data.
+  await migrateWorkspaceLayout();
+
   // Verify storage first - if this throws, callers (e.g. the route) surface it.
   await verifyStorage();
   await ensureVendoredFlowGenerator();
@@ -103,7 +188,7 @@ async function runInitialization(): Promise<void> {
 
   // Refresh the Spotlight curated-server cache in the background. Deliberately
   // NOT awaited: the registry can be slow/unreachable and must never delay
-  // startup ÔÇö the Spotlight tab just shows the previous cache until this lands.
+  // startup — the Spotlight tab just shows the previous cache until this lands.
   refreshSpotlightServers().catch(error =>
     log.warn('Spotlight refresh failed at startup:', error)
   );
@@ -112,10 +197,10 @@ async function runInitialization(): Promise<void> {
   // resolve ${global:...} bindings and decrypt model API keys. In locked USER
   // encryption mode those secrets are undecryptable, so this secret-dependent
   // startup must be DEFERRED until the user unlocks (see onUnlocked). In DEFAULT
-  // mode ÔÇö or once already unlocked ÔÇö it runs immediately, exactly as before.
+  // mode — or once already unlocked — it runs immediately, exactly as before.
   if (await isEncryptionLocked()) {
     log.info(
-      'Encryption locked ÔÇö deferring MCP/scheduler startup until unlock'
+      'Encryption locked — deferring MCP/scheduler startup until unlock'
     );
     return;
   }
@@ -136,8 +221,9 @@ async function runInitialization(): Promise<void> {
  * remain isolated to their existing logging paths.
  */
 function startSecretDependentServices(): Promise<void> {
-  if (!global.__flujo_secret_services_promise) {
-    global.__flujo_secret_services_promise = (async () => {
+  const existing = getMemo('secret');
+  if (!existing) {
+    const promise = (async () => {
       log.info('Initializing MCP servers');
       try {
         // Issue #346: provisioning must finish before the enabled-server sweep.
@@ -146,7 +232,7 @@ function startSecretDependentServices(): Promise<void> {
         log.error('Failed to provision shipped MCP server configurations:', error);
         // Keep the startup retryable in-process; starting without the durable
         // records would silently omit the shipped servers.
-        global.__flujo_secret_services_promise = undefined;
+        setMemo('secret', undefined);
         throw error;
       }
 
@@ -180,15 +266,17 @@ function startSecretDependentServices(): Promise<void> {
         log.error('Failed to arm run-resource retention sweep:', error);
       }
     })();
+    setMemo('secret', promise);
+    return promise;
   }
-  return global.__flujo_secret_services_promise;
+  return existing;
 }
 
 /**
  * Unlock transition hook: start the secret-dependent services that were
  * deferred at boot while USER encryption was locked (Stage 3 of the #16 fix).
  * Called from the authenticate/unlock path once the server unlock DEK is in
- * memory ÔÇö no FLUJO restart required.
+ * memory — no FLUJO restart required.
  *
  * Idempotent: shares one memoized promise with the boot path, so repeated
  * unlock attempts never double-start MCP servers or double-arm the scheduler.
@@ -200,6 +288,6 @@ export async function onUnlocked(): Promise<void> {
     // DEFAULT mode: secret-dependent services started at boot already.
     return;
   }
-  log.info('Encryption unlocked ÔÇö starting deferred MCP/scheduler startup');
+  log.info('Encryption unlocked — starting deferred MCP/scheduler startup');
   await startSecretDependentServices();
 }

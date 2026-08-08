@@ -4,6 +4,7 @@ import { createLogger } from '@/utils/logger';
 import { Flow } from '@/shared/types/flow';
 import { flowService } from '@/backend/services/flow';
 import { json } from './_helpers';
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 
 const log = createLogger('app/api/flow/route');
 
@@ -11,7 +12,7 @@ const log = createLogger('app/api/flow/route');
  * GET /api/flow
  * List all flows.
  */
-export async function GET() {
+async function GET_handler() {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -31,7 +32,7 @@ export async function GET() {
  * Create semantics: a flow whose id already exists is rejected (use
  * PUT /api/flow/{id} to update an existing flow).
  */
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -58,3 +59,8 @@ export async function POST(request: NextRequest) {
     return json({ error: 'Internal server error' }, 500);
   }
 }
+
+
+// Workspaces (#406): flows live in the selected workspace's db/.
+export const GET = withWorkspaceRoute(GET_handler);
+export const POST = withWorkspaceRoute(POST_handler);

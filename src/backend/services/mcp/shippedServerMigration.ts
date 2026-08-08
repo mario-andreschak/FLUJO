@@ -3,6 +3,7 @@ import path from 'node:path';
 import { Settings, StorageKey } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
 import { loadItem, saveItem } from '@/utils/storage/backend';
+import { getCurrentWorkspace } from '@/utils/workspace';
 import {
   createShippedServerConfig,
   SHIPPED_MCP_SERVERS,
@@ -11,7 +12,10 @@ import {
 
 const log = createLogger('backend/services/mcp/shippedServerMigration');
 
-let migrationInFlight: Promise<void> | undefined;
+// Keyed by workspace (#406): shipped-server provisioning writes workspace-owned
+// storage markers, so workspace B must not be short-circuited by — or wait on —
+// a run that is provisioning workspace A.
+const migrationsInFlight = new Map<string, Promise<void>>();
 
 type LegacyServerOverride = {
   disabled?: boolean;
@@ -302,8 +306,10 @@ async function runBrowserRecordRepairMigration(): Promise<void> {
 
 /** Provision and upgrade shipped packages without synthetic runtime injection. */
 export function migrateShippedMcpServers(): Promise<void> {
-  if (migrationInFlight) return migrationInFlight;
-  migrationInFlight = (async () => {
+  const workspace = getCurrentWorkspace();
+  const existing = migrationsInFlight.get(workspace);
+  if (existing) return existing;
+  const migrationInFlight = (async () => {
     try {
       await runLegacySeedMigration();
       await runBrowserSeedMigration();
@@ -311,8 +317,9 @@ export function migrateShippedMcpServers(): Promise<void> {
       await runShippedServerRootsMigration();
       await runBrowserRecordRepairMigration();
     } finally {
-      migrationInFlight = undefined;
+      migrationsInFlight.delete(workspace);
     }
   })();
+  migrationsInFlight.set(workspace, migrationInFlight);
   return migrationInFlight;
 }

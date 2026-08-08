@@ -6,7 +6,11 @@ import { v4 as uuidv4 } from "uuid";
 import fs from "fs/promises";
 import path from "path";
 import { createLogger } from "@/utils/logger";
-import { getDataDir } from "@/utils/paths";
+import {
+  DEFAULT_WORKSPACE,
+  getCurrentWorkspace,
+  getWorkspaceDataDir,
+} from "@/utils/workspace";
 import { runWithConcurrency } from "./utils/boundedConcurrency";
 
 // MCP connection state must be PROCESS-global, never per module instance: Next.js
@@ -71,6 +75,47 @@ if (typeof global.__mcp_client_generation === "undefined") {
 }
 if (typeof global.__mcp_tool_schema_hash === "undefined") {
   global.__mcp_tool_schema_hash = new Map<string, string>();
+}
+
+// Per-workspace copies of the server-name-keyed registries above (#406). Only
+// NON-default workspaces get an entry here: the default workspace keeps using
+// the original objects, so every pre-existing consumer (including tests that
+// manipulate global.__mcp_clients directly) is completely unaffected.
+declare global {
+  var __mcp_workspace_registries:
+    | Map<string, Map<string, unknown>>
+    | undefined;
+}
+
+/**
+ * Return the registry `name` for the currently selected workspace.
+ *
+ * `base` is the pre-workspace object and is returned as-is for the default
+ * workspace. For any other workspace an empty registry of the same kind (Map or
+ * Set) is created on first use and then reused for the life of the process,
+ * shared across MCPService instances exactly like the globals are.
+ */
+function scopedRegistry<T extends Map<unknown, unknown> | Set<unknown>>(
+  name: string,
+  base: T,
+): T {
+  const workspace = getCurrentWorkspace();
+  if (workspace === DEFAULT_WORKSPACE) return base;
+  const all = (global.__mcp_workspace_registries ??= new Map<
+    string,
+    Map<string, unknown>
+  >());
+  let perWorkspace = all.get(workspace);
+  if (!perWorkspace) {
+    perWorkspace = new Map<string, unknown>();
+    all.set(workspace, perWorkspace);
+  }
+  let registry = perWorkspace.get(name);
+  if (!registry) {
+    registry = base instanceof Set ? new Set() : new Map();
+    perWorkspace.set(name, registry);
+  }
+  return registry as T;
 }
 
 // Import from backend modules
@@ -217,26 +262,59 @@ function hasManagedOAuthState(config: MCPStreamableConfig): boolean {
  * while maintaining compatibility with the MCP SDK.
  */
 export class MCPService {
-  private stderrLogs: Map<string, string[]> = new Map(); // Store stderr logs for each server
+  // --- Workspace-scoped registries (#406) -----------------------------------
+  // Every registry below is keyed by SERVER NAME, and a server name is only
+  // unique WITHIN a workspace: "github" in workspace A and "github" in workspace
+  // B are two different servers with two different clone directories, configs
+  // and processes. Sharing one registry would mean connecting one implicitly
+  // "connects" the other, and stopping one would tear down the other's client.
+  //
+  // `scopedRegistry` therefore returns a per-workspace registry — EXCEPT for the
+  // default workspace, which keeps using the exact same object as before. That
+  // preserves the cross-module-instance sharing the global maps exist for, and
+  // keeps every existing caller (and test that pokes global.__mcp_clients
+  // directly) behaving byte-for-byte as it did before workspaces existed.
+  private stderrLogsBase: Map<string, string[]> = new Map(); // Store stderr logs for each server
+  private get stderrLogs(): Map<string, string[]> {
+    return scopedRegistry("stderrLogs", this.stderrLogsBase);
+  }
   // Last connection failure per server. Unlike stderrLogs (which is reset at the start of
   // every connection attempt to capture a fresh run), this persists until the server next
   // connects successfully, so getServerStatus() can always report why a server is down -
   // even during the brief window of an in-flight reconnect.
-  private lastConnectionError: Map<string, string> = new Map();
+  private lastConnectionErrorBase: Map<string, string> = new Map();
+  private get lastConnectionError(): Map<string, string> {
+    return scopedRegistry("lastConnectionError", this.lastConnectionErrorBase);
+  }
   // De-dupes concurrent connectServer() calls for the same server (see connectServer below).
-  private inFlightConnects: Map<string, Promise<MCPServiceResponse>> =
+  private inFlightConnectsBase: Map<string, Promise<MCPServiceResponse>> =
     new Map();
-  private connectionRetryTimers: Map<string, NodeJS.Timeout> = new Map(); // Track retry timers for each server
-  private connectionRetryAttempts: Map<string, number> = new Map(); // Track retry attempts for each server
+  private get inFlightConnects(): Map<string, Promise<MCPServiceResponse>> {
+    return scopedRegistry("inFlightConnects", this.inFlightConnectsBase);
+  }
+  private connectionRetryTimersBase: Map<string, NodeJS.Timeout> = new Map(); // Track retry timers for each server
+  private get connectionRetryTimers(): Map<string, NodeJS.Timeout> {
+    return scopedRegistry("connectionRetryTimers", this.connectionRetryTimersBase);
+  }
+  private connectionRetryAttemptsBase: Map<string, number> = new Map(); // Track retry attempts for each server
+  private get connectionRetryAttempts(): Map<string, number> {
+    return scopedRegistry("connectionRetryAttempts", this.connectionRetryAttemptsBase);
+  }
 
   // Per-server resource list version counter (incremented on notifications/resources/list_changed).
   // Exposed via getResourceListVersion() so the server-status API can include it in its
   // response, and the frontend can detect a stale resource listing and auto-refresh.
-  private resourceListVersion: Map<string, number> = new Map();
+  private resourceListVersionBase: Map<string, number> = new Map();
+  private get resourceListVersion(): Map<string, number> {
+    return scopedRegistry("resourceListVersion", this.resourceListVersionBase);
+  }
   // Per-server set of URIs that have received a notifications/resources/updated notification
   // (sent by servers that support resources/subscribe, registered via subscribeToResource).
   // ResourceHandler checks this before re-reading a bound resource node.
-  private pendingResourceUpdates: Map<string, Set<string>> = new Map();
+  private pendingResourceUpdatesBase: Map<string, Set<string>> = new Map();
+  private get pendingResourceUpdates(): Map<string, Set<string>> {
+    return scopedRegistry("pendingResourceUpdates", this.pendingResourceUpdatesBase);
+  }
 
   /**
    * Remove the exact stale marker written by the old auth-inference path once a static
@@ -288,31 +366,31 @@ export class MCPService {
   // closed clients ("This operation was aborted") after another instance rebuilt a
   // connection.
   private get clients(): Map<string, Client> {
-    return global.__mcp_clients!;
+    return scopedRegistry("clients", global.__mcp_clients!);
   }
 
   // Servers with an in-flight connection attempt. Global-backed (see __mcp_connecting)
   // so the set is shared across module instances / hot reloads.
   private get connectingServers(): Set<string> {
-    return global.__mcp_connecting!;
+    return scopedRegistry("connectingServers", global.__mcp_connecting!);
   }
 
   // The currently-registered transport per server. Global-backed (see
   // __mcp_active_transports) so a deregistration in one module instance is visible to
   // the onclose/onerror handlers that were registered by another.
   private get activeTransports(): Map<string, Transport> {
-    return global.__mcp_active_transports!;
+    return scopedRegistry("activeTransports", global.__mcp_active_transports!);
   }
 
   // Issue #255: per-server client-(re)registration generation. Global-backed for
   // the same cross-module-instance reason as __mcp_clients.
   private get clientGenerations(): Map<string, number> {
-    return global.__mcp_client_generation!;
+    return scopedRegistry("clientGenerations", global.__mcp_client_generation!);
   }
 
   // Issue #255: current advertised input-schema hash per (server\0tool).
   private get toolSchemaHashes(): Map<string, string> {
-    return global.__mcp_tool_schema_hash!;
+    return scopedRegistry("toolSchemaHashes", global.__mcp_tool_schema_hash!);
   }
 
   // Cap per-server stderr retention: a chatty or crash-looping server would otherwise
@@ -2167,7 +2245,7 @@ export class MCPService {
         return;
       const rootPath = (config.rootPath || "").trim();
       if (!rootPath) return;
-      const resolved = path.resolve(getDataDir(), rootPath);
+      const resolved = path.resolve(getWorkspaceDataDir(), rootPath);
       // Never create (or touch) a filesystem root — a root is its own parent.
       if (path.dirname(resolved) === resolved) return;
       await fs.mkdir(resolved, { recursive: true });

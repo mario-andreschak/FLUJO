@@ -1,7 +1,7 @@
 import path from 'path';
 import { promises as fs } from 'fs';
 import { createLogger } from '@/utils/logger';
-import { getDataDir } from '@/utils/paths';
+import { getWorkspaceDataDir } from '@/utils/workspace';
 import {
   assertSafeCollectionId,
   runInWriteChain,
@@ -50,11 +50,11 @@ interface IndexedConversationSummary extends ConversationSummary {
 }
 
 function conversationsDir(): string {
-  return path.join(getDataDir(), 'db', 'conversations');
+  return path.join(getWorkspaceDataDir(), 'db', 'conversations');
 }
 
 function summariesDir(): string {
-  return path.join(getDataDir(), 'db', 'conversation-summaries');
+  return path.join(getWorkspaceDataDir(), 'db', 'conversation-summaries');
 }
 
 function snapshotPath(id: string): string {

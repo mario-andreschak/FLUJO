@@ -44,6 +44,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import BugReportButton from '@/frontend/components/BugReport/BugReportButton';
 import AskFlujoButton from '@/frontend/components/AskFlujo/AskFlujoButton';
 import QuickActionsMenu from '@/frontend/components/Navigation/QuickActionsMenu';
+import WorkspaceTabs from '@/frontend/components/Navigation/WorkspaceTabs';
 import LanguageMenu from '@/frontend/components/LanguageMenu';
 import CopyLinkButton from '@/frontend/components/shared/CopyLinkButton';
 import { useI18n } from '@/frontend/contexts/I18nContext';
@@ -528,6 +529,11 @@ export default function Navigation() {
         {isCompact && <Box sx={{ flex: 1 }} />}
 
         <Stack direction="row" spacing={0.7} alignItems="center">
+          {/* Workspaces (#406): colored tabs for the workspace namespaces that
+              exist on disk. Renders nothing on a single-workspace install, so
+              the navbar is unchanged for everyone who doesn't use them. */}
+          {!isCompact && <WorkspaceTabs />}
+
           {/* Rendered in this shared action cluster so it is present in both the
               desktop and the compact/mobile navbar. */}
           <Suspense fallback={null}>
@@ -692,6 +698,10 @@ export default function Navigation() {
             </Typography>
           </Stack>
         </Box>
+
+        {/* Workspaces (#406): the compact layout gets the same selection as a
+            wrapping chip row, since a scrollable tab strip doesn't fit here. */}
+        <WorkspaceTabs variant="drawer" onSwitch={() => setDrawerOpen(false)} />
 
         <List disablePadding sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
           <NavigationEntries

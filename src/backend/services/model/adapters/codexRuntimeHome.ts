@@ -1,7 +1,7 @@
 import os from 'os';
 import path from 'path';
 import { promises as fs } from 'fs';
-import { getDataDir } from '@/utils/paths';
+import { getWorkspaceDataDir } from '@/utils/workspace';
 
 const AUTH_FILE = 'auth.json';
 const CONFIG_FILE = 'config.toml';
@@ -40,7 +40,9 @@ function inheritedEnvironment(): Record<string, string> {
 export async function prepareCodexRuntimeEnvironment(
   useUserLogin: boolean,
 ): Promise<CodexRuntimeEnvironment> {
-  const home = path.join(getDataDir(), 'db', 'codex-runtime');
+  // Per workspace (#406): the Codex runtime home holds auth.json + config.toml,
+  // which are workspace-owned credentials/settings, not installation-wide ones.
+  const home = path.join(getWorkspaceDataDir(), 'db', 'codex-runtime');
   await fs.mkdir(home, { recursive: true, mode: 0o700 });
   const workingDirectory = path.join(home, 'workspace');
   await fs.mkdir(workingDirectory, { recursive: true, mode: 0o700 });

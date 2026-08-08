@@ -55,8 +55,9 @@ function resolveShadowRootDir(): string {
   if (shadowRootDir) return shadowRootDir;
   // Lazy require so importing this module never eagerly touches paths/env.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { getDataDir } = require('@/utils/paths');
-  return path.join(getDataDir(), 'snapshots');
+  // Snapshots are workspace-owned user data (#406).
+  const { getWorkspaceDataDir } = require('@/utils/workspace');
+  return path.join(getWorkspaceDataDir(), 'snapshots');
 }
 
 /** Snapshots globally on unless the operator or user switches them off. */

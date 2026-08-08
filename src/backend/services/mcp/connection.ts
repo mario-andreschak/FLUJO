@@ -28,7 +28,7 @@ import { createOAuthClientProvider } from "./oauth";
 import { isClientConnectionClosed } from "@/utils/mcp/utils";
 import { resolveServerCwd } from "@/utils/mcp/resolveServerCwd";
 import { resolveNodeCommand } from "@/utils/mcp/resolveNodeCommand";
-import { getDataDir } from "@/utils/paths";
+import { getWorkspaceDataDir } from "@/utils/workspace";
 import { registerRootsHandler } from "./roots";
 import {
   samplingEnabled,
@@ -560,7 +560,7 @@ export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
 
     // If it's just a filename (e.g., "run.bat"), check if it exists in the server directory
     if (isJustFilename) {
-      const fullPath = path.join(getDataDir(), serverDir, command);
+      const fullPath = path.join(getWorkspaceDataDir(), serverDir, command);
       log.debug(`Checking if file exists at: ${fullPath}`);
 
       const fileExists = fs.existsSync(fullPath);
@@ -618,7 +618,7 @@ export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
   });
   const cwd = path.isAbsolute(resolvedCwd)
     ? resolvedCwd
-    : path.join(getDataDir(), resolvedCwd);
+    : path.join(getWorkspaceDataDir(), resolvedCwd);
   log.debug(`cwd: ${cwd}`);
   log.debug(`env: ${JSON.stringify(config.env)}`);
 

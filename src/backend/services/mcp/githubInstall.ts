@@ -3,7 +3,7 @@ import fs from 'fs/promises';
 import { createHash } from 'crypto';
 import { spawn } from 'child_process';
 import simpleGit from 'simple-git';
-import { getDataDir } from '@/utils/paths';
+import { getWorkspaceDataDir } from '@/utils/workspace';
 import { isSafeRepoUrl, isSafeBranchName } from '@/utils/git/validation';
 import { killProcessTree } from '@/utils/process/killProcessTree';
 import { withNpmDevDependencies } from '@/utils/mcp/npmEnvironment';
@@ -331,7 +331,7 @@ export async function installGithubServer(input: GithubInstallInput): Promise<Gi
   const secretValues = [...secretNames]
     .map((name) => input.env[name])
     .filter((value): value is string => Boolean(value));
-  const cloneRoot = path.join(getDataDir(), 'mcp-servers');
+  const cloneRoot = path.join(getWorkspaceDataDir(), 'mcp-servers');
   const repoPath = path.join(cloneRoot, repoSlug(parsed.repositoryUrl, parsed.ref));
 
   try {

@@ -50,6 +50,8 @@ const messageRows = {
   'nav.closeMenu': ['Close navigation menu', 'Cerrar menú de navegación', 'Navigationsmenü schließen', 'Fermer le menu de navigation', 'Chiudi il menu di navigazione', 'Fechar menu de navegação', '关闭导航菜单'],
   'nav.homeAria': ['FLUJO home', 'Inicio de FLUJO', 'FLUJO-Startseite', 'Accueil FLUJO', 'Home di FLUJO', 'Início do FLUJO', 'FLUJO 首页'],
   'nav.copyChatLink': ['Copy link to this chat', 'Copiar enlace a este chat', 'Link zu diesem Chat kopieren', 'Copier le lien de cette conversation', 'Copia il link a questa chat', 'Copiar link desta conversa', '复制此聊天的链接'],
+  'nav.workspaces': ['Workspaces', 'Espacios de trabajo', 'Arbeitsbereiche', 'Espaces de travail', 'Spazi di lavoro', 'Espaços de trabalho', '工作区'],
+  'nav.workspaceSelected': ['Current workspace: {workspace}', 'Espacio de trabajo actual: {workspace}', 'Aktueller Arbeitsbereich: {workspace}', 'Espace de travail actuel : {workspace}', 'Spazio di lavoro corrente: {workspace}', 'Espaço de trabalho atual: {workspace}', '当前工作区：{workspace}'],
   'nav.groupSections': ['{group} sections', 'Secciones de {group}', 'Bereiche von {group}', 'Sections de {group}', 'Sezioni di {group}', 'Seções de {group}', '{group}分区'],
   'nav.quickActions': ['Quick actions', 'Acciones rápidas', 'Schnellaktionen', 'Actions rapides', 'Azioni rapide', 'Ações rápidas', '快捷操作'],
   'nav.quickActions.newChat': ['New Chat', 'Nuevo chat', 'Neuer Chat', 'Nouvelle conversation', 'Nuova chat', 'Nova conversa', '新建对话'],

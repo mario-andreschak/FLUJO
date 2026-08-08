@@ -11,6 +11,7 @@ import {
 } from '@/shared/types/plannedExecution';
 import { createLogger } from '@/utils/logger';
 import { isEncryptionLocked } from '@/utils/encryption/secure';
+import { DEFAULT_WORKSPACE, getCurrentWorkspace, runWithWorkspace } from '@/utils/workspace';
 import { ArmedTrigger } from './triggers/types';
 import { armSchedule, isCatchUpDue, validateSchedule } from './triggers/schedule';
 import { armFileWatch } from './triggers/fileWatch';
@@ -109,6 +110,21 @@ export class SchedulerService {
   /** Pause state as of the last reconcile (for synchronous status reads). */
   private pausedCache = false;
   private started = false;
+  /**
+   * The workspace this scheduler belongs to (#406), captured at construction.
+   *
+   * Timers, file watchers and pollers fire long after the request that armed
+   * them has finished, so there is no ambient workspace context left to inherit.
+   * Every entry point re-establishes THIS workspace before touching storage,
+   * otherwise a non-default workspace's triggers would silently read and write
+   * the default workspace's planned executions and run history.
+   */
+  private readonly workspace: string = getCurrentWorkspace();
+
+  /** Run `fn` with this scheduler's workspace as the ambient selection. */
+  private inWorkspace<T>(fn: () => T): T {
+    return runWithWorkspace(this.workspace, fn);
+  }
 
   // --- lifecycle -----------------------------------------------------------
 
@@ -129,7 +145,7 @@ export class SchedulerService {
   reconcile(): Promise<void> {
     const run = this.reconcileChain
       .catch(() => { /* prior reconcile's error surfaced to its own caller */ })
-      .then(() => this.doReconcile());
+      .then(() => this.inWorkspace(() => this.doReconcile()));
     this.reconcileChain = run;
     return run;
   }
@@ -1149,7 +1165,23 @@ export class SchedulerService {
    * Run the bound flow for a trigger fire. Never throws — every outcome
    * (including overlap skips and crashes) becomes a RunRecord.
    */
-  async fire(
+  /**
+   * Public fire entry point. Triggers call this from timers/watchers/pollers,
+   * i.e. with no ambient workspace context, so it re-establishes the workspace
+   * this scheduler was created for before any storage access happens (#406).
+   */
+  fire(
+    execution: PlannedExecution,
+    payload: TriggerFirePayload,
+    runId: string = uuidv4(),
+    bypassOverlap = false
+  ): Promise<RunRecord> {
+    return this.inWorkspace(() =>
+      this.fireInternal(execution, payload, runId, bypassOverlap)
+    );
+  }
+
+  private async fireInternal(
     execution: PlannedExecution,
     payload: TriggerFirePayload,
     runId: string = uuidv4(),
@@ -1648,9 +1680,23 @@ export class SchedulerService {
 // (startup hook vs API routes, dev hot reloads) asks for the service.
 declare global {
   var __flujo_scheduler: SchedulerService | undefined;
+  // Workspaces (#406): planned executions are workspace-owned storage, so each
+  // workspace needs its OWN armed timers and watchers. The default workspace
+  // keeps the original global instance so nothing about the existing single-
+  // workspace behaviour (or the tests that reach for __flujo_scheduler) changes.
+  var __flujo_workspace_schedulers: Map<string, SchedulerService> | undefined;
 }
 
 export function getSchedulerService(): SchedulerService {
-  const service = global.__flujo_scheduler ?? (global.__flujo_scheduler = new SchedulerService());
+  const workspace = getCurrentWorkspace();
+  if (workspace === DEFAULT_WORKSPACE) {
+    return global.__flujo_scheduler ?? (global.__flujo_scheduler = new SchedulerService());
+  }
+  const byWorkspace = (global.__flujo_workspace_schedulers ??= new Map());
+  let service = byWorkspace.get(workspace);
+  if (!service) {
+    service = new SchedulerService();
+    byWorkspace.set(workspace, service);
+  }
   return service;
 }

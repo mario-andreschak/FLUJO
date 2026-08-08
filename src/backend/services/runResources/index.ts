@@ -2,7 +2,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { createHash, randomUUID } from 'crypto';
 import { createLogger } from '@/utils/logger';
-import { getDataDir } from '@/utils/paths';
+import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
 import { loadItem, writeFileAtomic, runInWriteChain } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import {
@@ -39,7 +39,12 @@ const log = createLogger('backend/services/runResources');
 
 // Mutable so tests can point the store at a temp directory (same seam pattern
 // as conversationLog's _setConversationLogDirForTests).
-let runResourcesDir = path.join(getDataDir(), 'db', 'run-resources');
+// Resolved per call (never captured at import time) because db/ now lives inside
+// the selected workspace (#406). The override keeps the existing temp-dir test
+// seam working and wins over the workspace when set.
+let runResourcesDirOverride: string | undefined;
+const runResourcesDir = () =>
+  runResourcesDirOverride ?? path.join(getWorkspaceDataDir(), 'db', 'run-resources');
 
 // Ids and conversation ids become file/directory names, so they must pass the
 // same gate as storage collection ids — anything else could escape the store
@@ -54,7 +59,7 @@ function assertSafeId(id: string, what: string): void {
   }
 }
 
-const conversationDir = (conversationId: string) => path.join(runResourcesDir, conversationId);
+const conversationDir = (conversationId: string) => path.join(runResourcesDir(), conversationId);
 const indexPath = (conversationId: string) => path.join(conversationDir(conversationId), 'index.json');
 const payloadPath = (conversationId: string, id: string) => path.join(conversationDir(conversationId), `${id}.dat`);
 
@@ -90,6 +95,9 @@ function materializedPayloadPath(entry: Pick<RunResourceEntry, 'conversationId' 
 }
 
 const chainKey = (conversationId: string) => `run-resources/${conversationId}`;
+// Conversation ids are unique only within a workspace, so the process-wide index
+// cache must be namespaced by workspace (#406).
+const cacheKey = (conversationId: string) => workspaceCacheKey('run-resources', conversationId);
 
 export function buildRunResourceUri(conversationId: string, id: string): string {
   return `${RUN_RESOURCE_SCHEME}${conversationId}/${id}`;
@@ -111,12 +119,14 @@ export function parseRunResourceUri(uri: string): { conversationId: string; id: 
 
 // --- Settings ---------------------------------------------------------------
 
-let settingsCache: { value: RunResourceSettings; at: number } | null = null;
+const settingsCache = new Map<string, { value: RunResourceSettings; at: number }>();
 const SETTINGS_TTL_MS = 30_000;
 
 export async function getRunResourceSettings(): Promise<RunResourceSettings> {
-  if (settingsCache && Date.now() - settingsCache.at < SETTINGS_TTL_MS) {
-    return settingsCache.value;
+  const settingsKey = workspaceCacheKey('run-resource-settings');
+  const cachedSettings = settingsCache.get(settingsKey);
+  if (cachedSettings && Date.now() - cachedSettings.at < SETTINGS_TTL_MS) {
+    return cachedSettings.value;
   }
   let value: RunResourceSettings;
   try {
@@ -130,13 +140,13 @@ export async function getRunResourceSettings(): Promise<RunResourceSettings> {
     log.warn('Failed to load run-resource settings; using defaults', error);
     value = DEFAULT_RUN_RESOURCE_SETTINGS;
   }
-  settingsCache = { value, at: Date.now() };
+  settingsCache.set(settingsKey, { value, at: Date.now() });
   return value;
 }
 
 /** Test seam: drop the settings cache. */
 export function _clearRunResourceSettingsCache(): void {
-  settingsCache = null;
+  settingsCache.clear();
 }
 
 // --- Index cache -------------------------------------------------------------
@@ -151,7 +161,7 @@ const indexCache: Map<string, RunResourceEntry[]> =
   global.__flujo_run_resources ?? (global.__flujo_run_resources = new Map());
 
 async function loadIndex(conversationId: string): Promise<RunResourceEntry[]> {
-  const cached = indexCache.get(conversationId);
+  const cached = indexCache.get(cacheKey(conversationId));
   if (cached) return cached;
   let entries: RunResourceEntry[] = [];
   try {
@@ -165,7 +175,7 @@ async function loadIndex(conversationId: string): Promise<RunResourceEntry[]> {
       log.error(`Failed to read run-resource index for ${conversationId}; treating as empty`, error);
     }
   }
-  indexCache.set(conversationId, entries);
+  indexCache.set(cacheKey(conversationId), entries);
   return entries;
 }
 
@@ -187,7 +197,7 @@ async function mutateIndex<T>(
     const entries = await loadIndex(conversationId);
     const { next, result } = await mutator(entries);
     if (next !== entries) {
-      indexCache.set(conversationId, next);
+      indexCache.set(cacheKey(conversationId), next);
       await writeFileAtomic(indexPath(conversationId), JSON.stringify(next, null, 2));
     }
     return result;
@@ -319,7 +329,7 @@ export async function listRunResources(conversationId: string): Promise<RunResou
 export async function listAllRunResources(limit = 200, offset = 0): Promise<RunResourceEntry[]> {
   let conversationIds: string[] = [];
   try {
-    const dirents = await fs.readdir(runResourcesDir, { withFileTypes: true });
+    const dirents = await fs.readdir(runResourcesDir(), { withFileTypes: true });
     conversationIds = dirents.filter(d => d.isDirectory() && SAFE_ID.test(d.name)).map(d => d.name);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
@@ -549,7 +559,7 @@ export async function readRunResourceBounded(
 /** Remove a conversation's resources (called from conversation DELETE). */
 export async function deleteRunResources(conversationId: string): Promise<void> {
   assertSafeId(conversationId, 'conversationId');
-  indexCache.delete(conversationId);
+  indexCache.delete(cacheKey(conversationId));
   await runInWriteChain(chainKey(conversationId), async () => {
     try {
       await fs.rm(conversationDir(conversationId), { recursive: true, force: true });
@@ -578,7 +588,7 @@ export async function sweepOldRunResources(now: number = Date.now()): Promise<{ 
 
   let conversationIds: string[] = [];
   try {
-    const dirents = await fs.readdir(runResourcesDir, { withFileTypes: true });
+    const dirents = await fs.readdir(runResourcesDir(), { withFileTypes: true });
     conversationIds = dirents.filter(d => d.isDirectory() && SAFE_ID.test(d.name)).map(d => d.name);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { removed: 0 };
@@ -617,8 +627,8 @@ export async function sweepOldRunResources(now: number = Date.now()): Promise<{ 
 
 /** Test seam: point the store at a temp directory. Returns the previous dir. */
 export function _setRunResourcesDirForTests(dir: string): string {
-  const previous = runResourcesDir;
-  runResourcesDir = dir;
+  const previous = runResourcesDir();
+  runResourcesDirOverride = dir;
   indexCache.clear();
   return previous;
 }

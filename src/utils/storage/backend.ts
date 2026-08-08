@@ -3,19 +3,29 @@ import path from 'path';
 import { StorageKey } from '../../shared/types/storage';
 import { createLogger } from '@/utils/logger';
 import { getDataDir } from '@/utils/paths';
+import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
 
 const log = createLogger('utils/storage/backend');
 
 // Current storage directory. Resolved from the data dir (see utils/paths) so a
 // packaged install (npm/Docker) can keep db/ outside the read-only app install;
 // defaults to the app dir, so a git checkout is unchanged (<repo>/db).
-const STORAGE_DIR = path.join(getDataDir(), 'db');
-// Old storage directory (for checking)
-const OLD_STORAGE_DIR = path.join(getDataDir(), '.next', 'storage');
-const getFilePath = (key: StorageKey) => path.join(STORAGE_DIR, `${key}.json`);
+//
+// Workspaces (#406): db/ now lives inside the SELECTED workspace, i.e.
+// <data root>/workspaces/<workspace>/db. These are deliberately functions, not
+// module-level constants: the workspace is per-request ambient context, so a
+// constant captured at import time would pin the whole process to whichever
+// workspace happened to be resolved first.
+const storageDir = () => path.join(getWorkspaceDataDir(), 'db');
+// Old storage directory (for checking). Pre-dates both the data dir and
+// workspaces, so it stays at the installation root.
+const oldStorageDir = () => path.join(getDataDir(), '.next', 'storage');
+const getFilePath = (key: StorageKey) => path.join(storageDir(), `${key}.json`);
 
 // Ensure storage directory exists
 async function ensureStorageDir() {
+  const STORAGE_DIR = storageDir();
+  const OLD_STORAGE_DIR = oldStorageDir();
   try {
     await fs.access(STORAGE_DIR);
     log.verbose(`Storage directory exists: ${STORAGE_DIR}`); // Changed to verbose
@@ -59,7 +69,7 @@ export async function verifyStorage(): Promise<void> {
       log.debug(`Storage check: ${key} - ${exists ? 'File exists' : 'File does not exist yet'}`); // Changed to debug
       
       // Check if the file exists in the old location but not in the new location
-      const oldFilePath = path.join(OLD_STORAGE_DIR, `${key}.json`);
+      const oldFilePath = path.join(oldStorageDir(), `${key}.json`);
       try {
         await fs.access(oldFilePath);
         if (!exists) {
@@ -131,11 +141,15 @@ export async function saveItem<T>(key: StorageKey, value: T): Promise<void> {
   const filePath = getFilePath(key);
   // Serialize against any in-flight write for the same key. We chain off the
   // previous write (ignoring its outcome) so a failure doesn't wedge the key.
-  const previous = writeChains.get(key) ?? Promise.resolve();
+  // The chain is keyed per workspace (#406): the same StorageKey in two
+  // workspaces is two different files and must not serialize against — or, far
+  // worse, be deduplicated with — each other.
+  const chainKey = workspaceCacheKey('item', key);
+  const previous = writeChains.get(chainKey) ?? Promise.resolve();
   const run = previous
     .catch(() => { /* prior write's error is surfaced to its own caller */ })
     .then(() => writeFileAtomic(filePath, JSON.stringify(value, null, 2)));
-  writeChains.set(key, run);
+  writeChains.set(chainKey, run);
 
   try {
     await run;
@@ -145,8 +159,8 @@ export async function saveItem<T>(key: StorageKey, value: T): Promise<void> {
     throw error; // Re-throw the error after logging
   } finally {
     // Drop the chain entry once it's the tail, so the map doesn't grow forever.
-    if (writeChains.get(key) === run) {
-      writeChains.delete(key);
+    if (writeChains.get(chainKey) === run) {
+      writeChains.delete(chainKey);
     }
   }
 }
@@ -235,23 +249,29 @@ export function assertSafeCollectionId(id: string): void {
   }
 }
 
-const getCollectionDir = (collection: string) => path.join(STORAGE_DIR, collection);
+const getCollectionDir = (collection: string) => path.join(storageDir(), collection);
 const getCollectionItemPath = (collection: string, id: string) =>
   path.join(getCollectionDir(collection), `${id}.json`);
 
 // Run a task serialized behind any in-flight write for the same chain key, so
 // concurrent saves/deletes of the SAME item can't interleave their
 // temp-file/rename/unlink steps. Different keys still run concurrently.
+//
+// The caller's key is namespaced by the selected workspace (#406) so that ids
+// that are only unique WITHIN a workspace (conversation ids, MCP server names,
+// KV scopes) cannot serialize across workspaces — which would both be a
+// needless bottleneck and, for read-modify-write callers, a correctness bug.
 export function runInWriteChain<T>(chainKey: string, task: () => Promise<T>): Promise<T> {
-  const previous = writeChains.get(chainKey) ?? Promise.resolve();
+  const scopedKey = workspaceCacheKey('chain', chainKey);
+  const previous = writeChains.get(scopedKey) ?? Promise.resolve();
   const run = previous
     .catch(() => { /* prior task's error is surfaced to its own caller */ })
     .then(task);
-  writeChains.set(chainKey, run);
+  writeChains.set(scopedKey, run);
   // Drop the entry once it's the tail so the map doesn't grow forever.
   void run.catch(() => { /* handled by the caller awaiting `run` */ }).finally(() => {
-    if (writeChains.get(chainKey) === run) {
-      writeChains.delete(chainKey);
+    if (writeChains.get(scopedKey) === run) {
+      writeChains.delete(scopedKey);
     }
   });
   return run;

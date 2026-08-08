@@ -4,10 +4,11 @@ import { saveItem, loadItem, clearItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
 import { v4 as uuidv4 } from 'uuid';
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 
 const log = createLogger('app/api/storage/route');
 
-export async function GET(request: NextRequest) {
+async function GET_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -36,7 +37,7 @@ export async function GET(request: NextRequest) {
   }
 }
 
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -62,7 +63,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-export async function DELETE(request: NextRequest) {
+async function DELETE_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -90,3 +91,10 @@ export async function DELETE(request: NextRequest) {
   }
 }
 
+
+
+// Workspaces (#406): generic storage reads/writes target the selected
+// workspace's db/ directory.
+export const GET = withWorkspaceRoute(GET_handler);
+export const POST = withWorkspaceRoute(POST_handler);
+export const DELETE = withWorkspaceRoute(DELETE_handler);

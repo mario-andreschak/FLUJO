@@ -4,7 +4,7 @@ import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
 import { MCPServerConfig, MCPServerSource, MCPStdioConfig, MCPWebSocketConfig, MCPServiceResponse, MCPSSEConfig, MCPStreamableConfig } from '@/shared/types/mcp';
-import { getDataDir } from '@/utils/paths';
+import { getWorkspaceDataDir } from '@/utils/workspace';
 
 const log = createLogger('backend/services/mcp/config');
 
@@ -16,7 +16,10 @@ const REMOTE_TRANSPORTS = new Set(['streamable', 'sse', 'websocket']);
 // Where GitHub/reference server clones live (mirrors /api/git's REPOS_BASE_DIR).
 // Used to decide whether an un-sourced server's rootPath is a git clone whose
 // origin can be read to reconstruct a `github` install-origin (#193 backfill).
-const REPOS_BASE_DIR = path.join(getDataDir(), 'mcp-servers');
+// Per-call, not a module constant: mcp-servers/ lives inside the SELECTED
+// workspace (#406), so the same server name can exist independently in two
+// workspaces and a captured constant would cross-wire them.
+const reposBaseDir = () => path.join(getWorkspaceDataDir(), 'mcp-servers');
 
 // Per-process memo of read-time git-remote lookups (keyed by absolute repo path),
 // so the backfill spawns `git remote get-url origin` at most once per clone even
@@ -27,12 +30,15 @@ const gitRemoteCache = new Map<string, string | null>();
 /** Resolve a (possibly relative) server rootPath to an absolute path under the data dir. */
 function resolveRootPath(rootPath: unknown): string | null {
   if (typeof rootPath !== 'string' || rootPath.trim() === '') return null;
-  return path.isAbsolute(rootPath) ? rootPath : path.resolve(getDataDir(), rootPath);
+  // Absolute roots are explicit operator choices and stay exactly as configured
+  // (they may deliberately point outside FLUJO); relative roots are
+  // workspace-relative.
+  return path.isAbsolute(rootPath) ? rootPath : path.resolve(getWorkspaceDataDir(), rootPath);
 }
 
 /** Is this absolute path inside the mcp-servers clone directory? */
 function isInsideReposDir(absPath: string): boolean {
-  const rel = path.relative(REPOS_BASE_DIR, absPath);
+  const rel = path.relative(reposBaseDir(), absPath);
   return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 

@@ -8,14 +8,19 @@ import { assertSafeCollectionId, listCollectionItems, loadItem } from '@/utils/s
 import { flowService } from '@/backend/services/flow';
 import { StorageKey } from '@/shared/types/';
 import { createLogger } from '@/utils/logger';
-import { getDataDir } from '@/utils/paths';
+import { getCurrentWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { v4 as uuidv4 } from 'uuid';
 
 const log = createLogger('app/api/backup/route');
 
-const MCP_SERVERS_DIR = path.join(getDataDir(), 'mcp-servers');
+// Workspaces (#406): a backup covers exactly ONE workspace — the selected one.
+// Aggregating every workspace into a single archive would make restore a
+// far more destructive operation than it is today, so that is deliberately out
+// of scope here. Resolved per call because the workspace is per-request.
+const mcpServersDir = () => path.join(getWorkspaceDataDir(), 'mcp-servers');
 
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
   const notLocal = assertLocalRequest(request);
@@ -37,10 +42,17 @@ export async function POST(request: NextRequest) {
     const zip = new JSZip();
     
     // Add metadata
+    // `version` stays '1.0' so older FLUJO builds can still read new archives;
+    // the workspace fields are additive metadata that a legacy reader ignores.
     zip.file('backup-info.json', JSON.stringify({
       version: '1.0',
       timestamp: new Date().toISOString(),
       selections,
+      // #406: which workspace this archive was taken from, and which on-disk
+      // layout it assumes. An archive WITHOUT these fields is a legacy,
+      // pre-workspace backup and restores into the selected workspace.
+      workspace: getCurrentWorkspace(),
+      workspaceLayoutVersion: 1,
     }));
     
     // Add storage files
@@ -131,7 +143,7 @@ export async function POST(request: NextRequest) {
     if (selections.includes('mcpServersFolder')) {
       try {
         log.debug(`Adding MCP servers folder to backup [${requestId}]`);
-        await addFolderToZip(zip, MCP_SERVERS_DIR, 'mcp-servers');
+        await addFolderToZip(zip, mcpServersDir(), 'mcp-servers');
         log.debug(`Added MCP servers folder to backup [${requestId}]`);
       } catch (error) {
         log.error(`Error adding MCP servers folder to backup [${requestId}]:`, error);
@@ -202,3 +214,7 @@ async function addFolderToZip(zip: JSZip, folderPath: string, zipPath: string) {
   }
 }
 
+
+
+// Workspaces (#406): the archive contains only the selected workspace's data.
+export const POST = withWorkspaceRoute(POST_handler);

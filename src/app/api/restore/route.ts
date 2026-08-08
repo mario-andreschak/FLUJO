@@ -9,14 +9,18 @@ import { flowService } from '@/backend/services/flow';
 import { StorageKey } from '@/shared/types/storage';
 import type { Flow } from '@/shared/types/flow';
 import { createLogger } from '@/utils/logger';
-import { getDataDir } from '@/utils/paths';
+import { getWorkspaceDataDir } from '@/utils/workspace';
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { v4 as uuidv4 } from 'uuid';
 
 const log = createLogger('app/api/restore/route');
 
-const MCP_SERVERS_DIR = path.join(getDataDir(), 'mcp-servers');
+// Workspaces (#406): restore writes into the SELECTED workspace only. A legacy
+// (pre-workspace) archive therefore lands in default-workspace by default,
+// which is exactly where its data used to live.
+const mcpServersDir = () => path.join(getWorkspaceDataDir(), 'mcp-servers');
 
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
   const notLocal = assertLocalRequest(request);
@@ -164,7 +168,7 @@ export async function POST(request: NextRequest) {
     if (selections.includes('mcpServersFolder')) {
       try {
         log.debug(`Restoring MCP servers folder [${requestId}]`);
-        await restoreFolderFromZip(zip, 'mcp-servers', MCP_SERVERS_DIR);
+        await restoreFolderFromZip(zip, 'mcp-servers', mcpServersDir());
         log.debug(`Restored MCP servers folder [${requestId}]`);
       } catch (error) {
         log.error(`Error restoring MCP servers folder [${requestId}]:`, error);
@@ -189,6 +193,26 @@ async function ensureDir(dir: string) {
   }
 }
 
+/**
+ * Resolve an archive-relative path against the restore target, refusing any
+ * entry that would land outside it.
+ *
+ * Archive entry names are attacker-controlled data: `../../db/encryption_key`
+ * or an absolute path inside a hand-crafted zip would otherwise escape the
+ * restore target. With workspaces (#406) that escape is strictly worse than
+ * before, because "outside the target" now includes OTHER WORKSPACES and the
+ * shared parent data root. Returns null for an entry that must be skipped.
+ */
+function safeJoinInside(targetPath: string, relativePath: string): string | null {
+  // Zip paths always use '/', regardless of the platform that produced them.
+  if (relativePath.split('/').some(segment => segment === '..')) return null;
+  const resolvedTarget = path.resolve(targetPath);
+  const resolved = path.resolve(resolvedTarget, ...relativePath.split('/'));
+  const rel = path.relative(resolvedTarget, resolved);
+  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return null;
+  return resolved;
+}
+
 // Helper function to recursively restore a folder from a zip file
 async function restoreFolderFromZip(zip: JSZip, zipPath: string, targetPath: string) {
   // Ensure the target directory exists
@@ -207,7 +231,11 @@ async function restoreFolderFromZip(zip: JSZip, zipPath: string, targetPath: str
   for (const file of files.filter(f => f.isDirectory)) {
     if (!file.relativePath) continue;
     
-    const dirPath = path.join(targetPath, file.relativePath);
+    const dirPath = safeJoinInside(targetPath, file.relativePath);
+    if (!dirPath) {
+      log.warn('Skipped unsafe archive directory entry:', file.path);
+      continue;
+    }
     await ensureDir(dirPath);
   }
   
@@ -215,7 +243,11 @@ async function restoreFolderFromZip(zip: JSZip, zipPath: string, targetPath: str
   for (const file of files.filter(f => !f.isDirectory)) {
     if (!file.relativePath) continue;
     
-    const filePath = path.join(targetPath, file.relativePath);
+    const filePath = safeJoinInside(targetPath, file.relativePath);
+    if (!filePath) {
+      log.warn('Skipped unsafe archive file entry:', file.path);
+      continue;
+    }
     const content = await zip.files[file.path].async('nodebuffer');
     
     // Ensure parent directory exists
@@ -226,4 +258,8 @@ async function restoreFolderFromZip(zip: JSZip, zipPath: string, targetPath: str
     await fs.writeFile(filePath, content);
   }
 }
+
+// Workspaces (#406): restores into the selected workspace only; archive entries
+// that would escape it are refused above.
+export const POST = withWorkspaceRoute(POST_handler);
 

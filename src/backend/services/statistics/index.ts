@@ -9,7 +9,7 @@ import {
   type StatisticsSkipReason,
 } from '@/shared/types/statistics';
 import { createLogger } from '@/utils/logger';
-import { getDataDir } from '@/utils/paths';
+import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
 
 const log = createLogger('backend/services/statistics');
 const SAFE_UTC_DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -21,17 +21,23 @@ type StatisticsEventInput = StatisticsEvent extends infer Event
     : never
   : never;
 
-let statisticsDir = path.join(getDataDir(), 'db', 'statistics');
+// Per-call resolution: statistics live in the selected workspace's db/ (#406).
+let statisticsDirOverride: string | undefined;
+const statisticsDir = () =>
+  statisticsDirOverride ?? path.join(getWorkspaceDataDir(), 'db', 'statistics');
+// All three of these are keyed by workspace: a day partition, an installation
+// HMAC key and a "already pruned today" marker all belong to ONE workspace's
+// statistics directory.
 const appendChains = new Map<string, Promise<void>>();
-let keyPromise: Promise<Buffer> | undefined;
-let lastPrunedDay: string | undefined;
+const keyPromises = new Map<string, Promise<Buffer>>();
+const lastPrunedDay = new Map<string, string>();
 
 export function _setStatisticsDirForTests(dir: string): string {
-  const previous = statisticsDir;
-  statisticsDir = dir;
+  const previous = statisticsDir();
+  statisticsDirOverride = dir;
   appendChains.clear();
-  keyPromise = undefined;
-  lastPrunedDay = undefined;
+  keyPromises.clear();
+  lastPrunedDay.clear();
   return previous;
 }
 
@@ -56,21 +62,22 @@ function utcDay(timestamp: string): string {
 
 function eventFile(day: string): string {
   if (!SAFE_UTC_DAY.test(day)) throw new TypeError('Invalid statistics day');
-  return path.join(statisticsDir, `${day}.jsonl`);
+  return path.join(statisticsDir(), `${day}.jsonl`);
 }
 
 async function pruneOldPartitions(today: string): Promise<void> {
-  if (lastPrunedDay === today) return;
-  lastPrunedDay = today;
+  const pruneKey = workspaceCacheKey('statistics-prune');
+  if (lastPrunedDay.get(pruneKey) === today) return;
+  lastPrunedDay.set(pruneKey, today);
   const cutoff = Date.parse(`${today}T00:00:00.000Z`) - STATISTICS_RETENTION_DAYS * 86_400_000;
   try {
-    const entries = await fs.readdir(statisticsDir, { withFileTypes: true });
+    const entries = await fs.readdir(statisticsDir(), { withFileTypes: true });
     await Promise.all(entries.map(async entry => {
       if (!entry.isFile() || !entry.name.endsWith('.jsonl')) return;
       const day = entry.name.slice(0, -'.jsonl'.length);
       if (!SAFE_UTC_DAY.test(day)) return;
       if (Date.parse(`${day}T00:00:00.000Z`) < cutoff) {
-        await fs.unlink(path.join(statisticsDir, entry.name));
+        await fs.unlink(path.join(statisticsDir(), entry.name));
       }
     }));
   } catch {
@@ -84,17 +91,20 @@ export function appendStatisticsEvent(event: StatisticsEvent): Promise<void> {
     return Promise.reject(new TypeError('Invalid or unsupported statistics event'));
   }
   const day = utcDay(sanitized.timestamp);
-  const previous = appendChains.get(day) ?? Promise.resolve();
+  // Same UTC day in two workspaces = two different files, so the append chain is
+  // per (workspace, day) rather than per day (#406).
+  const chain = workspaceCacheKey('statistics', day);
+  const previous = appendChains.get(chain) ?? Promise.resolve();
   const next = previous
     .catch(() => undefined)
     .then(async () => {
-      await fs.mkdir(statisticsDir, { recursive: true });
+      await fs.mkdir(statisticsDir(), { recursive: true });
       await fs.appendFile(eventFile(day), `${JSON.stringify(sanitized)}\n`, 'utf8');
       void pruneOldPartitions(day);
     });
-  appendChains.set(day, next);
+  appendChains.set(chain, next);
   void next.finally(() => {
-    if (appendChains.get(day) === next) appendChains.delete(day);
+    if (appendChains.get(chain) === next) appendChains.delete(chain);
   }).catch(() => undefined);
   return next;
 }
@@ -156,8 +166,8 @@ export async function readStatisticsEvents(day: string): Promise<StatisticsEvent
 }
 
 async function loadInstallationKey(): Promise<Buffer> {
-  const keyFile = path.join(statisticsDir, '.installation-key');
-  await fs.mkdir(statisticsDir, { recursive: true });
+  const keyFile = path.join(statisticsDir(), '.installation-key');
+  await fs.mkdir(statisticsDir(), { recursive: true });
   try {
     return await fs.readFile(keyFile);
   } catch (error) {
@@ -176,7 +186,12 @@ async function loadInstallationKey(): Promise<Buffer> {
 /** Stable installation-local grouping. Neither the credential nor HMAC key is serialized. */
 export async function credentialFingerprint(credential: string | undefined | null): Promise<string | undefined> {
   if (!credential) return undefined;
-  keyPromise ??= loadInstallationKey();
+  const installationKeyId = workspaceCacheKey('statistics-installation-key');
+  let keyPromise = keyPromises.get(installationKeyId);
+  if (!keyPromise) {
+    keyPromise = loadInstallationKey();
+    keyPromises.set(installationKeyId, keyPromise);
+  }
   const key = await keyPromise;
   return `cred_${createHmac('sha256', key).update(credential).digest('base64url').slice(0, 22)}`;
 }

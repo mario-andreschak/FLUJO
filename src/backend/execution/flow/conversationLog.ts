@@ -9,7 +9,7 @@ import { FlujoChatMessage } from '@/shared/types/chat';
 import { SharedState } from './types';
 import { isConversationDeleted } from './cancellation';
 import { createLogger } from '@/utils/logger';
-import { getDataDir } from '@/utils/paths';
+import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
 
 const log = createLogger('backend/execution/flow/conversationLog');
 
@@ -68,12 +68,24 @@ const PERSISTED_EVENT_TYPES: ReadonlySet<ExecutionEventType> = new Set<Execution
 // so a hostile id can never escape the log directory.
 const SAFE_ID = /^[A-Za-z0-9_-]+$/;
 
-let logDir = path.join(getDataDir(), 'db', 'conversation-logs');
+// Resolved per call: conversation logs live in the selected workspace's db/
+// (#406), so this must not be captured at import time.
+let logDirOverride: string | undefined;
+const logDir = () =>
+  logDirOverride ?? path.join(getWorkspaceDataDir(), 'db', 'conversation-logs');
+
+/**
+ * Cache/chain key for a conversation. Conversation ids are unique only WITHIN a
+ * workspace, so the process-wide seq counters and append chains must be
+ * namespaced by workspace — otherwise workspace B would continue workspace A's
+ * sequence numbering, or serialize its appends behind A's (#406).
+ */
+const ck = (conversationId: string) => workspaceCacheKey('conversation-log', conversationId);
 
 /** Test seam: point the store at a temp directory. Returns the previous dir. */
 export function _setConversationLogDirForTests(dir: string): string {
-  const previous = logDir;
-  logDir = dir;
+  const previous = logDir();
+  logDirOverride = dir;
   // Counters are seeded from the store on cold start; switching stores must
   // re-seed from the new directory rather than reuse a stale counter.
   nextSeq.clear();
@@ -81,7 +93,7 @@ export function _setConversationLogDirForTests(dir: string): string {
 }
 
 function logFilePath(conversationId: string): string {
-  return path.join(logDir, `${conversationId}.jsonl`);
+  return path.join(logDir(), `${conversationId}.jsonl`);
 }
 
 // Per-conversation append chains so concurrent appends for the same log never
@@ -108,7 +120,7 @@ const nextSeq = new Map<string, number>();
  *  most once per conversation per process; a one-time synchronous read keeps
  *  allocateSeq usable from the bus's synchronous emit path. */
 function initSeqIfNeeded(conversationId: string): void {
-  if (nextSeq.has(conversationId)) return;
+  if (nextSeq.has(ck(conversationId))) return;
   let max = -1;
   try {
     const content = readFileSync(logFilePath(conversationId), 'utf-8');
@@ -126,7 +138,7 @@ function initSeqIfNeeded(conversationId: string): void {
       log.warn(`Could not read conversation log ${conversationId} to seed seq; starting at 0.`, { err });
     }
   }
-  nextSeq.set(conversationId, max + 1);
+  nextSeq.set(ck(conversationId), max + 1);
 }
 
 /**
@@ -137,8 +149,8 @@ function initSeqIfNeeded(conversationId: string): void {
  */
 export function allocateSeq(conversationId: string): number {
   initSeqIfNeeded(conversationId);
-  const seq = nextSeq.get(conversationId)!;
-  nextSeq.set(conversationId, seq + 1);
+  const seq = nextSeq.get(ck(conversationId))!;
+  nextSeq.set(ck(conversationId), seq + 1);
   return seq;
 }
 
@@ -150,21 +162,22 @@ export function allocateSeq(conversationId: string): number {
 export async function latestSequence(conversationId: string): Promise<number> {
   if (!SAFE_ID.test(conversationId)) return -1;
   initSeqIfNeeded(conversationId);
-  return nextSeq.get(conversationId)! - 1;
+  return nextSeq.get(ck(conversationId))! - 1;
 }
 
 function chainAppend(conversationId: string, lines: string): Promise<void> {
-  const previous = appendChains.get(conversationId) ?? Promise.resolve();
+  const key = ck(conversationId);
+  const previous = appendChains.get(key) ?? Promise.resolve();
   const run = previous
     .catch(() => { /* prior append's error was logged by its own caller */ })
     .then(async () => {
-      await fs.mkdir(logDir, { recursive: true });
+      await fs.mkdir(logDir(), { recursive: true });
       await fs.appendFile(logFilePath(conversationId), lines);
     });
-  appendChains.set(conversationId, run);
+  appendChains.set(key, run);
   return run.finally(() => {
-    if (appendChains.get(conversationId) === run) {
-      appendChains.delete(conversationId);
+    if (appendChains.get(key) === run) {
+      appendChains.delete(key);
     }
   }) as Promise<void>;
 }
@@ -174,17 +187,18 @@ function chainAppend(conversationId: string, lines: string): Promise<void> {
 // by the self-heal repair (repairTruncatedConversationLog) to replace a log that
 // lost events with one rebuilt from the authoritative SharedState snapshot.
 function chainWrite(conversationId: string, content: string): Promise<void> {
-  const previous = appendChains.get(conversationId) ?? Promise.resolve();
+  const key = ck(conversationId);
+  const previous = appendChains.get(key) ?? Promise.resolve();
   const run = previous
     .catch(() => { /* prior op's error was logged by its own caller */ })
     .then(async () => {
-      await fs.mkdir(logDir, { recursive: true });
+      await fs.mkdir(logDir(), { recursive: true });
       await fs.writeFile(logFilePath(conversationId), content);
     });
-  appendChains.set(conversationId, run);
+  appendChains.set(key, run);
   return run.finally(() => {
-    if (appendChains.get(conversationId) === run) {
-      appendChains.delete(conversationId);
+    if (appendChains.get(key) === run) {
+      appendChains.delete(key);
     }
   }) as Promise<void>;
 }
@@ -269,7 +283,7 @@ export async function appendRawForState(state: SharedState, raws: RawExecutionEv
  * observe them (projection reads, tests) can flush first. Never rejects.
  */
 export function flushConversationLog(conversationId: string): Promise<void> {
-  const pending = appendChains.get(conversationId);
+  const pending = appendChains.get(ck(conversationId));
   return pending ? pending.then(() => undefined, () => undefined) : Promise.resolve();
 }
 
@@ -627,7 +641,7 @@ export async function repairTruncatedConversationLog(
   const content = snapshot
     .map((m) => serialize({ type: 'message', message: m, conversationId, seq: rebuiltSeq++, timestamp: Date.now() } as ExecutionEvent))
     .join('');
-  nextSeq.set(conversationId, rebuiltSeq);
+  nextSeq.set(ck(conversationId), rebuiltSeq);
   try {
     await chainWrite(conversationId, content);
     log.info(

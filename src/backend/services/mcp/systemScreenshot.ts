@@ -29,7 +29,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js';
-import { getDataDir } from '@/utils/paths';
+import { getWorkspaceDataDir } from '@/utils/workspace';
 
 const SPAWN_TIMEOUT_MS = 15_000;
 const MAX_IMAGE_BYTES = 30_000_000;
@@ -49,7 +49,7 @@ function isInside(root: string, candidate: string): boolean {
 }
 
 function screenshotRoot(): string {
-  return path.resolve(getDataDir(), 'screenshots', 'system');
+  return path.resolve(getWorkspaceDataDir(), 'screenshots', 'system');
 }
 
 async function realpathIfExists(candidate: string): Promise<string> {
@@ -65,7 +65,7 @@ async function resolveOutputPath(outputPath: unknown): Promise<string> {
   if (typeof outputPath === 'string' && outputPath.trim().length > 0) {
     const resolved = path.resolve(outputPath.trim());
     const real = await realpathIfExists(path.dirname(resolved));
-    const dataDir = await realpathIfExists(getDataDir());
+    const dataDir = await realpathIfExists(getWorkspaceDataDir());
     if (!isInside(root, resolved) && !isInside(dataDir, real) && !isInside(dataDir, resolved)) {
       throw new Error('outputPath must be inside the FLUJO data directory.');
     }

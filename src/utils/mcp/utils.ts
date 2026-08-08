@@ -5,7 +5,7 @@ import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { createLogger } from '@/utils/logger';
 import { MCPServerConfig, SERVER_DIR_PREFIX } from '@/shared/types/mcp';
-import { getDataDir } from '@/utils/paths';
+import { getWorkspaceDataDir } from '@/utils/workspace';
 
 const log = createLogger('app/api/mcp/utils');
 
@@ -209,7 +209,7 @@ export function enhanceConnectionErrorMessage(error: unknown, config: MCPServerC
             // Check if the .bat file exists
             const batFilePath = path.isAbsolute(batFile)
               ? batFile
-              : path.join(getDataDir(), serverDir, batFile);
+              : path.join(getWorkspaceDataDir(), serverDir, batFile);
 
             log.debug(`Full .bat file path: ${batFilePath}`);
             const batFileExists = fs.existsSync(batFilePath);
@@ -227,7 +227,7 @@ export function enhanceConnectionErrorMessage(error: unknown, config: MCPServerC
 
             if (!execExists) {
               // Try checking in the server directory
-              const fullExecPath = path.join(getDataDir(), serverDir, execPath);
+              const fullExecPath = path.join(getWorkspaceDataDir(), serverDir, execPath);
               log.debug(`Checking in server directory: ${fullExecPath}`);
               const fullExecExists = fs.existsSync(fullExecPath);
               log.debug(`Executable exists in server directory: ${fullExecExists}`);
@@ -246,7 +246,7 @@ export function enhanceConnectionErrorMessage(error: unknown, config: MCPServerC
 
               const fullPath = isAbsolutePath(scriptPath)
                 ? scriptPath
-                : path.join(getDataDir(), serverDir, scriptPath);
+                : path.join(getWorkspaceDataDir(), serverDir, scriptPath);
 
               log.debug(`Full script path: ${fullPath}`);
               const scriptExists = fs.existsSync(fullPath);
