@@ -3,6 +3,8 @@
 Decision record for issue #380 ("Formalize Static Node FlowSpec Decision"), and the
 reusable rule for classifying every future `NodeType` addition.
 
+User guide: [Static node](../features/flows/static-node.md).
+
 ## Context
 
 FLUJO has two authoring surfaces for the same runtime:
