@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 /**
  * DELETE /api/registry/packages
  *
@@ -31,7 +32,7 @@ function statusForResult(result: RegistryDeleteResult): number {
   }
 }
 
-export async function DELETE(request: NextRequest) {
+async function DELETE_handler(request: NextRequest) {
   const lock = await assertUnlocked();
   if (lock) return lock;
   const notLocal = assertLocalRequest(request);
@@ -60,3 +61,5 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ ok: false, code: 'error', error: 'Failed to delete package' }, { status: 500 });
   }
 }
+
+export const DELETE = withWorkspaceRoute(DELETE_handler);

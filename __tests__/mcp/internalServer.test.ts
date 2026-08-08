@@ -16,10 +16,15 @@ import {
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import type { MCPServerConfig } from '@/shared/types/mcp';
+import { ensureWorkspaceDirs } from '@/utils/workspace';
 
 const loadItemMock = loadItem as jest.Mock;
 const saveItemMock = saveItem as jest.Mock;
 let storage: Map<StorageKey, unknown>;
+
+beforeAll(async () => {
+  await ensureWorkspaceDirs();
+});
 
 function copy<T>(value: T): T {
   const serialized = JSON.stringify(value);
@@ -148,11 +153,15 @@ describe('normal stdio delivery', () => {
       FLUJO_FS_ROOTS: '/workspace',
       SECRET_THAT_MUST_NOT_LEAK: 'secret',
     });
-    expect(env).toMatchObject({ FLUJO_DATA_DIR: '/data', FLUJO_FS_ROOTS: '/workspace' });
+    expect(env).toMatchObject({
+      FLUJO_DATA_DIR: path.join(path.resolve('/data'), 'workspaces', 'default-workspace'),
+      FLUJO_WORKSPACE: 'default-workspace',
+      FLUJO_FS_ROOTS: '/workspace',
+    });
     expect(env).not.toHaveProperty('SECRET_THAT_MUST_NOT_LEAK');
   });
 
-  it('forwards the shared Patchright browser cache to the browser child only', () => {
+  it('keeps durable browser outputs in the workspace while sharing only package binaries', () => {
     const browser = SHIPPED_MCP_SERVERS.find((item) => item.defaultName === 'browser')!;
     const filesystem = SHIPPED_MCP_SERVERS.find((item) => item.defaultName === 'filesystem')!;
     const environment = {
@@ -165,7 +174,9 @@ describe('normal stdio delivery', () => {
     };
 
     expect(shippedServerEnv(browser, environment)).toMatchObject({
-      FLUJO_BROWSER_SCREENSHOT_DIR: '/artifacts/browser',
+      FLUJO_BROWSER_PROFILE_DIR: path.join(path.resolve('/data'), 'workspaces', 'default-workspace', 'browser-profile', 'trusted'),
+      FLUJO_BROWSER_SCREENSHOT_DIR: path.join(path.resolve('/data'), 'workspaces', 'default-workspace', 'screenshots', 'browser'),
+      FLUJO_BROWSER_RECORD_DIR: path.join(path.resolve('/data'), 'workspaces', 'default-workspace', 'recordings', 'browser'),
       FLUJO_BROWSER_MODE: 'trusted',
       FLUJO_BROWSER_WINDOW_VISIBILITY: 'offscreen',
       FLUJO_BROWSER_EXTENSION_DIRS: '/extensions/one:/extensions/two',

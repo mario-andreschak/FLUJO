@@ -1,5 +1,6 @@
 import path from 'node:path';
 import type { MCPHostPathAccessConfig, MCPServerIcon, MCPStdioConfig } from '@/shared/types/mcp';
+import { getCurrentWorkspace } from '@/utils/workspace';
 
 type Environment = Readonly<Record<string, string | undefined>>;
 
@@ -71,8 +72,12 @@ export function shippedServerEnv(
   descriptor: ShippedMcpServerDescriptor,
   env: Environment = process.env,
 ): Record<string, string> {
+  const workspace = getCurrentWorkspace();
+  const parentDataDir = path.resolve(env.FLUJO_DATA_DIR?.trim() || process.cwd());
+  const workspaceDataDir = path.join(parentDataDir, 'workspaces', workspace);
   const result: Record<string, string> = {
-    FLUJO_DATA_DIR: env.FLUJO_DATA_DIR ?? process.cwd(),
+    FLUJO_DATA_DIR: workspaceDataDir,
+    FLUJO_WORKSPACE: workspace,
   };
   const forwarded = new Set([
     'FLUJO_BASE_URL',
@@ -147,7 +152,31 @@ export function shippedServerEnv(
     const value = env[key];
     if (typeof value === 'string') result[key] = value;
   }
+  // Inherit-all (bash) and explicit forwarded values must never overwrite the
+  // workspace process boundary established above.
+  result.FLUJO_DATA_DIR = workspaceDataDir;
+  result.FLUJO_WORKSPACE = workspace;
+  if (descriptor.defaultName === 'browser') {
+    // These are durable outputs. Operator values are useful when the browser
+    // package is run standalone, but the FLUJO-managed copy must always keep
+    // them in the selected workspace.
+    result.FLUJO_BROWSER_PROFILE_DIR = path.join(workspaceDataDir, 'browser-profile', 'trusted');
+    result.FLUJO_BROWSER_SCREENSHOT_DIR = path.join(workspaceDataDir, 'screenshots', 'browser');
+    result.FLUJO_BROWSER_RECORD_DIR = path.join(workspaceDataDir, 'recordings', 'browser');
+  }
   return result;
+}
+
+/** Identify a bundled package by immutable install/source identity, not display name. */
+export function shippedDescriptorForConfig(config: MCPStdioConfig): ShippedMcpServerDescriptor | undefined {
+  const record = config as MCPStdioConfig & { internalPackage?: unknown };
+  const sourceId = record.source?.type === 'marketplace' ? record.source.id : undefined;
+  return SHIPPED_MCP_SERVERS.find(descriptor => {
+    const ids = [descriptor.packageId, ...(descriptor.legacyPackageIds ?? [])];
+    return ids.includes(sourceId ?? '') || ids.includes(
+      typeof record.internalPackage === 'string' ? record.internalPackage : '',
+    );
+  });
 }
 
 /** Build the ordinary persisted stdio record installed for one shipped package. */

@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { NextRequest, NextResponse } from 'next/server';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
@@ -20,7 +21,7 @@ async function serverConfig(serverName: string) {
   return Array.isArray(configs) ? configs.find((config) => config.name === serverName) : undefined;
 }
 
-export async function GET(request: NextRequest) {
+async function GET_handler(request: NextRequest) {
   const lock = await assertUnlocked();
   if (lock) return lock;
   const { serverName, uri, conversationId } = input(request);
@@ -31,7 +32,7 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({ status }, { headers: { 'Cache-Control': 'no-store' } });
 }
 
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const notLocal = assertLocalRequest(request);
   if (notLocal) return notLocal;
   const lock = await assertUnlocked();
@@ -60,3 +61,6 @@ export async function POST(request: NextRequest) {
   );
   return NextResponse.json({ status }, { headers: { 'Cache-Control': 'no-store' } });
 }
+
+export const GET = withWorkspaceRoute(GET_handler);
+export const POST = withWorkspaceRoute(POST_handler);

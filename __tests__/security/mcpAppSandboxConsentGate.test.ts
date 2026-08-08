@@ -19,31 +19,53 @@ jest.mock('@/utils/encryption/lockGate', () => ({
   assertUnlocked: jest.fn(async () => null),
 }));
 
-const loadServerConfigs = jest.fn(async (): Promise<MCPServerConfig[]> => []);
-jest.mock('@/backend/services/mcp', () => ({
-  mcpService: { loadServerConfigs: (...args: unknown[]) => loadServerConfigs(...args as []) },
+// This suite exercises route authorization, not the independently tested
+// startup migration barrier. Avoid coupling every request to filesystem
+// migration fixtures that other Jest workers may intentionally perturb.
+jest.mock('@/backend/services/workspace/migration', () => ({
+  ensureWorkspaceLayoutReady: jest.fn(async () => undefined),
+}));
+jest.mock('@/utils/workspace', () => ({
+  ...jest.requireActual('@/utils/workspace'),
+  workspaceExists: jest.fn(async () => true),
 }));
 
-const getSandboxAuthToken = jest.fn(() => 'shared-token');
-const getSandboxPort = jest.fn(() => 4100);
+const loadServerConfigs = jest.fn(async (): Promise<MCPServerConfig[]> => []);
+const readResourceFromApp = jest.fn(async () => ({
+  success: true,
+  data: {
+    contents: [{
+      uri: 'ui://acme/dashboard',
+      mimeType: 'text/html;profile=mcp-app',
+      text: '<main>verified app</main>',
+    }],
+  },
+}));
+jest.mock('@/backend/services/mcp', () => ({
+  mcpService: {
+    loadServerConfigs: (...args: unknown[]) => loadServerConfigs(...args as []),
+    readResourceFromApp: (...args: unknown[]) => readResourceFromApp(...args as []),
+  },
+}));
+
 const ensureSandboxForOriginKey = jest.fn(async (_originKey?: string) => ({ port: 4100, token: 'scoped-token' }));
 const registerSandboxHostOrigin = jest.fn();
+const hasValidSandboxAppUrlTemplate = jest.fn(() => true);
 
 jest.mock('@/backend/mcpApps/sandboxServer', () => ({
-  getSandboxAuthToken: () => getSandboxAuthToken(),
-  getSandboxPort: () => getSandboxPort(),
   ensureSandboxForOriginKey: (key: string) => ensureSandboxForOriginKey(key),
   registerSandboxHostOrigin: (origin: string) => registerSandboxHostOrigin(origin),
-  deriveSandboxPublicUrl: () => undefined,
-  getSandboxPublicUrl: () => undefined,
-  hasSandboxPublicUrlConfiguration: () => false,
-  isSandboxServerReady: () => true,
+  deriveSandboxPublicUrl: (_host: string, port: number, key: string) =>
+    `http://${key}.localhost:${port}/sandbox.html`,
+  hasValidSandboxAppUrlTemplate: () => hasValidSandboxAppUrlTemplate(),
 }));
 
 import { GET } from '@/app/api/mcp/app-sandbox/route';
 import { setMcpAppConsent } from '@/backend/mcpApps/appConsent';
+import { deriveVerifiedMcpAppOriginKey } from '@/backend/mcpApps/appOrigin';
 
 const URI = 'ui://acme/dashboard';
+const originalExposureMode = process.env.FLUJO_EXPOSURE_MODE;
 
 const external = (name: string): MCPServerConfig => ({
   name, transport: 'stdio', command: 'node', args: [], env: {}, disabled: false,
@@ -64,17 +86,30 @@ const expectDenied = async (response: Response) => {
   await expect(response.json()).resolves.toEqual({ error: 'mcp_app_consent_required' });
   expect(response.headers.get('Cache-Control')).toBe('no-store');
   // Nothing may be allocated or handed out for a denied request.
-  expect(getSandboxAuthToken).not.toHaveBeenCalled();
+  expect(readResourceFromApp).not.toHaveBeenCalled();
   expect(ensureSandboxForOriginKey).not.toHaveBeenCalled();
   expect(registerSandboxHostOrigin).not.toHaveBeenCalled();
 };
 
 describe('MCP App sandbox token issuance is consent-gated (#331)', () => {
   beforeEach(() => {
+    process.env.FLUJO_EXPOSURE_MODE = 'localhost';
     for (const key of Object.keys(consentStore)) delete consentStore[key];
     jest.clearAllMocks();
     loadServerConfigs.mockResolvedValue([]);
+    readResourceFromApp.mockResolvedValue({
+      success: true,
+      data: {
+        contents: [{ uri: URI, mimeType: 'text/html;profile=mcp-app', text: '<main>verified</main>' }],
+      },
+    });
     ensureSandboxForOriginKey.mockResolvedValue({ port: 4100, token: 'scoped-token' });
+    hasValidSandboxAppUrlTemplate.mockReturnValue(true);
+  });
+
+  afterAll(() => {
+    if (originalExposureMode === undefined) delete process.env.FLUJO_EXPOSURE_MODE;
+    else process.env.FLUJO_EXPOSURE_MODE = originalExposureMode;
   });
 
   it('refuses to identify an app at all when serverName/uri are missing', async () => {
@@ -113,7 +148,14 @@ describe('MCP App sandbox token issuance is consent-gated (#331)', () => {
       `?serverName=acme&uri=${encodeURIComponent(URI)}&conversationId=conversation-1`,
     ));
     expect(allowed.status).toBe(200);
-    await expect(allowed.json()).resolves.toMatchObject({ port: 4100, token: 'shared-token', shared: true });
+    await expect(allowed.json()).resolves.toMatchObject({
+      port: 4100,
+      token: 'scoped-token',
+      originKey: deriveVerifiedMcpAppOriginKey({
+        workspace: 'default-workspace', serverName: 'acme', uri: URI,
+      }),
+      shared: false,
+    });
   });
 
   it('does not let a renamed third-party server impersonate a shipped app', async () => {
@@ -124,7 +166,7 @@ describe('MCP App sandbox token issuance is consent-gated (#331)', () => {
     loadServerConfigs.mockResolvedValue([shippedBash('bash')]);
     const internal = await GET(request(`?serverName=bash&uri=${encodeURIComponent(URI)}`));
     expect(internal.status).toBe(200);
-    await expect(internal.json()).resolves.toMatchObject({ token: 'shared-token', shared: true });
+    await expect(internal.json()).resolves.toMatchObject({ token: 'scoped-token', shared: false });
   });
 
   it('issues a token for an allow-always app in any conversation', async () => {
@@ -136,7 +178,51 @@ describe('MCP App sandbox token issuance is consent-gated (#331)', () => {
     ));
     expect(response.status).toBe(200);
     expect(registerSandboxHostOrigin).toHaveBeenCalledWith('http://localhost:4200');
-    await expect(response.json()).resolves.toMatchObject({ token: 'shared-token', shared: true });
+    await expect(response.json()).resolves.toMatchObject({ token: 'scoped-token', shared: false });
+  });
+
+  it('rejects a caller origin hint that disagrees with the verified identity', async () => {
+    await setMcpAppConsent('acme', URI, 'allow-always');
+    loadServerConfigs.mockResolvedValue([external('acme')]);
+
+    const response = await GET(request(
+      `?serverName=acme&uri=${encodeURIComponent(URI)}&originKey=attacker-app`,
+    ));
+    expect(response.status).toBe(409);
+    expect(ensureSandboxForOriginKey).not.toHaveBeenCalled();
+    expect(registerSandboxHostOrigin).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the server does not return exact MCP App HTML', async () => {
+    await setMcpAppConsent('acme', URI, 'allow-always');
+    loadServerConfigs.mockResolvedValue([external('acme')]);
+    readResourceFromApp.mockResolvedValueOnce({
+      success: true,
+      data: {
+        contents: [{
+          uri: 'ui://acme/other',
+          mimeType: 'text/html;profile=mcp-app',
+          text: '<main>wrong resource</main>',
+        }],
+      },
+    });
+
+    const response = await GET(request(`?serverName=acme&uri=${encodeURIComponent(URI)}`));
+    expect(response.status).toBe(422);
+    expect(ensureSandboxForOriginKey).not.toHaveBeenCalled();
+    expect(registerSandboxHostOrigin).not.toHaveBeenCalled();
+  });
+
+  it('refuses hosted mode without a per-app hostname template', async () => {
+    process.env.FLUJO_EXPOSURE_MODE = 'public';
+    hasValidSandboxAppUrlTemplate.mockReturnValue(false);
+    await setMcpAppConsent('acme', URI, 'allow-always');
+    loadServerConfigs.mockResolvedValue([external('acme')]);
+
+    const response = await GET(request(`?serverName=acme&uri=${encodeURIComponent(URI)}`));
+    expect(response.status).toBe(503);
+    expect(ensureSandboxForOriginKey).not.toHaveBeenCalled();
+    expect(registerSandboxHostOrigin).not.toHaveBeenCalled();
   });
 
   it('stays locked behind the encryption gate before consent is even considered', async () => {
@@ -149,7 +235,7 @@ describe('MCP App sandbox token issuance is consent-gated (#331)', () => {
 
     const response = await GET(request(`?serverName=acme&uri=${encodeURIComponent(URI)}`));
     expect(response.status).toBe(401);
-    expect(getSandboxAuthToken).not.toHaveBeenCalled();
+    expect(readResourceFromApp).not.toHaveBeenCalled();
     expect(ensureSandboxForOriginKey).not.toHaveBeenCalled();
   });
 });

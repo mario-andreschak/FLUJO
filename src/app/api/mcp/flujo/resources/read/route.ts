@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import type { NextRequest } from 'next/server';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { createLogger } from '@/utils/logger';
@@ -5,7 +6,7 @@ import { json } from '@/app/api/mcp/_helpers';
 
 const log = createLogger('app/api/mcp/flujo/resources/read/route');
 
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const lock = await assertUnlocked();
   if (lock) return lock;
 
@@ -33,3 +34,5 @@ export async function POST(request: NextRequest) {
     return json({ error: 'Failed to read run resource.' }, 500);
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

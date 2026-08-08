@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
@@ -87,7 +88,7 @@ async function buildContextInfo(sharedState: SharedState): Promise<
   return undefined;
 }
 
-export async function GET(
+async function GET_handler(
   request: NextRequest,
   { params }: { params: Promise<{ conversationId: string }> } // Reverted to using params destructuring
 ) {
@@ -240,7 +241,7 @@ export async function GET(
 }
 
 // PATCH handler to update conversation properties (e.g., flowId)
-export async function PATCH(
+async function PATCH_handler(
   request: NextRequest,
   { params }: { params: Promise<{ conversationId: string }> }
 ) {
@@ -372,7 +373,7 @@ export async function PATCH(
 
 
 // DELETE handler to remove conversation state
-export async function DELETE(
+async function DELETE_handler(
   request: NextRequest,
   { params }: { params: Promise<{ conversationId: string }> }
 ) {
@@ -454,3 +455,7 @@ export async function DELETE(
     return NextResponse.json({ error: 'Failed to delete conversation' }, { status: 500 });
   }
 }
+
+export const GET = withWorkspaceRoute(GET_handler);
+export const PATCH = withWorkspaceRoute(PATCH_handler);
+export const DELETE = withWorkspaceRoute(DELETE_handler);

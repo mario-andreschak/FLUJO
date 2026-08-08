@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import crypto from 'crypto';
 import path from 'path';
 import { NextRequest, NextResponse } from 'next/server';
@@ -66,7 +67,7 @@ function unavailable() {
   return NextResponse.json({ error: 'Revert to here is not enabled' }, { status: 404 });
 }
 
-export async function GET(
+async function GET_handler(
   request: NextRequest,
   { params }: { params: Promise<{ conversationId: string }> },
 ) {
@@ -84,7 +85,7 @@ export async function GET(
   return NextResponse.json(await buildPreview(conversationId, target));
 }
 
-export async function POST(
+async function POST_handler(
   request: NextRequest,
   { params }: { params: Promise<{ conversationId: string }> },
 ) {
@@ -145,3 +146,6 @@ export async function POST(
   await persistConversationState(`conversations/${conversationId}` as StorageKey, state);
   return NextResponse.json({ operationId });
 }
+
+export const GET = withWorkspaceRoute(GET_handler);
+export const POST = withWorkspaceRoute(POST_handler);

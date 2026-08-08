@@ -43,6 +43,7 @@ import {
 } from '../retryAfter';
 import { runWithConcurrency } from '@/backend/services/mcp/utils/boundedConcurrency';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
+import { getCurrentWorkspace } from '@/utils/workspace';
 import { extractUiResourceUri } from '@/shared/utils/mcpApps';
 import { resolveInvokedToolUiLink } from '@/backend/mcpApps/toolUi';
 import {
@@ -171,7 +172,8 @@ async function persistModelMedia(
         ...(localPath ? { localPath } : {}),
         url:
           `/v1/chat/conversations/${encodeURIComponent(conversationId)}` +
-          `/resources/${encodeURIComponent(written.id)}/content`,
+          `/resources/${encodeURIComponent(written.id)}/content` +
+          `?workspace=${encodeURIComponent(getCurrentWorkspace())}`,
       };
     } catch (error) {
       log.warn('Failed to persist direct model media; keeping it inline', {

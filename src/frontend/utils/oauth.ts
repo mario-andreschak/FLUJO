@@ -134,12 +134,13 @@ export function openOAuthPopup(options: OAuthPopupOptions): Promise<any> {
 /**
  * Generate OAuth state parameter with server information
  */
-export function generateOAuthState(serverName: string, redirectUri: string): string {
+export function generateOAuthState(serverName: string, redirectUri: string, workspace?: string): string {
   const stateData = {
     serverName,
     redirectUri,
     timestamp: Date.now(),
-    nonce: Math.random().toString(36).substring(2, 15)
+    nonce: Math.random().toString(36).substring(2, 15),
+    ...(workspace ? { workspace } : {}),
   };
   
   return encodeURIComponent(JSON.stringify(stateData));

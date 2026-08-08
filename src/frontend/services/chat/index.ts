@@ -8,6 +8,7 @@ import type {
 } from '@/frontend/components/Chat';
 import type { Flow } from '@/shared/types/flow';
 import type { ConversationChainsResponse } from '@/shared/types/conversationChain';
+import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 
 // Create a logger instance for this file
 const log = createLogger('frontend/services/chat/index');
@@ -544,7 +545,7 @@ class ChatService {
       fromSeq !== undefined
         ? `${BASE}/${encodeURIComponent(id)}/events?fromSeq=${fromSeq}`
         : `${BASE}/${encodeURIComponent(id)}/events`;
-    const es = new EventSource(url);
+    const es = new EventSource(withWorkspaceUrl(url));
     es.onopen = () => {
       log.debug('Execution event stream open', { conversationId: id });
       handlers.onOpen?.();
@@ -570,7 +571,7 @@ class ChatService {
    * and other high-volume execution events never reach the sidebar.
    */
   subscribeToSidebarEvents(handlers: EventStreamHandlers): EventSource {
-    const es = new EventSource('/v1/chat/events?scope=sidebar');
+    const es = new EventSource(withWorkspaceUrl('/v1/chat/events?scope=sidebar'));
     es.onopen = () => {
       log.debug('Sidebar lifecycle event stream open');
       handlers.onOpen?.();

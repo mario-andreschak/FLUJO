@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { NextRequest, NextResponse } from 'next/server';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { promptRenderer } from '@/backend/utils/PromptRenderer';
@@ -11,7 +12,7 @@ const log = createLogger('api/flow/prompt-renderer');
  * @param request - The request object
  * @returns The rendered prompt
  */
-export async function POST(request: NextRequest): Promise<NextResponse> {
+async function POST_handler(request: NextRequest): Promise<NextResponse> {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -45,3 +46,5 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     );
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

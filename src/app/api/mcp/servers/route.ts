@@ -37,7 +37,7 @@ function redactServerConfig(config: MCPServerConfig): MCPServerConfig {
  * GET /api/mcp/servers
  * List all MCP server configurations (with secrets redacted for the browser).
  */
-async function GET_handler() {
+async function GET_handler(_request: Request) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -106,5 +106,10 @@ async function POST_handler(request: NextRequest) {
 
 // Workspaces (#406): MCP configs and clones are workspace-owned, so the same
 // server name can exist independently in two workspaces.
-export const GET = withWorkspaceRoute(GET_handler);
+const GET_workspaceRoute = withWorkspaceRoute(GET_handler);
+export function GET(): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request = new Request('http://localhost/')) {
+  return GET_workspaceRoute(request);
+}
 export const POST = withWorkspaceRoute(POST_handler);

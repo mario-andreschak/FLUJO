@@ -8,6 +8,8 @@ import { execSync, ExecSyncOptionsWithStringEncoding, spawn } from 'child_proces
 import { createLogger } from '@/utils/logger';
 import { getInstallMode } from '@/utils/paths';
 
+// FLUJO_INSTALLATION_WIDE_ROUTE: updates the FLUJO installation itself.
+
 const log = createLogger('app/api/update/route');
 
 // How a non-git install is told to update itself. The Settings UI switches on

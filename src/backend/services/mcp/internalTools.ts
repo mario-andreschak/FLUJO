@@ -33,6 +33,7 @@
  * mcpService back, and this file must not be pulled into index.ts's module-init.
  */
 import { createLogger } from '@/utils/logger';
+import { AsyncLocalStorage } from 'async_hooks';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { MCPServerConfig, MCPServiceResponse, MCPToolResponse } from '@/shared/types/mcp';
 import type { ToolCallSource, ToolListAudience } from './appsProtocol';
@@ -103,8 +104,14 @@ const log = createLogger('backend/services/mcp/internalTools');
  */
 declare global {
   var __flujo_internal_flow_depth: number | undefined;
+  var __flujo_internal_flow_depth_als: AsyncLocalStorage<number> | undefined;
 }
 const MAX_EXECUTE_FLOW_DEPTH = 4;
+
+function internalFlowDepthStore(): AsyncLocalStorage<number> {
+  return global.__flujo_internal_flow_depth_als ??
+    (global.__flujo_internal_flow_depth_als = new AsyncLocalStorage<number>());
+}
 
 
 /** read_conversation bounds (same rationale as the terminal output cap). */
@@ -628,7 +635,12 @@ async function executeFlow(args: Record<string, unknown>): Promise<CallToolResul
     return textResult({ error: `No flow named or with id "${ref}". Use list_flow_building_blocks to see the available flows.` }, true);
   }
 
-  const depth = global.__flujo_internal_flow_depth ?? 0;
+  const store = internalFlowDepthStore();
+  const inheritedDepth = store.getStore();
+  // The numeric global remains a compatibility-only test override. Runtime
+  // recursion lives in AsyncLocalStorage, so concurrent calls cannot consume
+  // one another's budget (within or across workspaces).
+  const depth = inheritedDepth ?? global.__flujo_internal_flow_depth ?? 0;
   if (depth >= MAX_EXECUTE_FLOW_DEPTH) {
     return textResult(
       { error: `execute_flow nesting limit (${MAX_EXECUTE_FLOW_DEPTH}) reached — refusing to start "${flow.name}" to prevent runaway recursion.` },
@@ -636,8 +648,8 @@ async function executeFlow(args: Record<string, unknown>): Promise<CallToolResul
     );
   }
 
-  global.__flujo_internal_flow_depth = depth + 1;
-  try {
+  return store.run(depth + 1, async () => {
+    try {
     const result = await runFlow({
       flowId: flow.id,
       prompt: String(args?.input ?? ''),
@@ -652,10 +664,13 @@ async function executeFlow(args: Record<string, unknown>): Promise<CallToolResul
     if (result.status === 'error') {
       return textResult({ error: result.error?.message ?? 'Unknown error during flow execution.' }, true);
     }
-    return textResult(result.outputText ?? '');
-  } finally {
-    global.__flujo_internal_flow_depth = depth;
-  }
+      return textResult(result.outputText ?? '');
+    } finally {
+      // Preserve the old observable reset used by the test suite without using
+      // this mutable value to track live runtime depth.
+      if (inheritedDepth === undefined) global.__flujo_internal_flow_depth = 0;
+    }
+  });
 }
 
 async function deleteFlow(args: Record<string, unknown>): Promise<CallToolResult> {

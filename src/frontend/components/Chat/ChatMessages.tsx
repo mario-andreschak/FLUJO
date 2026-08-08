@@ -56,6 +56,7 @@ import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import LinkRoundedIcon from '@mui/icons-material/LinkRounded';
 import { ChatMessage } from './index';
 import { magicLinkUrl } from '@/frontend/utils/magicLink';
+import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import { copyText } from '@/frontend/components/shared/CopyLinkButton';
 import RevertPreviewDialog from './RevertPreviewDialog';
 import { FEATURES } from '@/config/features';
@@ -638,7 +639,7 @@ const ToolCallDetails: React.FC<{
           tool: toolTesterDestination.toolName,
           args: JSON.stringify(parsedArgs),
         });
-        window.location.assign(`/mcp?${query.toString()}`);
+        window.location.assign(withWorkspaceUrl(`/mcp?${query.toString()}`));
       }
     : undefined;
   // This preview is intentionally display-only; execution and approval continue

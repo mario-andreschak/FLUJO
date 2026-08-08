@@ -13,9 +13,11 @@ import { useRouter } from 'next/navigation';
 
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { magicLinkPath } from '@/frontend/utils/magicLink';
-import { StorageKey } from '@/shared/types/storage';
 import type { Ticket } from '@/shared/types/ticket';
-import { TICKET_DRAFT_STORAGE_KEY } from '@/shared/types/ticket';
+import {
+  currentConversationStorageKey,
+  ticketDraftStorageKey,
+} from '@/frontend/utils/workspaceContentKeys';
 
 export interface TicketCardProps {
   ticket: Ticket;
@@ -51,7 +53,7 @@ export function TicketCard({
   const openConversation = () => {
     if (!ticket.conversationId) return;
     try {
-      localStorage.setItem(StorageKey.CURRENT_CONVERSATION_ID, ticket.conversationId);
+      localStorage.setItem(currentConversationStorageKey(), ticket.conversationId);
     } catch {
       /* private-mode storage failures must not block navigation */
     }
@@ -74,7 +76,7 @@ export function TicketCard({
       .filter(Boolean)
       .join('\n');
     try {
-      sessionStorage.setItem(TICKET_DRAFT_STORAGE_KEY, draft);
+      sessionStorage.setItem(ticketDraftStorageKey(), draft);
     } catch {
       /* ignore storage failures — the chat simply opens empty */
     }

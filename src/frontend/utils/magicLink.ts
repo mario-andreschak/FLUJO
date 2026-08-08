@@ -12,6 +12,7 @@
  */
 
 import { createLogger } from '@/utils/logger';
+import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 
 const log = createLogger('frontend/utils/magicLink');
 
@@ -100,7 +101,7 @@ export function magicLinkPath(target: MagicLinkTarget): string {
  * bare path when `window` is unavailable (SSR / node tests).
  */
 export function magicLinkUrl(target: MagicLinkTarget): string {
-  const path = magicLinkPath(target);
+  const path = withWorkspaceUrl(magicLinkPath(target));
   if (typeof window === 'undefined' || !window.location?.origin) {
     return path;
   }

@@ -44,7 +44,7 @@ import {
 } from '@/utils/shared/flowModelReplacement';
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
-import { writeUiPreference } from '@/frontend/hooks/useUiPreference';
+import { writeWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
 import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useAskFlujoPage } from '@/frontend/contexts/AskFlujoContext';
@@ -642,7 +642,7 @@ const FlowsPage = () => {
 
     // Set the requested view before the builder mounts, avoiding a flash of the
     // previously used editor when starting explicitly in Easy or Expert mode.
-    writeUiPreference('flujo-ui:flow-builder:mode', authoringMode);
+    writeWorkspaceUiPreference('flujo-ui:flow-builder:mode', authoringMode);
     setBuilderEntryMode(authoringMode);
 
     // Keep manual creations as drafts too. Abandoning the editor no longer

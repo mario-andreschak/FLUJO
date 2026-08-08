@@ -1,40 +1,39 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { NextRequest, NextResponse } from 'next/server';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { isValidMcpAppDomain } from '@/shared/utils/mcpAppOrigin';
+import { extractAppHtml } from '@/shared/utils/mcpApps';
 import { mcpService } from '@/backend/services/mcp';
 import { getMcpAppConsent } from '@/backend/mcpApps/appConsent';
+import { deriveVerifiedMcpAppOriginKey } from '@/backend/mcpApps/appOrigin';
+import { getCurrentWorkspace } from '@/utils/workspace';
+import { getExposureMode } from '@/utils/http/exposureMode';
 import {
-  getSandboxAuthToken,
   deriveSandboxPublicUrl,
-  getSandboxPort,
-  getSandboxPublicUrl,
-  hasSandboxPublicUrlConfiguration,
-  isSandboxServerReady,
   ensureSandboxForOriginKey,
+  hasValidSandboxAppUrlTemplate,
   registerSandboxHostOrigin,
 } from '@/backend/mcpApps/sandboxServer';
 
 /**
- * GET /api/mcp/app-sandbox?originKey=…
+ * GET /api/mcp/app-sandbox?serverName=…&uri=…
  *
- * Returns the sandbox proxy's port and access token, either shared (legacy)
- * or scoped to a specific originKey (per-app origin isolation).
+ * Verifies the exact MCP App resource and returns a sandbox endpoint whose
+ * browser origin and token are scoped to that host-owned resource identity.
  *
  * Query parameters:
- *   - originKey (optional): Validated app origin key (DNS-safe domain or hash).
- *     If provided, returns a token scoped to that app; if omitted or invalid,
- *     returns the legacy shared token.
+ *   - originKey (optional compatibility hint): Must exactly match the key the
+ *     server derives. It never selects an origin and a mismatch is rejected.
  *
- * Local installs build `http://<same-hostname>:<port>/sandbox.html?token=…`;
- * hosted installs return an HTTPS URL. Legacy explicit URL configuration remains
- * a compatibility fallback.
+ * Local installs use `http://<originKey>.localhost:<port>/sandbox.html` on a
+ * shared loopback listener. Hosted installs require a `{app}` hostname template.
  *
  * Response shape:
  *   - port: Port number for the sandbox listener
  *   - token: Access token (per-app scoped or shared)
  *   - url?: Browser-visible URL (hosted HTTPS deployments)
- *   - originKey?: Echo of the requested originKey (when provided)
- *   - shared: Whether this is a fallback to the shared origin (Mode C)
+ *   - originKey: Server-derived, workspace-scoped origin key
+ *   - shared: Always false; retained only for compatibility with older clients
  *
  * Gated like the rest of the API (deny-by-default): MCP Apps only render inside
  * an active chat, which already requires the encryption unlock.
@@ -47,7 +46,7 @@ function externalOrigin(request: NextRequest): string {
   return `${protocol}://${host}`;
 }
 
-export async function GET(request: NextRequest) {
+async function GET_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -70,18 +69,90 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // The sandbox listener only ever sees its OWN origin in the request headers,
-  // so it cannot derive a correct `frame-ancestors` on its own. This request is
-  // authenticated and comes from the page that will embed the proxy: record its
-  // origin as a trusted embedder before handing out the token.
-  registerSandboxHostOrigin(externalOrigin(request));
-
-  // Ensure the shared sandbox listener is allocated and ready.
-  // This is fire-and-forget on startup, but on first request we wait for it.
-  const sharedSandbox = await ensureSandboxForOriginKey('');
-  if (!sharedSandbox) {
+  // Consent proves the user approved an app identity; it does not prove that a
+  // caller-supplied server/URI pair is a renderable MCP App. Re-read through the
+  // app-authorized service and require an exact URI + stable MCP App MIME match
+  // before deriving or minting anything.
+  let resource: Awaited<ReturnType<typeof mcpService.readResourceFromApp>>;
+  try {
+    resource = await mcpService.readResourceFromApp(serverName, uri);
+  } catch (error) {
+    console.error('Failed to verify MCP App resource before sandbox allocation:', error);
     return NextResponse.json(
-      { error: 'MCP Apps sandbox failed to start; retry in a moment' },
+      { error: 'MCP App resource verification failed' },
+      { status: 502, headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } },
+    );
+  }
+  if (!resource.success) {
+    const status = Number.isInteger(resource.statusCode)
+      && (resource.statusCode as number) >= 400
+      && (resource.statusCode as number) <= 599
+      ? resource.statusCode as number
+      : 502;
+    return NextResponse.json(
+      { error: resource.error || 'MCP App resource is unavailable' },
+      {
+        status,
+        headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' },
+      },
+    );
+  }
+  const verifiedResource = extractAppHtml(resource.data, undefined, uri);
+  if ('error' in verifiedResource) {
+    return NextResponse.json(
+      { error: verifiedResource.error },
+      {
+        status: 422,
+        headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' },
+      },
+    );
+  }
+
+  const originKey = deriveVerifiedMcpAppOriginKey({
+    workspace: getCurrentWorkspace(),
+    serverName,
+    uri,
+  });
+
+  // Older clients may still send their locally-derived key. Treat it only as
+  // an assertion and reject disagreement; it can never choose the partition.
+  const rawOriginKey = request.nextUrl.searchParams.get('originKey');
+  if (rawOriginKey !== null) {
+    if (!isValidMcpAppDomain(rawOriginKey)) {
+      return NextResponse.json(
+        { error: 'Invalid originKey' },
+        { status: 400, headers: { 'Cache-Control': 'no-store' } },
+      );
+    }
+    if (rawOriginKey !== originKey) {
+      return NextResponse.json(
+        { error: 'originKey does not match the verified MCP App resource' },
+        { status: 409, headers: { 'Cache-Control': 'no-store' } },
+      );
+    }
+  }
+
+  if (getExposureMode() !== 'localhost' && !hasValidSandboxAppUrlTemplate()) {
+    return NextResponse.json(
+      { error: 'Hosted MCP Apps require a sandbox URL with {app} as a hostname label' },
+      { status: 503, headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } },
+    );
+  }
+
+  let sandboxResult;
+  try {
+    sandboxResult = await ensureSandboxForOriginKey(originKey);
+  } catch (error) {
+    console.error('Failed to start scoped MCP App sandbox:', error);
+  }
+  if (
+    !sandboxResult
+    || !Number.isInteger(sandboxResult.port)
+    || typeof sandboxResult.token !== 'string'
+    || sandboxResult.token.length === 0
+  ) {
+    return NextResponse.json(
+      { error: 'A workspace-scoped MCP Apps sandbox is unavailable' },
       {
         status: 503,
         headers: {
@@ -93,84 +164,44 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const configuredPublicUrl = getSandboxPublicUrl();
-  if (hasSandboxPublicUrlConfiguration() && !configuredPublicUrl) {
+  const hostOrigin = externalOrigin(request);
+  const publicUrl = deriveSandboxPublicUrl(hostOrigin, sandboxResult.port, originKey);
+  if (!publicUrl) {
     return NextResponse.json(
-      { error: 'The legacy MCP Apps sandbox URL is not a valid HTTP(S) URL' },
-      {
-        status: 503,
-        headers: {
-          'Cache-Control': 'no-store',
-          Pragma: 'no-cache',
-        },
-      },
+      { error: 'MCP Apps sandbox hosting requires a per-app origin template' },
+      { status: 503, headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } },
     );
   }
 
-  // Extract and validate the originKey parameter (if provided).
-  const rawOriginKey = request.nextUrl.searchParams.get('originKey');
-  let originKey: string | undefined;
-  let shared = false;
-
-  if (rawOriginKey) {
-    // Validate the originKey. If it's not a valid domain, reject it.
-    if (!isValidMcpAppDomain(rawOriginKey)) {
-      return NextResponse.json(
-        { error: 'Invalid originKey' },
-        { status: 400, headers: { 'Cache-Control': 'no-store' } },
-      );
-    }
-    originKey = rawOriginKey;
-  }
-
-  // Try to allocate or reuse a sandbox for this originKey.
-  let sandboxResult;
-  if (originKey) {
-    // Attempt per-app origin allocation (Mode A/B).
-    try {
-      sandboxResult = await ensureSandboxForOriginKey(originKey);
-    } catch (err) {
-      // Log and fall back to shared.
-      console.error('Failed to allocate sandbox for originKey:', originKey, err);
-    }
-  }
-
-  // If allocation failed or no originKey was provided, fall back to shared (Mode C).
-  if (!sandboxResult) {
-    sandboxResult = {
-      port: getSandboxPort(),
-      token: getSandboxAuthToken(),
-    };
-    shared = true;
-  }
-
-  const publicUrl = configuredPublicUrl
-    ?? deriveSandboxPublicUrl(externalOrigin(request), sandboxResult.port, originKey);
-
   // Validate that the sandbox URL origin differs from the request origin
   // (enforces foreign-origin isolation).
-  if (publicUrl) {
-    try {
-      const sandboxUrlOrigin = new URL(publicUrl).origin;
-      const requestOrigin = new URL(externalOrigin(request)).origin;
-      if (sandboxUrlOrigin === requestOrigin) {
-        return NextResponse.json(
-          { error: 'Sandbox origin must differ from host origin' },
-          { status: 500, headers: { 'Cache-Control': 'no-store' } },
-        );
-      }
-    } catch {
-      // URL parsing failed; return anyway and let the client detect the issue.
+  try {
+    const sandboxUrlOrigin = new URL(publicUrl).origin;
+    const requestOrigin = new URL(hostOrigin).origin;
+    if (sandboxUrlOrigin === requestOrigin) {
+      return NextResponse.json(
+        { error: 'Sandbox origin must differ from host origin' },
+        { status: 500, headers: { 'Cache-Control': 'no-store' } },
+      );
     }
+  } catch {
+    return NextResponse.json(
+      { error: 'MCP Apps sandbox returned an invalid per-app URL' },
+      { status: 503, headers: { 'Cache-Control': 'no-store' } },
+    );
   }
+
+  // The listener only sees its own origin. Record the authenticated embedder
+  // after every fail-closed check, immediately before handing out credentials.
+  registerSandboxHostOrigin(hostOrigin);
 
   return NextResponse.json(
     {
       port: sandboxResult.port,
       token: sandboxResult.token,
-      ...(publicUrl ? { url: publicUrl } : {}),
-      ...(originKey ? { originKey } : {}),
-      shared,
+      url: publicUrl,
+      originKey,
+      shared: false,
     },
     {
       headers: {
@@ -180,3 +211,5 @@ export async function GET(request: NextRequest) {
     },
   );
 }
+
+export const GET = withWorkspaceRoute(GET_handler);

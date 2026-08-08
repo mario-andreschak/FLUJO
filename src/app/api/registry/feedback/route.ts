@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 /**
  * POST /api/registry/feedback
  *
@@ -29,7 +30,7 @@ const feedbackSchema = z
     { path: ['notice'], message: 'Feedback must not exceed 255 characters' },
   );
 
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const notLocal = assertLocalRequest(request);
   if (notLocal) return notLocal;
 
@@ -75,3 +76,5 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
@@ -19,7 +20,7 @@ const log = createLogger('app/v1/chat/conversations/[conversationId]/debug/attac
  * observed after the current model/tool finishes without destroying breakpoint
  * configuration.
  */
-export async function POST(
+async function POST_handler(
   request: NextRequest,
   { params }: { params: Promise<{ conversationId: string }> },
 ) {
@@ -50,3 +51,5 @@ export async function POST(
     return NextResponse.json({ error: 'Internal server error attaching debugger' }, { status: 500 });
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

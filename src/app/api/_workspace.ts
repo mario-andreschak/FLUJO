@@ -1,11 +1,12 @@
 import {
-  DEFAULT_WORKSPACE,
   InvalidWorkspaceNameError,
+  ensureWorkspaceDirs,
   normalizeWorkspaceName,
   runWithWorkspace,
   workspaceExists,
 } from '@/utils/workspace';
 import { createLogger } from '@/utils/logger';
+import { waitForWorkspaceLayoutReady } from '@/backend/services/workspace/layoutReadiness';
 
 const log = createLogger('app/api/_workspace');
 
@@ -82,6 +83,17 @@ export function parseWorkspaceParam(request: Request): string {
  */
 export async function resolveWorkspace(request: Request): Promise<string> {
   const workspace = parseWorkspaceParam(request);
+  try {
+    // Do not let a request observe the legacy root while startup is still
+    // migrating it. Concurrent callers share the migration's in-flight promise.
+    await waitForWorkspaceLayoutReady();
+  } catch (error) {
+    log.error('Workspace layout is not ready; refusing workspace request', error);
+    throw new WorkspaceRequestError(
+      'Workspace storage is temporarily unavailable while its layout is being prepared.',
+      503,
+    );
+  }
   if (!(await workspaceExists(workspace))) {
     throw new WorkspaceRequestError(`Unknown workspace: ${workspace}`, 404);
   }
@@ -91,18 +103,21 @@ export async function resolveWorkspace(request: Request): Promise<string> {
 function errorResponse(error: WorkspaceRequestError): Response {
   return new Response(JSON.stringify({ error: error.message }), {
     status: error.status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(error.status === 503 ? { 'Retry-After': '5' } : {}),
+    },
   });
 }
 
 /**
  * Run `handler` with the request's workspace selected.
  *
- * A non-default workspace is initialized on first use (MCP servers connected,
- * triggers armed) so selecting a workspace behaves like a freshly started FLUJO
- * for that namespace, without a restart. Initialization failures are logged and
- * do not fail the request: the same failure mode as process startup, where a
- * broken MCP server never blocks the UI.
+ * Storage is revalidated on every selection so a replaced symlink/junction can
+ * never turn into a cross-workspace read. Background services are initialized
+ * for every discovered workspace by the process startup sweep; keeping that
+ * heavyweight graph out of this wrapper is important because every route
+ * imports it.
  */
 export async function withWorkspace<T>(
   request: Request,
@@ -117,16 +132,20 @@ export async function withWorkspace<T>(
   }
 
   return runWithWorkspace(workspace, async () => {
-    if (workspace !== DEFAULT_WORKSPACE) {
-      try {
-        // Imported lazily: backend/init pulls in the MCP service and scheduler,
-        // which must not be dragged into every route's module graph eagerly.
-        const { ensureWorkspaceInitialized } = await import('@/backend/init');
-        await ensureWorkspaceInitialized(workspace);
-      } catch (error) {
-        log.warn(`Deferred initialization of workspace ${workspace} failed`, error);
-      }
+    // Filesystem validation is an isolation boundary, not optional service
+    // startup. Re-check every selected workspace, including the default: the
+    // process-lifetime migration memo cannot detect a subtree replaced with a
+    // symlink/junction after startup.
+    try {
+      await ensureWorkspaceDirs(workspace);
+    } catch (error) {
+      log.error(`Workspace ${workspace} has an unsafe or unavailable storage layout`, error);
+      return errorResponse(new WorkspaceRequestError(
+        `Workspace storage is unavailable: ${workspace}`,
+        503,
+      ));
     }
+
     return handler(workspace);
   });
 }
@@ -143,8 +162,20 @@ export async function withWorkspace<T>(
 export function withWorkspaceRoute<
   H extends (request: never, ...rest: never[]) => Promise<Response> | Response,
 >(handler: H): H {
-  return (async (request: Request, ...rest: unknown[]) =>
-    withWorkspace(request, () =>
-      Promise.resolve((handler as unknown as (...a: unknown[]) => Promise<Response>)(request, ...rest)),
-    )) as unknown as H;
+  return (async (request: Request | undefined, ...rest: unknown[]) => {
+    // A number of route unit tests (and a few internal callers) invoke handlers
+    // such as GET()/PUT() with no argument. Normalize before workspace parsing
+    // so compatibility calls cannot crash at request.headers.
+    const normalizedRequest = request instanceof Request
+      ? request
+      : new Request('http://localhost/');
+    // Preserve lightweight request stubs used by route unit tests (for example
+    // `{ json: async () => body }`) for the handler itself. Only workspace
+    // parsing needs the normalized Fetch Request.
+    const handlerRequest = request ?? normalizedRequest;
+    return withWorkspace(normalizedRequest, () =>
+      Promise.resolve(
+        (handler as unknown as (...a: unknown[]) => Promise<Response>)(handlerRequest, ...rest),
+      ));
+  }) as unknown as H;
 }

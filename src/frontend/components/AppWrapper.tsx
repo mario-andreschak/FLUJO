@@ -9,6 +9,7 @@ import { I18nProvider, useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n';
 import useCompactAppChrome from '@/frontend/hooks/useCompactAppChrome';
 import { AskFlujoProvider } from '@/frontend/contexts/AskFlujoContext';
+import WorkspaceBootstrap from './WorkspaceBootstrap';
 
 const log = createLogger('frontend/components/AppWrapper');
 
@@ -165,17 +166,19 @@ export default function AppWrapper({ children }: AppWrapperProps) {
     <I18nProvider>
       <ErrorBoundary>
         <Suspense fallback={<AppLoading />}>
-          <ThemeProvider>
-            <StorageProvider>
-              <AskFlujoProvider>
-                <TourProvider>
-                  <LocalizedAppShell>
-                    {children}
-                  </LocalizedAppShell>
-                </TourProvider>
-              </AskFlujoProvider>
-            </StorageProvider>
-          </ThemeProvider>
+          <WorkspaceBootstrap fallback={<AppLoading message="shell.loading.workspace" />}>
+            <ThemeProvider>
+              <StorageProvider>
+                <AskFlujoProvider>
+                  <TourProvider>
+                    <LocalizedAppShell>
+                      {children}
+                    </LocalizedAppShell>
+                  </TourProvider>
+                </AskFlujoProvider>
+              </StorageProvider>
+            </ThemeProvider>
+          </WorkspaceBootstrap>
         </Suspense>
       </ErrorBoundary>
     </I18nProvider>

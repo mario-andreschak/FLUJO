@@ -2,8 +2,8 @@ import os from 'os';
 import path from 'path';
 import { promises as fs } from 'fs';
 
-jest.mock('@/utils/paths', () => ({
-  getDataDir: () => process.env.FLUJO_CODEX_TEST_DATA_DIR!,
+jest.mock('@/utils/workspace', () => ({
+  getWorkspaceDataDir: () => process.env.FLUJO_CODEX_TEST_DATA_DIR!,
 }));
 
 import { prepareCodexRuntimeEnvironment } from '@/backend/services/model/adapters/codexRuntimeHome';
@@ -40,6 +40,10 @@ describe('Codex runtime home isolation', () => {
     expect(runtime.workingDirectory).toBe(path.join(runtime.home, 'workspace'));
     await expect(fs.stat(runtime.workingDirectory)).resolves.toMatchObject({});
     expect(runtime.env.CODEX_HOME).toBe(runtime.home);
+    expect(runtime.env.HOME).toBe(runtime.home);
+    expect(runtime.env.USERPROFILE).toBe(runtime.home);
+    expect(runtime.env.XDG_CONFIG_HOME).toBe(path.join(runtime.home, '.config'));
+    expect(runtime.env.TMP).toBe(path.join(runtime.home, 'tmp'));
     await expect(fs.readFile(path.join(runtime.home, 'auth.json'), 'utf8')).resolves.toBe('{"token":"test"}');
     await expect(fs.readFile(path.join(runtime.home, 'config.toml'), 'utf8')).resolves.not.toContain(
       'mcp_servers.personal',

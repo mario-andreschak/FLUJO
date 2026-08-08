@@ -91,7 +91,7 @@ import AutoAwesomeMotionRoundedIcon from '@mui/icons-material/AutoAwesomeMotionR
 import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded';
 import CloudOffRoundedIcon from '@mui/icons-material/CloudOffRounded';
 import PlayArrowRoundedIcon from '@mui/icons-material/PlayArrowRounded';
-import { useUiPreference } from '@/frontend/hooks/useUiPreference';
+import { useWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
 import {
   flowUsesAdvancedFeatures,
   type FlowAuthoringMode,
@@ -313,7 +313,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     })
     || analyzeGuidedGraph(initialFlow.nodes || [], initialFlow.edges || []).unsafe
   );
-  const [persistedAuthoringMode, setPersistedAuthoringMode] = useUiPreference<FlowAuthoringMode>(
+  const [persistedAuthoringMode, setPersistedAuthoringMode] = useWorkspaceUiPreference<FlowAuthoringMode>(
     'flujo-ui:flow-builder:mode',
     'guided',
   );

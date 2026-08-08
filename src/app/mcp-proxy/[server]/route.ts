@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 /**
  * FLUJO as an MCP server — per-server proxy endpoint (#17A).
  *
@@ -107,14 +108,18 @@ interface RouteCtx {
   params: Promise<{ server: string }>;
 }
 
-export async function POST(request: Request, ctx: RouteCtx): Promise<Response> {
+async function POST_handler(request: Request, ctx: RouteCtx): Promise<Response> {
   return handle(request, (await ctx.params).server);
 }
 
-export async function GET(request: Request, ctx: RouteCtx): Promise<Response> {
+async function GET_handler(request: Request, ctx: RouteCtx): Promise<Response> {
   return handle(request, (await ctx.params).server);
 }
 
-export async function DELETE(request: Request, ctx: RouteCtx): Promise<Response> {
+async function DELETE_handler(request: Request, ctx: RouteCtx): Promise<Response> {
   return handle(request, (await ctx.params).server);
 }
+
+export const GET = withWorkspaceRoute(GET_handler);
+export const POST = withWorkspaceRoute(POST_handler);
+export const DELETE = withWorkspaceRoute(DELETE_handler);

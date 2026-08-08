@@ -22,6 +22,7 @@ import {
   normalizeAutoInstallSettings,
   InstallAuditEntry,
 } from '@/utils/mcp/autoInstallConsent';
+import { bindToCurrentWorkspace, getCurrentWorkspace } from '@/utils/workspace';
 
 const log = createLogger('backend/services/mcp/autoInstall');
 
@@ -57,7 +58,7 @@ const MAX_AUDIT_RECORDS = 300;
 
 // Append is a read-modify-write, so serialize appends behind a single chain
 // (saveItem already serializes same-key WRITES, but not the read+write pair).
-let appendChain: Promise<unknown> = Promise.resolve();
+const appendChains = new Map<string, Promise<unknown>>();
 
 export async function loadInstallAudit(): Promise<InstallAuditEntry[]> {
   try {
@@ -74,17 +75,23 @@ export async function loadInstallAudit(): Promise<InstallAuditEntry[]> {
  * install decision (the caller has already decided; the record is accountability).
  */
 export async function appendInstallAudit(entry: InstallAuditEntry): Promise<void> {
-  const run = appendChain
+  const workspace = getCurrentWorkspace();
+  const append = bindToCurrentWorkspace(async () => {
+    const records = await loadInstallAudit();
+    records.push(entry);
+    const trimmed = records.slice(-MAX_AUDIT_RECORDS);
+    await saveItem(AUDIT_KEY, trimmed);
+  });
+  const run = (appendChains.get(workspace) ?? Promise.resolve())
     .catch(() => { /* prior append's error already logged */ })
-    .then(async () => {
-      const records = await loadInstallAudit();
-      records.push(entry);
-      const trimmed = records.slice(-MAX_AUDIT_RECORDS);
-      await saveItem(AUDIT_KEY, trimmed);
-    })
+    .then(append)
     .catch((error) => {
       log.error('Failed to append MCP install audit entry', error);
     });
-  appendChain = run;
-  await run;
+  appendChains.set(workspace, run);
+  try {
+    await run;
+  } finally {
+    if (appendChains.get(workspace) === run) appendChains.delete(workspace);
+  }
 }

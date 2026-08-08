@@ -59,7 +59,7 @@ import {
   orderWaveGroups,
 } from '@/utils/shared/waveGrouping';
 import type { WavesResponse } from '@/shared/types/waves/waves';
-import { useUiPreference } from '@/frontend/hooks/useUiPreference';
+import { useWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
 import ConversationTree from './ConversationTree';
 import { buildChainIndex } from '@/utils/shared/conversationChains';
 import { alpha, useTheme as useMuiTheme } from '@mui/material/styles';
@@ -185,7 +185,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   // Search dimension (issue #182): 'title' filters client-side over titles+flow
   // (Phase 1); 'content' resolves matches server-side against message bodies
   // (which aren't all resident on the client). Persisted so the choice sticks.
-  const [searchDimension, setSearchDimension] = useUiPreference<'title' | 'content'>(
+  const [searchDimension, setSearchDimension] = useWorkspaceUiPreference<'title' | 'content'>(
     PREF.searchDim,
     'title',
   );
@@ -193,11 +193,11 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   // server-backed result set temporarily replaces the incrementally-loaded
   // browse pages. null means the debounced request is still in flight.
   const [searchResults, setSearchResults] = React.useState<ConversationListItem[] | null>(null);
-  const [groupMode, setGroupMode] = useUiPreference<GroupMode>(PREF.group, 'none');
-  const [statusFilter, setStatusFilter] = useUiPreference<StatusFilter>(PREF.status, 'all');
-  const [flowFilter, setFlowFilter] = useUiPreference<string>(PREF.flow, 'all');
-  const [dateFilter, setDateFilter] = useUiPreference<DateFilter>(PREF.date, 'all');
-  const [collapsedGroups, setCollapsedGroups] = useUiPreference<Record<string, boolean>>(
+  const [groupMode, setGroupMode] = useWorkspaceUiPreference<GroupMode>(PREF.group, 'none');
+  const [statusFilter, setStatusFilter] = useWorkspaceUiPreference<StatusFilter>(PREF.status, 'all');
+  const [flowFilter, setFlowFilter] = useWorkspaceUiPreference<string>(PREF.flow, 'all');
+  const [dateFilter, setDateFilter] = useWorkspaceUiPreference<DateFilter>(PREF.date, 'all');
+  const [collapsedGroups, setCollapsedGroups] = useWorkspaceUiPreference<Record<string, boolean>>(
     PREF.collapsed,
     {},
   );

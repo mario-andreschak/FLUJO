@@ -2,7 +2,10 @@
 
 Workspaces (issue #406) give one FLUJO installation several independent sets of
 data. Each workspace has its own flows, models, conversations, MCP servers,
-planned executions and settings; nothing is shared between them.
+planned executions and settings; no workspace-owned application data is shared
+between them. Process-level controls such as update checks, network exposure,
+telemetry and workspace discovery remain installation-wide because they do not
+contain workspace user data.
 
 A workspace is a **logical namespace inside the existing data root**, not a
 second installation. There is still one FLUJO process, one application install
@@ -18,14 +21,35 @@ and one `FLUJO_DATA_DIR`.
       db/
       mcp-servers/
       userdata/
+      snapshots/
+      screenshots/
+      recordings/
+      browser-profile/
+      bash-utils/
+      artifacts/
     <other-workspace>/
       db/
       mcp-servers/
       userdata/
+      snapshots/
+      screenshots/
+      recordings/
+      browser-profile/
+      bash-utils/
+      artifacts/
 ```
 
-Everything that used to live at `<data root>/db`, `<data root>/mcp-servers` and
-`<data root>/userdata` now lives one level deeper, inside a workspace.
+All writable application state lives below the selected workspace: models,
+flows, conversations, automations, global environment variables and settings in
+`db/`; installed MCP servers in `mcp-servers/`; user files and generated runtime
+data in the remaining roots. Shipped MCP package code remains with the read-only
+application installation, but every shipped server receives the selected
+workspace as its `FLUJO_DATA_DIR`.
+
+There is no application-owned top-level `outputs/` directory. Run outputs are
+stored by the run-resource services inside the workspace database; the legacy
+top-level `artifacts/` root is nevertheless migrated so older installations do
+not strand generated files.
 
 `FLUJO_DATA_DIR` keeps its previous meaning: it is the **parent** root that
 contains `workspaces/`. Docker volumes, `npx flujo` and packaged installs need no
@@ -33,30 +57,58 @@ configuration change.
 
 ## Migration from a pre-workspace install
 
-On the first start after upgrading, `migrateWorkspaceLayout()` runs before
-storage verification, MCP startup and the scheduler — so nothing ever opens a
-legacy path once the move has begun. Each of `db`, `mcp-servers` and `userdata`
-is migrated independently:
+On the first start after upgrading, `migrateWorkspaceLayout()` is an awaited
+startup barrier before storage verification, the sandbox, MCP startup and the
+scheduler. Workspace-sensitive requests share that readiness promise and return
+a retryable `503` if migration cannot complete, so no request can race the old
+layout.
 
-| Legacy directory | Workspace directory | Result |
-| --- | --- | --- |
-| missing | — | created empty (fresh install) |
-| has data | missing/empty | moved (rename, or verified copy across volumes) |
-| empty | exists | leftover removed (already migrated) |
-| missing | exists | nothing to do (already migrated) |
-| has data | has data | **startup fails with a conflict error** |
+Layout v2 inventories every legacy root and destination before renaming any user
+data. It recursively overlays disjoint paths, which safely recovers installs
+left half-copied by an older build. An overlapping file, directory or symlink is
+accepted only when its type, SHA-256 content (for files) or relative target (for
+links), and permission mode are identical. Any differing overlap aborts before
+mutation. Stable hardlinks are opened without following links, verified against
+their filesystem identity and materialized as independent files, so migration
+never mutates data through an outside alias.
 
-FLUJO never merges and never overwrites. When both the legacy and the workspace
-location contain data — for example after a partially manual move — startup
-stops with a message naming both paths.
+The database overlay includes all historical locations: `db/`,
+`.next/storage/` and `storage/`. The migration also covers `mcp-servers/`,
+`userdata/`, `snapshots/`, `screenshots/`, `recordings/`, `browser-profile/`,
+`bash-utils/` and `artifacts/`. In source checkouts, shipped MCP code is preserved
+while runtime-installed MCP directories move. Runtime screenshots/profile data
+written by older browser-server builds beneath
+`mcp-servers/browser/userdata/` is mapped into the corresponding workspace root.
 
-**Operator recovery from a conflict:** decide which copy is authoritative, back
-up the other, then remove (or empty) the losing directory and start FLUJO again.
-The migration is safe to retry: it is idempotent, and a failure leaves the source
-data in place.
+The complete transaction is staged under a random transaction directory,
+content-verified, fsynced and atomically published. A cross-process lock has an
+owner token and heartbeat; a live same-host process is never evicted, while an
+expired/dead owner is recoverable. Workspace roots, metadata and managed source
+roots may not be symlinks or junctions. Internal links are treated as opaque and
+accepted only when unbroken and canonically contained by the managed root.
+Absolute in-tree Windows junctions (including npm workspace links) are rebased
+onto the published workspace; broken or external links fail closed. Descendant
+mount points—including same-device Linux bind mounts discovered through
+`/proc/self/mountinfo`—also fail during preflight, before anything is renamed.
 
-Completion is recorded in `workspaces/.workspace-layout.json`. While that marker
-records the current layout version, startup skips the migration entirely.
+The durable journal makes every checkpoint retryable from filesystem truth. Old
+sources and an existing destination are retained as transaction-specific backups
+until the new destination is verified and `workspaces/.workspace-layout.json` is
+durably published. Cleanup then verifies the destination again and deletes only
+the exact tokenized backups. If a legacy Docker/bind-mount root cannot be renamed
+(`EXDEV`/`EBUSY`), it stays intact through marker commit and cleanup removes only
+its inventoried children, leaving the empty mountpoint in place. File access and
+modification timestamps are journaled and restored after copying, so legacy flow
+ordering based on `mtime` survives migration and crash recovery.
+
+A crash at any checkpoint resumes the same transaction. A current marker does
+not blindly hide legacy data left by an older binary: startup reconciles any
+non-empty legacy roots in a new transaction. Corrupt, unreadable, unsupported
+future markers and tampered journals fail closed without overwriting either copy.
+
+**Operator recovery from a conflict:** back up every named location, resolve the
+specific differing path or unsafe filesystem object, and retry. Do not delete the
+journal or transaction backups: they are the recovery record.
 
 ## Selecting a workspace
 
@@ -80,6 +132,8 @@ Workspace names are **identifiers, not paths**. They must match
 `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`, which excludes `.`, `..`, separators, drive
 letters, UNC prefixes, whitespace, control characters and percent-encoding. The
 resolved directory is additionally containment-checked against `workspaces/`.
+Windows device names (`CON`, `NUL`, `COM1`, and so on), case-only aliases and
+symlink/junction workspace roots are rejected on every platform.
 
 `GET /api/workspaces` lists the workspaces that exist on disk, with a
 deterministic color per workspace:
@@ -113,9 +167,12 @@ created by making the directory:
 mkdir -p "<data root>/workspaces/research"
 ```
 
-FLUJO creates `db/`, `mcp-servers/` and `userdata/` inside it the first time the
-workspace is used, connects its MCP servers and arms its triggers — no restart
-required.
+FLUJO creates the complete runtime directory set shown above when it initializes
+the workspace. At process start it initializes every discovered workspace
+sequentially, so schedules and webhooks are armed even when no browser tab opens
+that workspace. Restart FLUJO after creating a workspace directory so its
+background MCP and automation services join that startup sweep. One workspace's
+service failure is isolated from the others.
 
 ## Backup and restore
 
@@ -133,8 +190,9 @@ Aggregate multi-workspace export/import is deliberately out of scope.
 ## Notes for contributors
 
 - Use `getWorkspaceDataDir()` (from `src/utils/workspace.ts`) for anything that
-  belongs to a workspace — `db/`, `mcp-servers/`, `userdata/`, snapshots,
-  screenshots. Use `getDataDir()` only for installation-wide concerns.
+  belongs to a workspace — including databases, MCP runtime installs, userdata,
+  profiles and generated media. Use `getDataDir()` only for installation-wide
+  layout metadata and migration sources.
 - Never capture a workspace path in a module-level constant. The workspace is
   per-request ambient context (`AsyncLocalStorage`); a constant pins the whole
   process to whichever workspace loaded the module first.

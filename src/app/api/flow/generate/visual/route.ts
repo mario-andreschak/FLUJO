@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { NextRequest } from 'next/server';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { createJsonEventStreamResponse } from '@/backend/utils/jsonEventStream';
@@ -10,7 +11,7 @@ import {
 import { json } from '../../_helpers';
 
 /** Stream an unsaved visual authoring session as typed NDJSON events. */
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const lock = await assertUnlocked({ openai: true });
   if (lock) return lock;
   const body = await request.json().catch(() => null) as Partial<StartVisualGenerationInput> | null;
@@ -35,3 +36,5 @@ export async function POST(request: NextRequest) {
     { signal: request.signal },
   );
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

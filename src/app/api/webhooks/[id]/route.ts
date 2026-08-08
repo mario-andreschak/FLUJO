@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createHash, timingSafeEqual } from 'crypto';
@@ -34,7 +35,7 @@ function tokenMatches(provided: string, expected: string): boolean {
  * callers that need the flow's answer synchronously should use the
  * OpenAI-compatible endpoint (/v1/chat/completions) instead.
  */
-export async function POST(
+async function POST_handler(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -130,3 +131,5 @@ export async function POST(
     return json({ error: 'Internal server error' }, 500);
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

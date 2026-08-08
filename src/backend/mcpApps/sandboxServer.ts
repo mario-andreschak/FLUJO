@@ -4,15 +4,17 @@
  * The MCP Apps spec (2026-01-26) requires a sandbox proxy on a different origin
  * from FLUJO. That proxy creates the real (inner) app iframe and relays
  * postMessage between FLUJO (parent) and the app (inner). The inner View is
- * additionally isolated from other apps via origin separation (`_meta.ui.domain`
- * or deterministic URI hash).
+ * additionally isolated from other apps via a host-derived SHA-256 identity
+ * over the active workspace, configured server, and verified resource URI.
  *
- * This module runs that foreign origin as a pool of HTTP listeners:
- *   - **Mode A (desktop)**: Port pool on `basePort + N` (N = 0..15), LRU-evicted
- *   - **Mode B (hosted)**: Hostname-label templating (single listener, wildcard host)
- *   - **Mode C (fallback)**: Shared origin (regression-safe when pools/templates fail)
+ * This module runs that foreign origin on one HTTP listener while preserving a
+ * distinct, stable browser origin for every verified app identity:
+ *   - **Local**: `<originKey>.localhost:<port>` resolves to the shared loopback
+ *     listener without recycling browser origins between apps.
+ *   - **Hosted/network**: a configured `{app}` DNS-label template routes every
+ *     app hostname to the same listener through wildcard DNS/reverse proxying.
  *
- * Each listener serves exactly one document — `sandbox.html` — with a host-facing
+ * The listener serves exactly one document — `sandbox.html` — with a host-facing
  * Content-Security-Policy set via HTTP header. The resource's `_meta.ui.csp`,
  * passed in via the `?csp=` query param by the host, is sanitized into both that
  * header and a `<meta>` policy prepended to the View's HTML as its first byte.
@@ -27,15 +29,16 @@
  * The proxy script is inlined (dependency-free vanilla JS) so this needs no
  * bundler step and stays in lockstep with the constants below.
  *
- * Security posture: each listener binds loopback by default and serves only the
- * sandbox document; every other path 404s. If a listener cannot start, MCP Apps
- * fall back to the shared origin (Mode C) — FLUJO itself is unaffected.
+ * Security posture: the listener binds loopback by default and serves only the
+ * sandbox document; every other path 404s. Origin allocation fails closed when
+ * the listener cannot start or a non-local deployment lacks a valid wildcard
+ * hostname template. There is deliberately no shared browser-origin fallback.
  */
 import http from 'node:http';
 import { randomBytes, timingSafeEqual, createHmac } from 'node:crypto';
 import { createLogger } from '@/utils/logger';
 import { getExposureMode } from '@/utils/http/exposureMode';
-import { MAX_SANDBOX_ORIGINS, isValidMcpAppDomain } from '@/shared/utils/mcpAppOrigin';
+import { isValidMcpAppDomain } from '@/shared/utils/mcpAppOrigin';
 import {
   canonicalizeLoopbackCspOrigin,
   isLoopbackCspOrigin,
@@ -74,40 +77,40 @@ export function sandboxAllowAllContent(): boolean {
   return value === '1' || value === 'true' || value === 'yes' || value === 'on';
 }
 
-function shouldUseLegacySandboxConfiguration(): boolean {
+function shouldUseSandboxEndpointConfiguration(): boolean {
   const source = process.env.FLUJO_EXPOSURE_MODE_SOURCE;
   return !source
     || source === 'legacy'
-    || (source === 'settings' && getExposureMode() === 'public');
+    || getExposureMode() !== 'localhost';
 }
 
 type SandboxServerStatus = 'idle' | 'starting' | 'listening' | 'failed';
 
-/** Per-listener runtime state in the pool. */
+/** Runtime state for the singleton sandbox listener. */
 interface SandboxListenerState {
   /** The HTTP server instance. */
-  server: http.Server;
-  /** Port this listener is bound to (Mode A only; Mode B is single/wildcard). */
+  server?: http.Server;
+  /** Port this listener is bound to. */
   port: number;
   /** Status of this listener. */
   status: 'starting' | 'listening' | 'failed';
-  /** Last access time (for LRU eviction). */
-  lastUsedAt: number;
 }
 
-/** Global sandbox runtime state (v2: pool-based). */
+/** Global sandbox runtime state. */
 interface SandboxRuntimeState {
+  /** Transport architecture marker used to safely adopt state across HMR bundles. */
+  architectureVersion?: 3;
   /** Stable process secret, used to derive per-originKey tokens. */
   secret: Buffer;
-  /** Map of originKey → listener state. */
+  /** Singleton listener stored under the internal empty-string key. */
   entries: Map<string, SandboxListenerState>;
-  /** Base port for Mode A (port pool). */
+  /** Fixed listener port. */
   basePort: number;
   /** Bind host for all listeners. */
   bindHost: string;
-  /** Configured public URL (Mode B template or explicit URL). */
-  publicUrl?: string;
-  /** Configured host origins (legacy Mode B configuration). */
+  /** In-flight singleton startup shared by concurrent app requests. */
+  sharedListenerStart?: Promise<boolean>;
+  /** Configured host origins for hosted/network deployments. */
   configuredHostOrigins: string[];
   /**
    * FLUJO origins observed on authenticated `/api/mcp/app-sandbox` requests.
@@ -139,14 +142,41 @@ function getOrInitRuntimeState(): SandboxRuntimeState {
       // Tolerate state published before `hostOrigins` existed.
       shared.hostOrigins ??= [];
       sandboxRuntime = shared;
+
+      if (shared.architectureVersion !== 3) {
+        // A pre-singleton/HMR bundle may have left per-app listeners alive. Drop
+        // every recycled-port entry so none of those old browser origins can be
+        // issued again, and close their transports immediately.
+        for (const [key, entry] of shared.entries.entries()) {
+          if (key === '') continue;
+          shared.entries.delete(key);
+          try {
+            entry.server?.close();
+            entry.server?.closeAllConnections?.();
+          } catch (error) {
+            log.warn(`Could not close legacy MCP App sandbox listener "${key}"`, error);
+          }
+        }
+
+        // The base listener can stay bound (avoiding an HMR port-release race),
+        // but its old request closure may still implement shared-token fallback.
+        // Replace only that application-level handler with the new fail-closed
+        // Host-derived handler.
+        const baseListener = shared.entries.get('');
+        if (baseListener?.server) {
+          baseListener.server.removeAllListeners('request');
+          baseListener.server.on('request', handleSandboxRequest);
+        }
+        shared.architectureVersion = 3;
+      }
       return sandboxRuntime;
     }
     sandboxRuntime = {
+      architectureVersion: 3,
       secret: randomBytes(32),
       entries: new Map(),
       basePort: getSandboxPort(),
       bindHost: getSandboxBindHost(),
-      publicUrl: getSandboxPublicUrl(),
       configuredHostOrigins: getConfiguredSandboxHostOrigins(),
       hostOrigins: [],
     };
@@ -181,19 +211,7 @@ function isSandboxTokenValidForOriginKey(token: unknown, originKey: string): boo
   }
 }
 
-/** Legacy: single shared token for backward compatibility. */
-export function getSandboxAuthToken(): string {
-  const state = getOrInitRuntimeState();
-  // Derive a stable shared token for the default origin key (empty string).
-  return getSandboxTokenForOriginKey('');
-}
-
-/** Legacy: validate against the shared token. */
-export function isSandboxAuthTokenValid(candidate: unknown): boolean {
-  return isSandboxTokenValidForOriginKey(candidate, '');
-}
-
-/** Returns true when the pool has at least one fully listening sandbox. */
+/** Returns true when the singleton transport is fully listening. */
 export function isSandboxServerReady(): boolean {
   const state = getOrInitRuntimeState();
   for (const listener of state.entries.values()) {
@@ -202,7 +220,7 @@ export function isSandboxServerReady(): boolean {
   return false;
 }
 
-/** Diagnostic: overall sandbox pool status. */
+/** Diagnostic: overall sandbox transport status. */
 export function getSandboxServerStatus(): SandboxServerStatus {
   const state = getOrInitRuntimeState();
   if (state.entries.size === 0) return 'idle';
@@ -256,7 +274,7 @@ function parseHttpOrigin(value: string): string | undefined {
  * empty (fail closed); same-host fallback applies only when it is omitted.
  */
 export function getConfiguredSandboxHostOrigins(): string[] {
-  if (!shouldUseLegacySandboxConfiguration()) return [];
+  if (!shouldUseSandboxEndpointConfiguration()) return [];
   const raw = process.env[SANDBOX_HOST_ORIGINS_ENV];
   if (!raw?.trim()) return [];
 
@@ -273,17 +291,17 @@ export function getConfiguredSandboxHostOrigins(): string[] {
 }
 
 function hasConfiguredSandboxHostOrigins(): boolean {
-  return shouldUseLegacySandboxConfiguration()
+  return shouldUseSandboxEndpointConfiguration()
     && Boolean(process.env[SANDBOX_HOST_ORIGINS_ENV]?.trim());
 }
 
 /**
  * Optional browser-visible sandbox URL. Hosted HTTPS deployments terminate
  * TLS for this distinct origin and proxy it to the plain HTTP listener.
- * Supports `{app}` placeholder for Mode B hostname templating.
+ * Supports `{app}` as a hostname label for hosted/network templating.
  */
 export function getSandboxPublicUrl(): string | undefined {
-  if (!shouldUseLegacySandboxConfiguration()) return undefined;
+  if (!shouldUseSandboxEndpointConfiguration()) return undefined;
   const raw = process.env[SANDBOX_PUBLIC_URL_ENV]?.trim();
   if (!raw) return undefined;
   try {
@@ -307,58 +325,89 @@ export function getSandboxPublicUrl(): string | undefined {
 }
 
 export function hasSandboxPublicUrlConfiguration(): boolean {
-  return shouldUseLegacySandboxConfiguration()
+  return shouldUseSandboxEndpointConfiguration()
     && Boolean(process.env[SANDBOX_PUBLIC_URL_ENV]?.trim());
 }
 
 /**
- * Derive sandbox origin URL for a given originKey. Supports:
- *   - Mode B: `{app}` placeholder in FLUJO_MCP_APP_SANDBOX_PUBLIC_URL hostname
- *   - Fallback: same-host port (Mode A) or derived from hostOrigin
+ * Origin keys are embedded as exactly one DNS label. The route derives them
+ * from verified app identity; this boundary still validates its input so a
+ * future caller cannot turn a key into a sibling/parent hostname.
  */
-export function deriveSandboxPublicUrl(
-  hostOrigin: string,
-  port = getSandboxPort(),
-  originKey?: string,
-): string | undefined {
-  // Mode B: hostname templating with `{app}` placeholder.
-  if (originKey) {
-    const baseUrl = getSandboxPublicUrl();
-    if (baseUrl && baseUrl.includes('{app}')) {
-      try {
-        const parsed = new URL(baseUrl);
-        // Replace `{app}` only in the hostname label; reject if it appears elsewhere.
-        if (parsed.pathname.includes('{app}') || parsed.search.includes('{app}')) {
-          return undefined; // Invalid template.
-        }
-        // Substitute {app} in hostname: only as a label prefix before first dot.
-        const hostname = parsed.hostname;
-        if (hostname.startsWith('{app}')) {
-          parsed.hostname = `${originKey}.${hostname.slice(5)}`;
-        } else {
-          // Try to replace {app} as a full label (e.g., `{app}.sandbox.example.com`).
-          parsed.hostname = hostname.replace('{app}', originKey);
-        }
-        return parsed.href;
-      } catch {
+function isValidSandboxOriginKey(originKey: unknown): originKey is string {
+  return isValidMcpAppDomain(originKey)
+    && !originKey.includes('.')
+    && originKey.length <= 63;
+}
+
+/** Parse the configured hosted URL only when `{app}` is one whole DNS label. */
+function getValidSandboxAppUrlTemplate(): URL | undefined {
+  const configured = getSandboxPublicUrl();
+  if (!configured) return undefined;
+
+  try {
+    const parsed = new URL(configured);
+    const labels = parsed.hostname.toLowerCase().split('.');
+    const placeholderIndexes = labels
+      .map((label, index) => label === '{app}' ? index : -1)
+      .filter(index => index !== -1);
+
+    // One occurrence, as one complete label, and nowhere else in the URL.
+    if (
+      placeholderIndexes.length !== 1
+      || configured.split('{app}').length !== 2
+      || labels.length < 2
+    ) {
+      return undefined;
+    }
+
+    for (const label of labels) {
+      if (label === '{app}') continue;
+      if (
+        label.length === 0
+        || label.length > 63
+        || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label)
+      ) {
         return undefined;
       }
     }
-  }
-
-  // Mode A or fallback: derive from hostOrigin + port.
-  if (getExposureMode() === 'localhost') return undefined;
-  try {
-    const parsed = new URL(hostOrigin);
-    if (parsed.protocol !== 'https:' || parsed.username || parsed.password) return undefined;
-    parsed.pathname = '/sandbox.html';
-    parsed.search = '';
-    parsed.hash = '';
-    parsed.port = String(port);
-    return parsed.href;
+    return parsed;
   } catch {
     return undefined;
   }
+}
+
+/** Whether hosted/network mode has the wildcard-host prerequisite it needs. */
+export function hasValidSandboxAppUrlTemplate(): boolean {
+  return getValidSandboxAppUrlTemplate() !== undefined;
+}
+
+/**
+ * Derive sandbox origin URL for a given originKey. Supports:
+ *   - Local: a stable `<originKey>.localhost` browser origin
+ *   - Hosted/network: `{app}` as a whole hostname label in the configured URL
+ *
+ * No shared/same-host fallback is provided. A deployment that cannot give each
+ * app a distinct hostname must fail closed rather than sharing browser storage.
+ */
+export function deriveSandboxPublicUrl(
+  _hostOrigin: string,
+  port = getSandboxPort(),
+  originKey?: string,
+): string | undefined {
+  if (!isValidSandboxOriginKey(originKey)) return undefined;
+
+  if (getExposureMode() === 'localhost') {
+    return `http://${originKey}.localhost:${port}/sandbox.html`;
+  }
+
+  const template = getValidSandboxAppUrlTemplate();
+  if (!template) return undefined;
+  const labels = template.hostname.toLowerCase().split('.');
+  template.hostname = labels
+    .map(label => label === '{app}' ? originKey : label)
+    .join('.');
+  return template.href;
 }
 
 /**
@@ -794,163 +843,138 @@ export function buildSandboxProxyHtml(
 }
 
 
+/** Ensure the one transport listener is running, sharing concurrent startup. */
+async function ensureSharedSandboxListener(
+  state: SandboxRuntimeState,
+): Promise<SandboxListenerState | undefined> {
+  const existing = state.entries.get('');
+  if (existing?.status === 'listening') return existing;
+
+  if (state.sharedListenerStart) {
+    const success = await state.sharedListenerStart;
+    const started = state.entries.get('');
+    return success && started?.status === 'listening' ? started : undefined;
+  }
+
+  const listenerState: SandboxListenerState = {
+    port: state.basePort,
+    status: 'starting',
+  };
+  state.entries.set('', listenerState);
+
+  const startPromise = startSandboxListener(listenerState, state.bindHost);
+  state.sharedListenerStart = startPromise;
+  let success = false;
+  try {
+    success = await startPromise;
+  } finally {
+    if (state.sharedListenerStart === startPromise) {
+      state.sharedListenerStart = undefined;
+    }
+  }
+
+  if (!success) {
+    if (state.entries.get('') === listenerState) state.entries.delete('');
+    return undefined;
+  }
+  return listenerState;
+}
+
 /**
- * Ensure a sandbox listener exists for the given originKey, allocating a port
- * (Mode A) or reusing the singleton listener (Mode B) as appropriate. Returns
- * `{ port, token }` on success or `undefined` if allocation failed and Mode C
- * fallback should be used.
+ * Ensure the singleton sandbox transport is available and mint a token scoped
+ * to `originKey`. Local installs separate browser state with `*.localhost`;
+ * hosted/network installs must provide a valid wildcard hostname template.
+ *
+ * The empty key is reserved for internal startup/readiness compatibility. API
+ * routes must derive and pass a non-empty verified key before returning a URL.
  */
 export async function ensureSandboxForOriginKey(
   originKey: string,
 ): Promise<{ port: number; token: string } | undefined> {
   const state = getOrInitRuntimeState();
-
-  // Hosted single-origin deployments (Mode C): a configured public URL WITHOUT
-  // an `{app}` placeholder means every app is reached through one hostname, and
-  // the reverse proxy in front of it forwards to exactly ONE listener — the
-  // base port. Allocating a per-app listener here would put it on
-  // `basePort + N`, unreachable, while the token handed to the browser is
-  // scoped to that app's originKey. The proxied request still lands on the
-  // base-port listener, which validates against a DIFFERENT originKey and
-  // answers 403 — deterministically, for every app.
-  //
-  // Per-app ORIGIN isolation is impossible behind a single hostname anyway, so
-  // do not pretend to offer it: returning `undefined` makes the caller fall
-  // back to the shared origin and its matching shared token. The sandbox stays
-  // cross-origin with FLUJO, which is the property the spec actually requires.
-  // Real per-app isolation needs wildcard DNS plus `{app}` templating.
-  const configuredPublicUrl = getSandboxPublicUrl();
-  if (originKey && configuredPublicUrl && !configuredPublicUrl.includes('{app}')) {
-    log.debug(
-      `Sandbox: single configured public origin, serving app "${originKey}" from the shared listener`,
-    );
+  if (originKey !== '' && !isValidSandboxOriginKey(originKey)) return undefined;
+  if (getExposureMode() !== 'localhost' && !hasValidSandboxAppUrlTemplate()) {
     return undefined;
   }
 
-  // Mode B (hosted with hostname templating): reuse the singleton listener.
-  // The listener itself is started with originKey '' (see startSandboxServer),
-  // but handleSandboxRequest() re-derives the real per-app originKey from the
-  // request's Host header (see deriveOriginKeyFromHost) before validating the
-  // token, so the token minted here for `originKey` is checked against THAT
-  // app's key rather than the listener's nominal ''. See issue #362/#387.
-  if (getSandboxPublicUrl()?.includes('{app}')) {
-    const existing = state.entries.get('');
-    if (existing?.status === 'listening') {
-      existing.lastUsedAt = Date.now();
-      return { port: existing.port, token: getSandboxTokenForOriginKey(originKey) };
-    }
-  }
-
-  // Check if this originKey already has a listening listener.
-  const existing = state.entries.get(originKey);
-  if (existing?.status === 'listening') {
-    existing.lastUsedAt = Date.now();
-    return { port: existing.port, token: getSandboxTokenForOriginKey(originKey) };
-  }
-
-  // Mode A (desktop / port pool): allocate a new port if at capacity, evict LRU.
-  if (state.entries.size >= MAX_SANDBOX_ORIGINS) {
-    let lruKey: string | null = null;
-    let lruTime = Date.now();
-    for (const [key, entry] of state.entries.entries()) {
-      if (entry.lastUsedAt < lruTime) {
-        lruTime = entry.lastUsedAt;
-        lruKey = key;
-      }
-    }
-    if (lruKey) {
-      await stopSandboxListener(lruKey);
-    }
-  }
-
-  // Allocate a listener on the next free port. Ports already held by another
-  // originKey in this pool are skipped up front — probing them would only
-  // produce a self-inflicted EADDRINUSE round trip per app.
-  const portsInUse = new Set<number>();
-  for (const entry of state.entries.values()) portsInUse.add(entry.port);
-
-  for (let offset = 0; offset < MAX_SANDBOX_ORIGINS; offset++) {
-    const port = state.basePort + offset;
-    if (portsInUse.has(port)) continue;
-
-    // Try to start a listener on this port.
-    const listenerState: SandboxListenerState = {
-      port,
-      server: null as any,
-      status: 'starting',
-      lastUsedAt: Date.now(),
-    };
-    state.entries.set(originKey, listenerState);
-
-    const success = await startSandboxListener(originKey, port, state.bindHost);
-    if (success) {
-      return { port, token: getSandboxTokenForOriginKey(originKey) };
-    }
-    state.entries.delete(originKey);
-  }
-
-  // All ports exhausted; fall back to Mode C.
-  return undefined;
+  const listener = await ensureSharedSandboxListener(state);
+  if (!listener) return undefined;
+  return {
+    port: listener.port,
+    token: getSandboxTokenForOriginKey(originKey),
+  };
 }
 
 /**
- * Start an HTTP listener for a given originKey on a specific port. Returns true
- * if the listener started successfully, false if the port is in use or another
- * error occurred.
+ * Start the singleton HTTP listener. Returns false on binding/runtime errors;
+ * callers never probe another port because browser origins must stay stable.
  */
-async function startSandboxListener(originKey: string, port: number, host: string): Promise<boolean> {
+async function startSandboxListener(
+  listenerState: SandboxListenerState,
+  host: string,
+): Promise<boolean> {
   return new Promise((resolve) => {
-    const state = getOrInitRuntimeState();
-    const listenerState = state.entries.get(originKey);
-    if (!listenerState) return resolve(false);
-
     const server = http.createServer((req, res) => {
-      handleSandboxRequest(req, res, originKey);
+      handleSandboxRequest(req, res);
     });
 
     listenerState.server = server;
+    let startupSettled = false;
+    const settleStartup = (success: boolean) => {
+      if (startupSettled) return;
+      startupSettled = true;
+      resolve(success);
+    };
 
     server.on('error', (err: NodeJS.ErrnoException) => {
       listenerState.status = 'failed';
       if (err.code === 'EADDRINUSE') {
-        log.debug(`Sandbox port ${port} in use, will retry`);
+        log.warn(`MCP Apps sandbox port ${listenerState.port} is already in use`);
       } else {
-        log.error(`Sandbox listener error on port ${port}`, err);
+        log.error(`Sandbox listener error on port ${listenerState.port}`, err);
       }
-      resolve(false);
+      settleStartup(false);
     });
 
-    server.listen(port, host, () => {
+    server.listen(listenerState.port, host, () => {
       listenerState.status = 'listening';
-      log.debug(`MCP Apps sandbox listener for ${originKey} on ${host}:${port}`);
-      resolve(true);
+      log.debug(`MCP Apps sandbox listener on ${host}:${listenerState.port}`);
+      settleStartup(true);
     });
   });
 }
 
 /**
- * Stop a sandbox listener, closing its server and removing it from the pool.
+ * Stop a sandbox listener, closing its server and removing it from runtime.
  * Safe to call on non-existent keys.
  */
 export async function stopSandboxListener(originKey: string): Promise<void> {
   const state = getOrInitRuntimeState();
+  if (originKey === '' && state.sharedListenerStart) {
+    try {
+      await state.sharedListenerStart;
+    } catch {
+      // Startup reports failure through its boolean result; continue cleanup.
+    }
+  }
   const entry = state.entries.get(originKey);
   if (!entry) return;
 
-  if (entry.server) {
+  const server = entry.server;
+  if (server?.listening) {
     return new Promise((resolve) => {
-      entry.server!.close(() => {
-        state.entries.delete(originKey);
+      server.close(() => {
+        if (state.entries.get(originKey) === entry) state.entries.delete(originKey);
         resolve();
       });
       // Forcibly close any lingering sockets.
-      entry.server!.closeAllConnections?.();
+      server.closeAllConnections?.();
     });
   }
-  state.entries.delete(originKey);
+  if (state.entries.get(originKey) === entry) state.entries.delete(originKey);
 }
 
-/** Stop all sandbox listeners and clear the pool. */
+/** Stop all sandbox listeners, including any adopted legacy entries. */
 export async function stopAllSandboxListeners(): Promise<void> {
   const state = getOrInitRuntimeState();
   const promises: Promise<void>[] = [];
@@ -1014,7 +1038,8 @@ const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 
 function isLoopbackHostname(hostname: string | undefined): boolean {
   if (!hostname) return false;
-  return LOOPBACK_HOSTNAMES.has(hostname.toLowerCase());
+  const normalized = hostname.toLowerCase();
+  return LOOPBACK_HOSTNAMES.has(normalized) || normalized.endsWith('.localhost');
 }
 
 /**
@@ -1073,70 +1098,72 @@ export function getAllowedFrameAncestors(req: http.IncomingMessage): string[] {
   return ancestors;
 }
 
-/**
- * Resolve the originKey that a Mode B (hostname-templated) request is actually
- * targeting, by matching the request's `Host` header against the single
- * `{app}` placeholder in the configured public URL template.
- *
- * Returns `undefined` when Mode B templating is not configured, or when the
- * Host header does not match the template shape at all -- callers MUST fall
- * back to the listener's own originKey in that case, which keeps Mode A
- * (desktop port pool) and Mode C (single shared origin) behaviour unchanged.
- *
- * The extracted label is re-validated with {@link isValidMcpAppDomain} so a
- * malformed/hostile `Host` header can never produce an originKey that was not
- * itself a valid, DNS-safe label (defence in depth beyond the regex capture
- * group itself).
- */
-export function deriveOriginKeyFromHost(hostHeader: string | undefined): string | undefined {
-  const template = getSandboxPublicUrl();
-  if (!template || !template.includes('{app}')) return undefined;
-  if (!hostHeader) return undefined;
-
-  let templateHostname: string;
+function parseHostHeaderHostname(hostHeader: string | undefined): string | undefined {
+  if (
+    !hostHeader
+    || hostHeader.length > 512
+    || /[\s/\\?#@,]/.test(hostHeader)
+  ) {
+    return undefined;
+  }
   try {
-    templateHostname = new URL(template).hostname.toLowerCase();
+    const parsed = new URL(`http://${hostHeader}`);
+    if (parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) {
+      return undefined;
+    }
+    return parsed.hostname.toLowerCase();
   } catch {
     return undefined;
   }
-  const parts = templateHostname.split('{app}');
-  // Exactly one placeholder is the only supported (and only ever produced)
-  // template shape; anything else cannot be reversed unambiguously.
-  if (parts.length !== 2) return undefined;
-  const [prefix, suffix] = parts;
+}
 
-  // Strip an optional port from the Host header before matching; DNS labels
-  // never contain ':' so this cannot smuggle extra characters into the match.
-  const requestHostname = hostHeader.split(':')[0]?.trim().toLowerCase();
+/**
+ * Resolve the app key from the browser-visible hostname. Local mode accepts
+ * exactly `<key>.localhost`; hosted/network mode matches the exact configured
+ * hostname shape with `{app}` occupying one complete DNS label.
+ */
+export function deriveOriginKeyFromHost(hostHeader: string | undefined): string | undefined {
+  const requestHostname = parseHostHeaderHostname(hostHeader);
   if (!requestHostname) return undefined;
 
-  const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const pattern = new RegExp(
-    `^${escapeRegExp(prefix)}([a-z0-9]([a-z0-9-]*[a-z0-9])?)${escapeRegExp(suffix)}$`,
-  );
-  const match = pattern.exec(requestHostname);
-  const candidate = match?.[1];
-  if (!candidate || !isValidMcpAppDomain(candidate)) return undefined;
-  return candidate;
+  if (getExposureMode() === 'localhost') {
+    const suffix = '.localhost';
+    if (!requestHostname.endsWith(suffix)) return undefined;
+    const candidate = requestHostname.slice(0, -suffix.length);
+    return isValidSandboxOriginKey(candidate) ? candidate : undefined;
+  }
+
+  const template = getValidSandboxAppUrlTemplate();
+  if (!template) return undefined;
+  const templateLabels = template.hostname.toLowerCase().split('.');
+  const requestLabels = requestHostname.split('.');
+  if (requestLabels.length !== templateLabels.length) return undefined;
+
+  const placeholderIndex = templateLabels.indexOf('{app}');
+  if (placeholderIndex === -1) return undefined;
+  for (let index = 0; index < templateLabels.length; index += 1) {
+    if (index === placeholderIndex) continue;
+    if (requestLabels[index] !== templateLabels[index]) return undefined;
+  }
+
+  const candidate = requestLabels[placeholderIndex];
+  return isValidSandboxOriginKey(candidate) ? candidate : undefined;
 }
 
 /**
  * Request handler for sandbox proxy documents. Validates the authentication token
  * scoped to the originKey, and serves the sandbox proxy HTML with CSP headers.
  *
- * `originKey` is the key the listener was STARTED with (Mode A: the app's own
- * key; Mode B/C: the shared default `''`). When Mode B hostname templating is
- * configured, the request's `Host` header carries the REAL per-app key as a
- * label, and {@link deriveOriginKeyFromHost} takes priority over the listener's
- * nominal key -- this is what makes per-app tokens actually scoped per app
- * instead of every app validating against the same shared '' key (issue #387).
+ * Browser requests carry the real app key in their hostname. A request whose
+ * host cannot be resolved to a key is rejected; the listener's internal empty
+ * startup key is not a browser-visible authentication fallback.
  */
 function handleSandboxRequest(
   req: http.IncomingMessage,
   res: http.ServerResponse,
-  originKey: string,
 ): void {
-  const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+  // Never let an untrusted/malformed Host header participate in URL parsing.
+  const url = new URL(req.url || '/', 'http://localhost');
 
   // Only allow GET on /sandbox.html or /
   if (req.method !== 'GET' || (url.pathname !== '/' && url.pathname !== '/sandbox.html')) {
@@ -1145,14 +1172,11 @@ function handleSandboxRequest(
     return;
   }
 
-  // Resolve the effective originKey: Host-header-derived label wins in Mode B
-  // (hostname templating); otherwise fall back to the listener's own key,
-  // preserving Mode A/C behaviour exactly.
-  const effectiveOriginKey = deriveOriginKeyFromHost(req.headers.host) ?? originKey;
+  const effectiveOriginKey = deriveOriginKeyFromHost(req.headers.host);
 
   // Validate token scoped to this originKey.
   const token = url.searchParams.get(SANDBOX_AUTH_QUERY_PARAM);
-  if (!isSandboxTokenValidForOriginKey(token, effectiveOriginKey)) {
+  if (!effectiveOriginKey || !isSandboxTokenValidForOriginKey(token, effectiveOriginKey)) {
     res.statusCode = 403;
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -1194,9 +1218,9 @@ function handleSandboxRequest(
 }
 
 /**
- * Ensure at least one sandbox listener exists (the default shared origin for
- * backward compatibility). Called from instrumentation-node.ts at startup;
- * fire-and-forget, never throws.
+ * Ensure the singleton transport listener exists for readiness. The internal
+ * empty key does not authorize HTTP requests and is never exposed as an app
+ * origin. Called from instrumentation-node.ts at startup; fire-and-forget.
  */
 export function startSandboxServer(): void {
   // Kick off the default listener in the background; don't await.
@@ -1205,7 +1229,7 @@ export function startSandboxServer(): void {
       if (result) {
         log.info(`MCP Apps sandbox listening on port ${result.port}`);
       } else {
-        log.warn('MCP Apps sandbox failed to start; Mode C fallback active');
+        log.warn('MCP Apps sandbox unavailable: origin isolation prerequisites are unmet');
       }
     })
     .catch((err) => {

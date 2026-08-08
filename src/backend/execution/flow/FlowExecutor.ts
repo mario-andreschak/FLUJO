@@ -12,6 +12,7 @@ import {
   recordStatisticsEvent,
 } from '@/backend/services/statistics';
 import { emitErrorOnce } from './normalizeError';
+import { DEFAULT_WORKSPACE, getCurrentWorkspace } from '@/utils/workspace';
 
 // Create a logger instance for this file
 const log = createLogger('backend/execution/flow/FlowExecutor');
@@ -25,6 +26,18 @@ const log = createLogger('backend/execution/flow/FlowExecutor');
 declare global {
   var __flujo_flow_engine: FlowEngine | undefined;
   var __flujo_conversation_states: Map<string, SharedState> | undefined;
+  var __flujo_flow_engines_by_workspace: Map<string, FlowEngine> | undefined;
+  var __flujo_conversation_states_by_workspace: Map<string, Map<string, SharedState>> | undefined;
+}
+
+function enginesByWorkspace(): Map<string, FlowEngine> {
+  return global.__flujo_flow_engines_by_workspace ??
+    (global.__flujo_flow_engines_by_workspace = new Map());
+}
+
+function statesByWorkspace(): Map<string, Map<string, SharedState>> {
+  return global.__flujo_conversation_states_by_workspace ??
+    (global.__flujo_conversation_states_by_workspace = new Map());
 }
 
 // --- Debug snapshot slimming -------------------------------------------------
@@ -90,10 +103,19 @@ export class FlowExecutor {
   // planned (saveConversations) run, so its .jsonl held only the turn-start
   // reconcile line and the transcript vanished on reload (issue #49).
   static get conversationStates(): Map<string, SharedState> {
-    if (!global.__flujo_conversation_states) {
-      global.__flujo_conversation_states = new Map<string, SharedState>();
+    const workspace = getCurrentWorkspace();
+    if (workspace === DEFAULT_WORKSPACE) {
+      if (!global.__flujo_conversation_states) {
+        global.__flujo_conversation_states = new Map<string, SharedState>();
+      }
+      return global.__flujo_conversation_states;
     }
-    return global.__flujo_conversation_states;
+    let states = statesByWorkspace().get(workspace);
+    if (!states) {
+      states = new Map<string, SharedState>();
+      statesByWorkspace().set(workspace, states);
+    }
+    return states;
   }
 
   // The active execution engine. Replace the constructed engine to swap
@@ -101,16 +123,27 @@ export class FlowExecutor {
   // flow cache is shared across module instances and clearFlowCache() is
   // coherent everywhere.
   private static get engine(): FlowEngine {
-    if (!global.__flujo_flow_engine) {
-      global.__flujo_flow_engine = new PocketflowEngine();
+    const workspace = getCurrentWorkspace();
+    if (workspace === DEFAULT_WORKSPACE) {
+      if (!global.__flujo_flow_engine) {
+        global.__flujo_flow_engine = new PocketflowEngine();
+      }
+      return global.__flujo_flow_engine;
     }
-    return global.__flujo_flow_engine;
+    let engine = enginesByWorkspace().get(workspace);
+    if (!engine) {
+      engine = new PocketflowEngine();
+      enginesByWorkspace().set(workspace, engine);
+    }
+    return engine;
   }
   // Writable so the engine can be swapped for another framework, and so tests can
   // stub it. The setter writes through to the shared global to keep every module
   // instance pointing at the one engine.
   private static set engine(value: FlowEngine) {
-    global.__flujo_flow_engine = value;
+    const workspace = getCurrentWorkspace();
+    if (workspace === DEFAULT_WORKSPACE) global.__flujo_flow_engine = value;
+    else enginesByWorkspace().set(workspace, value);
   }
 
   /** Invalidate cached/compiled flow definitions (e.g. after a flow is edited). */

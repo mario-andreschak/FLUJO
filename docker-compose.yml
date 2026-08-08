@@ -13,14 +13,19 @@ services:
     # image: ghcr.io/mario-andreschak/flujo:latest
     ports:
       - "127.0.0.1:4200:4200"
-      # MCP Apps sandbox proxy: a separate browser origin, still loopback-only.
+      # MCP Apps transport for isolated `<originKey>.localhost` browser origins.
       - "127.0.0.1:4201:4201"
     volumes:
-      # User data persists across `down`/`up` in named volumes. These mounts
-      # stay below FLUJO_DATA_DIR and do not hide /app/mcp-servers, which holds
-      # the immutable offline built-in packages used by npx --no-install.
-      - flujo-db:/app/data/db
-      - flujo-mcp-servers:/app/data/mcp-servers
+      # Persist the complete workspace namespace, including non-default
+      # workspaces and runtime artifacts. The two established volume names are
+      # intentionally reused at their new default-workspace paths, so upgrading
+      # an existing Compose install exposes its old DB and MCP clones directly
+      # in the migrated layout without renaming a Docker mount point or copying
+      # secrets through the container layer. These mounts do not hide
+      # /app/mcp-servers, which contains the immutable offline built-ins.
+      - flujo-workspaces:/app/data/workspaces
+      - flujo-db:/app/data/workspaces/default-workspace/db
+      - flujo-mcp-servers:/app/data/workspaces/default-workspace/mcp-servers
       # To use the fileWatch trigger, bind-mount the watched host folder, e.g.:
       # - /path/on/host/watched:/data/watched
       # To browse host files via the filesystem file-browser MCP App, bind-mount a
@@ -37,5 +42,6 @@ services:
     restart: unless-stopped
 
 volumes:
+  flujo-workspaces:
   flujo-db:
   flujo-mcp-servers:

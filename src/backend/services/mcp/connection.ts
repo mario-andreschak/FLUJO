@@ -16,6 +16,7 @@ import { MCPSSEConfig } from "@/shared/types/mcp/mcp";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import { createHash } from "crypto";
 import { createLogger } from "@/utils/logger";
 import {
   MCPServerConfig,
@@ -29,7 +30,12 @@ import { isClientConnectionClosed } from "@/utils/mcp/utils";
 import { killProcessTreeAndWait } from "@/utils/process/killProcessTree";
 import { resolveServerCwd } from "@/utils/mcp/resolveServerCwd";
 import { resolveNodeCommand } from "@/utils/mcp/resolveNodeCommand";
-import { getWorkspaceDataDir } from "@/utils/workspace";
+import {
+  getCurrentWorkspace,
+  getWorkspaceDataDir,
+  remapLegacyDefaultWorkspaceReference,
+} from "@/utils/workspace";
+import { shippedDescriptorForConfig } from './shippedServers';
 import { registerRootsHandler } from "./roots";
 import {
   samplingEnabled,
@@ -532,12 +538,107 @@ export interface StdioLaunch {
 }
 
 /**
+ * Create the private home/cache tree inherited by one stdio MCP server.
+ *
+ * The MCP SDK supplies a small set of host environment defaults even when an
+ * explicit `env` object is passed. In particular HOME/USERPROFILE otherwise
+ * point at the account running FLUJO, so two workspaces can silently share a
+ * third-party server's tokens, sqlite files and caches. Keep those conventional
+ * persistence roots below the selected workspace and below a hash of the
+ * server name (names are user-controlled and must never become path segments).
+ */
+function isolatedStdioRuntimeEnv(serverName: string): Record<string, string> {
+  const workspaceRoot = getWorkspaceDataDir();
+  const serverKey = createHash('sha256').update(serverName, 'utf8').digest('hex').slice(0, 24);
+
+  const assertOrCreateRealDirectory = (candidate: string, label: string): void => {
+    try {
+      const stat = fs.lstatSync(candidate);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) {
+        throw new Error(`${label} must be a real directory: ${candidate}`);
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      fs.mkdirSync(candidate, { mode: 0o700 });
+      const stat = fs.lstatSync(candidate);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) {
+        throw new Error(`${label} must be a real directory: ${candidate}`);
+      }
+    }
+  };
+
+  // Never create a workspace as a side effect of launching a child. The HTTP
+  // boundary/startup migration has already validated and created this root.
+  const workspaceStat = fs.lstatSync(workspaceRoot);
+  if (!workspaceStat.isDirectory() || workspaceStat.isSymbolicLink()) {
+    throw new Error(`Workspace root must be a real directory: ${workspaceRoot}`);
+  }
+
+  let current = workspaceRoot;
+  for (const segment of ['userdata', 'mcp-runtime', serverKey, 'home']) {
+    current = path.join(current, segment);
+    assertOrCreateRealDirectory(current, 'MCP runtime directory');
+  }
+  const home = current;
+
+  const directories = {
+    appData: path.join(home, 'AppData', 'Roaming'),
+    localAppData: path.join(home, 'AppData', 'Local'),
+    config: path.join(home, '.config'),
+    cache: path.join(home, '.cache'),
+    data: path.join(home, '.local', 'share'),
+    state: path.join(home, '.local', 'state'),
+    runtime: path.join(home, '.runtime'),
+    temp: path.join(home, 'tmp'),
+    npm: path.join(home, '.npm'),
+    pip: path.join(home, '.cache', 'pip'),
+    uv: path.join(home, '.cache', 'uv'),
+  };
+  for (const directory of Object.values(directories)) {
+    const relative = path.relative(home, directory);
+    let cursor = home;
+    for (const segment of relative.split(path.sep).filter(Boolean)) {
+      cursor = path.join(cursor, segment);
+      assertOrCreateRealDirectory(cursor, 'MCP runtime directory');
+    }
+  }
+
+  const result: Record<string, string> = {
+    HOME: home,
+    USERPROFILE: home,
+    APPDATA: directories.appData,
+    LOCALAPPDATA: directories.localAppData,
+    XDG_CONFIG_HOME: directories.config,
+    XDG_CACHE_HOME: directories.cache,
+    XDG_DATA_HOME: directories.data,
+    XDG_STATE_HOME: directories.state,
+    XDG_RUNTIME_DIR: directories.runtime,
+    TMPDIR: directories.temp,
+    TMP: directories.temp,
+    TEMP: directories.temp,
+    NPM_CONFIG_CACHE: directories.npm,
+    PIP_CACHE_DIR: directories.pip,
+    UV_CACHE_DIR: directories.uv,
+  };
+  if (process.platform === 'win32') {
+    const parsed = path.parse(home);
+    result.HOMEDRIVE = parsed.root.replace(/[\\/]$/, '');
+    result.HOMEPATH = home.slice(parsed.root.length - 1);
+  }
+  return result;
+}
+
+/**
  * Resolve a stdio config into concrete spawn parameters (see StdioLaunch).
  */
 export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
   // For Windows .bat files, we need to use cmd.exe to execute them
-  let command = config.command;
-  let args = config.args ? [...config.args] : [];
+  const isShipped = Boolean(shippedDescriptorForConfig(config));
+  const remapMcpPath = (value: string): string => isShipped
+    ? value
+    : remapLegacyDefaultWorkspaceReference(value, 'mcp-servers');
+  let command = remapMcpPath(config.command);
+  let args = config.args ? config.args.map(remapMcpPath) : [];
   const serverDir = `${SERVER_DIR_PREFIX}/${config.name}`;
 
   log.info(`Creating stdio transport for server ${config.name}`);
@@ -607,7 +708,7 @@ export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
 
   log.debug(`Final command: ${command}`);
   log.debug(`Final args: ${JSON.stringify(args)}`);
-  const resolvedCwd = resolveServerCwd({
+  const resolvedCwd = remapMcpPath(resolveServerCwd({
     // Use the original (pre-.bat-rewrite) command/args for runner detection so
     // e.g. `npx` isn't masked by the cmd.exe wrapper applied above for .bat files.
     command: config.command,
@@ -616,15 +717,46 @@ export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
     cwd: config.cwd,
     serverName: config.name,
     defaultCwd: `${SERVER_DIR_PREFIX}/${config.name}`,
-  });
+  }));
   const cwd = path.isAbsolute(resolvedCwd)
     ? resolvedCwd
     : path.join(getWorkspaceDataDir(), resolvedCwd);
   log.debug(`cwd: ${cwd}`);
   log.debug(`env: ${JSON.stringify(config.env)}`);
 
-  // Transform the env object to extract only the value part from each key
+  // Transform the env object to extract only the value part from each key.
   const transformedEnv = transformEnv(config.env);
+  if (!isShipped) {
+    for (const [name, value] of Object.entries(transformedEnv)) {
+      transformedEnv[name] = remapMcpPath(value);
+    }
+  }
+  // Force the live child boundary for every stdio server, not only shipped
+  // packages. These assignments intentionally win over persisted config and
+  // over inherit-all launch modes; otherwise ordinary SDK defaults expose the
+  // host account and let workspace A reuse workspace B's auth/config state.
+  Object.assign(transformedEnv, isolatedStdioRuntimeEnv(config.name));
+  transformedEnv.FLUJO_DATA_DIR = getWorkspaceDataDir();
+  transformedEnv.FLUJO_WORKSPACE = getCurrentWorkspace();
+  if (shippedDescriptorForConfig(config)?.defaultName === 'browser') {
+    // Durable browser output/profile overrides from a pre-workspace config must
+    // not keep writing beside (or outside) the workspace tree.
+    transformedEnv.FLUJO_BROWSER_PROFILE_DIR = path.join(
+      getWorkspaceDataDir(),
+      'browser-profile',
+      'trusted',
+    );
+    transformedEnv.FLUJO_BROWSER_SCREENSHOT_DIR = path.join(
+      getWorkspaceDataDir(),
+      'screenshots',
+      'browser',
+    );
+    transformedEnv.FLUJO_BROWSER_RECORD_DIR = path.join(
+      getWorkspaceDataDir(),
+      'recordings',
+      'browser',
+    );
+  }
   log.verbose(
     "Transformed environment variables",
     JSON.stringify(transformedEnv),

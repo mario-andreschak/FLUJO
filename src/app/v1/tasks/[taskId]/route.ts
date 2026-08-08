@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { NextResponse } from 'next/server';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { getTask, requestCancel, toTaskHandle } from '@/backend/services/subflowTasks';
@@ -17,7 +18,7 @@ function responseForTask(task: Awaited<ReturnType<typeof getTask>>) {
   });
 }
 
-export async function GET(
+async function GET_handler(
   _request: Request,
   { params }: { params: Promise<{ taskId: string }> },
 ) {
@@ -26,7 +27,7 @@ export async function GET(
   return responseForTask(await getTask((await params).taskId));
 }
 
-export async function DELETE(
+async function DELETE_handler(
   _request: Request,
   { params }: { params: Promise<{ taskId: string }> },
 ) {
@@ -34,3 +35,6 @@ export async function DELETE(
   if (locked) return locked;
   return responseForTask(await requestCancel((await params).taskId));
 }
+
+export const GET = withWorkspaceRoute(GET_handler);
+export const DELETE = withWorkspaceRoute(DELETE_handler);

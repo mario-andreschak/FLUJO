@@ -13,12 +13,14 @@ import os from 'os';
  *   - APP dir  — where the code + built assets live (package.json, .next, and,
  *                for a git checkout, .git + the update scripts). Read-only in a
  *                packaged install.
- *   - DATA dir — where user data lives (db/, mcp-servers/, conversation logs).
- *                A named volume in Docker, ~/.flujo for the npm package.
+ *   - DATA dir — the parent of the workspace namespace (`workspaces/`) and its
+ *                installation-wide layout metadata. A named volume in Docker,
+ *                ~/.flujo for the npm package.
  *
- * By defaulting the DATA dir to the APP dir, an existing git-checkout install is
- * completely unchanged: data stays in <repo>/db and <repo>/mcp-servers, and the
- * self-updater keeps working. Only setting FLUJO_DATA_DIR relocates data.
+ * By defaulting the DATA dir to the APP dir, a git-checkout keeps its data root
+ * beside the application and the self-updater keeps working. Workspace-owned
+ * state lives below <data>/workspaces/<workspace>; the layout migration owns the
+ * move from historical <data>/db and <data>/mcp-servers locations.
  */
 
 /**
@@ -40,12 +42,12 @@ export function getHomeDir(): string {
 }
 
 /**
- * Where FLUJO's user data lives — db/, mcp-servers/, conversation logs, etc.
+ * Parent directory for FLUJO's workspace data and layout metadata.
  *
- * Defaults to the app dir so a plain git-checkout install is byte-for-byte
- * unchanged. Set FLUJO_DATA_DIR to relocate all user data (this is how the
- * `npx flujo` and Docker distributions keep writable data out of the read-only
- * application install, e.g. ~/.flujo or a mounted /app/db volume).
+ * Defaults to the app dir for a plain git checkout. Set FLUJO_DATA_DIR to
+ * relocate the complete workspace namespace (this is how the `npx flujo` and
+ * Docker distributions keep writable data out of the read-only application
+ * install, e.g. ~/.flujo or a mounted /app/data volume).
  */
 export function getDataDir(): string {
   const custom = process.env.FLUJO_DATA_DIR;

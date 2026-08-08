@@ -231,6 +231,11 @@ export type MCPStreamableConfig = StreamableHTTPClientTransportOptions & MCPMana
   oauthClientInformation?: OAuthClientInformation;
   oauthTokens?: OAuthTokens;
   oauthCodeVerifier?: string;
+  /** Opaque, single-use callback binding for an in-flight OAuth authorization. */
+  oauthState?: string;
+  /** Workspace which created oauthState; defense-in-depth beyond workspace-local storage. */
+  oauthStateWorkspace?: string;
+  oauthStateCreatedAt?: number;
   authorizationUrl?: string; // OAuth authorization URL when authentication is required
   /** Optional launch-and-connect spec (#392). Not spawned by FLUJO yet. */
   launch?: MCPLaunchSpec;

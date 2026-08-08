@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { NextRequest } from 'next/server';
 import { createJsonEventStreamResponse } from '@/backend/utils/jsonEventStream';
 import {
@@ -17,7 +18,7 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const notLocal = assertLocalRequest(request);
   if (notLocal) return notLocal;
   const lock = await assertUnlocked({ openai: true });
@@ -60,3 +61,5 @@ export async function POST(request: NextRequest) {
     return json({ error: error instanceof Error ? error.message : String(error) }, 500);
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

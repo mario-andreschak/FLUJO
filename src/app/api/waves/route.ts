@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { createLogger } from '@/utils/logger';
 import { getSchedulerService } from '@/backend/services/scheduler';
@@ -16,7 +17,7 @@ const log = createLogger('app/api/waves/route');
  * for the /waves visualization. Never arms, fires or persists anything.
  * Response: WavesResponse { paused, generatedAt, waves, orphans }.
  */
-export async function GET() {
+async function GET_handler(_request: Request) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -74,4 +75,11 @@ function json(body: unknown, status = 200): Response {
     status,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+const GET_workspaceRoute = withWorkspaceRoute(GET_handler);
+export function GET(): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request = new Request('http://localhost/')) {
+  return GET_workspaceRoute(request);
 }

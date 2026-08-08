@@ -7,6 +7,7 @@ import fs from "fs/promises";
 import path from "path";
 import { createLogger } from "@/utils/logger";
 import {
+  bindToCurrentWorkspace,
   DEFAULT_WORKSPACE,
   getCurrentWorkspace,
   getWorkspaceDataDir,
@@ -36,6 +37,7 @@ declare global {
   var __mcp_connecting: Set<string> | undefined;
   // True from process boot until startEnabledServers() finishes its first sweep.
   var __mcp_starting_up: boolean | undefined;
+  var __mcp_starting_up_by_workspace: Map<string, boolean> | undefined;
   // The CURRENT transport per server name. onclose/onerror handlers close over the
   // transport they were registered on and fire for ANY instance — including a zombie
   // process exiting minutes after it was replaced, and closes FLUJO itself initiated.
@@ -267,6 +269,7 @@ function hasManagedOAuthState(config: MCPStreamableConfig): boolean {
     config.oauthClientInformation ||
     config.oauthTokens ||
     config.oauthCodeVerifier ||
+    config.oauthState ||
     config.authorizationUrl
   );
 }
@@ -539,7 +542,7 @@ export class MCPService {
       `Scheduling connection retry for server ${serverName} in ${delay}ms (attempt ${currentAttempts + 1}/${maxAttempts})`,
     );
 
-    const timer = setTimeout(async () => {
+    const timer = setTimeout(bindToCurrentWorkspace(async () => {
       log.info(
         `Attempting to reconnect server ${serverName} (attempt ${currentAttempts + 1}/${maxAttempts})`,
       );
@@ -619,7 +622,7 @@ export class MCPService {
         // Schedule another retry if we haven't reached max attempts
         this.scheduleConnectionRetry(serverName, currentConfig);
       }
-    }, delay);
+    }), delay);
 
     this.connectionRetryTimers.set(serverName, timer);
   }
@@ -628,14 +631,24 @@ export class MCPService {
    * Check if the backend is currently starting up
    */
   isStartingUp(): boolean {
-    return global.__mcp_starting_up === true;
+    const workspace = getCurrentWorkspace();
+    return workspace === DEFAULT_WORKSPACE
+      ? global.__mcp_starting_up === true
+      : global.__mcp_starting_up_by_workspace?.get(workspace) === true;
   }
 
   /**
    * Set the backend startup state
    */
   private setStartingUp(value: boolean): void {
-    global.__mcp_starting_up = value;
+    const workspace = getCurrentWorkspace();
+    if (workspace === DEFAULT_WORKSPACE) {
+      global.__mcp_starting_up = value;
+    } else {
+      const states = global.__mcp_starting_up_by_workspace ??=
+        new Map<string, boolean>();
+      states.set(workspace, value);
+    }
     log.info(
       `Backend startup state set to: ${value ? "starting" : "complete"}`,
     );
@@ -657,12 +670,12 @@ export class MCPService {
    * call's toolNameMap entry.
    */
   setToolSchemaHash(serverName: string, toolName: string, hash: string): void {
-    this.toolSchemaHashes.set(`${serverName} ${toolName}`, hash);
+    this.toolSchemaHashes.set(`${serverName}\0${toolName}`, hash);
   }
 
   /** Issue #255: current advertised input-schema hash for (server, tool), if known. */
   getToolSchemaHash(serverName: string, toolName: string): string | undefined {
-    return this.toolSchemaHashes.get(`${serverName} ${toolName}`);
+    return this.toolSchemaHashes.get(`${serverName}\0${toolName}`);
   }
 
   /**
@@ -847,7 +860,7 @@ export class MCPService {
       config.websocketUrl ?? "",
       config.rootPath ?? "",
       config.disabled ? "disabled" : "enabled",
-    ].join(" ");
+    ].join("\0");
   }
 
   private async connectServerInternal(
@@ -1021,8 +1034,8 @@ export class MCPService {
         registerResourceNotificationHandlers(
           client,
           config.name,
-          (name) => this.onResourceListChanged(name),
-          (name, uri) => this.onResourceUpdated(name, uri),
+          bindToCurrentWorkspace((name: string) => this.onResourceListChanged(name)),
+          bindToCurrentWorkspace((name: string, uri: string) => this.onResourceUpdated(name, uri)),
         );
       } else {
         // v2 beta SDK: the Client class's setNotificationHandler takes a method string and a
@@ -1036,16 +1049,16 @@ export class MCPService {
           }
         ).setNotificationHandler?.bind(client);
         if (betaSetNotification) {
-          betaSetNotification("notifications/resources/list_changed", () => {
+          betaSetNotification("notifications/resources/list_changed", bindToCurrentWorkspace(() => {
             this.onResourceListChanged(config.name);
-          });
+          }));
           betaSetNotification(
             "notifications/resources/updated",
-            (notification: unknown) => {
+            bindToCurrentWorkspace((notification: unknown) => {
               const uri = (notification as { params?: { uri?: string } })
                 ?.params?.uri;
               if (uri) this.onResourceUpdated(config.name, uri);
-            },
+            }),
           );
         }
       }
@@ -1060,13 +1073,13 @@ export class MCPService {
       ).stderr;
       if (stdioStderr && typeof stdioStderr.on === "function") {
         const serverName = config.name;
-        stdioStderr.on("data", (data: Buffer) => {
+        stdioStderr.on("data", bindToCurrentWorkspace((data: Buffer) => {
           const stderrMessage = data.toString();
           log.warn(`stderr: [${serverName}]: ${stderrMessage}`);
 
           // Store stderr logs (capped, see appendStderrLog)
           this.appendStderrLog(serverName, stderrMessage);
-        });
+        }));
       }
 
       // Register FLUJO's transport event handlers BEFORE client.connect(): the SDK's
@@ -1076,7 +1089,7 @@ export class MCPService {
       // transport had closed: pending requests were never rejected with "Connection
       // closed", client.transport stayed attached, and later calls surfaced as the
       // cryptic AbortError "This operation was aborted" from the aborted fetch signal.
-      transport.onclose = () => {
+      transport.onclose = bindToCurrentWorkspace(() => {
         // Only act if THIS transport is still the registered one for the server.
         // Two cases must be ignored: (a) a zombie process from a replaced connection
         // finally exiting — its late close event used to delete the CURRENT healthy
@@ -1117,9 +1130,9 @@ export class MCPService {
               error,
             );
           });
-      };
+      });
 
-      transport.onerror = (error) => {
+      transport.onerror = bindToCurrentWorkspace((error: Error) => {
         // The Streamable HTTP transport keeps a long-lived SSE stream open for server->client
         // notifications; servers/proxies recycle that idle stream (e.g. Cloudflare in front of
         // Asana), which surfaces here as "SSE stream disconnected: TypeError: terminated". The
@@ -1229,7 +1242,7 @@ export class MCPService {
               error,
             );
           });
-      };
+      });
 
       // Handshake. Both handlers above are inert until the transport is registered as
       // the CURRENT one below (their stale guard sees activeTransports unset), so a

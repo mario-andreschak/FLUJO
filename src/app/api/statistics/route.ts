@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { NextRequest, NextResponse } from 'next/server';
 import {
   aggregateStatistics,
@@ -24,7 +25,7 @@ const NO_STORE = { 'Cache-Control': 'private, no-store' } as const;
  * `view=compare` returns a two-cohort revision comparison. Every view keeps the
  * local-request and unlocked-state guards and never returns payload content.
  */
-export async function GET(request: NextRequest) {
+async function GET_handler(request: NextRequest) {
   const notLocal = assertLocalRequest(request);
   if (notLocal) return notLocal;
   const lock = await assertUnlocked();
@@ -53,3 +54,5 @@ export async function GET(request: NextRequest) {
     );
   }
 }
+
+export const GET = withWorkspaceRoute(GET_handler);

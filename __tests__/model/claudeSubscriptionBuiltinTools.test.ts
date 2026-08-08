@@ -71,6 +71,18 @@ jest.mock('@/backend/services/runResources/boundToolResult', () => ({
   boundToolResult: (...args: unknown[]) => boundToolResultMock(...(args as [{ content: string }])),
 }));
 
+jest.mock('@/backend/services/model/adapters/claudeRuntimeHome', () => ({
+  prepareClaudeRuntimeEnvironment: jest.fn(async () => ({
+    home: 'C:\\flujo\\db\\claude-runtime',
+    workingDirectory: 'C:\\flujo\\db\\claude-runtime\\workspace',
+    env: {
+      PATH: 'C:\\Windows',
+      CLAUDE_CONFIG_DIR: 'C:\\flujo\\db\\claude-runtime',
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: 'C:\\flujo\\db\\claude-runtime',
+    },
+  })),
+}));
+
 import { ClaudeSubscriptionAdapter } from '@/backend/services/model/adapters/claudeSubscriptionAdapter';
 
 // A single terminal success `result` message ends the adapter's message loop
@@ -218,6 +230,20 @@ describe('ClaudeSubscriptionAdapter — malformed tool-call prose quarantine (#2
 });
 
 describe('ClaudeSubscriptionAdapter — built-in tool suppression (#166)', () => {
+  it('uses the workspace Claude runtime and disables inherited filesystem settings', async () => {
+    await new ClaudeSubscriptionAdapter().createCompletion(baseInput({ tools: [] }));
+
+    const options = capturedOptions();
+    expect(options.cwd).toBe('C:\\flujo\\db\\claude-runtime\\workspace');
+    expect(options.settingSources).toEqual([]);
+    expect(options.env).toMatchObject({
+      CLAUDE_CONFIG_DIR: 'C:\\flujo\\db\\claude-runtime',
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: 'C:\\flujo\\db\\claude-runtime',
+      CLAUDE_CODE_OAUTH_TOKEN: 'oauth-token',
+    });
+    expect((options.env as Record<string, unknown>).ANTHROPIC_API_KEY).toBeUndefined();
+  });
+
   it('disables all built-in tools on the query options for a tools-less node', async () => {
     const adapter = new ClaudeSubscriptionAdapter();
     await adapter.createCompletion(baseInput({ tools: [] }));
@@ -698,6 +724,7 @@ describe('ClaudeSubscriptionAdapter — MCP App transcript lifecycle', () => {
       undefined,
       expect.any(AbortSignal),
       'model',
+      undefined,
     );
     const toolMsg = transcript!.find(message => message.role === 'tool');
     expect(toolMsg?.ui).toEqual({

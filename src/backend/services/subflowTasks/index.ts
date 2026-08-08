@@ -18,6 +18,7 @@ import {
   type SubflowTaskSettings,
   type SubflowTaskStatus,
 } from '@/shared/types/subflowTasks';
+import { DEFAULT_WORKSPACE, getCurrentWorkspace } from '@/utils/workspace';
 
 const log = createLogger('backend/services/subflowTasks');
 const COLLECTION = 'subflow-tasks';
@@ -40,21 +41,38 @@ export function parseSubflowTaskUri(uri: string): string | null {
 }
 
 let settingsCache: { value: SubflowTaskSettings; at: number } | null = null;
+const settingsCacheByWorkspace = new Map<string, { value: SubflowTaskSettings; at: number }>();
+
+function getSettingsCache(): { value: SubflowTaskSettings; at: number } | null {
+  const workspace = getCurrentWorkspace();
+  return workspace === DEFAULT_WORKSPACE
+    ? settingsCache
+    : settingsCacheByWorkspace.get(workspace) ?? null;
+}
+
+function setSettingsCache(value: { value: SubflowTaskSettings; at: number } | null): void {
+  const workspace = getCurrentWorkspace();
+  if (workspace === DEFAULT_WORKSPACE) settingsCache = value;
+  else if (value) settingsCacheByWorkspace.set(workspace, value);
+  else settingsCacheByWorkspace.delete(workspace);
+}
+
 export async function getSubflowTaskSettings(): Promise<SubflowTaskSettings> {
-  if (settingsCache && Date.now() - settingsCache.at < 30_000) return settingsCache.value;
+  const cached = getSettingsCache();
+  if (cached && Date.now() - cached.at < 30_000) return cached.value;
   try {
     const stored = await loadItem<Partial<SubflowTaskSettings>>(
       StorageKey.SUBFLOW_TASK_SETTINGS,
       DEFAULT_SUBFLOW_TASK_SETTINGS,
     );
-    settingsCache = { value: { ...DEFAULT_SUBFLOW_TASK_SETTINGS, ...stored }, at: Date.now() };
+    setSettingsCache({ value: { ...DEFAULT_SUBFLOW_TASK_SETTINGS, ...stored }, at: Date.now() });
   } catch (error) {
     log.warn('Failed to load subflow task settings; using defaults', error);
-    settingsCache = { value: DEFAULT_SUBFLOW_TASK_SETTINGS, at: Date.now() };
+    setSettingsCache({ value: DEFAULT_SUBFLOW_TASK_SETTINGS, at: Date.now() });
   }
-  return settingsCache.value;
+  return getSettingsCache()!.value;
 }
-export function _clearSubflowTaskSettingsCache(): void { settingsCache = null; }
+export function _clearSubflowTaskSettingsCache(): void { setSettingsCache(null); }
 
 export async function createTask(input: Omit<SubflowTaskRecord, keyof SubflowTaskHandle | 'taskId' | 'uri' | 'createdAt' | 'updatedAt'> & Partial<Pick<SubflowTaskHandle, 'pollInterval' | 'status'>>): Promise<SubflowTaskRecord | null> {
   try {

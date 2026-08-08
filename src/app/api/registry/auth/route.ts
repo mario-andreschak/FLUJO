@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 /**
  * Registry account auth (issue #197): sign up / log in / log out / status.
  *
@@ -17,7 +18,7 @@ import { createLogger } from '@/utils/logger';
 
 const log = createLogger('app/api/registry/auth/route');
 
-export async function GET() {
+async function GET_handler(_request: Request) {
   const lock = await assertUnlocked();
   if (lock) return lock;
   try {
@@ -28,7 +29,7 @@ export async function GET() {
   }
 }
 
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const lock = await assertUnlocked();
   if (lock) return lock;
   const notLocal = assertLocalRequest(request);
@@ -67,7 +68,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-export async function DELETE(request: NextRequest) {
+async function DELETE_handler(request: NextRequest) {
   const lock = await assertUnlocked();
   if (lock) return lock;
   const notLocal = assertLocalRequest(request);
@@ -80,3 +81,12 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: 'Failed to log out' }, { status: 500 });
   }
 }
+
+const GET_workspaceRoute = withWorkspaceRoute(GET_handler);
+export function GET(): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request = new Request('http://localhost/')) {
+  return GET_workspaceRoute(request);
+}
+export const POST = withWorkspaceRoute(POST_handler);
+export const DELETE = withWorkspaceRoute(DELETE_handler);

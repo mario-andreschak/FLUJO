@@ -14,6 +14,7 @@ import { resumeRemoteMcpTasks } from '@/backend/services/mcp/remoteTaskResume';
 import { migrateWorkspaceLayout } from '@/backend/services/workspace/migration';
 import {
   DEFAULT_WORKSPACE,
+  ensureWorkspaceDirs,
   getCurrentWorkspace,
   listWorkspaces,
   runWithWorkspace,
@@ -248,7 +249,31 @@ export function ensureBackendInitialized(): Promise<void> {
  * requiring a restart — and without a workspace nobody uses costing anything.
  */
 export function ensureWorkspaceInitialized(workspace: string): Promise<void> {
-  return runWithWorkspace(workspace, () => ensureBackendInitialized());
+  return runWithWorkspace(workspace, async () => {
+    await ensureWorkspaceDirs(workspace);
+    await ensureBackendInitialized();
+  });
+}
+
+/**
+ * Initialize every workspace discovered at process start.
+ *
+ * Automations are workspace-owned background work, so waiting until a user
+ * opens a tab would leave schedules and webhooks in inactive workspaces
+ * unarmed. Workspaces are initialized sequentially to avoid a startup stampede;
+ * a broken workspace is logged and isolated from the others. Failure of the
+ * installation-wide layout barrier or workspace enumeration still rejects.
+ */
+export async function ensureAllWorkspacesInitialized(): Promise<void> {
+  await migrateWorkspaceLayout();
+  const workspaces = await listWorkspaces();
+  for (const workspace of workspaces) {
+    try {
+      await ensureWorkspaceInitialized(workspace.name);
+    } catch (error) {
+      log.error(`Initialization failed for workspace ${workspace.name}`, error);
+    }
+  }
 }
 
 async function runInitialization(): Promise<void> {
@@ -375,6 +400,10 @@ export async function onUnlocked(): Promise<void> {
     // DEFAULT mode: secret-dependent services started at boot already.
     return;
   }
-  log.info('Encryption unlocked — starting deferred MCP/scheduler startup');
+  // Only the ambient workspace was unlocked. Sibling workspaces may use a
+  // different DEK and must remain deferred until their own unlock transition.
+  log.info(
+    `Encryption unlocked — starting deferred MCP/scheduler startup for ${getCurrentWorkspace()}`,
+  );
   await startSecretDependentServices();
 }

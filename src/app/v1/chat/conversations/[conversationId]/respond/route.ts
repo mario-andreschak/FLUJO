@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
@@ -29,7 +30,7 @@ type RespondRequestBody =
   | { action: 'question-decline'; questionId: string }
   | { action: 'cancelToolCall'; toolCallId: string };
 
-export async function POST(
+async function POST_handler(
   request: NextRequest,
   { params }: { params: Promise<{ conversationId: string }> }
 ) {
@@ -226,3 +227,5 @@ export async function POST(
     return NextResponse.json({ error: 'Internal server error processing tool response' }, { status: 500 });
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

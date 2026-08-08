@@ -16,6 +16,7 @@ import {
   noteTaskInputRequested,
   noteTaskInputResolved,
 } from './taskInputRegistry';
+import { bindToCurrentWorkspace } from '@/utils/workspace';
 
 const log = createLogger('backend/services/mcp/elicitation');
 
@@ -59,7 +60,7 @@ export function registerElicitationHandler(client: Client, config: MCPServerConf
 export function createElicitationHandler(
   config: MCPServerConfig
 ): (request: { params?: unknown }) => Promise<ElicitResult> {
-  return async (request): Promise<ElicitResult> => {
+  return bindToCurrentWorkspace(async (request: { params?: unknown }): Promise<ElicitResult> => {
     const params = request.params as {
       mode?: string;
       message?: string;
@@ -129,5 +130,5 @@ export function createElicitationHandler(
       noteTaskInputResolved(config.name, relatedTaskId, elicitationId, result.action);
     }
     return result;
-  };
+  });
 }

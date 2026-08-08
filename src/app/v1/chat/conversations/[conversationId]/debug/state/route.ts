@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
@@ -19,7 +20,7 @@ const log = createLogger('app/v1/chat/conversations/[conversationId]/debug/state
  *
  * Read-only: it never mutates or resumes anything.
  */
-export async function GET(
+async function GET_handler(
   request: NextRequest,
   { params }: { params: Promise<{ conversationId: string }> }
 ) {
@@ -49,3 +50,5 @@ export async function GET(
     return NextResponse.json({ error: 'Internal server error reading debug state' }, { status: 500 });
   }
 }
+
+export const GET = withWorkspaceRoute(GET_handler);

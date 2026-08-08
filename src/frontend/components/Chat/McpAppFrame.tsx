@@ -40,7 +40,8 @@ import {
   extractUiResourceUri,
   isMcpAppMimeType,
 } from '@/shared/utils/mcpApps';
-import { deriveOriginKey } from '@/shared/utils/mcpAppOrigin';
+import { isValidMcpAppDomain } from '@/shared/utils/mcpAppOrigin';
+import { getSelectedWorkspace, withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import { createLogger } from '@/utils/logger';
 import packageMetadata from '../../../../package.json';
 import {
@@ -312,12 +313,11 @@ function createStablePostMessageTransport(
   return wrapper;
 }
 
-/** CSP + permission + domain block a UI resource declares under `_meta.ui`. */
+/** CSP + permission policy a UI resource declares under `_meta.ui`. */
 interface AppResource {
   html: string;
   csp?: McpUiResourceCsp;
   permissions?: McpUiResourcePermissions;
-  domain?: string;  // Optional origin domain for per-app sandbox isolation
   // `_meta.ui.prefersBorder: false` means the app paints its own frame (a
   // workbench, a browser window). Drawing FLUJO's decorative border on top of
   // one is what makes those apps look like a debug harness.
@@ -328,8 +328,8 @@ interface SandboxEndpointResponse {
   port?: number;
   token?: string;
   url?: string;
-  originKey?: string;  // Echo of the requested originKey (when provided)
-  shared?: boolean;    // Whether this is a fallback to the shared origin (Mode C)
+  originKey?: string;
+  shared?: boolean;
 }
 
 interface BrowserLocation {
@@ -342,45 +342,37 @@ export function buildSandboxUrl(
   data: SandboxEndpointResponse,
   host: BrowserLocation,
 ): string {
+  if (data.shared !== false) {
+    throw new Error('Sandbox endpoint discovery did not return an isolated app origin');
+  }
+  if (!isValidMcpAppDomain(data.originKey)) {
+    throw new Error('Sandbox endpoint discovery returned an invalid origin key');
+  }
   if (typeof data.token !== 'string' || data.token.length === 0) {
     throw new Error('Sandbox endpoint discovery returned invalid credentials');
   }
 
+  if (typeof data.url !== 'string') {
+    throw new Error('Sandbox endpoint discovery did not return an isolated app URL');
+  }
   let sandboxUrl: URL;
-  if (data.url !== undefined) {
-    if (typeof data.url !== 'string') {
-      throw new Error('Sandbox endpoint discovery returned an invalid public URL');
-    }
-    try {
-      sandboxUrl = new URL(data.url);
-    } catch {
-      throw new Error('Sandbox endpoint discovery returned an invalid public URL');
-    }
-    if (
-      (sandboxUrl.protocol !== 'http:' && sandboxUrl.protocol !== 'https:')
-      || sandboxUrl.username
-      || sandboxUrl.password
-    ) {
-      throw new Error('Sandbox public URL must be an absolute HTTP(S) URL without credentials');
-    }
-    if (host.protocol === 'https:' && sandboxUrl.protocol !== 'https:') {
-      throw new Error('HTTPS FLUJO deployments require an HTTPS MCP Apps sandbox URL');
-    }
-  } else {
-    if (host.protocol !== 'http:') {
-      throw new Error(
-        'MCP Apps on HTTPS require Public or Local Network access and an HTTPS proxy for sandbox port 4201',
-      );
-    }
-    if (
-      !Number.isInteger(data.port)
-      || (data.port as number) < 1
-      || (data.port as number) > 65_535
-    ) {
-      throw new Error('Sandbox endpoint discovery returned an invalid port');
-    }
-    sandboxUrl = new URL('/sandbox.html', host.origin);
-    sandboxUrl.port = String(data.port);
+  try {
+    sandboxUrl = new URL(data.url);
+  } catch {
+    throw new Error('Sandbox endpoint discovery returned an invalid public URL');
+  }
+  if (
+    (sandboxUrl.protocol !== 'http:' && sandboxUrl.protocol !== 'https:')
+    || sandboxUrl.username
+    || sandboxUrl.password
+  ) {
+    throw new Error('Sandbox public URL must be an absolute HTTP(S) URL without credentials');
+  }
+  if (host.protocol === 'https:' && sandboxUrl.protocol !== 'https:') {
+    throw new Error('HTTPS FLUJO deployments require an HTTPS MCP Apps sandbox URL');
+  }
+  if (!sandboxUrl.hostname.split('.').includes(data.originKey)) {
+    throw new Error('Sandbox URL is not bound to the verified app origin key');
   }
 
   if (sandboxUrl.origin === host.origin) {
@@ -390,23 +382,35 @@ export function buildSandboxUrl(
   return sandboxUrl.href;
 }
 
-/** Per-originKey cache of the authenticated sandbox endpoint. */
+/** Per-workspace verified-resource cache of the authenticated sandbox endpoint. */
 const sandboxEndpointCache = new Map<string, Promise<SandboxEndpointResponse>>();
 
+/** Unambiguous tuple encoding for identities containing URI punctuation. */
+export function mcpAppSandboxCacheKey(
+  workspace: string,
+  serverName: string,
+  uri: string,
+  conversationId?: string,
+): string {
+  return JSON.stringify([workspace, serverName, uri, conversationId ?? null]);
+}
+
 async function resolveSandboxBaseUrl(
-  originKey: string | undefined,
   serverName: string,
   uri: string,
   conversationId?: string,
 ): Promise<string> {
-  const cacheKey = `${originKey || ''}::${serverName}::${uri}::${conversationId || ''}`;
+  const workspace = getSelectedWorkspace();
+  const cacheKey = mcpAppSandboxCacheKey(workspace, serverName, uri, conversationId);
   if (!sandboxEndpointCache.has(cacheKey)) {
     const params = new URLSearchParams();
-    if (originKey) params.set('originKey', originKey);
     params.set('serverName', serverName);
     params.set('uri', uri);
     if (conversationId) params.set('conversationId', conversationId);
-    const url = `/api/mcp/app-sandbox${params.toString() ? `?${params}` : ''}`;
+    const url = withWorkspaceUrl(
+      `/api/mcp/app-sandbox${params.toString() ? `?${params}` : ''}`,
+      workspace,
+    );
     const promise = fetch(url)
       .then(async (response) => {
         if (!response.ok) {
@@ -422,14 +426,7 @@ async function resolveSandboxBaseUrl(
     sandboxEndpointCache.set(cacheKey, promise);
   }
   const response = await sandboxEndpointCache.get(cacheKey)!;
-  const sandboxUrl = buildSandboxUrl(response, window.location);
-  
-  // Validate that the returned originKey matches if one was requested.
-  if (originKey && response.originKey && response.originKey !== originKey) {
-    throw new Error(`Sandbox endpoint returned mismatched originKey`);
-  }
-  
-  return sandboxUrl;
+  return buildSandboxUrl(response, window.location);
 }
 
 function decodeBase64Utf8(blob: string): string {
@@ -579,7 +576,6 @@ export function extractAppResource(readData: unknown, expectedUri: string): AppR
     permissions: permissions.success
       ? sanitizeGrantedPermissions(permissions.data)
       : undefined,
-    domain: typeof uiMeta?.domain === 'string' ? uiMeta.domain : undefined,
     prefersBorder: typeof uiMeta?.prefersBorder === 'boolean' ? uiMeta.prefersBorder : undefined,
   };
 }
@@ -1207,18 +1203,12 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       const app = extractAppResource(read.data, uri);
       setChromeless(app.prefersBorder === false);
 
-      // 2. Derive per-app origin key for sandbox isolation.
-      const originKey = deriveOriginKey({
-        domain: app.domain,
-        serverName,
-        uri,
-      });
-
-      // 3. Resolve the foreign sandbox origin.
-      const sandboxBase = await resolveSandboxBaseUrl(originKey, serverName, uri, conversationId);
+      // 2. Ask the backend to verify the same resource and derive its
+      // workspace-scoped browser origin. The View never selects its own origin.
+      const sandboxBase = await resolveSandboxBaseUrl(serverName, uri, conversationId);
       if (!isCurrentMount() || !containerRef.current) return;
 
-      // 4. Create the OUTER (sandbox-proxy) iframe.
+      // 3. Create the OUTER (sandbox-proxy) iframe.
       const iframe = document.createElement('iframe');
       iframe.title = t('chat.app.frameTitle', { uri });
       // `allow-scripts allow-same-origin` is required and safe here: the proxy
@@ -1243,7 +1233,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       containerRef.current.appendChild(iframe);
       iframeRef.current = iframe;
 
-      // 5. Wait for the proxy to signal readiness, then point it at the sandbox.
+      // 4. Wait for the proxy to signal readiness, then point it at the sandbox.
       // Pin both WindowProxy and origin: a redirect (or a misconfigured public
       // endpoint) must not be able to impersonate FLUJO's trusted relay.
       const sandboxUrl = new URL(sandboxBase);

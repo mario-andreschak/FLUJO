@@ -4,7 +4,7 @@ import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
 import { MCPServerConfig, MCPServerSource, MCPStdioConfig, MCPWebSocketConfig, MCPServiceResponse, MCPSSEConfig, MCPStreamableConfig } from '@/shared/types/mcp';
-import { getWorkspaceDataDir } from '@/utils/workspace';
+import { getWorkspaceDataDir, remapLegacyDefaultWorkspaceReference } from '@/utils/workspace';
 
 const log = createLogger('backend/services/mcp/config');
 
@@ -101,6 +101,48 @@ export async function loadServerConfigs(): Promise<MCPServerConfig[] | MCPServic
     const configs = Object.entries(mcpServers).map(([name, serverConfig]) => {
       // Determine the transport type
       const transport = serverConfig.transport || 'stdio';
+
+      // Layout-v2 compatibility: old GitHub installs persisted absolute paths
+      // into the legacy managed MCP root. Normalize them in memory after the
+      // clone has moved; never rewrite an explicit path that still exists.
+      const remapMcpPath = (value: unknown): unknown =>
+        typeof value === 'string'
+          ? remapLegacyDefaultWorkspaceReference(value, 'mcp-servers')
+          : value;
+      const remapMcpEnv = (record: unknown): unknown => {
+        if (!record || typeof record !== 'object' || Array.isArray(record)) return record;
+        return Object.fromEntries(Object.entries(record).map(([key, value]) => {
+          if (typeof value === 'string') return [key, remapMcpPath(value)];
+          if (value && typeof value === 'object' && typeof value.value === 'string') {
+            return [key, { ...value, value: remapMcpPath(value.value) }];
+          }
+          return [key, value];
+        }));
+      };
+      serverConfig = {
+        ...serverConfig,
+        rootPath: remapMcpPath(serverConfig.rootPath),
+        cwd: remapMcpPath(serverConfig.cwd),
+        command: remapMcpPath(serverConfig.command),
+        args: Array.isArray(serverConfig.args)
+          ? serverConfig.args.map(remapMcpPath)
+          : serverConfig.args,
+        roots: Array.isArray(serverConfig.roots)
+          ? serverConfig.roots.map(remapMcpPath)
+          : serverConfig.roots,
+        env: remapMcpEnv(serverConfig.env),
+        launch: serverConfig.launch && typeof serverConfig.launch === 'object'
+          ? {
+              ...serverConfig.launch,
+              command: remapMcpPath(serverConfig.launch.command),
+              cwd: remapMcpPath(serverConfig.launch.cwd),
+              args: Array.isArray(serverConfig.launch.args)
+                ? serverConfig.launch.args.map(remapMcpPath)
+                : serverConfig.launch.args,
+              env: remapMcpEnv(serverConfig.launch.env),
+            }
+          : serverConfig.launch,
+      };
 
       // Read-time normalization (issue 52): remote servers saved with a too-wide
       // rootPath default ('/'/drive root) are re-pointed at their per-server folder,

@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { NextRequest } from 'next/server';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { createLogger } from '@/utils/logger';
@@ -19,7 +20,7 @@ interface ConversionRequest {
  * POST /api/flow/{id}/convert-process-to-subflow
  * Saves a newly extracted child and its rewritten parent with compensation.
  */
-export async function POST(request: NextRequest, { params }: RouteContext) {
+async function POST_handler(request: NextRequest, { params }: RouteContext) {
   const lock = await assertUnlocked();
   if (lock) return lock;
 
@@ -46,3 +47,5 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
     return json({ error: 'Internal server error' }, 500);
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

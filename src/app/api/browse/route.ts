@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest } from 'next/server';
@@ -46,7 +47,7 @@ async function listWindowsDrives(): Promise<string[]> {
     .map(c => c.value);
 }
 
-export async function GET(request: NextRequest) {
+async function GET_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
   const notLocal = assertLocalRequest(request);
@@ -102,3 +103,5 @@ export async function GET(request: NextRequest) {
     return json({ error: 'Internal server error' }, 500);
   }
 }
+
+export const GET = withWorkspaceRoute(GET_handler);

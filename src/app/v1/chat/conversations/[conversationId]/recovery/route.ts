@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { NextRequest, NextResponse } from 'next/server';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
@@ -15,7 +16,7 @@ async function guard(request: NextRequest): Promise<NextResponse | null> {
   return assertLocalRequest(request);
 }
 
-export async function GET(
+async function GET_handler(
   request: NextRequest,
   { params }: { params: Promise<{ conversationId: string }> },
 ) {
@@ -32,7 +33,7 @@ export async function GET(
   }
 }
 
-export async function POST(
+async function POST_handler(
   request: NextRequest,
   { params }: { params: Promise<{ conversationId: string }> },
 ) {
@@ -59,3 +60,6 @@ export async function POST(
     return NextResponse.json({ error: message }, { status });
   }
 }
+
+export const GET = withWorkspaceRoute(GET_handler);
+export const POST = withWorkspaceRoute(POST_handler);

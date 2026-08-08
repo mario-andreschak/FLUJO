@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 /**
  * GET /v1/chat/conversation-chains — read-only chain projection (issue #405).
  *
@@ -25,7 +26,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { createLogger } from '@/utils/logger';
-import { getDataDir } from '@/utils/paths';
+import { getWorkspaceDataDir } from '@/utils/workspace';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { listConversationSummaries } from '@/backend/execution/flow/conversationSummaryStore';
@@ -73,7 +74,7 @@ interface ResolvedConversation {
 }
 
 function conversationsDir(): string {
-  return path.join(getDataDir(), 'db', 'conversations');
+  return path.join(getWorkspaceDataDir(), 'db', 'conversations');
 }
 
 /**
@@ -179,7 +180,7 @@ async function resolvePreview(
   }
 }
 
-export async function GET(request: NextRequest) {
+async function GET_handler(request: NextRequest) {
   const _lock = await assertUnlocked({ openai: true });
   if (_lock) return _lock;
   const notLocal = assertLocalRequest(request);
@@ -314,3 +315,5 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Failed to build conversation chains' }, { status: 500 });
   }
 }
+
+export const GET = withWorkspaceRoute(GET_handler);

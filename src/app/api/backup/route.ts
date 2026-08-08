@@ -1,7 +1,6 @@
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
-import { promises as fs } from 'fs';
 import path from 'path';
 import JSZip from 'jszip';
 import { assertSafeCollectionId, listCollectionItems, loadItem } from '@/utils/storage/backend';
@@ -11,6 +10,8 @@ import { createLogger } from '@/utils/logger';
 import { getCurrentWorkspace, getWorkspaceDataDir } from '@/utils/workspace';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { v4 as uuidv4 } from 'uuid';
+import { WORKSPACE_LAYOUT_VERSION } from '@/backend/services/workspace/layoutVersion';
+import { addFolderToZipLinkSafe } from '@/backend/services/workspace/backupRestoreFs';
 
 const log = createLogger('app/api/backup/route');
 
@@ -52,7 +53,7 @@ async function POST_handler(request: NextRequest) {
       // layout it assumes. An archive WITHOUT these fields is a legacy,
       // pre-workspace backup and restores into the selected workspace.
       workspace: getCurrentWorkspace(),
-      workspaceLayoutVersion: 1,
+      workspaceLayoutVersion: WORKSPACE_LAYOUT_VERSION,
     }));
     
     // Add storage files
@@ -143,7 +144,13 @@ async function POST_handler(request: NextRequest) {
     if (selections.includes('mcpServersFolder')) {
       try {
         log.debug(`Adding MCP servers folder to backup [${requestId}]`);
-        await addFolderToZip(zip, mcpServersDir(), 'mcp-servers');
+        await addFolderToZipLinkSafe(
+          zip,
+          mcpServersDir(),
+          'mcp-servers',
+          getWorkspaceDataDir(),
+          (entryPath, reason) => log.warn(`Skipped unsafe MCP backup entry ${entryPath}: ${reason}`),
+        );
         log.debug(`Added MCP servers folder to backup [${requestId}]`);
       } catch (error) {
         log.error(`Error adding MCP servers folder to backup [${requestId}]:`, error);
@@ -175,46 +182,6 @@ async function POST_handler(request: NextRequest) {
     return NextResponse.json({ error: 'Failed to create backup' }, { status: 500 });
   }
 }
-
-// Helper function to recursively add a folder to a zip file
-async function addFolderToZip(zip: JSZip, folderPath: string, zipPath: string) {
-  const entries = await fs.readdir(folderPath, { withFileTypes: true });
-  
-  for (const entry of entries) {
-    const fullPath = path.join(folderPath, entry.name);
-    const zipEntryPath = path.join(zipPath, entry.name).replace(/\\/g, '/');
-    
-    if (entry.isDirectory()) {
-      // Skip node_modules and .git folders
-      if (entry.name === 'node_modules' || entry.name === '.git') {
-        continue;
-      }
-      
-      // Create folder in zip
-      zip.folder(zipEntryPath);
-      
-      // Recursively add contents
-      await addFolderToZip(zip, fullPath, zipEntryPath);
-    } else {
-      // Skip large files (> 10MB)
-      try {
-        const stats = await fs.stat(fullPath);
-        if (stats.size > 10 * 1024 * 1024) {
-          continue;
-        }
-        
-        // Add file to zip
-        const content = await fs.readFile(fullPath);
-        zip.file(zipEntryPath, content);
-      } catch (error) {
-        // Skip files that can't be read
-        continue;
-      }
-    }
-  }
-}
-
-
 
 // Workspaces (#406): the archive contains only the selected workspace's data.
 export const POST = withWorkspaceRoute(POST_handler);

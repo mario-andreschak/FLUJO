@@ -14,11 +14,18 @@ import {
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import MenuBookRoundedIcon from '@mui/icons-material/MenuBookRounded';
-import { API_GROUPS, ApiEndpoint, HttpMethod } from './apiReference';
+import {
+  API_GROUPS,
+  ApiEndpoint,
+  HttpMethod,
+  workspaceAwareEndpointPath,
+  workspaceHeaderForReference,
+} from './apiReference';
 import PageHeader from '@/frontend/components/shared/PageHeader';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import StickySearchBar from '@/frontend/components/shared/StickySearchBar';
 import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
+import { getSelectedWorkspace } from '@/frontend/utils/workspaceSelection';
 
 const GROUP_MESSAGE_KEYS = {
   openai: { name: 'docs.group.openai.name', description: 'docs.group.openai.description' },
@@ -61,8 +68,9 @@ function MethodChip({ method }: { method: HttpMethod }) {
   );
 }
 
-function EndpointCard({ endpoint }: { endpoint: ApiEndpoint }) {
+function EndpointCard({ endpoint, workspace }: { endpoint: ApiEndpoint; workspace: string }) {
   const { t } = useI18n();
+  const displayedPath = workspaceAwareEndpointPath(endpoint.path, workspace);
   const paramsLabel = endpoint.paramsLabel === 'Body'
     ? t('docs.label.body')
     : endpoint.paramsLabel === 'Query'
@@ -79,7 +87,7 @@ function EndpointCard({ endpoint }: { endpoint: ApiEndpoint }) {
           component="code"
           sx={{ fontFamily: 'var(--font-geist-mono), monospace', fontSize: '0.9rem', wordBreak: 'break-all' }}
         >
-          {endpoint.path}
+          {displayedPath}
         </Typography>
       </Box>
 
@@ -156,6 +164,8 @@ function EndpointCard({ endpoint }: { endpoint: ApiEndpoint }) {
 
 export default function Docs() {
   const { t } = useI18n();
+  const workspace = getSelectedWorkspace();
+  const workspaceHeader = workspaceHeaderForReference(workspace);
   const [query, setQuery] = useState('');
   const searchInputRef = useAutoFocusSearch();
   const [origin, setOrigin] = useState('');
@@ -202,6 +212,27 @@ export default function Docs() {
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
           {t('docs.baseHelp', { url: (origin || 'http://localhost:4200') + '/v1' })}
         </Typography>
+        {workspaceHeader && (
+          <Box sx={{ mt: 1.5 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+              {t('nav.workspaceSelected', { workspace })}
+            </Typography>
+            <Box
+              component="code"
+              sx={{
+                display: 'inline-block',
+                px: 1,
+                py: 0.5,
+                borderRadius: 1,
+                bgcolor: 'action.hover',
+                fontFamily: 'var(--font-geist-mono), monospace',
+                fontSize: '0.8rem',
+              }}
+            >
+              {workspaceHeader}
+            </Box>
+          </Box>
+        )}
       </Paper>
 
       <StickySearchBar mode="page" sx={{ mb: 3 }}>
@@ -239,7 +270,7 @@ export default function Docs() {
               : group.description}
           </Typography>
           {group.endpoints.map((e) => (
-            <EndpointCard key={`${e.method} ${e.path}`} endpoint={e} />
+            <EndpointCard key={`${e.method} ${e.path}`} endpoint={e} workspace={workspace} />
           ))}
         </Box>
       ))}

@@ -2,6 +2,7 @@ import { saveItem, loadItem, clearItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { RunRecord } from '@/shared/types/plannedExecution';
 import { createLogger } from '@/utils/logger';
+import { bindToCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
 
 const log = createLogger('backend/services/scheduler/runHistory');
 
@@ -34,21 +35,23 @@ export async function appendRunRecord(
   executionId: string,
   record: RunRecord
 ): Promise<void> {
-  const previous = appendChains.get(executionId) ?? Promise.resolve();
+  const chainKey = workspaceCacheKey(executionId);
+  const previous = appendChains.get(chainKey) ?? Promise.resolve();
+  const append = bindToCurrentWorkspace(async () => {
+    const records = await loadRunRecords(executionId);
+    records.push(record);
+    const trimmed = records.slice(-MAX_RUN_RECORDS);
+    await saveItem(runsKey(executionId), trimmed);
+  });
   const run = previous
     .catch(() => { /* prior append's error surfaced to its own caller */ })
-    .then(async () => {
-      const records = await loadRunRecords(executionId);
-      records.push(record);
-      const trimmed = records.slice(-MAX_RUN_RECORDS);
-      await saveItem(runsKey(executionId), trimmed);
-    });
-  appendChains.set(executionId, run);
+    .then(append);
+  appendChains.set(chainKey, run);
   try {
     await run;
   } finally {
-    if (appendChains.get(executionId) === run) {
-      appendChains.delete(executionId);
+    if (appendChains.get(chainKey) === run) {
+      appendChains.delete(chainKey);
     }
   }
 }
@@ -66,27 +69,29 @@ export async function updateRunRecord(
   runId: string,
   patch: Partial<RunRecord>
 ): Promise<RunRecord | null> {
-  const previous = appendChains.get(executionId) ?? Promise.resolve();
+  const chainKey = workspaceCacheKey(executionId);
+  const previous = appendChains.get(chainKey) ?? Promise.resolve();
   let updated: RunRecord | null = null;
+  const update = bindToCurrentWorkspace(async () => {
+    const records = await loadRunRecords(executionId);
+    const index = records.findIndex(r => r.runId === runId);
+    if (index < 0) {
+      updated = null;
+      return;
+    }
+    records[index] = { ...records[index], ...patch, runId };
+    updated = records[index];
+    await saveItem(runsKey(executionId), records);
+  });
   const run = previous
     .catch(() => { /* prior write's error surfaced to its own caller */ })
-    .then(async () => {
-      const records = await loadRunRecords(executionId);
-      const index = records.findIndex(r => r.runId === runId);
-      if (index < 0) {
-        updated = null;
-        return;
-      }
-      records[index] = { ...records[index], ...patch, runId };
-      updated = records[index];
-      await saveItem(runsKey(executionId), records);
-    });
-  appendChains.set(executionId, run);
+    .then(update);
+  appendChains.set(chainKey, run);
   try {
     await run;
   } finally {
-    if (appendChains.get(executionId) === run) {
-      appendChains.delete(executionId);
+    if (appendChains.get(chainKey) === run) {
+      appendChains.delete(chainKey);
     }
   }
   return updated;

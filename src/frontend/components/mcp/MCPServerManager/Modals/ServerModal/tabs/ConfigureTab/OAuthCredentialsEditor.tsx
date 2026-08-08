@@ -9,6 +9,7 @@ import { useStorage } from '@/frontend/contexts/StorageContext';
 import { MASKED_API_KEY } from '@/shared/types/constants';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import Trans from '@/frontend/components/shared/Trans';
+import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 
 interface OAuthCredentialsEditorProps {
   clientId: string;
@@ -50,7 +51,9 @@ const OAuthCredentialsEditor: React.FC<OAuthCredentialsEditorProps> = ({
 
   // The exact redirect URI the provider sends; must be allow-listed in the OAuth app.
   const callbackUrl =
-    typeof window !== 'undefined' ? `${window.location.origin}/api/oauth/callback` : '/api/oauth/callback';
+    withWorkspaceUrl(
+      typeof window !== 'undefined' ? `${window.location.origin}/api/oauth/callback` : '/api/oauth/callback',
+    );
 
   const handleSelectGlobalVar = (key: string) => {
     onClientSecretChange(`\${global:${key}}`);

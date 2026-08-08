@@ -1,6 +1,7 @@
 import { saveItem, loadItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
+import { bindToCurrentWorkspace, getCurrentWorkspace } from '@/utils/workspace';
 
 const log = createLogger('backend/services/scheduler/pendingApprovals');
 
@@ -41,7 +42,7 @@ const KEY = StorageKey.PENDING_APPROVALS;
 
 /** Serializes read-modify-write mutations so concurrent pauses/resolves can't
  *  clobber each other's entries. */
-let writeChain: Promise<unknown> = Promise.resolve();
+const writeChains = new Map<string, Promise<unknown>>();
 
 async function loadAll(): Promise<PendingApprovalsFile> {
   try {
@@ -66,27 +67,39 @@ export async function getPendingApproval(
 }
 
 export async function putPendingApproval(entry: PendingApprovalEntry): Promise<void> {
-  const run = writeChain
+  const workspace = getCurrentWorkspace();
+  const write = bindToCurrentWorkspace(async () => {
+    const file = await loadAll();
+    file[entry.approvalId] = entry;
+    await saveItem(KEY, file);
+  });
+  const run = (writeChains.get(workspace) ?? Promise.resolve())
     .catch(() => { /* prior write's error surfaced to its own caller */ })
-    .then(async () => {
-      const file = await loadAll();
-      file[entry.approvalId] = entry;
-      await saveItem(KEY, file);
-    });
-  writeChain = run;
-  await run;
+    .then(write);
+  writeChains.set(workspace, run);
+  try {
+    await run;
+  } finally {
+    if (writeChains.get(workspace) === run) writeChains.delete(workspace);
+  }
 }
 
 export async function removePendingApproval(approvalId: string): Promise<void> {
-  const run = writeChain
+  const workspace = getCurrentWorkspace();
+  const write = bindToCurrentWorkspace(async () => {
+    const file = await loadAll();
+    if (approvalId in file) {
+      delete file[approvalId];
+      await saveItem(KEY, file);
+    }
+  });
+  const run = (writeChains.get(workspace) ?? Promise.resolve())
     .catch(() => { /* prior write's error surfaced to its own caller */ })
-    .then(async () => {
-      const file = await loadAll();
-      if (approvalId in file) {
-        delete file[approvalId];
-        await saveItem(KEY, file);
-      }
-    });
-  writeChain = run;
-  await run;
+    .then(write);
+  writeChains.set(workspace, run);
+  try {
+    await run;
+  } finally {
+    if (writeChains.get(workspace) === run) writeChains.delete(workspace);
+  }
 }

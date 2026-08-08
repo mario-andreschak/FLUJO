@@ -30,7 +30,7 @@ import {
   CardGroup,
   DEFAULT_CARD_GROUP_MODE,
 } from '@/utils/shared/cardGrouping';
-import { useUiPreference } from '@/frontend/hooks/useUiPreference';
+import { useWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
 import {
   ModelSortOption,
   deriveModelSortGroup,
@@ -65,13 +65,13 @@ export const ModelList = ({ models, isLoading, onAdd, onUpdate, onDelete, folder
     const { t, tp } = useI18n();
     const theme = useTheme();
     // Persisted view preferences (#93): retained across navigation.
-    const [sortOption, setSortOption] = useUiPreference<ModelSortOption>('flujo-ui:models:sort', 'name-asc');
-    const [groupMode, setGroupMode] = useUiPreference<GroupMode>('flujo-ui:models:group', DEFAULT_CARD_GROUP_MODE);
+    const [sortOption, setSortOption] = useWorkspaceUiPreference<ModelSortOption>('flujo-ui:models:sort', 'name-asc');
+    const [groupMode, setGroupMode] = useWorkspaceUiPreference<GroupMode>('flujo-ui:models:group', DEFAULT_CARD_GROUP_MODE);
     const [sortAnchorEl, setSortAnchorEl] = useState<null | HTMLElement>(null);
     const [groupAnchorEl, setGroupAnchorEl] = useState<null | HTMLElement>(null);
     // Keys of the sections the user has collapsed; everything defaults to expanded.
     // Persisted as a string[] and re-derived into a Set for O(1) lookups.
-    const [collapsedList, setCollapsedList] = useUiPreference<string[]>('flujo-ui:models:collapsed', []);
+    const [collapsedList, setCollapsedList] = useWorkspaceUiPreference<string[]>('flujo-ui:models:collapsed', []);
     const collapsedKeys = useMemo(() => new Set(collapsedList), [collapsedList]);
 
     const handleSortChange = (option: ModelSortOption) => {

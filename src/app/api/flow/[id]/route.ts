@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
@@ -13,7 +14,7 @@ type RouteContext = { params: Promise<{ id: string }> };
  * GET /api/flow/{id}
  * Get a single flow by ID.
  */
-export async function GET(_request: NextRequest, { params }: RouteContext) {
+async function GET_handler(_request: NextRequest, { params }: RouteContext) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -37,7 +38,7 @@ export async function GET(_request: NextRequest, { params }: RouteContext) {
  * Update an existing flow. The path ID is authoritative and overrides any ID in the
  * body. Returns 404 when the flow does not exist (use POST /api/flow to create).
  */
-export async function PUT(request: NextRequest, { params }: RouteContext) {
+async function PUT_handler(request: NextRequest, { params }: RouteContext) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -73,7 +74,7 @@ export async function PUT(request: NextRequest, { params }: RouteContext) {
  * DELETE /api/flow/{id}
  * Delete a flow by ID.
  */
-export async function DELETE(_request: NextRequest, { params }: RouteContext) {
+async function DELETE_handler(_request: NextRequest, { params }: RouteContext) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -96,3 +97,7 @@ export async function DELETE(_request: NextRequest, { params }: RouteContext) {
     return json({ error: 'Internal server error' }, 500);
   }
 }
+
+export const GET = withWorkspaceRoute(GET_handler);
+export const PUT = withWorkspaceRoute(PUT_handler);
+export const DELETE = withWorkspaceRoute(DELETE_handler);

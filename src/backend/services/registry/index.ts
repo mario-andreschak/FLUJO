@@ -30,6 +30,7 @@ import * as client from '@/backend/utils/packageRegistryClient';
 import type { RegistryAuthPayload } from '@/backend/utils/packageRegistryClient';
 import { buildAuthorizeUrl, exchangeAuthorizationCode } from '@/backend/services/registry/oauth-adapter';
 import { randomBytes, createHash } from 'crypto';
+import { getCurrentWorkspace } from '@/utils/workspace';
 
 const log = createLogger('backend/services/registry');
 
@@ -201,6 +202,7 @@ interface OAuthPendingSession {
   codeVerifier: string;
   redirectUri: string;
   createdAt: number;
+  workspace: string;
 }
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes.
@@ -232,7 +234,13 @@ export async function beginOAuth(
   pruneExpiredOAuthSessions();
   const state = randomBytes(24).toString('base64url');
   const { verifier, challenge } = generatePkce();
-  oauthSessions.set(state, { provider, codeVerifier: verifier, redirectUri, createdAt: Date.now() });
+  oauthSessions.set(state, {
+    provider,
+    codeVerifier: verifier,
+    redirectUri,
+    createdAt: Date.now(),
+    workspace: getCurrentWorkspace(),
+  });
   const authorizationUrl = await buildAuthorizeUrl({ provider, redirectUri, state, codeChallenge: challenge });
   return { authorizationUrl, state };
 }
@@ -246,12 +254,16 @@ export async function beginOAuth(
 export async function completeOAuth(code: string, state: string): Promise<RegistryAuthResult> {
   pruneExpiredOAuthSessions();
   const session = state ? oauthSessions.get(state) : undefined;
-  // Single-use: consume the state regardless of the exchange outcome.
-  if (state) oauthSessions.delete(state);
 
   if (!code || !session) {
     return { status: 'error', message: 'Your sign-in session expired or was invalid. Please try again.' };
   }
+  if (session.workspace !== getCurrentWorkspace()) {
+    return { status: 'error', message: 'The sign-in callback targeted a different workspace.' };
+  }
+  // Single-use after workspace validation: a callback cannot consume another
+  // workspace's pending session by changing its workspace query parameter.
+  oauthSessions.delete(state);
 
   const { status, body } = await exchangeAuthorizationCode({
     code,
@@ -275,6 +287,12 @@ export async function completeOAuth(code: string, state: string): Promise<Regist
     status: 'error',
     message: body?.error || body?.message || `Registry responded with status ${status}.`,
   };
+}
+
+/** Resolve the workspace bound to an opaque, still-live OAuth state token. */
+export function pendingOAuthWorkspace(state: string): string | undefined {
+  pruneExpiredOAuthSessions();
+  return state ? oauthSessions.get(state)?.workspace : undefined;
 }
 
 /** Resend the confirmation email for the stored (or provided) address. */

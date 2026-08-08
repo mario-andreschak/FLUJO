@@ -30,6 +30,7 @@ import {
   jsonUtf8ByteLength,
   MAX_MCP_APP_CONTEXT_BYTES,
   mcpAppDeliveryIdentity,
+  mcpAppSandboxCacheKey,
   normalizeStableAppMessage,
   sanitizeGrantedCsp,
   sanitizeGrantedPermissions,
@@ -54,6 +55,13 @@ describe('MCP App delivery identity', () => {
       .not.toBe(mcpAppDeliveryIdentity('tool-b', undefined, undefined, undefined, undefined, undefined));
     expect(mcpAppDeliveryIdentity('tool-a', 7, undefined, undefined, undefined, undefined))
       .toBe(mcpAppDeliveryIdentity('tool-a', 7, 'ignored when versioned', undefined, undefined, undefined));
+  });
+
+  it('encodes sandbox cache identities without delimiter collisions', () => {
+    expect(mcpAppSandboxCacheKey('workspace', 'a::b', 'c'))
+      .not.toBe(mcpAppSandboxCacheKey('workspace', 'a', 'b::c'));
+    expect(mcpAppSandboxCacheKey('workspace-a', 'server', URI))
+      .not.toBe(mcpAppSandboxCacheKey('workspace-b', 'server', URI));
   });
 });
 
@@ -318,23 +326,50 @@ describe('MCP App host policy helpers', () => {
     expect(canFullscreenCanvas([], modes)).toBe(false);
   });
 
-  it('validates deployment sandbox URLs and permits port fallback only on HTTP', () => {
+  it('accepts only server-derived, per-key sandbox origins', () => {
+    const originKey = `app${'a'.repeat(60)}`;
     expect(buildSandboxUrl(
-      { url: 'https://apps.example.test/sandbox.html', token: 'secret' },
+      {
+        url: `https://${originKey}.apps.example.test/sandbox.html`,
+        token: 'secret',
+        originKey,
+        shared: false,
+      },
       { origin: 'https://flujo.example.test', protocol: 'https:' },
-    )).toBe('https://apps.example.test/sandbox.html?token=secret');
+    )).toBe(`https://${originKey}.apps.example.test/sandbox.html?token=secret`);
     expect(buildSandboxUrl(
-      { port: 4201, token: 'secret' },
+      {
+        url: `http://${originKey}.localhost:4201/sandbox.html`,
+        port: 4201,
+        token: 'secret',
+        originKey,
+        shared: false,
+      },
       { origin: 'http://localhost:3000', protocol: 'http:' },
-    )).toBe('http://localhost:4201/sandbox.html?token=secret');
+    )).toBe(`http://${originKey}.localhost:4201/sandbox.html?token=secret`);
+
     expect(() => buildSandboxUrl(
-      { port: 4201, token: 'secret' },
-      { origin: 'https://flujo.example.test', protocol: 'https:' },
-    )).toThrow(/sandbox port 4201/);
+      { port: 4201, token: 'secret', originKey, shared: false },
+      { origin: 'http://localhost:3000', protocol: 'http:' },
+    )).toThrow(/isolated app URL/);
     expect(() => buildSandboxUrl(
-      { url: 'https://flujo.example.test/sandbox.html', token: 'secret' },
+      {
+        url: `http://${originKey}.localhost:4201/sandbox.html`,
+        token: 'secret',
+        originKey,
+        shared: true,
+      },
+      { origin: 'http://localhost:3000', protocol: 'http:' },
+    )).toThrow(/isolated app origin/);
+    expect(() => buildSandboxUrl(
+      {
+        url: 'https://unrelated.apps.example.test/sandbox.html',
+        token: 'secret',
+        originKey,
+        shared: false,
+      },
       { origin: 'https://flujo.example.test', protocol: 'https:' },
-    )).toThrow(/distinct origin/);
+    )).toThrow(/verified app origin key/);
   });
 
   it('clamps finite inline View size requests', () => {

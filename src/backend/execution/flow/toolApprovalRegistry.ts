@@ -1,4 +1,5 @@
 import type OpenAI from 'openai';
+import { workspaceCacheKey } from '@/utils/workspace';
 
 /**
  * In-memory registry of tool calls awaiting human approval for self-orchestrating
@@ -28,10 +29,11 @@ export function registerPendingApproval(
   toolCall: OpenAI.ChatCompletionMessageFunctionToolCall,
   resolve: (approved: boolean, feedback?: string) => void
 ): void {
-  let perConv = registry.get(conversationId);
+  const key = workspaceCacheKey(conversationId);
+  let perConv = registry.get(key);
   if (!perConv) {
     perConv = new Map();
-    registry.set(conversationId, perConv);
+    registry.set(key, perConv);
   }
   perConv.set(toolCall.id, { toolCall, resolve });
 }
@@ -47,11 +49,12 @@ export function resolvePendingApproval(
   approved: boolean,
   feedback?: string   // Issue #247: optional rejection feedback for the model
 ): boolean {
-  const perConv = registry.get(conversationId);
+  const key = workspaceCacheKey(conversationId);
+  const perConv = registry.get(key);
   const pending = perConv?.get(toolCallId);
   if (!perConv || !pending) return false;
   perConv.delete(toolCallId);
-  if (perConv.size === 0) registry.delete(conversationId);
+  if (perConv.size === 0) registry.delete(key);
   pending.resolve(approved, feedback);
   return true;
 }
@@ -60,15 +63,16 @@ export function resolvePendingApproval(
 export function listPendingToolCalls(
   conversationId: string
 ): OpenAI.ChatCompletionMessageFunctionToolCall[] {
-  const perConv = registry.get(conversationId);
+  const perConv = registry.get(workspaceCacheKey(conversationId));
   if (!perConv) return [];
   return Array.from(perConv.values(), p => p.toolCall);
 }
 
 /** Reject and clear all pending approvals for a conversation (e.g. on cancel). */
 export function clearPendingApprovals(conversationId: string): void {
-  const perConv = registry.get(conversationId);
+  const key = workspaceCacheKey(conversationId);
+  const perConv = registry.get(key);
   if (!perConv) return;
   for (const pending of perConv.values()) pending.resolve(false);
-  registry.delete(conversationId);
+  registry.delete(key);
 }

@@ -6,6 +6,7 @@ import {
   ToClaudeFormatOptions,
   flattenEnv,
   fromClaudeFormat,
+  exposedProxyUrl,
 } from './claudeFormat';
 
 /**
@@ -53,7 +54,7 @@ export function toClineFormat(
       mcpServers[server.name] = {
         ...common,
         type: 'streamableHttp',
-        url: `${proxyBaseUrl}/mcp-proxy/${server.name}`,
+        url: exposedProxyUrl(proxyBaseUrl, server.name, options.workspace),
       };
       continue;
     }

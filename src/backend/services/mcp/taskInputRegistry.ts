@@ -22,6 +22,7 @@
  */
 
 import { createLogger } from '@/utils/logger';
+import { getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
 
 const log = createLogger('backend/services/mcp/taskInputRegistry');
 
@@ -42,7 +43,7 @@ const registry: Map<string, TaskInputState> =
   (globalForRegistry.__flujoMcpTaskInputRegistry = new Map());
 
 function keyOf(serverName: string, taskId: string): string {
-  return `${serverName}::${taskId}`;
+  return workspaceCacheKey(serverName, taskId);
 }
 
 /** Record that a related elicitation was received for a task. */
@@ -110,5 +111,8 @@ export function clearTaskInputState(serverName: string, taskId: string): void {
 
 /** Test helper. */
 export function _clearAllTaskInputState(): void {
-  registry.clear();
+  const prefix = `${getCurrentWorkspace()}\0`;
+  for (const key of registry.keys()) {
+    if (key.startsWith(prefix)) registry.delete(key);
+  }
 }

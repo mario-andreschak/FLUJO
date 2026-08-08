@@ -46,6 +46,7 @@ import {
   isTerminalMcpTaskStatus,
   type McpTaskStatus,
 } from '@/shared/types/mcp/tasks';
+import { DEFAULT_WORKSPACE, getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
 
 const log = createLogger('backend/services/mcp/remoteTaskStore');
 
@@ -54,27 +55,43 @@ const log = createLogger('backend/services/mcp/remoteTaskStore');
 // ---------------------------------------------------------------------------
 
 let settingsCache: { value: McpRemoteTaskSettings; at: number } | null = null;
+const settingsCacheByWorkspace = new Map<string, { value: McpRemoteTaskSettings; at: number }>();
+
+function cachedSettings(): { value: McpRemoteTaskSettings; at: number } | null {
+  const workspace = getCurrentWorkspace();
+  return workspace === DEFAULT_WORKSPACE
+    ? settingsCache
+    : settingsCacheByWorkspace.get(workspace) ?? null;
+}
+
+function setCachedSettings(value: { value: McpRemoteTaskSettings; at: number } | null): void {
+  const workspace = getCurrentWorkspace();
+  if (workspace === DEFAULT_WORKSPACE) settingsCache = value;
+  else if (value) settingsCacheByWorkspace.set(workspace, value);
+  else settingsCacheByWorkspace.delete(workspace);
+}
 
 export async function getMcpRemoteTaskSettings(): Promise<McpRemoteTaskSettings> {
-  if (settingsCache && Date.now() - settingsCache.at < 30_000) return settingsCache.value;
+  const cached = cachedSettings();
+  if (cached && Date.now() - cached.at < 30_000) return cached.value;
   try {
     const stored = await loadItem<Partial<McpRemoteTaskSettings>>(
       StorageKey.MCP_REMOTE_TASK_SETTINGS,
       DEFAULT_MCP_REMOTE_TASK_SETTINGS,
     );
-    settingsCache = {
+    setCachedSettings({
       value: { ...DEFAULT_MCP_REMOTE_TASK_SETTINGS, ...stored },
       at: Date.now(),
-    };
+    });
   } catch (error) {
     log.warn('Failed to load MCP remote task settings; using defaults', error);
-    settingsCache = { value: DEFAULT_MCP_REMOTE_TASK_SETTINGS, at: Date.now() };
+    setCachedSettings({ value: DEFAULT_MCP_REMOTE_TASK_SETTINGS, at: Date.now() });
   }
-  return settingsCache.value;
+  return cachedSettings()!.value;
 }
 
 export function _clearMcpRemoteTaskSettingsCache(): void {
-  settingsCache = null;
+  setCachedSettings(null);
 }
 
 // ---------------------------------------------------------------------------
@@ -417,21 +434,22 @@ export interface PollSlot {
  */
 export async function acquirePollSlot(serverName: string): Promise<PollSlot | undefined> {
   const settings = await getMcpRemoteTaskSettings();
-  const perServer = slots.perServer.get(serverName) ?? 0;
+  const serverKey = workspaceCacheKey(serverName);
+  const perServer = slots.perServer.get(serverKey) ?? 0;
   if (slots.total >= settings.maxConcurrentPolls) return undefined;
   if (perServer >= settings.maxConcurrentPollsPerServer) return undefined;
 
   slots.total++;
-  slots.perServer.set(serverName, perServer + 1);
+  slots.perServer.set(serverKey, perServer + 1);
   let released = false;
   return {
     release: () => {
       if (released) return;
       released = true;
       slots.total = Math.max(0, slots.total - 1);
-      const current = slots.perServer.get(serverName) ?? 1;
-      if (current <= 1) slots.perServer.delete(serverName);
-      else slots.perServer.set(serverName, current - 1);
+      const current = slots.perServer.get(serverKey) ?? 1;
+      if (current <= 1) slots.perServer.delete(serverKey);
+      else slots.perServer.set(serverKey, current - 1);
     },
   };
 }

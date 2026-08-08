@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 /**
  * Begin OAuth provider sign-in for a registry account (issue #207).
  *
@@ -16,10 +17,11 @@ import { assertLocalRequest } from '@/utils/http/localRequest';
 import { beginOAuth } from '@/backend/services/registry';
 import { isRegistryOAuthProvider } from '@/shared/types/registry';
 import { createLogger } from '@/utils/logger';
+import { getCurrentWorkspace } from '@/utils/workspace';
 
 const log = createLogger('app/api/registry/oauth/initiate/route');
 
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const lock = await assertUnlocked();
   if (lock) return lock;
   const notLocal = assertLocalRequest(request);
@@ -37,7 +39,9 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const redirectUri = `${new URL(request.url).origin}/api/registry/oauth/callback`;
+    const redirectUrl = new URL('/api/registry/oauth/callback', new URL(request.url).origin);
+    redirectUrl.searchParams.set('workspace', getCurrentWorkspace());
+    const redirectUri = redirectUrl.toString();
     const { authorizationUrl } = await beginOAuth(provider, redirectUri);
     return NextResponse.json({ authorizationUrl });
   } catch (err) {
@@ -45,3 +49,5 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Failed to initiate OAuth sign-in' }, { status: 500 });
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

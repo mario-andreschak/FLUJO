@@ -31,6 +31,7 @@
 
 import { createLogger } from '@/utils/logger';
 import type OpenAI from 'openai';
+import { getCurrentWorkspace } from '@/utils/workspace';
 
 const log = createLogger('backend/flow/execution/handlers/promptCacheMetrics');
 
@@ -175,7 +176,17 @@ export function derivePromptCacheKey(
  * behaviour we want to see (they SHOULD share a warm prefix).
  */
 const MAX_TRACKED_CONVERSATIONS = 200;
-const lastPrefix = new Map<string, PrefixFingerprint>();
+const lastPrefixByWorkspace = new Map<string, Map<string, PrefixFingerprint>>();
+
+function lastPrefix(): Map<string, PrefixFingerprint> {
+  const workspace = getCurrentWorkspace();
+  let value = lastPrefixByWorkspace.get(workspace);
+  if (!value) {
+    value = new Map();
+    lastPrefixByWorkspace.set(workspace, value);
+  }
+  return value;
+}
 
 export interface DriftReport {
   drift: PrefixDrift;
@@ -201,15 +212,16 @@ export function classifyDrift(
     return { drift: 'first', divergedAt: -1, stableMessages: 0, totalMessages: total };
   }
 
-  const prev = lastPrefix.get(conversationId);
+  const prefixes = lastPrefix();
+  const prev = prefixes.get(conversationId);
 
   // Refresh insertion order so active conversations are not evicted first.
-  lastPrefix.delete(conversationId);
-  if (lastPrefix.size >= MAX_TRACKED_CONVERSATIONS) {
-    const oldest = lastPrefix.keys().next();
-    if (!oldest.done) lastPrefix.delete(oldest.value);
+  prefixes.delete(conversationId);
+  if (prefixes.size >= MAX_TRACKED_CONVERSATIONS) {
+    const oldest = prefixes.keys().next();
+    if (!oldest.done) prefixes.delete(oldest.value);
   }
-  lastPrefix.set(conversationId, fp);
+  prefixes.set(conversationId, fp);
 
   if (!prev) {
     return { drift: 'first', divergedAt: -1, stableMessages: 0, totalMessages: total };
@@ -244,12 +256,12 @@ export function classifyDrift(
 
 /** Drop a conversation's fingerprint (e.g. on delete) — purely housekeeping. */
 export function forgetConversationPrefix(conversationId: string): void {
-  lastPrefix.delete(conversationId);
+  lastPrefix().delete(conversationId);
 }
 
 /** Test seam: reset the in-process fingerprint map. */
 export function __resetPrefixTracking(): void {
-  lastPrefix.clear();
+  lastPrefix().clear();
 }
 
 export interface CacheOutcome {

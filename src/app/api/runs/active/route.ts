@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
@@ -44,7 +45,7 @@ function json(body: unknown, status = 200): Response {
  * origin. It NEVER returns prompt text, messages, resolved variables, or any
  * decrypted binding.
  */
-export async function GET() {
+async function GET_handler(_request: Request) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -92,4 +93,11 @@ export async function GET() {
     log.error('Error handling GET request', error);
     return json({ error: 'Internal server error' }, 500);
   }
+}
+
+const GET_workspaceRoute = withWorkspaceRoute(GET_handler);
+export function GET(): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request = new Request('http://localhost/')) {
+  return GET_workspaceRoute(request);
 }

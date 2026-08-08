@@ -2,7 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DependencyList, RefObject } from 'react';
-import { readUiPreference, writeUiPreference } from '@/frontend/hooks/useUiPreference';
+import {
+  readWorkspaceUiPreference,
+  writeWorkspaceUiPreference,
+} from '@/frontend/hooks/useUiPreference';
 import {
   applyScrollTop as applyScrollTopTo,
   getScrollMetrics,
@@ -91,7 +94,7 @@ export function useScrollRestoration<T extends HTMLElement = HTMLDivElement>(
       const top = getScrollTop();
       setShowBackToTop(top > threshold);
       if (frame) caf(frame);
-      frame = raf(() => writeUiPreference(storageKey, top));
+      frame = raf(() => writeWorkspaceUiPreference(storageKey, top));
     };
 
     el?.addEventListener('scroll', onScroll, { passive: true });
@@ -108,7 +111,7 @@ export function useScrollRestoration<T extends HTMLElement = HTMLDivElement>(
   // value exceeds the current scroll height the browser clamps it safely.
   useEffect(() => {
     if (typeof window === 'undefined' || restoredRef.current) return;
-    const target = readUiPreference<number>(storageKey, 0);
+    const target = readWorkspaceUiPreference<number>(storageKey, 0);
     if (target <= 0) {
       restoredRef.current = true;
       return;

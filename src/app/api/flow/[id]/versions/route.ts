@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
@@ -14,7 +15,7 @@ type RouteContext = { params: Promise<{ id: string }> };
  * summaries only (id, savedAt, name, node/edge counts) — fetch a single
  * version's full definition via GET /api/flow/{id}/versions/{versionId}.
  */
-export async function GET(_request: NextRequest, { params }: RouteContext) {
+async function GET_handler(_request: NextRequest, { params }: RouteContext) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -33,3 +34,5 @@ export async function GET(_request: NextRequest, { params }: RouteContext) {
     return json({ error: 'Internal server error' }, 500);
   }
 }
+
+export const GET = withWorkspaceRoute(GET_handler);

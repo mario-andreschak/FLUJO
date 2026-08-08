@@ -19,6 +19,7 @@ import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import ScheduleIcon from '@mui/icons-material/Schedule';
 import AddCommentOutlinedIcon from '@mui/icons-material/AddCommentOutlined';
 import { useLocalStorage, StorageKey } from '@/utils/storage';
+import { workspaceLocalStorageKey } from '@/frontend/utils/workspaceSelection';
 import ChatHistory from './ChatHistory';
 import ChatMessages from './ChatMessages';
 import type { CanvasLaunchInfo, PendingElicitation, PendingQuestion } from './ChatMessages';
@@ -403,7 +404,7 @@ const Chat: React.FC = () => {
 
   // Currently selected conversation ID (persisted)
   const [currentConversationId, setCurrentConversationIdStored] = useLocalStorage<string | null>(
-    StorageKey.CURRENT_CONVERSATION_ID,
+    workspaceLocalStorageKey(StorageKey.CURRENT_CONVERSATION_ID),
     null
   );
   const currentConversationIdRef = useRef<string | null>(currentConversationId);
