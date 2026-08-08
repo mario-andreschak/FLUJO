@@ -75,6 +75,7 @@ import {
   markdownLinkVars,
 } from '@/frontend/components/shared/MarkdownLink';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import SubflowLaneChip from './SubflowLaneChip';
 import { formatPartialJson } from '@/frontend/utils/partialJson';
 import {
   groupMcpAppOccurrences,
@@ -1037,6 +1038,10 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
               sx={{ height: 20, fontSize: '0.7rem', mr: 1 }}
             />
           </Tooltip>
+        )}
+
+        {message.subflowResult && (
+          <SubflowLaneChip result={message.subflowResult} />
         )}
 
         {depth > 0 && (

@@ -21,6 +21,8 @@ import HistoryIcon from '@mui/icons-material/History';
 import ShortTextIcon from '@mui/icons-material/ShortText';
 import EditNoteIcon from '@mui/icons-material/EditNote';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import ViewAgendaOutlinedIcon from '@mui/icons-material/ViewAgendaOutlined';
+import MergeTypeIcon from '@mui/icons-material/MergeType';
 import { FlowNode, Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
 import OptionCard from '@/frontend/components/shared/OptionCard';
@@ -421,6 +423,35 @@ export const SubflowNodePropertiesModal = ({
             description={t('flows.subflow.condensedHelp')}
           />
         </Box>
+
+        {/* Issue #384 (deferred UI half of #359): how parallel lane results are
+            presented in chat. Only takes effect when a run produces >1 lane. */}
+        <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
+          {t('flows.subflow.resultPresentationTitle')}
+        </Typography>
+        <Box
+          role="radiogroup"
+          aria-label={t('flows.subflow.resultPresentationAria')}
+          sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}
+        >
+          <OptionCard
+            selected={(nodeData.properties?.resultPresentation ?? 'joined') === 'separate'}
+            onClick={() => handlePropertyChange('resultPresentation', 'separate')}
+            icon={<ViewAgendaOutlinedIcon />}
+            title={t('flows.subflow.resultSeparate')}
+            description={t('flows.subflow.resultSeparateHelp')}
+          />
+          <OptionCard
+            selected={(nodeData.properties?.resultPresentation ?? 'joined') !== 'separate'}
+            onClick={() => handlePropertyChange('resultPresentation', 'joined')}
+            icon={<MergeTypeIcon />}
+            title={t('flows.subflow.resultJoined')}
+            description={t('flows.subflow.resultJoinedHelp')}
+          />
+        </Box>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+          {t('flows.subflow.resultPresentationHelp')}
+        </Typography>
 
         {/* Debugging (issue #125): persist each queued child conversation into
             the chat sidebar, linked to the parent run. */}
