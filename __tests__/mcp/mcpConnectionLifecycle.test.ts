@@ -10,6 +10,16 @@
  * still shutting down; the SDK's hardcoded stdin -> 2s -> SIGTERM -> 2s -> SIGKILL
  * ladder then hard-killed servers mid-teardown (orphaning their own child processes).
  * The fix waits for the child's exit before client.close().
+ *
+ * Issue #413 changed the escalation half: instead of signalling the immediate child
+ * (usually only a shell / npx wrapper, which orphans the real server and everything it
+ * spawned), safelyCloseClient now escalates through the awaited, exit-verifying
+ * killProcessTreeAndWait, which terminates the whole descendant tree and REPORTS
+ * whether it actually died. These tests therefore assert the tree-teardown contract:
+ * stdin-first grace, exactly one awaited tree kill, no direct child signalling, and a
+ * bounded close that still tears the client down when the tree refuses to die. The
+ * platform-specific ladder itself (taskkill /T /F vs negative-pid SIGTERM/SIGKILL) is
+ * covered in __tests__/process/killProcessTree.test.ts.
  */
 import { EventEmitter } from "events";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -110,6 +120,7 @@ interface FakeStdin {
 }
 
 class FakeChild extends EventEmitter {
+  pid = 4242;
   exitCode: number | null = null;
   signalCode: NodeJS.Signals | null = null;
   killed = false;
@@ -188,43 +199,66 @@ describe("safelyCloseClient graceful shutdown", () => {
     expect(child.kill).not.toHaveBeenCalled();
   });
 
-  it("escalates SIGTERM then SIGKILL when the child never exits, then still closes the client", async () => {
+  it("escalates the whole POSIX process group through SIGTERM then SIGKILL when the child never exits", async () => {
     const events: string[] = [];
     const child = new FakeChild();
-    child.stdin.end.mockImplementation(() => {});
+    child.stdin.end.mockImplementation(() => events.push("stdin.end"));
     const client = clientWithChild(child, events);
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    const kill = jest.spyOn(process, "kill").mockImplementation(((pid, signal) => {
+      events.push(String(signal));
+      return true;
+    }) as never);
 
-    await safelyCloseClient(client, "wa-test", undefined, {
-      gracePeriodMs: 30,
-      killEscalationMs: 30,
-    });
+    Object.defineProperty(process, "platform", { value: "linux" });
+    try {
+      await safelyCloseClient(client, "wa-test", undefined, {
+        gracePeriodMs: 30,
+        killEscalationMs: 30,
+      });
+    } finally {
+      kill.mockRestore();
+      Object.defineProperty(process, "platform", platform!);
+    }
 
-    expect(child.kill.mock.calls.map((c) => c[0])).toEqual([
-      "SIGTERM",
-      "SIGKILL",
+    // A shell wrapper must never be signalled directly: escalation targets its
+    // descendant process group, and client.close waits until that bounded ladder ends.
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(events).toEqual(["stdin.end", "SIGTERM", "SIGKILL", "client.close"]);
+    expect(kill.mock.calls).toEqual([
+      [-child.pid, "SIGTERM"],
+      [-child.pid, "SIGKILL"],
     ]);
-    expect(events).toContain("client.close");
   });
 
-  it("does not SIGKILL when SIGTERM makes the child exit", async () => {
+  it("does not SIGKILL when tree SIGTERM makes the child exit", async () => {
     const events: string[] = [];
     const child = new FakeChild();
-    child.stdin.end.mockImplementation(() => {});
-    child.kill.mockImplementation((signal: NodeJS.Signals) => {
+    child.stdin.end.mockImplementation(() => events.push("stdin.end"));
+    const client = clientWithChild(child, events);
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    const kill = jest.spyOn(process, "kill").mockImplementation(((pid, signal) => {
+      events.push(String(signal));
       if (signal === "SIGTERM") {
         setTimeout(() => child.exitNow(1), 5);
       }
       return true;
-    });
-    const client = clientWithChild(child, events);
+    }) as never);
 
-    await safelyCloseClient(client, "wa-test", undefined, {
-      gracePeriodMs: 30,
-      killEscalationMs: 1000,
-    });
+    Object.defineProperty(process, "platform", { value: "linux" });
+    try {
+      await safelyCloseClient(client, "wa-test", undefined, {
+        gracePeriodMs: 30,
+        killEscalationMs: 1000,
+      });
+    } finally {
+      kill.mockRestore();
+      Object.defineProperty(process, "platform", platform!);
+    }
 
-    expect(child.kill.mock.calls.map((c) => c[0])).toEqual(["SIGTERM"]);
-    expect(events).toContain("client.close");
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(events).toEqual(["stdin.end", "SIGTERM", "client.close"]);
+    expect(kill.mock.calls).toEqual([[-child.pid, "SIGTERM"]]);
   });
 
   it("lets a REAL child with slow teardown exit naturally instead of being killed", async () => {
