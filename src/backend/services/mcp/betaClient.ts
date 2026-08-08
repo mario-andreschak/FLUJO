@@ -110,7 +110,7 @@ export function createNewBetaClient(config: MCPServerConfig): Client {
   const client = new BetaClient(
     {
       name: `flujo-${config.name}-client`,
-      version: "3.42.1",
+      version: "3.43.0",
     },
     {
       capabilities: {

@@ -13,7 +13,7 @@ FLUJO is open-source and local-first: connect models, tools, and reusable subflo
 [**Visit flujo.com.co →**](https://flujo.com.co/) · [**Watch the 2:28 product film →**](https://flujo.com.co/short/) · [**Install FLUJO ↓**](#-quick-install-recommended) · [**Explore features ↓**](#-key-features) · [**Try FLUJO online →**](https://try.flujo.com.co/)
 
 [![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-3.42.1-green.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-3.43.0-green.svg)](package.json)
 
 </div>
 
