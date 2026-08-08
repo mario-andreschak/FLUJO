@@ -19,8 +19,12 @@ const model = (output: 'image' | 'video'): Model => ({
   outputModalities: [output],
 });
 
+// `Model['outputModalities']` is `string[] | undefined`; indexing the optional
+// union with [number] is a TS2537 error, so unwrap it first.
+type OutputModality = NonNullable<Model['outputModalities']>[number];
+
 const multimodalModel = (
-  outputModalities: readonly Model['outputModalities'][number][],
+  outputModalities: readonly OutputModality[],
 ): Model => ({
   ...model('image'),
   id: `model-${outputModalities.join('-')}`,
