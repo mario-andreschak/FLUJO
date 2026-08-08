@@ -49,6 +49,11 @@ function jsonError(status: number, message: string): Response {
 function buildFlowsServer(): Server {
   const server = new Server(
     { name: 'flujo-flows', version: SERVER_VERSION },
+    // MCP Tasks (#404) is deliberately NOT advertised: this endpoint has no
+    // caller identity at all, so a durable task could only be addressed by
+    // task id — an authorization hole across stateless requests. Long-running
+    // flow runs therefore stay synchronous here until a caller-bound ownership
+    // mechanism exists. See docs/features/mcp-tasks.md ("Server-side status").
     { capabilities: { tools: {} } },
   );
   server.setRequestHandler(ListToolsRequestSchema, async () => {

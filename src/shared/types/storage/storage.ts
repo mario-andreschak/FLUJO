@@ -28,6 +28,9 @@ export enum StorageKey {
   MCP_APP_CONSENT = 'mcp_app_consent',
   RUN_RESOURCE_SETTINGS = 'run_resource_settings',
   SUBFLOW_TASK_SETTINGS = 'subflow_task_settings',
+  // Bounds for the remote MCP Tasks lifecycle (issue #404): poll interval
+  // clamps, requested TTL, retention and poll-concurrency limits. No secrets.
+  MCP_REMOTE_TASK_SETTINGS = 'mcp_remote_task_settings',
   KV_STORE_SETTINGS = 'kv_store_settings',
   PENDING_APPROVALS = 'pending_approvals',
   // Legacy per-internal-server overrides retained only as migration input.
@@ -90,6 +93,7 @@ export const StorageKeys = {
   MCP_APP_CONSENT: StorageKey.MCP_APP_CONSENT,
   RUN_RESOURCE_SETTINGS: StorageKey.RUN_RESOURCE_SETTINGS,
   SUBFLOW_TASK_SETTINGS: StorageKey.SUBFLOW_TASK_SETTINGS,
+  MCP_REMOTE_TASK_SETTINGS: StorageKey.MCP_REMOTE_TASK_SETTINGS,
   KV_STORE_SETTINGS: StorageKey.KV_STORE_SETTINGS,
   PENDING_APPROVALS: StorageKey.PENDING_APPROVALS,
   MCP_INTERNAL_OVERRIDES: StorageKey.MCP_INTERNAL_OVERRIDES,

@@ -9,6 +9,8 @@ import { isEncryptionLocked, isUserEncryptionEnabled } from '@/utils/encryption/
 import { createLogger } from '@/utils/logger';
 import { ensureVendoredFlowGenerator } from '@/backend/services/flow/systemFlows';
 import { migrateShippedMcpServers } from '@/backend/services/mcp/shippedServerMigration';
+import { sweepOldMcpRemoteTasks } from '@/backend/services/mcp/remoteTaskStore';
+import { resumeRemoteMcpTasks } from '@/backend/services/mcp/remoteTaskResume';
 
 const log = createLogger('backend/init');
 
@@ -20,7 +22,7 @@ declare global {
   // The in-flight (or settled) secret-dependent startup promise (MCP sweep +
   // scheduler arm). Global-backed and memoized so that both the boot path
   // (runInitialization) and the unlock transition (onUnlocked) drive it exactly
-  // once per process — neither double-starts servers nor double-arms triggers.
+  // once per process ÔÇö neither double-starts servers nor double-arms triggers.
   // Deliberately NOT captured by __flujo_init_promise: while USER encryption is
   // locked this work is skipped at boot and only runs later, at unlock.
   var __flujo_secret_services_promise: Promise<void> | undefined;
@@ -29,6 +31,8 @@ declare global {
   // (mirrors __flujo_run_resources / the scheduler singletons).
   var __flujo_retention_cron: Cron | undefined;
   var __flujo_subflow_task_retention_cron: Cron | undefined;
+  // Hourly retention/expiry sweep for durable REMOTE MCP task records (#404).
+  var __flujo_mcp_remote_task_retention_cron: Cron | undefined;
 }
 
 /**
@@ -51,6 +55,15 @@ function armRetentionSweep(): void {
     global.__flujo_subflow_task_retention_cron = new Cron('0 * * * *', { unref: true }, () => {
       sweepOldSubflowTasks().catch(error =>
         log.warn('Detached subflow task retention sweep failed:', error)
+      );
+    });
+  }
+  // Remote MCP task records (#404): the sweep both fails expired non-terminal
+  // records closed and prunes old terminal ones.
+  if (!global.__flujo_mcp_remote_task_retention_cron) {
+    global.__flujo_mcp_remote_task_retention_cron = new Cron('0 * * * *', { unref: true }, () => {
+      sweepOldMcpRemoteTasks().catch(error =>
+        log.warn('Remote MCP task retention sweep failed:', error)
       );
     });
   }
@@ -90,7 +103,7 @@ async function runInitialization(): Promise<void> {
 
   // Refresh the Spotlight curated-server cache in the background. Deliberately
   // NOT awaited: the registry can be slow/unreachable and must never delay
-  // startup — the Spotlight tab just shows the previous cache until this lands.
+  // startup ÔÇö the Spotlight tab just shows the previous cache until this lands.
   refreshSpotlightServers().catch(error =>
     log.warn('Spotlight refresh failed at startup:', error)
   );
@@ -99,10 +112,10 @@ async function runInitialization(): Promise<void> {
   // resolve ${global:...} bindings and decrypt model API keys. In locked USER
   // encryption mode those secrets are undecryptable, so this secret-dependent
   // startup must be DEFERRED until the user unlocks (see onUnlocked). In DEFAULT
-  // mode — or once already unlocked — it runs immediately, exactly as before.
+  // mode ÔÇö or once already unlocked ÔÇö it runs immediately, exactly as before.
   if (await isEncryptionLocked()) {
     log.info(
-      'Encryption locked — deferring MCP/scheduler startup until unlock'
+      'Encryption locked ÔÇö deferring MCP/scheduler startup until unlock'
     );
     return;
   }
@@ -144,6 +157,14 @@ function startSecretDependentServices(): Promise<void> {
         log.error('Failed to start enabled servers:', error);
       });
 
+      // Resume durable REMOTE MCP tasks (#404) AFTER the MCP sweep: resuming
+      // needs live clients so each record's server/config identity can be
+      // verified before a single tasks/get is sent. Deliberately not awaited —
+      // a slow remote server must never delay the scheduler.
+      resumeRemoteMcpTasks().catch(error =>
+        log.warn('Remote MCP task resume failed at startup:', error)
+      );
+
       // Arm planned-execution triggers AFTER the MCP sweep so a catch-up or
       // early scheduled run doesn't race servers that are still connecting.
       // start() is idempotent and catches per-execution arming failures.
@@ -167,7 +188,7 @@ function startSecretDependentServices(): Promise<void> {
  * Unlock transition hook: start the secret-dependent services that were
  * deferred at boot while USER encryption was locked (Stage 3 of the #16 fix).
  * Called from the authenticate/unlock path once the server unlock DEK is in
- * memory — no FLUJO restart required.
+ * memory ÔÇö no FLUJO restart required.
  *
  * Idempotent: shares one memoized promise with the boot path, so repeated
  * unlock attempts never double-start MCP servers or double-arm the scheduler.
@@ -179,6 +200,6 @@ export async function onUnlocked(): Promise<void> {
     // DEFAULT mode: secret-dependent services started at boot already.
     return;
   }
-  log.info('Encryption unlocked — starting deferred MCP/scheduler startup');
+  log.info('Encryption unlocked ÔÇö starting deferred MCP/scheduler startup');
   await startSecretDependentServices();
 }

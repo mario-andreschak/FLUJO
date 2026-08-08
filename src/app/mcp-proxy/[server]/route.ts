@@ -59,6 +59,14 @@ function buildProxyServer(serverName: string): Server {
     // The resources capability must be declared or SDK clients won't issue
     // resources/* requests at all (Tier 3: the internal "flujo" server serves
     // run-scoped resources; other exposed servers get passthrough).
+    //
+    // MCP Tasks (#404) is deliberately NOT advertised here: `tasks/get`,
+    // `tasks/result` and `tasks/cancel` are not registered, and this endpoint
+    // has no authenticated caller identity (localhost + explicit exposure are
+    // an exposure boundary, NOT per-task ownership), so task lookup would be
+    // reachable by task id alone. Advertising it would also claim partial
+    // support. See docs/features/mcp-tasks.md ("Server-side status") and the
+    // FEATURES.ENABLE_MCP_TASKS_SERVER flag.
     { capabilities: { tools: {}, resources: {} } },
   );
   server.setRequestHandler(ListToolsRequestSchema, () => proxyListTools(serverName));
