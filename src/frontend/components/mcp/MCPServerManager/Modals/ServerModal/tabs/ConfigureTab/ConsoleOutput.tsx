@@ -35,7 +35,9 @@ const ConsoleOutput: React.FC<ConsoleOutputProps> = ({
         p: 2, 
         height: '100%',
         display: 'flex',
-        flexDirection: 'column'
+        flexDirection: 'column',
+        minWidth: 0,
+        overflow: 'hidden'
       }}
     >
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
@@ -43,6 +45,7 @@ const ConsoleOutput: React.FC<ConsoleOutputProps> = ({
         <IconButton
           onClick={toggleVisibility}
           size="small"
+          aria-label={isVisible ? t('mcp.local.console.hide') : t('mcp.local.console.show')}
           title={isVisible ? t('mcp.local.console.hide') : t('mcp.local.console.show')}
           color="inherit"
           sx={{ color: 'text.secondary' }}
@@ -59,11 +62,12 @@ const ConsoleOutput: React.FC<ConsoleOutputProps> = ({
           bgcolor: theme.palette.mode === 'dark' ? '#121212' : '#1a1a1a',
           color: '#4ade80',
           flex: 1,
+          minHeight: 0,
           overflow: 'auto'
         }}
       >
         {output ? (
-          <Box component="pre" sx={{ whiteSpace: 'pre-wrap', m: 0 }}>
+          <Box component="pre" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', m: 0 }}>
             {output}
           </Box>
         ) : (

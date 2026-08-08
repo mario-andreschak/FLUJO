@@ -17,7 +17,9 @@ import {
   Button,
   Tabs,
   Tab,
-  Box
+  Box,
+  useMediaQuery,
+  useTheme
 } from '@mui/material';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
@@ -33,6 +35,10 @@ const ServerModal: React.FC<ServerModalProps> = ({
   onSaveAndAuthenticate
 }) => {
   const { t } = useI18n();
+  const theme = useTheme();
+  // Phones get the whole viewport: the desktop 95vw shell leaves the six setup
+  // tabs and the configure form unusable at phone widths (#394).
+  const isPhoneLayout = useMediaQuery(theme.breakpoints.down('sm'), { noSsr: true });
   const [activeTab, setActiveTab] = useState<ServerSetupTab>(initialTab);
   
   // The single source→sink message (#392). Every inbound tab prop below is
@@ -113,13 +119,24 @@ const ServerModal: React.FC<ServerModalProps> = ({
       onClose={handleClose}
       maxWidth="xl"
       fullWidth
+      fullScreen={isPhoneLayout}
       PaperProps={{
-        sx: {
-          width: '95vw',
-          maxWidth: '95vw',
-          maxHeight: '95vh',
-          height: 'auto',
-        }
+        // The desktop sizing must not fight `fullScreen`, so it is only applied
+        // above the phone breakpoint.
+        sx: isPhoneLayout
+          ? {
+              width: '100%',
+              maxWidth: '100%',
+              height: '100%',
+              maxHeight: '100%',
+              m: 0,
+            }
+          : {
+              width: '95vw',
+              maxWidth: '95vw',
+              maxHeight: '95vh',
+              height: 'auto',
+            }
       }}
     >
       <DialogHeaderActions
@@ -137,7 +154,10 @@ const ServerModal: React.FC<ServerModalProps> = ({
               value={activeTab} 
               onChange={handleTabChange}
               aria-label={t('mcp.modal.tabsAria')}
-              sx={{ px: 2 }}
+              variant="scrollable"
+              scrollButtons="auto"
+              allowScrollButtonsMobile
+              sx={{ px: { xs: 1, sm: 2 } }}
             >
               <Tab label={t('mcp.modal.spotlight')} value="spotlight" />
               <Tab label={t('mcp.modal.marketplace')} value="marketplace" />
@@ -149,7 +169,7 @@ const ServerModal: React.FC<ServerModalProps> = ({
           </Box>
         ) : null}
 
-        <Box sx={{ p: 3 }}>
+        <Box sx={{ p: { xs: 2, sm: 3 } }}>
           {/* Render the active tab or the edit form */}
           {initialConfig ? (
             <ConfigureTab

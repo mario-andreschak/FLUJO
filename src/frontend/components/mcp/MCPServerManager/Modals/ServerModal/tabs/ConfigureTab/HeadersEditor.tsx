@@ -189,14 +189,23 @@ const HeadersEditor: React.FC<HeadersEditorProps> = ({ headers, onChange }) => {
         )}
 
         {rows.map((row, index) => (
-          <Stack key={index} direction="row" spacing={1} alignItems="flex-start">
+          // Phones get one field per line plus a wrapping action row; the fixed
+          // 32% key column and the single-line layout only apply from `sm` up (#394).
+          <Stack
+            key={index}
+            direction={{ xs: 'column', sm: 'row' }}
+            spacing={1}
+            alignItems={{ xs: 'stretch', sm: 'flex-start' }}
+            sx={{ minWidth: 0 }}
+          >
             <TextField
               size="small"
               label={t('mcp.local.headers.header')}
               placeholder="Authorization"
               value={row.key}
               onChange={e => handleKeyChange(index, e.target.value)}
-              sx={{ flex: '0 0 32%' }}
+              fullWidth
+              sx={{ flex: { xs: '1 1 auto', sm: '0 0 32%' }, minWidth: 0 }}
             />
             <TextField
               size="small"
@@ -222,41 +231,55 @@ const HeadersEditor: React.FC<HeadersEditorProps> = ({ headers, onChange }) => {
                       variant="outlined"
                       onDelete={() => handleUnbind(index)}
                       deleteIcon={<CancelIcon fontSize="small" />}
+                      sx={{ maxWidth: '100%' }}
                     />
                   </InputAdornment>
                 ) : null
               }}
-              sx={{ flex: 1 }}
+              fullWidth
+              sx={{ flex: 1, minWidth: 0 }}
             />
-            <FormControlLabel
-              control={
-                <Checkbox
-                  checked={row.isSecret}
-                  onChange={e => handleSecretToggle(index, e.target.checked)}
-                  size="small"
-                />
-              }
-              label={t('mcp.local.headers.secret')}
-              sx={{ mr: 0, mt: 0.25 }}
-            />
-            {!row.isBound && (
-              <Tooltip title={t('mcp.local.headers.bind')}>
-                <IconButton
-                  aria-label={t('mcp.local.headers.bind')}
-                  size="small"
-                  color="primary"
-                  onClick={() => { setSelectedRowIndex(index); setShowBindModal(true); }}
-                  sx={{ mt: 0.25 }}
-                >
-                  <LinkIcon fontSize="small" />
+            {/* Secret / bind / delete stay together and wrap instead of squeezing
+                the key and value fields on narrow screens. */}
+            <Box
+              sx={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                gap: 0.5,
+                flexShrink: 0,
+                mt: { xs: 0, sm: 0.25 }
+              }}
+            >
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={row.isSecret}
+                    onChange={e => handleSecretToggle(index, e.target.checked)}
+                    size="small"
+                  />
+                }
+                label={t('mcp.local.headers.secret')}
+                sx={{ mr: 0 }}
+              />
+              {!row.isBound && (
+                <Tooltip title={t('mcp.local.headers.bind')}>
+                  <IconButton
+                    aria-label={t('mcp.local.headers.bind')}
+                    size="small"
+                    color="primary"
+                    onClick={() => { setSelectedRowIndex(index); setShowBindModal(true); }}
+                  >
+                    <LinkIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              )}
+              <Tooltip title={t('mcp.local.headers.remove')}>
+                <IconButton aria-label={t('mcp.local.headers.remove')} onClick={() => handleRemove(index)} size="small">
+                  <DeleteIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
-            )}
-            <Tooltip title={t('mcp.local.headers.remove')}>
-              <IconButton aria-label={t('mcp.local.headers.remove')} onClick={() => handleRemove(index)} size="small" sx={{ mt: 0.25 }}>
-                <DeleteIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
+            </Box>
           </Stack>
         ))}
 

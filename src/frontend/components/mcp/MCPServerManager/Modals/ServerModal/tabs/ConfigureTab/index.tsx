@@ -433,7 +433,9 @@ const ConfigureTab: React.FC<TabProps> = ({
   return (
     <Box component="form" onSubmit={onSubmit} sx={{ width: '100%' }}>
       <Grid container spacing={2}>
-        <Grid item xs={isConsoleVisible ? 8 : 12}>
+        {/* Phone/tablet layouts keep the form full width and push the console
+            below it; the 8/4 split only applies from `md` up (#394). */}
+        <Grid item xs={12} md={isConsoleVisible ? 8 : 12}>
           <Stack spacing={3}>
             {/* Launch-and-connect (#392): read-only. FLUJO does not start this
                 process yet — the user does, then FLUJO connects to serverUrl. */}
@@ -710,8 +712,15 @@ const ConfigureTab: React.FC<TabProps> = ({
         </Grid>
         
         {isConsoleVisible && (
-          <Grid item xs={4}>
-            {/* Right column with console output */}
+          <Grid
+            item
+            xs={12}
+            md={4}
+            // Stacked below the form the console has no row height to fill, so
+            // give it a bounded mobile height and let it scroll internally.
+            sx={{ height: { xs: 320, md: 'auto' }, minHeight: { xs: 240, md: 0 } }}
+          >
+            {/* Right column (desktop) / stacked panel (mobile) with console output */}
             <ConsoleOutput
               output={consoleOutput}
               isVisible={true}
@@ -752,7 +761,7 @@ const ConfigureTab: React.FC<TabProps> = ({
         onApplyPatch={applyTroubleshootPatch}
       />
 
-      <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, mt: 3 }}>
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 1, mt: 3 }}>
         <Button
           variant="outlined"
           onClick={onClose}
