@@ -387,11 +387,19 @@ export function buildSandboxUrl(
 /** Per-originKey cache of the authenticated sandbox endpoint. */
 const sandboxEndpointCache = new Map<string, Promise<SandboxEndpointResponse>>();
 
-async function resolveSandboxBaseUrl(originKey?: string): Promise<string> {
-  const cacheKey = originKey || '';
+async function resolveSandboxBaseUrl(
+  originKey: string | undefined,
+  serverName: string,
+  uri: string,
+  conversationId?: string,
+): Promise<string> {
+  const cacheKey = `${originKey || ''}::${serverName}::${uri}::${conversationId || ''}`;
   if (!sandboxEndpointCache.has(cacheKey)) {
     const params = new URLSearchParams();
     if (originKey) params.set('originKey', originKey);
+    params.set('serverName', serverName);
+    params.set('uri', uri);
+    if (conversationId) params.set('conversationId', conversationId);
     const url = `/api/mcp/app-sandbox${params.toString() ? `?${params}` : ''}`;
     const promise = fetch(url)
       .then(async (response) => {
@@ -852,10 +860,34 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [consentStatus, setConsentStatus] = useState<'loading' | 'internal' | 'granted' | 'prompt' | 'denied'>('loading');
   // #375: mirrors `error` without triggering re-renders, so async continuations
   // (handshake handoff) can cheaply check "did this frame already fail?".
   const errorRef = useRef<string | null>(null);
   useEffect(() => { errorRef.current = error; }, [error]);
+  useEffect(() => {
+    let active = true;
+    const params = new URLSearchParams({ serverName, uri });
+    if (conversationId) params.set('conversationId', conversationId);
+    void fetch(`/api/mcp/app-consent?${params}`)
+      .then(async (response) => response.ok ? response.json() : Promise.reject(new Error('Consent lookup failed')))
+      .then((data: { status?: string }) => {
+        if (active && ['internal', 'granted', 'prompt', 'denied'].includes(data.status ?? '')) {
+          setConsentStatus(data.status as 'internal' | 'granted' | 'prompt' | 'denied');
+        }
+      })
+      .catch(() => { if (active) setConsentStatus('denied'); });
+    return () => { active = false; };
+  }, [conversationId, serverName, uri]);
+  const decideConsent = useCallback(async (decision: 'allow-once' | 'allow-always' | 'deny-always') => {
+    const response = await fetch('/api/mcp/app-consent', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ serverName, uri, conversationId, decision }),
+    });
+    if (!response.ok) throw new Error('Unable to save MCP App consent');
+    const data = await response.json() as { status?: 'granted' | 'denied' };
+    setConsentStatus(data.status === 'granted' ? 'granted' : 'denied');
+  }, [conversationId, serverName, uri]);
   const [displayMode, setDisplayMode] = useState<McpUiDisplayMode>(docked ? 'pip' : 'inline');
   const [floatingRect, setFloatingRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [appDisplayModes, setAppDisplayModes] = useState<McpUiDisplayMode[]>([]);
@@ -1150,7 +1182,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       });
 
       // 3. Resolve the foreign sandbox origin.
-      const sandboxBase = await resolveSandboxBaseUrl(originKey);
+      const sandboxBase = await resolveSandboxBaseUrl(originKey, serverName, uri, conversationId);
       if (!isCurrentMount() || !containerRef.current) return;
 
       // 4. Create the OUTER (sandbox-proxy) iframe.
@@ -1541,11 +1573,11 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
     }
     if (next) onUserOpen?.();
     setExpanded(next);
-    if (next) {
+    if (next && (consentStatus === 'internal' || consentStatus === 'granted')) {
       // Mount after the Collapse has rendered its container.
       setTimeout(() => { void mount(); }, 0);
     }
-  }, [expanded, mount, onUserOpen]);
+  }, [consentStatus, expanded, mount, onUserOpen]);
 
   // Existing transcript launchers normally hydrate collapsed. When a newly
   // completed live result is later marked eligible for auto-launch, react to the
@@ -1560,19 +1592,19 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   // and then stays mounted for the life of the tab — visibility is CSS-only,
   // so the live iframe/bridge is never reparented.
   useEffect(() => {
-    if (docked && !mountedRef.current) void mount();
-  }, [docked, mount]);
+    if (docked && (consentStatus === 'internal' || consentStatus === 'granted') && !mountedRef.current) void mount();
+  }, [consentStatus, docked, mount]);
 
   // An opted-in app should be visible without a second consent-like click.
   // Wait for the expanded container to exist, then mount exactly as the manual
   // toggle does. The docked path above remains independently auto-mounted.
   useEffect(() => {
-    if (!docked && defaultExpanded && expanded && !mountedRef.current) {
+    if (!docked && (consentStatus === 'internal' || consentStatus === 'granted') && expanded && !mountedRef.current) {
       const timer = window.setTimeout(() => { void mount(); }, 0);
       return () => window.clearTimeout(timer);
     }
     return undefined;
-  }, [defaultExpanded, docked, expanded, mount]);
+  }, [consentStatus, defaultExpanded, docked, expanded, mount]);
 
   // The proxy iframe used to keep its original 200px inline height after the
   // host entered fullscreen, leaving a large blank panel around terminals and
@@ -1699,7 +1731,18 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
           flexDirection: 'column',
         }}
       >
-        {loading && (
+        {consentStatus === 'loading' && <Typography variant="body2" sx={{ p: 2 }}>Checking MCP App consent…</Typography>}
+        {consentStatus === 'prompt' && (
+          <Box sx={{ p: 2 }}>
+            <Typography variant="body2" sx={{ mb: 1 }}>This external MCP App runs sandboxed on a separate origin. Allow it to render?</Typography>
+            <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>{serverName} — {uri}</Typography>
+            <Button size="small" onClick={() => { void decideConsent('allow-once'); }}>Allow once</Button>
+            <Button size="small" onClick={() => { void decideConsent('allow-always'); }}>Always allow</Button>
+            <Button size="small" color="inherit" onClick={() => { void decideConsent('deny-always'); }}>Never allow</Button>
+          </Box>
+        )}
+        {consentStatus === 'denied' && <Typography variant="body2" color="text.secondary" sx={{ p: 2 }}>This MCP App is blocked by your consent preference.</Typography>}
+        {(consentStatus === 'internal' || consentStatus === 'granted') && loading && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 2, justifyContent: 'center' }}>
             <CircularProgress size={16} thickness={6} />
             <Typography variant="body2" color="text.secondary">{t('chat.app.loading')}</Typography>
@@ -1823,8 +1866,18 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
         </Button>
       </Box>
 
+      {consentStatus === 'prompt' && (
+        <Box sx={{ p: 1 }}>
+          <Typography variant="body2" sx={{ mb: 1 }}>This external MCP App runs sandboxed on a separate origin. Allow it to render?</Typography>
+          <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>{uri}</Typography>
+          <Button size="small" onClick={() => { void decideConsent('allow-once'); }}>Allow once</Button>
+          <Button size="small" onClick={() => { void decideConsent('allow-always'); }}>Always allow</Button>
+          <Button size="small" color="inherit" onClick={() => { void decideConsent('deny-always'); }}>Never allow</Button>
+        </Box>
+      )}
+      {consentStatus === 'denied' && <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>This MCP App is blocked by your consent preference.</Typography>}
       <Collapse
-        in={expanded}
+        in={expanded && (consentStatus === 'internal' || consentStatus === 'granted')}
         onExited={() => { void teardown(); }}
         sx={displayMode === 'fullscreen' ? {
           flex: 1,

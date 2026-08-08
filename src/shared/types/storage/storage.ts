@@ -23,6 +23,8 @@ export enum StorageKey {
   PLANNED_EXECUTIONS = 'planned_executions',
   MCP_AUTO_INSTALL_SETTINGS = 'mcp_auto_install_settings',
   MCP_QUALITY_SETTINGS = 'mcp_quality_settings',
+  /** Backend-authoritative per-app consent decisions for third-party MCP Apps. */
+  MCP_APP_CONSENT = 'mcp_app_consent',
   RUN_RESOURCE_SETTINGS = 'run_resource_settings',
   SUBFLOW_TASK_SETTINGS = 'subflow_task_settings',
   KV_STORE_SETTINGS = 'kv_store_settings',
@@ -81,6 +83,7 @@ export const StorageKeys = {
   PLANNED_EXECUTIONS: StorageKey.PLANNED_EXECUTIONS,
   MCP_AUTO_INSTALL_SETTINGS: StorageKey.MCP_AUTO_INSTALL_SETTINGS,
   MCP_QUALITY_SETTINGS: StorageKey.MCP_QUALITY_SETTINGS,
+  MCP_APP_CONSENT: StorageKey.MCP_APP_CONSENT,
   RUN_RESOURCE_SETTINGS: StorageKey.RUN_RESOURCE_SETTINGS,
   SUBFLOW_TASK_SETTINGS: StorageKey.SUBFLOW_TASK_SETTINGS,
   KV_STORE_SETTINGS: StorageKey.KV_STORE_SETTINGS,
