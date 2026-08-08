@@ -9,6 +9,10 @@
   diagnostics and adds an exit-code hint for common executable-not-found failures (#314).
 - Bash MCP ignores WSL relay launchers when resolving Git Bash and recognizes multi-letter switches
   for Windows file utilities without treating them as external POSIX paths (#314).
+- Bash MCP now detects Windows slash switches per command segment, so `cd … && dir /b && rg …` and
+  `echo dir /b` no longer report `/b` as a path outside the working roots, while genuine advisories
+  (`echo /etc/passwd`, `dir /b && echo /etc/passwd`) are preserved. All seven calls reported in #314
+  are pinned by the new `__tests__/mcp/bashIssue314.test.ts` regression suite (#314).
 - OpenRouter multimodal chat models (e.g. `outputModalities: ["text","image"]`) were routed to the
   dedicated `/images` / `/videos` media endpoints and failed with a route-not-found error even for
   plain text turns (#370). Routing to the dedicated media route is now reserved for models that are

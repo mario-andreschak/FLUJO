@@ -581,6 +581,49 @@ function maskGlobOptionValues(command: string): string {
   return chars.join('');
 }
 
+/**
+ * Windows utilities that take `/x`-style switches (issue #314, item D). A slash
+ * token is only demoted from "absolute path" to "switch" when one of these
+ * appears EARLIER IN THE SAME command segment, so `cd … && dir /b && rg …` and
+ * `echo dir /b` stay quiet while `echo /.git/config` keeps its advisory.
+ * Deliberately excludes names that are also common POSIX utilities (`find`,
+ * `sort`, `type`, `more`, `mkdir`, `rmdir`) — suppressing their arguments would
+ * silence genuine path advisories such as `find /etc -name passwd`.
+ */
+const WINDOWS_SWITCH_UTILITIES = new Set([
+  'dir', 'xcopy', 'robocopy', 'copy', 'move', 'del', 'erase', 'attrib', 'icacls', 'takeown',
+  'findstr', 'tasklist', 'taskkill', 'sc', 'reg', 'net', 'subst', 'where', 'ren', 'rename',
+  'md', 'rd', 'tree', 'fc', 'comp', 'cacls', 'schtasks', 'chkdsk', 'sfc', 'shutdown',
+  'wmic', 'diskpart', 'label', 'vol', 'mklink', 'assoc', 'ftype', 'gpupdate', 'powercfg',
+]);
+
+/**
+ * A cmd-style switch: `/b`, `/ad`, `/mir`, `/e:on`. Never matches a nested path
+ * (no interior separator), so `/etc/passwd` is untouched.
+ */
+const WINDOWS_SWITCH_RE = /^\/[A-Za-z][A-Za-z0-9?*-]{0,15}(?::[^\s"']*)?$/;
+
+/** Text of the command segment (split on shell separators) preceding `index`. */
+function segmentTextBefore(command: string, index: number): string {
+  const separators = /&&|\|\||[|;&\n]/g;
+  let start = 0;
+  let match: RegExpExecArray | null;
+  while ((match = separators.exec(command)) !== null) {
+    if (match.index >= index) break;
+    start = match.index + match[0].length;
+  }
+  return command.slice(start, index);
+}
+
+/** True when a slash-switch utility heads the segment containing `index`. */
+function windowsSwitchUtilityPrecedes(command: string, index: number): boolean {
+  for (const word of segmentTextBefore(command, index).match(/[^\s"'<>()]+/g) ?? []) {
+    const name = word.replace(/^.*[\\/]/, '').toLowerCase().replace(/\.(?:exe|com|bat|cmd)$/, '');
+    if (WINDOWS_SWITCH_UTILITIES.has(name)) return true;
+  }
+  return false;
+}
+
 async function scanCommandForExternalPaths(command: string, cwd: string, roots: string[]): Promise<string[]> {
   const warnings: string[] = [];
   const protectedPathsEnabled = await isProtectedPathsEnabled();
@@ -591,13 +634,17 @@ async function scanCommandForExternalPaths(command: string, cwd: string, roots: 
   // Absolute-looking tokens: Windows drive (X:\ or X:/), UNC (\\host\share),
   // POSIX (/foo), and ~-prefixed home paths.
   const tokenRe = /(?:[A-Za-z]:[\\/][^\s"']*|\\\\[^\s"']+|~\/[^\s"']*|(?<![\w.])\/[^\s"']+)/g;
-  const windowsUtility = /^\s*(?:dir|xcopy|robocopy|copy|move|del|erase|attrib|icacls|takeown)\b/i.test(commandForPathScan);
-  const matches = (commandForPathScan.match(tokenRe) ?? []).filter((token) => {
-    if (process.platform !== 'win32') return true;
-    // Treat switches as such only for utilities that use slash switches. This
-    // keeps `/etc/passwd` and other genuine POSIX paths advisory warnings.
-    return !(windowsUtility && /^\/[A-Za-z][A-Za-z0-9?*-]*$/.test(token));
-  });
+  const matches = [...commandForPathScan.matchAll(tokenRe)]
+    .filter((match) => {
+      if (process.platform !== 'win32') return true;
+      // Two independent conditions must hold before a token is dropped: it must
+      // LOOK like a cmd switch, and a slash-switch utility must appear earlier
+      // in the SAME segment (`… && dir /b && …`). This keeps `/etc/passwd` and
+      // other genuine POSIX paths advisory.
+      if (!WINDOWS_SWITCH_RE.test(match[0])) return true;
+      return !windowsSwitchUtilityPrecedes(commandForPathScan, match.index ?? 0);
+    })
+    .map((match) => match[0]);
   const home = (() => {
     try {
       return getHomeDir();
