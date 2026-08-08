@@ -500,7 +500,10 @@ export interface SubflowNodeProperties {
      *  change an existing flow's behaviour by itself. Tool-mode invocations are
      *  NOT resumable in v1 (no graph transition means no persist point); a
      *  mid-call crash re-runs the lanes from scratch. */
-    invocationMode?: 'handoff' | 'tool';
+    invocationMode?: 'handoff' | 'tool' | 'detached';
+    /** Optional per-node detached-task polling hint and runtime cap (issue #386). */
+    detachedPollIntervalMs?: number;
+    detachedMaxRuntimeMs?: number;
 }
 
 /** One resolved job in a SubflowNode queue. Legacy code and event payloads still
@@ -1046,6 +1049,10 @@ export interface SharedState {
      * only ever matches `handoff_to_*` and transitions the graph).
      */
     subflowToolNameMap?: Record<string, string>;
+    /** Model-facing start_subflow_* tool name -> detached target node id. */
+    subflowDetachedToolNameMap?: Record<string, string>;
+    /** Durable task handles launched while this conversation was active. */
+    launchedTaskIds?: string[];
 
     // --- Token / cost accounting (aggregated from per-message usage) ---
     /** Running totals of token usage and estimated cost for this conversation. */

@@ -2,6 +2,7 @@ import { Cron } from 'croner';
 import { verifyStorage } from '@/utils/storage/backend';
 import { mcpService } from '@/backend/services/mcp';
 import { sweepOldRunResources } from '@/backend/services/runResources';
+import { reconcileOrphanedTasks, sweepOldSubflowTasks } from '@/backend/services/subflowTasks';
 import { refreshSpotlightServers } from '@/backend/services/spotlight';
 import { getSchedulerService } from '@/backend/services/scheduler';
 import { isEncryptionLocked, isUserEncryptionEnabled } from '@/utils/encryption/secure';
@@ -27,6 +28,7 @@ declare global {
   // Next.js hot-reload / duplicate module instantiation can't arm it twice
   // (mirrors __flujo_run_resources / the scheduler singletons).
   var __flujo_retention_cron: Cron | undefined;
+  var __flujo_subflow_task_retention_cron: Cron | undefined;
 }
 
 /**
@@ -37,13 +39,21 @@ declare global {
  * retentionAgeDays <= 0, so this is safe to arm unconditionally.
  */
 function armRetentionSweep(): void {
-  if (global.__flujo_retention_cron) return;
-  global.__flujo_retention_cron = new Cron('0 * * * *', { unref: true }, () => {
-    sweepOldRunResources().catch(error =>
-      log.warn('Run-resource retention sweep failed:', error)
-    );
-  });
-  log.info('Armed run-resource retention sweep (hourly)');
+  if (!global.__flujo_retention_cron) {
+    global.__flujo_retention_cron = new Cron('0 * * * *', { unref: true }, () => {
+      sweepOldRunResources().catch(error =>
+        log.warn('Run-resource retention sweep failed:', error)
+      );
+    });
+    log.info('Armed run-resource retention sweep (hourly)');
+  }
+  if (!global.__flujo_subflow_task_retention_cron) {
+    global.__flujo_subflow_task_retention_cron = new Cron('0 * * * *', { unref: true }, () => {
+      sweepOldSubflowTasks().catch(error =>
+        log.warn('Detached subflow task retention sweep failed:', error)
+      );
+    });
+  }
 }
 
 /**
@@ -72,6 +82,11 @@ async function runInitialization(): Promise<void> {
   // Verify storage first - if this throws, callers (e.g. the route) surface it.
   await verifyStorage();
   await ensureVendoredFlowGenerator();
+  // Detached task execution is process-local in v1. Any persisted working task
+  // left behind by a prior process is visible as a terminal restart failure.
+  reconcileOrphanedTasks().catch(error =>
+    log.warn('Detached subflow task reconciliation failed at startup:', error)
+  );
 
   // Refresh the Spotlight curated-server cache in the background. Deliberately
   // NOT awaited: the registry can be slow/unreachable and must never delay

@@ -24,6 +24,7 @@ export enum StorageKey {
   MCP_AUTO_INSTALL_SETTINGS = 'mcp_auto_install_settings',
   MCP_QUALITY_SETTINGS = 'mcp_quality_settings',
   RUN_RESOURCE_SETTINGS = 'run_resource_settings',
+  SUBFLOW_TASK_SETTINGS = 'subflow_task_settings',
   KV_STORE_SETTINGS = 'kv_store_settings',
   PENDING_APPROVALS = 'pending_approvals',
   // Legacy per-internal-server overrides retained only as migration input.
@@ -81,6 +82,7 @@ export const StorageKeys = {
   MCP_AUTO_INSTALL_SETTINGS: StorageKey.MCP_AUTO_INSTALL_SETTINGS,
   MCP_QUALITY_SETTINGS: StorageKey.MCP_QUALITY_SETTINGS,
   RUN_RESOURCE_SETTINGS: StorageKey.RUN_RESOURCE_SETTINGS,
+  SUBFLOW_TASK_SETTINGS: StorageKey.SUBFLOW_TASK_SETTINGS,
   KV_STORE_SETTINGS: StorageKey.KV_STORE_SETTINGS,
   PENDING_APPROVALS: StorageKey.PENDING_APPROVALS,
   MCP_INTERNAL_OVERRIDES: StorageKey.MCP_INTERNAL_OVERRIDES,
@@ -199,6 +201,8 @@ export interface ExperimentalSettings {
    * disabled.
    */
   subflowToolInvocation?: boolean;
+  /** Enable durable, detached subflow task handles (issue #386). Off by default. */
+  subflowDetachedInvocation?: boolean;
   /**
    * When true, a Subflow node honours its `sessionScope` configuration and may
    * RESUME the same child conversation across repeat visits inside one parent

@@ -16,6 +16,7 @@ import { resolveFrozenSystemPrompt } from '../systemPromptDrift';
 import { buildHandoffDescription } from '../buildHandoffDescription';
 import { buildHandoffToolNameMap, buildSubflowToolNameMap, SUBFLOW_TOOL_PREFIX } from '@/shared/utils/handoffNaming';
 import { buildSubflowTool } from '../handlers/subflowToolInvocation';
+import { buildDetachedSubflowTool, SUBFLOW_DETACHED_TOOL_PREFIX } from '../handlers/subflowDetachedInvocation';
 import { flowService } from '@/backend/services/flow/index';
 import { modelService } from '@/backend/services/model';
 import { loadServerConfigs } from '@/backend/services/mcp/config';
@@ -164,6 +165,9 @@ export class ProcessNode extends BaseNode {
     const subflowToolInvocationEnabled = hasSubflowTargets
       ? await ModelHandler.isSubflowToolInvocationEnabled()
       : false;
+    const subflowDetachedInvocationEnabled = hasSubflowTargets
+      ? await ModelHandler.isSubflowDetachedInvocationEnabled()
+      : false;
     const subflowToolTargetIds = new Set(
       subflowToolInvocationEnabled
         ? targets
@@ -176,20 +180,40 @@ export class ProcessNode extends BaseNode {
         : [],
     );
 
+    const subflowDetachedTargetIds = new Set(
+      subflowDetachedInvocationEnabled
+        ? targets.filter((t) => {
+            const props = flowNodesById?.get(t.id)?.data?.properties as SubflowNodeProperties | undefined;
+            return t.type === 'subflow' && props?.invocationMode === 'detached';
+          }).map((t) => t.id)
+        : [],
+    );
+
     // Human-readable, collision-free tool names (issue #38, Item A): the raw
     // node UUID is gone from the name; SharedState.handoffNameMap keeps the
     // name -> node-id mapping so routing still works. Tool-mode subflow targets
     // get their OWN name map (`call_subflow_*` namespace) and never consume a
     // `handoff_to_*` slug.
-    const nameMap = buildHandoffToolNameMap(targets.filter((t) => !subflowToolTargetIds.has(t.id)));
+    const nameMap = buildHandoffToolNameMap(targets.filter((t) => !subflowToolTargetIds.has(t.id) && !subflowDetachedTargetIds.has(t.id)));
     const subflowNameMap = buildSubflowToolNameMap(targets.filter((t) => subflowToolTargetIds.has(t.id)));
+    const detachedNameMap = new Map(targets.filter((t) => subflowDetachedTargetIds.has(t.id)).map((t) => [t.id, `${SUBFLOW_DETACHED_TOOL_PREFIX}${t.label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || t.id}`]));
     sharedState.handoffNameMap = sharedState.handoffNameMap || {};
     sharedState.handoffTargetTypes = sharedState.handoffTargetTypes || {};
     sharedState.subflowToolNameMap = sharedState.subflowToolNameMap || {};
+    sharedState.subflowDetachedToolNameMap = sharedState.subflowDetachedToolNameMap || {};
 
     const handoffTools: ToolDefinition[] = [];
     for (const target of targets) {
       const flowNodeForTarget = flowNodesById?.get(target.id);
+
+      if (subflowDetachedTargetIds.has(target.id)) {
+        const toolName = detachedNameMap.get(target.id) || `${SUBFLOW_DETACHED_TOOL_PREFIX}${target.id}`;
+        sharedState.subflowDetachedToolNameMap[toolName] = target.id;
+        const description = flowNodeForTarget ? await buildHandoffDescription(flowNodeForTarget) : `Start ${target.label} as a detached subflow`;
+        const props = flowNodeForTarget?.data?.properties as SubflowNodeProperties | undefined;
+        handoffTools.push(buildDetachedSubflowTool(toolName, { id: target.id, label: target.label }, description, !(props?.promptTemplate?.trim())));
+        continue;
+      }
 
       if (subflowToolTargetIds.has(target.id)) {
         // Tool-mode Subflow (issue #385): emit `call_subflow_<slug>` instead of
@@ -312,6 +336,13 @@ export class ProcessNode extends BaseNode {
       });
 
       log.debug(`Created handoff tool`, { toolName, targetNodeId: target.id, targetNodeLabel: target.label });
+    }
+
+    if (subflowDetachedTargetIds.size > 0) {
+      handoffTools.push(
+        { name: 'subflow_task_get', description: 'Get the status and terminal result of a detached subflow task.', inputSchema: { type: 'object', properties: { taskId: { type: 'string' } }, required: ['taskId'] } },
+        { name: 'subflow_task_cancel', description: 'Cancel a working detached subflow task.', inputSchema: { type: 'object', properties: { taskId: { type: 'string' } }, required: ['taskId'] } },
+      );
     }
 
     log.info('Generated handoff tools', {
