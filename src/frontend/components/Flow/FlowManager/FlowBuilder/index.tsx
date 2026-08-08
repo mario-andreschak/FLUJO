@@ -66,6 +66,7 @@ import MCPNodePropertiesModal from './Modals/MCPNodePropertiesModal';
 import StartNodePropertiesModal from './Modals/StartNodePropertiesModal';
 import FinishNodePropertiesModal from './Modals/FinishNodePropertiesModal';
 import EdgePropertiesModal from './Modals/EdgePropertiesModal';
+import NodeTechnicalDetailsModal from './Modals/NodeTechnicalDetailsModal';
 import SubflowNodePropertiesModal from './Modals/SubflowNodePropertiesModal';
 import ResourceNodePropertiesModal from './Modals/ResourceNodePropertiesModal';
 import SignalNodePropertiesModal from './Modals/SignalNodePropertiesModal';
@@ -364,6 +365,9 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const [signalModalOpen, setSignalModalOpen] = useState(false);
   const [staticModalOpen, setStaticModalOpen] = useState(false);
   const [triggerModalOpen, setTriggerModalOpen] = useState(false);
+  // Read-only technical details for the selected node (issue #412). Only the
+  // node id is stored so the dialog always reflects the live node data.
+  const [technicalDetailsNodeId, setTechnicalDetailsNodeId] = useState<string | null>(null);
   // Compact, non-blocking feedback for rejected quick-authoring actions.
   const [builderNotice, setBuilderNotice] = useState<string | null>(null);
   const [nodeToEdit, setNodeToEdit] = useState<FlowNode | null>(null);
@@ -1467,6 +1471,27 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   ]);
 
   const selectedNode = nodes.find(node => node.selected) ?? null;
+
+  // The technical-details dialog follows the Inspector selection: it retargets
+  // when another node is selected and closes when the selection is cleared or
+  // the node is deleted, so stale details can never stay on screen (#412).
+  const technicalDetailsNode = useMemo(
+    () => (technicalDetailsNodeId
+      ? nodes.find(node => node.id === technicalDetailsNodeId) ?? null
+      : null),
+    [nodes, technicalDetailsNodeId],
+  );
+  useEffect(() => {
+    if (!technicalDetailsNodeId) return;
+    if (!selectedNode) {
+      setTechnicalDetailsNodeId(null);
+      return;
+    }
+    if (selectedNode.id !== technicalDetailsNodeId) {
+      setTechnicalDetailsNodeId(selectedNode.id);
+    }
+  }, [selectedNode, technicalDetailsNodeId]);
+
   const addableNodeTypes = useMemo(() => getNodeTypes(t), [t]);
   const mcpConnectionsByProcess = useMemo(() => {
     const result = new Map<string, Array<{ nodeId: string; serverName: string }>>();
@@ -2419,6 +2444,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
           onClearSelection={handleClearNodeSelection}
           onCommitNode={updateNodeData}
           onOpenAdvanced={openNodeProperties}
+          onOpenTechnicalDetails={(node) => setTechnicalDetailsNodeId(node.id)}
           flowName={flowName}
           flowNameError={flowNameError}
           onFlowNameChange={(value) => {
@@ -2589,6 +2615,15 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         flowId={initialFlow?.id || ''}
         onClose={() => { setTriggerModalOpen(false); setNodeToEdit(null); }}
         onSave={handleNodeUpdate}
+      />
+
+      {/* Node technical details (issue #412): read-only, sanitized view that
+          replaced the inline accordion on every canvas node. */}
+      <NodeTechnicalDetailsModal
+        open={!!technicalDetailsNode}
+        node={technicalDetailsNode}
+        flowNames={flowNames}
+        onClose={() => setTechnicalDetailsNodeId(null)}
       />
 
       <EdgePropertiesModal

@@ -8,9 +8,6 @@ import {
 } from '@xyflow/react';
 import { alpha, styled, useTheme } from '@mui/material/styles';
 import {
-  Accordion,
-  AccordionDetails,
-  AccordionSummary,
   Paper,
   Typography,
   Box,
@@ -25,7 +22,6 @@ import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
 import BoltIcon from '@mui/icons-material/Bolt';
 import NoteAddIcon from '@mui/icons-material/NoteAdd';
 import BuildRoundedIcon from '@mui/icons-material/BuildRounded';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import PlayArrowRoundedIcon from '@mui/icons-material/PlayArrowRounded';
 import type { NodeType } from '@/frontend/types/flow/flow';
 import { flowNodeColors, flowNodeLightColors } from '@/frontend/utils/flowPaletteTokens';
@@ -249,7 +245,6 @@ const CustomNode = ({ id, data, nodeType, selected }: CustomNodeProps & { select
   const theme = useTheme();
   const { t, tp, formatList } = useI18n();
   const flowNames = useContext(FlowNamesContext);
-  const [expanded, setExpanded] = useState(false);
   const [hoverReady, setHoverReady] = useState(false);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -314,10 +309,6 @@ const CustomNode = ({ id, data, nodeType, selected }: CustomNodeProps & { select
     event.stopPropagation();
   };
 
-  const handleDetailsChange = (event: React.SyntheticEvent, isExpanded: boolean) => {
-    event.stopPropagation();
-    setExpanded(isExpanded);
-  };
   
   // Render different handle configurations based on node type
   const renderHandles = () => {
@@ -660,56 +651,9 @@ const CustomNode = ({ id, data, nodeType, selected }: CustomNodeProps & { select
           </NodeDetails>
         )}
 
-        <Accordion
-          disableGutters
-          elevation={0}
-          expanded={expanded}
-          onChange={handleDetailsChange}
-          onClick={stopNodeInteraction}
-          onPointerDown={stopNodeInteraction}
-          className="nodrag nowheel"
-          sx={{
-            mt: 1,
-            backgroundColor: 'transparent',
-            '&::before': { display: 'none' },
-          }}
-        >
-          <AccordionSummary
-            expandIcon={<ExpandMoreIcon fontSize="small" />}
-            aria-controls={`${id}-technical-details`}
-            sx={{
-              minHeight: 28,
-              px: 0,
-              '& .MuiAccordionSummary-content': { my: 0.25 },
-            }}
-          >
-            <Typography variant="caption" color="text.secondary">
-              {t('flows.nodeInfo.technical')}
-            </Typography>
-          </AccordionSummary>
-          <AccordionDetails
-            id={`${id}-technical-details`}
-            sx={{ p: 0 }}
-          >
-            <Box
-              component="pre"
-              sx={{
-                m: 0,
-                p: 1,
-                maxHeight: 220,
-                overflow: 'auto',
-                whiteSpace: 'pre-wrap',
-                overflowWrap: 'anywhere',
-                fontSize: '0.7rem',
-                lineHeight: 1.35,
-                backgroundColor: 'action.hover',
-                borderRadius: 1,
-              }}
-            >
-              {information.technicalText}
-            </Box>
-          </AccordionDetails>
-        </Accordion>
+        {/* Technical details deliberately do NOT render on the canvas anymore
+            (issue #412): they are the Inspector's last actionable option and
+            open in a read-only modal, keeping nodes compact. */}
       </NodeContainer>
     </>
   );

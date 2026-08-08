@@ -26,6 +26,7 @@ import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
 import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
 import AutoFixHighRoundedIcon from '@mui/icons-material/AutoFixHighRounded';
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
+import CodeRoundedIcon from '@mui/icons-material/CodeRounded';
 import type { Flow, FlowNode } from '@/frontend/types/flow/flow';
 import type { Model } from '@/shared/types';
 import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
@@ -74,6 +75,12 @@ interface InspectorPanelProps {
   onClearSelection: () => void;
   onCommitNode: (nodeId: string, data: FlowNode['data']) => void;
   onOpenAdvanced: (node: FlowNode) => void;
+  /**
+   * Opens the read-only technical-details modal for the given node (#412).
+   * Optional so the panel can be rendered standalone; the FlowBuilder always
+   * supplies it and owns the modal state.
+   */
+  onOpenTechnicalDetails?: (node: FlowNode) => void;
   flowName: string;
   flowNameError: string | null;
   onFlowNameChange: (value: string) => void;
@@ -127,6 +134,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onClearSelection,
   onCommitNode,
   onOpenAdvanced,
+  onOpenTechnicalDetails,
   flowName,
   flowNameError,
   onFlowNameChange,
@@ -532,6 +540,23 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 {t('flows.inspector.suggestAgents')}
               </Button>
             )}
+
+            {/* Technical details are the LAST actionable option for a selected
+                node (issue #412). The tip below is explanatory copy, not an
+                option, so it may stay underneath. */}
+            <Button
+              variant="text"
+              size="small"
+              startIcon={<CodeRoundedIcon />}
+              onClick={() => {
+                // Commit the in-progress label/prompt edits first so the modal
+                // shows the current draft instead of stale selection data.
+                const updatedNode = commitNode();
+                if (updatedNode) onOpenTechnicalDetails?.(updatedNode);
+              }}
+            >
+              {t('flows.inspector.technicalDetails')}
+            </Button>
 
             <Typography variant="caption" color="text.secondary">
               {beginnerMode

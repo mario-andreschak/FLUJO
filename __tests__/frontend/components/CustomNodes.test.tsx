@@ -93,9 +93,9 @@ describe('FlowBuilder CustomNodes', () => {
     expect(screen.getByText('review-complete')).toBeInTheDocument();
   });
 
-  it('expands bounded technical details without propagating pointer or click events to the node canvas', () => {
-    const onClick = jest.fn();
-    const onPointerDown = jest.fn();
+  // Issue #412: technical details moved out of the canvas node into the
+  // Inspector's last action, which opens a read-only modal.
+  it('no longer renders inline technical details while keeping the node summary', () => {
     renderNode(ProcessNode, {
       label: 'Safe node',
       type: 'process',
@@ -103,18 +103,15 @@ describe('FlowBuilder CustomNodes', () => {
         promptTemplate: 'Hello',
         unsupportedSecret: 'do not render',
       },
-    }, { onClick, onPointerDown });
+    });
 
-    const disclosure = screen.getByRole('button', { name: /Technical details/i });
-    fireEvent.pointerDown(disclosure);
-    fireEvent.click(disclosure);
-
-    expect(onPointerDown).not.toHaveBeenCalled();
-    expect(onClick).not.toHaveBeenCalled();
-    expect(screen.getByText(/Node metadata/)).toBeVisible();
-    expect(screen.getByText(/promptTemplate: Hello/)).toBeVisible();
+    expect(screen.queryByRole('button', { name: /Technical details/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Node metadata/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/promptTemplate: Hello/)).not.toBeInTheDocument();
     expect(screen.queryByText(/do not render/)).not.toBeInTheDocument();
-    expect(disclosure.closest('.nodrag')).not.toBeNull();
+
+    const summary = within(screen.getByLabelText('Node summary'));
+    expect(summary.getByText(/Hello/)).toBeInTheDocument();
   });
 
   it('reveals quick-connect controls on hover and emits the requested handle', () => {
