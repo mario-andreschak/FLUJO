@@ -169,6 +169,33 @@ describe('McpAppsDashboard', () => {
     expect(service.clearCapabilitiesCache).toHaveBeenCalledWith('weather');
   });
 
+  it('previews the app a caller preselected instead of the first one (#396)', async () => {
+    service.loadServerConfigs.mockResolvedValue([
+      { name: 'weather', disabled: false, enableMcpApps: true },
+    ] as any);
+    service.listServerResources.mockResolvedValue({
+      resources: [
+        { uri: 'ui://forecast', name: 'Forecast', mimeType: APP_MIME },
+        { uri: 'ui://radar', name: 'Radar', mimeType: APP_MIME },
+      ],
+      resourceTemplates: [],
+    });
+
+    render(
+      <ThemeProvider theme={createTheme()}>
+        <McpAppsDashboard
+          open
+          onClose={jest.fn()}
+          onOpenToolTester={jest.fn()}
+          initialSelection={{ serverName: 'weather', uri: 'ui://radar' }}
+        />
+      </ThemeProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('mcp-app-frame')).toHaveAttribute('data-uri', 'ui://radar'));
+  });
+
   it('uses fullScreen dialog and opts out of backdropFilter so fixed descendants are not clipped', async () => {
     service.loadServerConfigs.mockResolvedValue([
       { name: 'enabled-apps', disabled: false, enableMcpApps: true },

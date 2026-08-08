@@ -106,6 +106,12 @@ import { highlightAskFlujoElement } from '@/frontend/utils/askFlujoActions';
 import { useEntityDeepLink } from '@/frontend/hooks/useEntityDeepLink';
 import { magicLinkPath } from '@/frontend/utils/magicLink';
 import {
+  NEW_CHAT_PARAM,
+  consumeQuickActionToken,
+  isQuickActionTokenPending,
+  subscribeNewChatRequests,
+} from '@/frontend/utils/quickActions';
+import {
   latestMcpAppResultIdsByResource,
   observeNewMcpAppResultIds,
 } from './mcpAppProjection';
@@ -1539,6 +1545,38 @@ const Chat: React.FC = () => {
     replacePath: '/chat',
   });
 
+  // --- Quick actions "New Chat" (issue #396) --------------------------------
+  // The bottom-left quick-actions menu lives in Navigation, but the standard
+  // creation flow lives here, so the menu only expresses an INTENT and this
+  // component performs it through the very same `createNewConversation`
+  // (flow-selection priority, list/current/detail updates, error handling).
+  // Two transports, one meaning:
+  //   * `/chat?new=<token>` when the menu is used from another route (this page
+  //     mounts and consumes the param, which is then stripped from the URL);
+  //   * a window event when the menu is used while `/chat` is already on screen
+  //     (pushing the same route would not re-run any deep link).
+  // `consumeQuickActionToken` claims the token, so a request that somehow
+  // arrives twice (Strict Mode, Back/Forward replay, both transports) still
+  // creates exactly one conversation.
+  const startQuickActionConversation = useStableCallback(() => {
+    void createNewConversation();
+  });
+
+  useEntityDeepLink({
+    param: NEW_CHAT_PARAM,
+    ready: flows.length > 0,
+    exists: (token) => isQuickActionTokenPending(token),
+    onResolve: (token) => {
+      if (consumeQuickActionToken(token)) startQuickActionConversation();
+    },
+    consume: true,
+    replacePath: '/chat',
+  });
+
+  useEffect(() => subscribeNewChatRequests((token) => {
+    if (consumeQuickActionToken(token)) startQuickActionConversation();
+  }), [startQuickActionConversation]);
+
   // --- URL-originated sidebar reveal (issue #397) ---------------------------
   // A chat opened through a URL must not only be selected, it must be made
   // VISIBLE in the sidebar: materialized across pagination, un-collapsed and
@@ -1653,10 +1691,11 @@ const Chat: React.FC = () => {
 
     const params = new URLSearchParams(window.location.search);
 
-    // `?flow=` and `?message=` are one-shot links consumed by their own hooks
-    // (which then rewrite the URL themselves, `?message=` back to the canonical
-    // conversation link). Rewriting the query first would swallow them.
-    if (params.get('flow') || params.get('message')) return;
+    // `?flow=`, `?message=` and `?new=` are one-shot links consumed by their
+    // own hooks (which then rewrite the URL themselves, `?message=` back to the
+    // canonical conversation link). Rewriting the query first would swallow
+    // them — for `?new=` (#396) that would silently drop a New Chat request.
+    if (params.get('flow') || params.get('message') || params.get(NEW_CHAT_PARAM)) return;
 
     const activeId = currentConversationIdRef.current;
     const paramId = params.get('conversation');

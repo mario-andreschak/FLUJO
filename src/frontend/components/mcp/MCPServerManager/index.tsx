@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { magicLinkPath } from '@/frontend/utils/magicLink';
 import ServerList from './ServerList';
@@ -8,8 +8,16 @@ import ServerModal from './Modals/ServerModal/index';
 import { SaveAndAuthenticateResult, type ServerSetupTab } from './Modals/ServerModal/types';
 import McpConnectionWizard from './McpConnectionWizard';
 import ServerDetailsModal from './ServerDetailsModal';
-import McpAppsDashboard from '../McpAppsDashboard';
+import McpAppsDashboard, { type McpAppsDashboardSelection } from '../McpAppsDashboard';
 import type { ToolTesterPrefill } from '../MCPToolManager/ToolTester';
+import {
+  MCP_APP_PARAM,
+  MCP_APP_TOKEN_PARAM,
+  MCP_APP_URI_PARAM,
+  consumeQuickActionToken,
+  subscribeOpenMcpApp,
+  type McpAppQuickAction,
+} from '@/frontend/utils/quickActions';
 import { MCPServerConfig } from '@/shared/types/mcp';
 import { ServerUpdateInfo, checkServerUpdates } from './utils/serverUpdates';
 import { useServerStatus } from '@/frontend/hooks/useServerStatus';
@@ -120,6 +128,9 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   const detailsPushedByUsRef = useRef(false);
   const [toolPrefill, setToolPrefill] = useState<ToolTesterPrefill | undefined>();
   const [showAppsDashboard, setShowAppsDashboard] = useState(false);
+  // #396: app the MCP Apps dashboard should preview when opened from the
+  // navigation quick-actions menu (held in state so its identity is stable).
+  const [appsSelection, setAppsSelection] = useState<McpAppsDashboardSelection | null>(null);
   // Git update status per repository rootPath (locally cloned stdio servers).
   const [updates, setUpdates] = useState<Record<string, ServerUpdateInfo>>({});
 
@@ -222,6 +233,40 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
       router.replace('/mcp');
     }
   }, [servers, router]);
+
+  // #396: quick actions hand an MCP target to the page that already owns the
+  // dashboard and the Tool Tester. A linked tool reuses the pre-existing
+  // `?server=&tool=` deep link above; an app opens the dashboard preselected.
+  // Nothing here invokes a tool.
+  const openMcpQuickTarget = useCallback((request: McpAppQuickAction) => {
+    if (request.toolName) {
+      setShowAppsDashboard(false);
+      setToolPrefill({ toolName: request.toolName, arguments: {} });
+      setDetailsServerName(request.serverName);
+      return;
+    }
+    setAppsSelection(request.uri ? { serverName: request.serverName, uri: request.uri } : null);
+    setShowAppsDashboard(true);
+  }, []);
+
+  // Route intent, for when this page was not mounted yet. One-shot: the token
+  // is claimed and the params are dropped so a refresh does not reopen it.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const query = new URLSearchParams(window.location.search);
+    const serverName = query.get(MCP_APP_PARAM);
+    if (!serverName) return;
+    if (!consumeQuickActionToken(query.get(MCP_APP_TOKEN_PARAM))) return;
+    openMcpQuickTarget({ serverName, uri: query.get(MCP_APP_URI_PARAM) || undefined });
+    router.replace('/mcp');
+  }, [openMcpQuickTarget, router]);
+
+  // In-page intent, for when the menu is used while `/mcp` is already open
+  // (pushing the same route would not re-run the effect above).
+  useEffect(() => subscribeOpenMcpApp((request, token) => {
+    if (!consumeQuickActionToken(token)) return;
+    openMcpQuickTarget(request);
+  }), [openMcpQuickTarget]);
 
   const handleCloseDetails = () => {
     const name = detailsServerName;
@@ -1161,7 +1206,11 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
 
       <McpAppsDashboard
         open={showAppsDashboard}
-        onClose={() => setShowAppsDashboard(false)}
+        onClose={() => {
+          setShowAppsDashboard(false);
+          setAppsSelection(null);
+        }}
+        initialSelection={appsSelection}
         onOpenToolTester={(serverName, toolName) => {
           setShowAppsDashboard(false);
           setToolPrefill({ toolName, arguments: {} });
