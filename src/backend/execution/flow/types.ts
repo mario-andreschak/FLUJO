@@ -215,7 +215,7 @@ export interface ProcessNodeProperties {
     /**
      * Per-node override of the bound model's Max Turns cap (agentic turns for
      * self-orchestrating adapters). Unset/0 = inherit the model setting, then
-     * the system default (DEFAULT_AGENTIC_MAX_TURNS = 50).
+     * the system default (DEFAULT_AGENTIC_MAX_TURNS = 255).
      */
     maxTurns?: number;
     /**

@@ -30,7 +30,7 @@ export interface ModelCallInput {
   /**
    * Optional per-node override of the agentic-turn cap for self-orchestrating
    * adapters (Claude subscription). When set (> 0) it wins; otherwise callModel
-   * resolves the bound model's `maxTurns`, then DEFAULT_AGENTIC_MAX_TURNS (50).
+   * resolves the bound model's `maxTurns`, then DEFAULT_AGENTIC_MAX_TURNS (255).
    * This is the authoritative cap that replaced the former hard-coded 30.
    */
   maxTurns?: number;

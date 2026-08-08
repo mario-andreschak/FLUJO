@@ -118,7 +118,7 @@ export interface FlowSpecNode {
   /**
    * process only: per-node cap on agentic turns (self-orchestrating tool loop). Clamped to
    * [1, {@link MAX_PROCESS_MAX_TURNS}]. Unset ⇒ inherit the model's setting, then the system
-   * default (50). Exposing it is the pragmatic "retry until it passes" loop: one process node
+   * default (255). Exposing it is the pragmatic "retry until it passes" loop: one process node
    * + a tool + a bounded maxTurns loops internally without a multi-node loop construct.
    */
   maxTurns?: number;

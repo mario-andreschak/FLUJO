@@ -1383,6 +1383,10 @@ describe('compileFlowSpec — process maxTurns / prompt flags / allowedTools (1b
     expect(proc(compileFlowSpec(procWrap({ maxTurns: 999999 }), context).flow!).data.properties!.maxTurns).toBe(1000);
   });
 
+  it('preserves an explicit 255 (the new system default) without clamping (#399)', () => {
+    expect(proc(compileFlowSpec(procWrap({ maxTurns: 255 }), context).flow!).data.properties!.maxTurns).toBe(255);
+  });
+
   it('warns and omits a non-numeric maxTurns', () => {
     const { flow, issues } = compileFlowSpec(procWrap({ maxTurns: 'many' as any }), context);
     expect(issues).toContainEqual(expect.objectContaining({ code: 'invalid-max-turns', severity: 'warning' }));
