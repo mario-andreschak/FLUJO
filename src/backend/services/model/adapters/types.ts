@@ -91,8 +91,8 @@ export interface CompletionInput {
   onCodexSessionChange?: (session: CodexSessionMetadata | undefined) => void;
   /** Optional tool definitions in OpenAI format. */
   tools?: OpenAI.ChatCompletionFunctionTool[];
-  /** Sampling temperature. */
-  temperature: number;
+  /** Sampling temperature. Omitted when an invalid persisted value is ignored. */
+  temperature?: number;
   /**
    * Upper bound on tokens the provider may generate for this single completion.
    * Already resolved by the caller with precedence: explicit request

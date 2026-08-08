@@ -26,7 +26,7 @@ import { resolveEffectiveCompaction, resolveEffectiveVisualCompaction } from './
 import { compactMessagesVisually, type EffectiveVisualCompaction } from './visualCompaction';
 import { compactHistory, estimateTokens } from './summarizingCompaction';
 import { normalizeMaxTokens } from '@/shared/types/model';
-import { isSelfOrchestratingAdapter } from '@/shared/types/model/provider';
+import { isSelfOrchestratingAdapter, normalizeModelTemperature } from '@/shared/types/model/provider';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
 import { mapOpenAiUsage, OpenAiUsageLike } from '@/backend/services/model/adapters/openaiUsage';
 import { fingerprintPrefix, classifyDrift, logCacheOutcome, derivePromptCacheKey } from './promptCacheMetrics';
@@ -1585,8 +1585,14 @@ export class ModelHandler {
         };
       }
 
-      // Extract model settings
-      const temperature = model.temperature ? parseFloat(model.temperature) : 0.0;
+      // Extract model settings. Malformed persisted values are omitted so NaN
+      // never reaches an adapter; truly unset legacy values retain the old 0.0 default.
+      const temperature = normalizeModelTemperature(
+        model.temperature,
+        model.provider,
+        model.adapter,
+        model.name,
+      ) ?? (model.temperature === undefined || model.temperature === '' ? 0.0 : undefined);
 
       // Resolve and decrypt the API key. Codex may run keyless: an empty key
       // means "use the machine's ChatGPT plan login from `codex login`" (the
