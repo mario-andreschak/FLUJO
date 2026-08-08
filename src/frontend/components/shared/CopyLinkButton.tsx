@@ -15,6 +15,13 @@ export interface CopyLinkButtonProps {
   size?: 'small' | 'medium';
   className?: string;
   sx?: SxProps<Theme>;
+  /**
+   * Optional override for the idle tooltip/aria-label (#398). Placements that
+   * are not next to the entity they link to (the navbar) need a more specific
+   * accessible name than the generic "Copy link". The transient
+   * copied/failed feedback labels are unchanged.
+   */
+  label?: string;
 }
 
 /** Copies text via the Clipboard API, falling back to a hidden textarea +
@@ -56,7 +63,7 @@ export async function copyText(text: string): Promise<boolean> {
  * magic link built from `target` and briefly shows a "Copied"/"Failed"
  * tooltip. Ids only — never place secrets in `target.extra`.
  */
-export default function CopyLinkButton({ target, size = 'small', className, sx }: CopyLinkButtonProps) {
+export default function CopyLinkButton({ target, size = 'small', className, sx, label: idleLabel }: CopyLinkButtonProps) {
   const { t } = useI18n();
   const [status, setStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
 
@@ -73,7 +80,11 @@ export default function CopyLinkButton({ target, size = 'small', className, sx }
   );
 
   const label =
-    status === 'copied' ? t('magicLink.copied') : status === 'failed' ? t('magicLink.copyFailed') : t('magicLink.copy');
+    status === 'copied'
+      ? t('magicLink.copied')
+      : status === 'failed'
+        ? t('magicLink.copyFailed')
+        : (idleLabel ?? t('magicLink.copy'));
 
   return (
     <Tooltip title={label} disableInteractive>

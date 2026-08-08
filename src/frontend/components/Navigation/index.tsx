@@ -36,13 +36,14 @@ import {
   SettingsRounded,
 } from '@mui/icons-material';
 import { alpha } from '@mui/material/styles';
-import { ElementType, Fragment, useEffect, useState } from 'react';
+import { ElementType, Fragment, Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
 import BugReportButton from '@/frontend/components/BugReport/BugReportButton';
 import AskFlujoButton from '@/frontend/components/AskFlujo/AskFlujoButton';
 import LanguageMenu from '@/frontend/components/LanguageMenu';
+import CopyLinkButton from '@/frontend/components/shared/CopyLinkButton';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import { useTheme } from '@/frontend/contexts/ThemeContext';
@@ -308,6 +309,44 @@ function NavigationEntries({ items, pathname, mobile = false, onNavigate }: Navi
   );
 }
 
+/**
+ * #398: while a conversation is open, surface its canonical magic link
+ * (`/chat?conversation=<id>`) directly in the navbar so it can be copied or
+ * shared without hunting for the row in chat history. The URL is the single
+ * source of truth (`Chat` keeps it in sync with the selected conversation), and
+ * link building/encoding/clipboard handling stays inside the shared
+ * `CopyLinkButton`.
+ *
+ * `useSearchParams()` opts its component into client-side rendering, so it is
+ * isolated in this small child behind a `<Suspense>` boundary instead of
+ * dragging the whole AppBar with it.
+ */
+function CurrentChatLinkButton() {
+  const { t } = useI18n();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  const conversationId = (searchParams?.get('conversation') ?? '').trim();
+
+  // Only on the chat route, and only when a conversation is actually selected:
+  // plain `/chat` or an empty parameter must not expose a stale link.
+  if (pathname !== '/chat' || !conversationId) return null;
+
+  return (
+    <CopyLinkButton
+      target={{ kind: 'conversation', id: conversationId }}
+      label={t('nav.copyChatLink')}
+      size="medium"
+      sx={{
+        color: 'inherit',
+        border: 1,
+        borderColor: 'divider',
+        '& .MuiSvgIcon-root': { fontSize: 20 },
+      }}
+    />
+  );
+}
+
 export default function Navigation() {
   const { toggleTheme, isDarkMode } = useTheme();
   const { t } = useI18n();
@@ -466,6 +505,12 @@ export default function Navigation() {
         {isCompact && <Box sx={{ flex: 1 }} />}
 
         <Stack direction="row" spacing={0.7} alignItems="center">
+          {/* Rendered in this shared action cluster so it is present in both the
+              desktop and the compact/mobile navbar. */}
+          <Suspense fallback={null}>
+            <CurrentChatLinkButton />
+          </Suspense>
+
           <AskFlujoButton />
 
           {!isCompact && (

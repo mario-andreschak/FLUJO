@@ -24,7 +24,9 @@ jest.mock('@/frontend/contexts/ThemeContext', () => ({
 }));
 jest.mock('next/navigation', () => ({
   usePathname: () => mockPathname,
-  useRouter: () => ({ push: jest.fn() }),
+  useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
+  // #398: the navbar reads `?conversation=` to expose the open chat's magic link.
+  useSearchParams: () => new URLSearchParams(),
 }));
 jest.mock('@/frontend/utils/navigationGuard', () => ({
   interceptNavigation: () => false,
