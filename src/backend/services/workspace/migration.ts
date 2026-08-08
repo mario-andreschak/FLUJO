@@ -37,7 +37,7 @@ const log = createLogger('backend/services/workspace/migration');
  *   - source, empty dest   -> move it (rename, or verified copy across volumes)
  *   - empty source, dest   -> already migrated, drop the empty leftover
  *   - no source, dest      -> already migrated
- *   - both have content    -> STOP with an actionable conflict error
+ *   - both have content    -> preserve both copies; use the workspace copy
  *
  * That makes a fresh install, a legacy install, an already-migrated install, an
  * interrupted migration and two racing startups all deterministic.
@@ -187,9 +187,16 @@ async function migrateSubtree(
     return destinationState === 'missing' ? 'created' : 'already-migrated';
   }
 
-  // Source has content.
+  // Source and destination both have data. This is a normal upgrade state when
+  // an operator has already created (or restored) the default workspace before
+  // upgrading. Never merge or overwrite: the workspace copy is authoritative
+  // and the legacy copy remains available for explicit recovery.
   if (destinationState === 'populated') {
-    throw new WorkspaceMigrationConflictError(subtree, source, destination);
+    log.warn(
+      `Both legacy and default-workspace \"${subtree}\" contain data; leaving both copies untouched`,
+      { source, destination },
+    );
+    return 'skipped';
   }
 
   // Destination missing or empty: safe to move the whole subtree.

@@ -26,7 +26,7 @@ const exists = async (p: string) => {
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-storage-'));
-  dbDir = path.join(tmpDir, 'db');
+  dbDir = path.join(tmpDir, 'workspaces', 'default-workspace', 'db');
   process.env.FLUJO_DATA_DIR = tmpDir;
   // STORAGE_DIR is resolved at module load, so re-import after setting the env.
   jest.resetModules();
@@ -58,7 +58,7 @@ describe('collection storage helpers', () => {
       await expect(backend.deleteCollectionItem('flows', bad)).rejects.toThrow();
     }
     // A file was never created outside the collection dir.
-    expect(await exists(path.join(tmpDir, 'db', 'evil.json'))).toBe(false);
+    expect(await exists(path.join(dbDir, 'evil.json'))).toBe(false);
   });
 
   it('accepts normal UUID-like ids', () => {
@@ -155,6 +155,6 @@ describe('migrateArrayFileToCollection', () => {
     await writeLegacy([{ id: 'ok', name: 'Fine' }, { id: '../evil', name: 'Bad' }]);
     await backend.migrateArrayFileToCollection(StorageKey.FLOWS, 'flows', (f: { id: string }) => f.id);
     expect(await exists(path.join(dbDir, 'flows', 'ok.json'))).toBe(true);
-    expect(await exists(path.join(tmpDir, 'db', 'evil.json'))).toBe(false);
+    expect(await exists(path.join(dbDir, 'evil.json'))).toBe(false);
   });
 });
