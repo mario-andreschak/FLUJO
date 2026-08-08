@@ -54,6 +54,7 @@ const issueMessageKeys: Record<string, TranslationKey> = {
   'tool-unavailable': 'validation.toolUnavailable',
   'handoff-target-unreferenced': 'validation.handoffUnused',
   'mcp-server-no-tools': 'validation.serverNoTools',
+  'static-invalid-injectonce': 'validation.staticInjectOnce',
 };
 
 export function localizeFlowIssue(issue: LocalizableFlowIssue, t: Translator): string {
