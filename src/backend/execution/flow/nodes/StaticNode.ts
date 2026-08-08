@@ -71,8 +71,7 @@ export class StaticNode extends BaseNode {
       });
     }
 
-    const state = sharedState as SharedState & { staticInjected?: Record<string, boolean> };
-    const alreadyInjected = state.staticInjected?.[nodeId] === true;
+    const alreadyInjected = sharedState.staticInjected?.[nodeId] === true;
 
     if (prepResult.injectOnce && alreadyInjected) {
       log.info('injectOnce: skipping repeat injection', { nodeId });
@@ -143,7 +142,7 @@ export class StaticNode extends BaseNode {
       }
 
       sharedState.messages.push(...messages);
-      state.staticInjected = { ...(state.staticInjected ?? {}), [nodeId]: true };
+      sharedState.staticInjected = { ...(sharedState.staticInjected ?? {}), [nodeId]: true };
       log.info('Injected static messages', { nodeId, messageCount: messages.length });
     }
 

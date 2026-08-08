@@ -143,4 +143,53 @@ describe('StaticNode', () => {
 
     expect(action).toBe('default');
   });
+  it('uses per-run staticInjected bookkeeping across re-entry and state serialization', async () => {
+    const node = nodeWithSuccessor();
+    const p = params({ entries: [{ kind: 'message', role: 'user', content: 'once' }], injectOnce: true });
+    const state = makeState();
+
+    await run(node, state, p);
+    expect(state.staticInjected).toEqual({ stat: true });
+
+    const restored = JSON.parse(JSON.stringify(state)) as SharedState;
+    await run(node, restored, p);
+    expect(restored.messages).toHaveLength(1);
+
+    const freshState = makeState();
+    await run(node, freshState, p);
+    expect(freshState.messages).toHaveLength(1);
+  });
+
+  it('treats non-true injectOnce values as append and re-resolves variables', async () => {
+    const node = nodeWithSuccessor();
+    const state = makeState({ variables: { attempt: 'one' } });
+    const p = params({
+      entries: [{ kind: 'message', role: 'user', content: 'attempt ${var:attempt}' }],
+      injectOnce: 'true',
+    });
+
+    await run(node, state, p);
+    state.variables = { attempt: 'two' };
+    await run(node, state, p);
+
+    expect(state.messages.map((message) => message.content)).toEqual(['attempt one', 'attempt two']);
+  });
+
+  it('does not mark an empty once-only node and mints fresh tool-call ids on re-entry', async () => {
+    const node = nodeWithSuccessor();
+    const state = makeState();
+    const empty = params({ entries: [], injectOnce: true });
+    await run(node, state, empty);
+    expect(state.staticInjected).toBeUndefined();
+
+    const tool = params({ entries: [{ kind: 'toolCall', toolName: 'lookup', argumentsJson: '{}', result: 'ok' }] });
+    await run(node, state, tool);
+    await run(node, state, tool);
+    const first = (state.messages[0] as any).tool_calls[0].id;
+    const second = (state.messages[2] as any).tool_calls[0].id;
+    expect(first).not.toBe(second);
+    expect((state.messages[1] as any).tool_call_id).toBe(first);
+    expect((state.messages[3] as any).tool_call_id).toBe(second);
+  });
+
 });

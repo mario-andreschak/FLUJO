@@ -896,7 +896,11 @@ export function compileFlowSpec(
         } else {
           warn('static-no-entries', `Node "${key}": a static node has no entries; it injects nothing.`, key);
         }
-        if (specNode.injectOnce === true) properties.injectOnce = true;
+        if (specNode.injectOnce === true) {
+          properties.injectOnce = true;
+        } else if (specNode.injectOnce !== undefined && typeof specNode.injectOnce !== 'boolean') {
+          warn('static-invalid-injectonce', `Node \"${key}\": injectOnce must be a boolean; value ignored.`, key);
+        }
       }
       // finish: no properties.
 

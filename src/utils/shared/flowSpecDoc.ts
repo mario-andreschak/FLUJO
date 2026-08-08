@@ -64,7 +64,7 @@ NODE TYPES:
       { "kind": "message", "role": "system|user|assistant", "content": "..." },
       { "kind": "toolCall", "toolName": "...", "argumentsJson": "{...}", "result": "..." }
     ],
-    "injectOnce": true }                                            // optional; inject only on the first traversal per run
+    "injectOnce": true }                                            // optional; default appends every traversal; true injects once per run
 
 EDGES: { "from": "<node key>", "to": "<node key>", "bidirectional": true|false,
          "condition": { "kind": "contains"|"regex"|"equals", "value": "...",

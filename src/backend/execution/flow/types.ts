@@ -665,9 +665,14 @@ export type StaticEntry =
 
 export interface StaticNodeProperties {
     name?: string;
-    /** Entries injected, in order, onto sharedState.messages. */
+    /** Entries injected, in order, onto sharedState.messages. Defaults to []. */
     entries?: StaticEntry[];
-    /** When true, inject only the first time the node is traversed in a run. */
+    /**
+     * Re-entry semantics. Default (`false`/omitted): append entries on every traversal,
+     * so a looping node re-injects each iteration with freshly resolved `${var:…}` values.
+     * `true`: inject only on the first traversal of this node within a run (tracked in
+     * `SharedState.staticInjected`). See docs/architecture/static-node-reentry-semantics.md.
+     */
     injectOnce?: boolean;
 }
 
@@ -774,6 +779,12 @@ export interface SharedState {
     /** On a persisted child conversation, identifies the exact parent lane that
      *  this conversation must satisfy after a retry or continued turn. */
     subflowLane?: RecoveryLaneIdentity;
+    /**
+     * Per-run bookkeeping for static nodes with `injectOnce: true`, keyed by node id.
+     * It is persisted with the run state, so it survives pause/resume. Subflow runs
+     * have their own SharedState and therefore begin with a fresh map.
+     */
+    staticInjected?: Record<string, boolean>;
     /** UTC epoch used to measure the logical run across pause/resume boundaries. */
     statisticsRunStartedAt?: number;
     /** Prevents a resumed approval/debug request from emitting a second start. */
