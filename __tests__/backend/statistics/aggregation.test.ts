@@ -154,6 +154,7 @@ describe('statistics aggregation', () => {
     expect(response.daily).toHaveLength(2);
     expect(response.rankings.models[0]).toEqual(expect.objectContaining({ id: 'model-1', runs: 1, providerAttempts: 2 }));
     expect(response.rankings.plannedExecutions[0]).toEqual(expect.objectContaining({ id: 'plan-1', runs: 1, schedulerSkips: 1 }));
+    expect(response.summary.errorClasses).toEqual({ provider: 1, rate_limit: 1 });
     expect(JSON.stringify(response)).not.toMatch(/truncated|eventId|runId|errorClass|rawError/);
   });
 
@@ -175,6 +176,7 @@ describe('statistics aggregation', () => {
     expect(empty.daily.map(bucket => bucket.summary.runs)).toEqual([0, 0]);
     expect(empty.rankings).toEqual({
       flows: [], plannedExecutions: [], models: [], providers: [], credentials: [], nodes: [], tools: [],
+      subflows: [], revisions: [],
     });
   });
 
