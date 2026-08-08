@@ -27,6 +27,39 @@ export { WORKSPACE_LAYOUT_VERSION } from './layoutVersion';
 
 const log = createLogger('backend/services/workspace/migration');
 
+/**
+ * Workspace layout bootstrap + legacy migration (#406).
+ *
+ * Before #406 the three writable subtrees lived directly under the data root:
+ *
+ *   <data root>/db, <data root>/mcp-servers, <data root>/userdata
+ *
+ * They now live one level deeper, inside a workspace:
+ *
+ *   <data root>/workspaces/default-workspace/{db,mcp-servers,userdata}
+ *
+ * This module runs BEFORE storage verification, MCP startup and the scheduler,
+ * so nothing ever opens a legacy path after the move has started. It follows the
+ * conventions already used by the shipped-server migration: one in-flight promise
+ * shared by concurrent callers, cleared in `finally` so a failure is retryable,
+ * and a durable marker so a completed migration is a cheap no-op forever after.
+ *
+ * The cardinal rule is **never merge and never overwrite**. Each subtree is
+ * migrated independently and one of five things is true for it:
+ *
+ *   - no source            -> create the destination (fresh install)
+ *   - source, empty dest   -> move it (rename, or verified copy across volumes)
+ *   - empty source, dest   -> already migrated, drop the empty leftover
+ *   - no source, dest      -> already migrated
+ *   - both have content    -> preserve both copies; use the workspace copy
+ *
+ * That makes a fresh install, a legacy install, an already-migrated install, an
+ * interrupted migration and two racing startups all deterministic.
+ */
+
+/** Bump when the on-disk layout changes again; older markers then re-run. */
+export const WORKSPACE_LAYOUT_VERSION = 1;
+
 const MARKER_FILE = '.workspace-layout.json';
 const JOURNAL_FILE = '.workspace-layout.transaction.json';
 const FAST_JOURNAL_FILE = '.workspace-layout.fast-transaction.json';
@@ -471,8 +504,65 @@ async function prepareRoots(): Promise<void> {
   await assertNotSymlink(fastJournalPath(), 'Fast workspace migration journal');
 }
 
+async function migrateSubtree(
+  subtree: WorkspaceSubtree,
+  source: string,
+  destination: string,
+): Promise<SubtreeOutcome> {
+  const sourceState = await inspect(source);
+  const destinationState = await inspect(destination);
+
+  // Fresh install (or a subtree this install never used): just create it.
+  if (sourceState === 'missing') {
+    await fs.mkdir(destination, { recursive: true });
+    return destinationState === 'missing' ? 'created' : 'already-migrated';
+  }
+
+  // Something that isn't a directory is not ours to move.
+  if (sourceState === 'other') {
+    log.warn(`Legacy "${subtree}" is not a directory — leaving it untouched`, { source });
+    await fs.mkdir(destination, { recursive: true });
+    return 'skipped';
+  }
+
+  if (destinationState === 'other') {
+    throw new WorkspaceMigrationConflictError(subtree, source, destination);
+  }
+
+  if (sourceState === 'empty') {
+    // Nothing to preserve. Remove the empty leftover so a half-finished run
+    // doesn't look like a legacy install forever.
+    await fs.mkdir(destination, { recursive: true });
+    await fs.rmdir(source).catch(() => {
+      /* still in use / not empty any more — harmless */
+    });
+    return destinationState === 'missing' ? 'created' : 'already-migrated';
+  }
+
+  // Source and destination both have data. This is a normal upgrade state when
+  // an operator has already created (or restored) the default workspace before
+  // upgrading. Never merge or overwrite: the workspace copy is authoritative
+  // and the legacy copy remains available for explicit recovery.
+  if (destinationState === 'populated') {
+    log.warn(
+      `Both legacy and default-workspace \"${subtree}\" contain data; leaving both copies untouched`,
+      { source, destination },
+    );
+    return 'skipped';
+  }
+
+  // Destination missing or empty: safe to move the whole subtree.
+  if (destinationState === 'empty') {
+    // rename() onto an existing directory is portable only when the target is
+    // absent, so clear the empty placeholder first.
+    await fs.rmdir(destination).catch(() => undefined);
+  }
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+}
+
 async function syncDirectory(candidate: string): Promise<void> {
   let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+
   try {
     handle = await fs.open(candidate, 'r');
     await handle.sync();

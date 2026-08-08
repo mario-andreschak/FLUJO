@@ -133,12 +133,16 @@ describe('callTool timeout handling', () => {
 
     const result = await callTool(client, 'srv', 'demo', {});
 
+    // Every task-lifecycle failure response carries BOTH the correlating
+    // progressToken (the remote task id) and the toolName, exactly like the
+    // caller-abort response above — see clientTasks.terminalResponseFor.
     expect(result).toEqual({
       success: false,
       error: "Tool 'demo' task task-1 was cancelled by the server.",
       errorType: 'cancelled',
       toolName: 'demo',
       progressToken: 'task-1',
+      toolName: 'demo',
     });
   });
 

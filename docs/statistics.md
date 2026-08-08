@@ -40,7 +40,7 @@ Correlation and revision identifiers are bounded to 128 characters and a conserv
 
 ### Exclusions
 
-Prompts, messages, completions, tool schemas, tool arguments/results, trigger context, URLs, raw provider errors, API keys, encrypted credentials, and decrypted secrets are never part of the statistics schema. The statistics service logs only bounded diagnostics such as event type, partition day, and invalid-record count; it does not log the rejected record or runtime payload.
+Prompts, messages, completions, tool schemas, tool arguments/results, trigger context, URLs, raw provider errors, API keys, encrypted credentials, and decrypted secrets are never part of the statistics schema. Events may retain only an allowlisted categorical `errorClass` (for example `provider` or `rate_limit`); aggregation exposes these as count-only `errorClasses`, never as error messages, stacks, or payload. The statistics service logs only bounded diagnostics such as event type, partition day, and invalid-record count; it does not log the rejected record or runtime payload.
 
 Payload metadata describes SIZE and SHAPE only. A request of 812 bytes categorized as `json` is recorded; its content is not read into the event, not hashed into the event, and not retained anywhere.
 

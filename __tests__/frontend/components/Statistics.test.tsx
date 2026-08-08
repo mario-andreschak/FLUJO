@@ -115,7 +115,11 @@ describe('Statistics dashboard', () => {
 
     const summaryRegion = await screen.findByLabelText('Statistics summary');
     expect(within(summaryRegion).getByText('Logical runs')).toBeInTheDocument();
-    expect(within(summaryRegion).getByText('50%')).toBeInTheDocument();
+    const successRateCard = within(summaryRegion).getByLabelText('Success rate');
+    const cacheHitRateCard = within(summaryRegion).getByLabelText('Cache hit rate');
+    expect(successRateCard).not.toBe(cacheHitRateCard);
+    expect(within(successRateCard).getByText('50%')).toBeInTheDocument();
+    expect(within(cacheHitRateCard).getByText('50%')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Providers & Keys' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('tab', { name: 'Flows' }));
@@ -161,8 +165,9 @@ describe('Statistics dashboard', () => {
 
     render(<Statistics />);
 
-    expect(await screen.findByText('No telemetry for this selection')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'No telemetry for this selection' })).toBeInTheDocument();
     expect(screen.getByText(/Reliable collection begins after experimental statistics are enabled/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Statistics summary')).not.toBeInTheDocument();
   });
 
   it('shows retryable API errors', async () => {

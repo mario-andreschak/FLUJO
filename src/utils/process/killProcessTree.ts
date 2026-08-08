@@ -21,7 +21,11 @@ const log = createLogger('utils/process/killProcessTree');
  *          later receive a dangling SIGKILL (and the timer never keeps the event loop
  *          alive). On Windows / spawn-failure it is a harmless no-op.
  */
-export function killProcessTree(child: ChildProcess, graceMs = 2000): () => void {
+export function killProcessTree(
+  child: ChildProcess,
+  graceMs = 2000,
+  scheduleEscalation = true,
+): () => void {
   const pid = child.pid;
   if (pid === undefined) {
     // spawn failed or never produced a pid — nothing to terminate.
@@ -45,6 +49,10 @@ export function killProcessTree(child: ChildProcess, graceMs = 2000): () => void
     process.kill(-pid, 'SIGTERM');
   } catch {
     /* ESRCH: the group is already gone */
+  }
+
+  if (!scheduleEscalation) {
+    return () => { /* the awaited caller owns SIGKILL escalation */ };
   }
 
   const escalation = setTimeout(() => {
@@ -127,7 +135,10 @@ export async function killProcessTreeAndWait(
   }
 
   // First escalation: signal the whole tree/group, not just the shell wrapper.
-  const cancelEscalation = killProcessTree(child, graceMs);
+  // The awaitable path owns the escalation timing below. Avoid scheduling the
+  // fire-and-forget helper's SIGKILL timer as well, which could otherwise race
+  // this explicit escalation and signal a recycled process group twice.
+  const cancelEscalation = killProcessTree(child, graceMs, false);
   let exited = await waitForExit(child, graceMs);
   if (exited) {
     // The tree died within the grace window; drop the pending SIGKILL so it can

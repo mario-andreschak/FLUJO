@@ -252,7 +252,7 @@ interface SummaryCardProps {
 
 function SummaryCard({ label, value, detail }: SummaryCardProps) {
   return (
-    <Card variant="outlined" sx={{ minWidth: 0 }}>
+    <Card variant="outlined" aria-label={label} sx={{ minWidth: 0 }}>
       <CardContent>
         <Typography color="text.secondary" variant="body2">
           {label}

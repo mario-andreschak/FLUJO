@@ -16,6 +16,7 @@
 // Async return values are configured in beforeEach; a bare undefined return is
 // harmless for the void-returning collaborators (they are awaited).
 const verifyStorageMock = jest.fn();
+const migrateWorkspaceLayoutMock = jest.fn();
 const migrateInternalMcpServersMock = jest.fn();
 const startEnabledServersMock = jest.fn();
 const refreshSpotlightMock = jest.fn();
@@ -26,6 +27,9 @@ const ensureVendoredFlowGeneratorMock = jest.fn();
 
 jest.mock('@/utils/storage/backend', () => ({
   verifyStorage: (...a: unknown[]) => verifyStorageMock(...a),
+}));
+jest.mock('@/backend/services/workspace/migration', () => ({
+  migrateWorkspaceLayout: (...a: unknown[]) => migrateWorkspaceLayoutMock(...a),
 }));
 jest.mock('@/backend/services/mcp', () => ({
   mcpService: { startEnabledServers: (...a: unknown[]) => startEnabledServersMock(...a) },
@@ -66,6 +70,7 @@ describe('backend init startup gating (#78)', () => {
     jest.clearAllMocks();
     clearGlobals();
     verifyStorageMock.mockResolvedValue(undefined);
+    migrateWorkspaceLayoutMock.mockResolvedValue(undefined);
     ensureVendoredFlowGeneratorMock.mockResolvedValue(undefined);
     migrateInternalMcpServersMock.mockResolvedValue(undefined);
     startEnabledServersMock.mockResolvedValue(undefined);
@@ -78,7 +83,11 @@ describe('backend init startup gating (#78)', () => {
   it('DEFAULT mode: verifies storage, then starts MCP servers, then arms the scheduler at boot', async () => {
     await ensureBackendInitialized();
 
+    expect(migrateWorkspaceLayoutMock).toHaveBeenCalledTimes(1);
     expect(verifyStorageMock).toHaveBeenCalledTimes(1);
+    expect(migrateWorkspaceLayoutMock.mock.invocationCallOrder[0]).toBeLessThan(
+      verifyStorageMock.mock.invocationCallOrder[0]
+    );
     expect(ensureVendoredFlowGeneratorMock).toHaveBeenCalledTimes(1);
     expect(migrateInternalMcpServersMock).toHaveBeenCalledTimes(1);
     expect(startEnabledServersMock).toHaveBeenCalledTimes(1);
@@ -91,6 +100,25 @@ describe('backend init startup gating (#78)', () => {
     expect(startEnabledServersMock.mock.invocationCallOrder[0]).toBeLessThan(
       schedulerStartMock.mock.invocationCallOrder[0]
     );
+  });
+
+  it('does not run downstream startup when workspace migration fails, then retries cleanly', async () => {
+    migrateWorkspaceLayoutMock
+      .mockRejectedValueOnce(new Error('workspace migration failed'))
+      .mockResolvedValueOnce(undefined);
+
+    await expect(ensureBackendInitialized()).rejects.toThrow('workspace migration failed');
+
+    expect(verifyStorageMock).not.toHaveBeenCalled();
+    expect(ensureVendoredFlowGeneratorMock).not.toHaveBeenCalled();
+    expect(migrateInternalMcpServersMock).not.toHaveBeenCalled();
+    expect(startEnabledServersMock).not.toHaveBeenCalled();
+    expect(schedulerStartMock).not.toHaveBeenCalled();
+
+    await ensureBackendInitialized();
+
+    expect(migrateWorkspaceLayoutMock).toHaveBeenCalledTimes(2);
+    expect(verifyStorageMock).toHaveBeenCalledTimes(1);
   });
 
   it('does not start the sweep until a failed migration succeeds on retry', async () => {
