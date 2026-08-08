@@ -25,31 +25,49 @@ import {
 } from '../../src/backend/services/mcp/shippedServers';
 
 const mockLaunchBrowser = jest.fn();
+const mockLaunchPersistentContext = jest.fn();
 jest.mock('patchright', () => ({
-  chromium: { launch: (...args: unknown[]) => mockLaunchBrowser(...args) },
+  chromium: {
+    launch: (...args: unknown[]) => mockLaunchBrowser(...args),
+    launchPersistentContext: (...args: unknown[]) => mockLaunchPersistentContext(...args),
+  },
 }));
 
 describe('bundled browser MCP', () => {
-  const previousOrigins = process.env.FLUJO_BROWSER_ALLOWED_ORIGINS;
-  const previousPrivate = process.env.FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS;
-  const previousStream = process.env.FLUJO_BROWSER_STREAM_ENABLED;
+  const managedEnvKeys = [
+    'FLUJO_BROWSER_ALLOWED_ORIGINS',
+    'FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS',
+    'FLUJO_BROWSER_STREAM_ENABLED',
+    'FLUJO_BROWSER_MODE',
+    'FLUJO_BROWSER_CHANNEL',
+    'FLUJO_BROWSER_HEADED',
+    'FLUJO_BROWSER_ALLOW_SERVICE_WORKERS',
+    'FLUJO_BROWSER_EXECUTABLE_PATH',
+    'FLUJO_BROWSER_PROFILE_DIR',
+    'FLUJO_BROWSER_LOCALE',
+    'FLUJO_BROWSER_TIMEZONE_ID',
+    'FLUJO_BROWSER_EXTENSION_DIRS',
+    'FLUJO_BROWSER_WINDOW_VISIBILITY',
+  ] as const;
+  const previousEnv = new Map(managedEnvKeys.map((key) => [key, process.env[key]]));
 
   beforeEach(() => {
+    for (const key of managedEnvKeys) delete process.env[key];
     // The live view gateway binds a real loopback listener; suites that do not
     // exercise it opt out explicitly.
     process.env.FLUJO_BROWSER_STREAM_ENABLED = '0';
   });
 
   afterEach(async () => {
-    if (previousOrigins === undefined) delete process.env.FLUJO_BROWSER_ALLOWED_ORIGINS;
-    else process.env.FLUJO_BROWSER_ALLOWED_ORIGINS = previousOrigins;
-    if (previousPrivate === undefined) delete process.env.FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS;
-    else process.env.FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS = previousPrivate;
-    if (previousStream === undefined) delete process.env.FLUJO_BROWSER_STREAM_ENABLED;
-    else process.env.FLUJO_BROWSER_STREAM_ENABLED = previousStream;
+    for (const key of managedEnvKeys) {
+      const previous = previousEnv.get(key);
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    }
     await shutdownBrowserGateway();
     await shutdownBrowserRuntime();
     mockLaunchBrowser.mockReset();
+    mockLaunchPersistentContext.mockReset();
   });
 
   it('advertises a stable MCP Apps resource on every browser tool', () => {
@@ -72,6 +90,8 @@ describe('bundled browser MCP', () => {
       'browser_record_start',
       'browser_record_stop',
       'browser_record_status',
+      'browser_diagnostics',
+      'browser_extensions',
       'browser_close',
     ]);
     for (const tool of tools) {
@@ -232,6 +252,185 @@ describe('bundled browser MCP', () => {
     await expect(closeSession(undefined)).resolves.toBe(true);
     const closedAgain = await browserCallTool('browser_close', {}, new AbortController().signal);
     expect(closedAgain.structuredContent).toEqual({ success: true, sessionId: null, closed: false });
+  });
+
+  it('uses installed headed Chrome with a dedicated persistent profile in trusted mode', async () => {
+    const profileDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-browser-profile-test-'));
+    process.env.FLUJO_BROWSER_MODE = 'trusted';
+    process.env.FLUJO_BROWSER_CHANNEL = 'chrome';
+    process.env.FLUJO_BROWSER_HEADED = '1';
+    process.env.FLUJO_BROWSER_ALLOW_SERVICE_WORKERS = '1';
+    process.env.FLUJO_BROWSER_PROFILE_DIR = profileDir;
+    process.env.FLUJO_BROWSER_LOCALE = 'en-US';
+    process.env.FLUJO_BROWSER_TIMEZONE_ID = 'America/Bogota';
+
+    let closed = false;
+    const page = {
+      close: jest.fn(async () => { closed = true; }),
+      evaluate: jest.fn(async () => ({
+        userAgent: 'Mozilla/5.0 Chrome/149.0.0.0 Safari/537.36',
+        userAgentBrands: [{ brand: 'Google Chrome', version: '149' }],
+        webdriver: false,
+        language: 'en-US',
+        languages: ['en-US'],
+        platform: 'Win32',
+        timezone: 'America/Bogota',
+      })),
+      isClosed: jest.fn(() => closed),
+      mainFrame: jest.fn(() => ({})),
+      on: jest.fn(),
+      url: jest.fn(() => 'about:blank'),
+    };
+    const context = {
+      browser: jest.fn(() => ({ version: jest.fn(() => '149.0.0.0') })),
+      close: jest.fn(async () => undefined),
+      newPage: jest.fn(async () => page),
+      once: jest.fn(),
+      pages: jest.fn(() => [page]),
+      route: jest.fn(async () => undefined),
+    };
+    mockLaunchPersistentContext.mockResolvedValue(context);
+
+    try {
+      const session = await openSession('trusted-session', new AbortController().signal);
+      expect(session.mode).toBe('trusted');
+      expect(mockLaunchPersistentContext).toHaveBeenCalledWith(
+        path.resolve(profileDir),
+        expect.objectContaining({
+          channel: 'chrome',
+          headless: false,
+          locale: 'en-US',
+          serviceWorkers: 'allow',
+          timezoneId: 'America/Bogota',
+        }),
+      );
+
+      const diagnostics = await browserCallTool(
+        'browser_diagnostics',
+        { sessionId: session.id },
+        new AbortController().signal,
+      );
+      expect(diagnostics.structuredContent).toMatchObject({
+        success: true,
+        mode: 'trusted',
+        channel: 'chrome',
+        headless: false,
+        persistentProfile: true,
+        fingerprint: { webdriver: false, language: 'en-US' },
+      });
+
+      await expect(closeSession(session.id)).resolves.toBe(true);
+      expect(page.close).toHaveBeenCalledTimes(1);
+      expect(context.close).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(profileDir, { recursive: true, force: true });
+    }
+  });
+
+  it('classifies destination challenges separately from FLUJO policy blocks', async () => {
+    process.env.FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS = '1';
+    const response = { status: jest.fn(() => 200) };
+    const page = {
+      goto: jest.fn(async () => response),
+      isClosed: jest.fn(() => false),
+      locator: jest.fn(() => ({ innerText: jest.fn(async () => 'Unsere Systeme haben ungewöhnlichen Datenverkehr festgestellt') })),
+      mainFrame: jest.fn(() => ({})),
+      on: jest.fn(),
+      title: jest.fn(async () => 'https://www.google.com/search?q=test'),
+      url: jest.fn(() => 'https://www.google.com/sorry/index'),
+    };
+    const context = {
+      close: jest.fn(async () => undefined),
+      newPage: jest.fn(async () => page),
+      route: jest.fn(async () => undefined),
+    };
+    mockLaunchBrowser.mockResolvedValue({
+      close: jest.fn(async () => undefined),
+      isConnected: jest.fn(() => true),
+      newContext: jest.fn(async () => context),
+      once: jest.fn(),
+      version: jest.fn(() => '149.0.0.0'),
+    });
+    const session = await openSession('classification-session', new AbortController().signal);
+
+    const siteResult = await browserCallTool(
+      'browser_navigate',
+      { sessionId: session.id, url: 'https://example.com/' },
+      new AbortController().signal,
+    );
+    expect(siteResult.structuredContent).toMatchObject({
+      success: true,
+      navigation: { classification: 'site', blocked: true, status: 200 },
+    });
+
+    delete process.env.FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS;
+    const policyResult = await browserCallTool(
+      'browser_navigate',
+      { sessionId: session.id, url: 'http://127.0.0.1:4200/' },
+      new AbortController().signal,
+    );
+    expect(policyResult.structuredContent).toMatchObject({
+      success: false,
+      error: { code: 'NAVIGATION_BLOCKED', category: 'policy' },
+    });
+  });
+
+  it('loads only explicitly allowlisted unpacked extensions and can hide headed Chrome off-screen', async () => {
+    const extensionDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-browser-extension-test-'));
+    const profileDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-browser-extension-profile-'));
+    await fs.writeFile(path.join(extensionDir, 'manifest.json'), JSON.stringify({
+      manifest_version: 3,
+      name: 'FLUJO test extension',
+      version: '1.0.0',
+      background: { service_worker: 'worker.js' },
+    }));
+    process.env.FLUJO_BROWSER_MODE = 'trusted';
+    process.env.FLUJO_BROWSER_CHANNEL = 'chromium';
+    process.env.FLUJO_BROWSER_EXTENSION_DIRS = extensionDir;
+    process.env.FLUJO_BROWSER_PROFILE_DIR = profileDir;
+    process.env.FLUJO_BROWSER_WINDOW_VISIBILITY = 'offscreen';
+
+    const page = {
+      close: jest.fn(async () => undefined),
+      isClosed: jest.fn(() => false),
+      mainFrame: jest.fn(() => ({})),
+      on: jest.fn(),
+      url: jest.fn(() => 'about:blank'),
+    };
+    const context = {
+      backgroundPages: jest.fn(() => []),
+      browser: jest.fn(() => ({ version: jest.fn(() => '149.0.0.0') })),
+      close: jest.fn(async () => undefined),
+      newPage: jest.fn(async () => page),
+      once: jest.fn(),
+      pages: jest.fn(() => [page]),
+      route: jest.fn(async () => undefined),
+      serviceWorkers: jest.fn(() => [{
+        url: () => 'chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/worker.js',
+      }]),
+    };
+    mockLaunchPersistentContext.mockResolvedValue(context);
+
+    try {
+      await openSession('extension-session', new AbortController().signal);
+      const options = mockLaunchPersistentContext.mock.calls[0][1] as { args: string[]; channel: string };
+      expect(options.channel).toBe('chromium');
+      expect(options.args).toEqual(expect.arrayContaining([
+        '--window-position=-32000,-32000',
+        `--disable-extensions-except=${await fs.realpath(extensionDir)}`,
+        `--load-extension=${await fs.realpath(extensionDir)}`,
+      ]));
+
+      const result = await browserCallTool('browser_extensions', {}, new AbortController().signal);
+      expect(result.structuredContent).toMatchObject({
+        success: true,
+        configuredUnpacked: [{ name: 'FLUJO test extension', version: '1.0.0' }],
+        activeExtensionIds: ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'],
+      });
+    } finally {
+      await fs.rm(extensionDir, { recursive: true, force: true });
+      await fs.rm(profileDir, { recursive: true, force: true });
+    }
   });
 
   it('drives pointer, keyboard, scroll, and history interactions used by the MCP App', async () => {

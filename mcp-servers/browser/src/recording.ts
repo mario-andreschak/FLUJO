@@ -34,6 +34,7 @@ import {
   ensureScratchDir,
   closeSession,
   integerEnv,
+  installRequestPolicy,
   recordingRoot,
   registerSession,
   type BrowserSession,
@@ -364,13 +365,16 @@ export async function startRecording(args: StartRecordingArgs, signal: AbortSign
 
   const session: BrowserSession = {
     id,
+    mode: 'sandbox',
     context,
     page,
     touchedAt: Date.now(),
     documentRequests: 0,
     navigationBlocked: false,
+    blockedRequestCount: 0,
   };
   registerSession(session);
+  await installRequestPolicy(context);
 
   const state: RecordingState = {
     id,

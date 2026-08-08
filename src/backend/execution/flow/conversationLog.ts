@@ -485,6 +485,17 @@ export function repairDanglingToolCalls(
   state: SharedState,
   content: string = INTERRUPTED_TOOL_RESULT_CONTENT,
 ): FlujoChatMessage[] {
+  // An approval/debug pause intentionally persists an unanswered assistant
+  // tool-call turn. It is not crash damage: the parked state carries the exact
+  // calls/action that resume must process. Repairing it here would insert fake
+  // "interrupted" results before Step/Continue and either duplicate execution
+  // or erase the approval boundary.
+  const intentionallyPending =
+    (state.status === 'paused_debug'
+      && (!!state.debugPendingAction || !!state.debugPendingToolCalls?.length))
+    || (state.status === 'awaiting_tool_approval' && !!state.pendingToolCalls?.length);
+  if (intentionallyPending) return [];
+
   const messages = state.messages ?? [];
   if (messages.length === 0) return [];
 

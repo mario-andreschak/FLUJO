@@ -225,10 +225,26 @@ describe('fingerprintPrefix', () => {
     expect(fp.toolCount).toBe(0);
   });
 
-  it('only fingerprints a system message in the LEADING position', () => {
-    // A system message that is not at index 0 is not a cacheable prefix segment.
+  it('fingerprints a late system message used by the GPT-5.6 wire strategy', () => {
     const fp = fingerprintPrefix([user('hi'), sys('S')], undefined);
-    expect(fp.system).toBeUndefined();
+    expect(fp.system).toBeTruthy();
+    expect(fp.systemPosition).toBe('trailing');
+    expect(fp.messageHashes).toHaveLength(1);
+  });
+
+  it('treats a changed late instruction as a fresh suffix, not cached-prefix drift', () => {
+    call('c1', [user('task'), sys('node A')], undefined);
+    expect(call('c1', [user('task'), sys('node B')], undefined)).toBe('none');
+  });
+
+  it('recognizes history inserted before a late instruction as a pure cacheable append', () => {
+    call('c1', [user('task'), sys('node A')], undefined);
+    expect(call('c1', [
+      user('task'),
+      { role: 'assistant', content: 'working' },
+      user('continue'),
+      sys('node A'),
+    ], undefined)).toBe('none');
   });
 });
 
@@ -267,6 +283,20 @@ describe('derivePromptCacheKey', () => {
   it('falls back to the system hash when there are no tools', () => {
     const key = keyFor([sys('S')], undefined);
     expect(key).toMatch(/^flujo-s/);
+  });
+
+  it('uses a conversation-stable key for no-tool late-instruction calls', () => {
+    const fp = fingerprintPrefix([user('hi'), sys('node-specific')], undefined);
+    const first = derivePromptCacheKey(fp, {
+      conversationId: 'conversation-1',
+      preferConversation: true,
+    });
+    const otherNode = derivePromptCacheKey(
+      fingerprintPrefix([user('hi'), sys('different node')], undefined),
+      { conversationId: 'conversation-1', preferConversation: true },
+    );
+    expect(first).toMatch(/^flujo-c/);
+    expect(otherNode).toBe(first);
   });
 
   it('is undefined when there is no cacheable prefix at all', () => {

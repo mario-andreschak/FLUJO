@@ -42,9 +42,10 @@ async function processChatCompletionInternal(
   requireApproval: boolean,
   flujodebug: boolean,
   conversationId?: string,
-  // When true, a debug session (debugMode) runs freely until a terminal/
-  // approval/breakpoint state instead of pausing after every step. Used by the
-  // "Continue" control; "Step" leaves this false so it pauses each step.
+  // When true, bypass debugger single-stepping and run until a natural stop.
+  // The Continue route now clears debugMode/breakpoints before using this so
+  // Continue is a real detach; legacy/internal callers can still use the flag
+  // to prevent an already-debug-marked state from single-stepping.
   continueDebug: boolean = false,
   // True only for a fresh user-initiated turn (the public completions route).
   // Such a turn re-syncs debugMode to the request's flujodebug flag so toggling

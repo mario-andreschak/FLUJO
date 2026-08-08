@@ -158,11 +158,17 @@ describe('normal stdio delivery', () => {
     const environment = {
       FLUJO_DATA_DIR: '/data',
       FLUJO_BROWSER_SCREENSHOT_DIR: '/artifacts/browser',
+      FLUJO_BROWSER_MODE: 'trusted',
+      FLUJO_BROWSER_WINDOW_VISIBILITY: 'offscreen',
+      FLUJO_BROWSER_EXTENSION_DIRS: '/extensions/one:/extensions/two',
       PLAYWRIGHT_BROWSERS_PATH: '/ms-playwright',
     };
 
     expect(shippedServerEnv(browser, environment)).toMatchObject({
       FLUJO_BROWSER_SCREENSHOT_DIR: '/artifacts/browser',
+      FLUJO_BROWSER_MODE: 'trusted',
+      FLUJO_BROWSER_WINDOW_VISIBILITY: 'offscreen',
+      FLUJO_BROWSER_EXTENSION_DIRS: '/extensions/one:/extensions/two',
       PLAYWRIGHT_BROWSERS_PATH: '/ms-playwright',
     });
     expect(shippedServerEnv(filesystem, environment)).not.toHaveProperty('PLAYWRIGHT_BROWSERS_PATH');

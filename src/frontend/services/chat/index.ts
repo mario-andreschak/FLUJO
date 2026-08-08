@@ -294,6 +294,15 @@ class ChatService {
     return parse<any>(response);
   }
 
+  /** POST /v1/chat/conversations/{id}/debug/attach — pause at the next safe boundary. */
+  async attachDebugger(id: string): Promise<void> {
+    log.debug('attachDebugger: Entering method', { conversationId: id });
+    const response = await fetch(`${BASE}/${encodeURIComponent(id)}/debug/attach`, {
+      method: 'POST',
+    });
+    await parse<void>(response);
+  }
+
   /**
    * GET /v1/chat/conversations/{id}/debug/state — read the current debug state.
    * Lets the debugger panel attach to a run this tab did not start (or one that

@@ -62,7 +62,6 @@ import QuickChatDialog, { QuickChatStartSelection } from './QuickChatDialog';
 import DebuggerCanvas from './DebuggerCanvas';
 import DebuggerPendingPanel from './DebuggerPendingPanel';
 import ExecutedFlowPanel from './ExecutedFlowPanel';
-import { ATTACH_BREAKPOINT } from '@/utils/shared/debugBreakpoints';
 import { isQuickChatFlowId } from '@/utils/shared/quickChat';
 import type { RecoveryRecord } from '@/shared/types/execution/events';
 import type { NormalizedChatError } from '@/shared/types/execution/errors';
@@ -249,7 +248,16 @@ export interface Conversation {
     costUsd?: number;
     /** Cache RE-READ tokens (subset of promptTokens) — shown as "cached", not fresh (#87). */
     cacheReadTokens?: number;
-    byNode?: Record<string, { promptTokens: number; completionTokens: number; totalTokens: number; costUsd?: number; cacheReadTokens?: number }>;
+    /** Cache-write tokens (subset of promptTokens) — fresh, but called out separately. */
+    cacheWriteTokens?: number;
+    byNode?: Record<string, {
+      promptTokens: number;
+      completionTokens: number;
+      totalTokens: number;
+      costUsd?: number;
+      cacheReadTokens?: number;
+      cacheWriteTokens?: number;
+    }>;
   };
   /** Context snapshot of the latest model call (provider-reported prompt size
    *  + the bound model's configured context window, when available). */
@@ -1869,7 +1877,12 @@ const Chat: React.FC = () => {
       }
       case 'usage':
         setLiveStats(prev => ({
-          totalTokens: (prev?.totalTokens ?? 0) + (event.totalTokens || 0),
+          // Match the durable header meter: cached input is provider throughput,
+          // not fresh work. Cache writes remain counted as fresh input.
+          totalTokens: (prev?.totalTokens ?? 0) + Math.max(
+            0,
+            (event.totalTokens || 0) - (event.cacheReadTokens || 0),
+          ),
           activeNode: prev?.activeNode ?? null,
           startedAt: prev?.startedAt ?? Date.now(),
           lastEventAt: Date.now(),
@@ -2668,9 +2681,13 @@ const Chat: React.FC = () => {
       // or errored — and only when the finished conversation is the one on
       // screen (a background run ending must not close the viewed debugger).
       log.info(`API Response: Execution completed or errored (Status: ${data.status}). Hiding debugger panel.`, { conversationId });
+      setDebuggerRequested(false);
+      setDebugAttaching(false);
+      setExecuteInDebugger(false);
       setIsDebugPaused(false);
       setDebugState(null);
       setDebugSessionActive(false);
+      setBreakpoints([]);
     } else {
        // For other statuses ('running', 'awaiting_tool_approval'), keep the debugger panel state as is.
        log.debug(`API Response: Status is '${data.status}'. Debugger panel visibility unchanged (currently ${isDebugPaused ? 'visible' : 'hidden'}).`, { conversationId });
@@ -2821,6 +2838,7 @@ const Chat: React.FC = () => {
     setIsLoading(true); // Set loading true for the API call itself
     setLoadingConversationId(conversation.id); // Scope the live indicator to this conversation
     markConvRunning(conversation.id, true);
+    patchConversationStatus(conversation.id, 'running');
     // A fresh run supersedes a prior Stop on this conversation (run:start does
     // this too, but clear it before any event arrives so the re-attach guard
     // and the cancel-classifying catches don't act on the stale flag).
@@ -3572,6 +3590,7 @@ const Chat: React.FC = () => {
     setIsLoading(true); // Indicate processing and potentially restart polling
     setLoadingConversationId(currentConversationId);
     markConvRunning(currentConversationId, true);
+    patchConversationStatus(currentConversationId, 'running');
     setError(null);
     setErrorInfo(null); // Issue #383: keep errorInfo in sync with error
     await openEventStream(currentConversationId);
@@ -3727,12 +3746,19 @@ const Chat: React.FC = () => {
     setIsLoading(true); // Show loading during continue
     setLoadingConversationId(currentConversationId);
     markConvRunning(currentConversationId, true);
+    patchConversationStatus(currentConversationId, 'running');
     setError(null);
     setErrorInfo(null); // Issue #383: keep errorInfo in sync with error
-    setIsDebugPaused(false); // No longer paused — running until the next pause/end.
-    // Keep debugState + debugSessionActive so the panel stays open and shows live
-    // progress while continuing (it repopulates on the next pause); previously
-    // nulling debugState here made the panel vanish until the next breakpoint.
+    // Continue means detach and run normally. Close every local debugger surface
+    // immediately; the route atomically clears debugMode and server breakpoints
+    // while preserving the pending action/tool batch that still has to finish.
+    setDebuggerRequested(false);
+    setDebugAttaching(false);
+    setExecuteInDebugger(false);
+    setIsDebugPaused(false);
+    setDebugState(null);
+    setDebugSessionActive(false);
+    setBreakpoints([]);
     await openEventStream(currentConversationId);
     try {
       const data = await chatService.debugContinue(currentConversationId);
@@ -3784,9 +3810,9 @@ const Chat: React.FC = () => {
     }
   }, [breakpoints, currentConversationId]);
 
-  // Attach the debugger to an already-running conversation. Arms a one-shot
-  // wildcard breakpoint ('*') on the live run: the backend loop pauses before
-  // its next node and returns paused_debug. When this client owns the run, the
+  // Attach the debugger to an already-running conversation. Requests a one-shot
+  // pause at the next safe runtime boundary (after the active model/tool call,
+  // or before the next node) without replacing the user's breakpoints. When this client owns the run, the
   // still-pending send POST resolves with debugState; otherwise the pause is
   // picked up from the SSE stream and the state is pulled with getDebugState
   // (see the hydration effect below), so attaching also works for background
@@ -3796,7 +3822,7 @@ const Chat: React.FC = () => {
     log.info('Attaching debugger to running conversation', { conversationId: currentConversationId });
     setDebugAttaching(true);
     try {
-      await chatService.setBreakpoints(currentConversationId, [ATTACH_BREAKPOINT]);
+      await chatService.attachDebugger(currentConversationId);
     } catch (err) {
       log.error('Failed to attach debugger', { conversationId: currentConversationId, err });
       setDebugAttaching(false);
@@ -3888,7 +3914,13 @@ const Chat: React.FC = () => {
     setLoadingConversationId(null);
     markConvRunning(currentConversationId, false);
     markConversationStopped(currentConversationId, true); // present the end as a Stop, not an error
+    setDebuggerRequested(false);
+    setDebugAttaching(false);
+    setExecuteInDebugger(false);
+    setIsDebugPaused(false);
+    setDebugState(null);
     setDebugSessionActive(false);
+    setBreakpoints([]);
     closeEventStream();
     setPendingToolCalls(null);
     setError(null); // a deliberate Stop is not an error to surface
@@ -3993,6 +4025,7 @@ const Chat: React.FC = () => {
     setIsLoading(true);
     setLoadingConversationId(conversationId);
     markConvRunning(conversationId, true);
+    patchConversationStatus(conversationId, 'running');
     await openEventStream(conversationId);
     try {
       const data = await chatService.debugContinue(conversationId);

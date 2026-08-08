@@ -42,6 +42,9 @@ export enum StorageKey {
   MCP_SHIPPED_SERVERS_MIGRATION_V4 = 'mcp_shipped_servers_migration_v4',
   // Backfills the absolute package root omitted from earlier shipped-server records.
   MCP_SHIPPED_SERVER_ROOTS_MIGRATION_V5 = 'mcp_shipped_server_roots_migration_v5',
+  // Repairs browser records created under the former @flujo-ai package id and
+  // clears stale process-status fields that could preserve a duplicated path.
+  MCP_SHIPPED_BROWSER_REPAIR_MIGRATION_V6 = 'mcp_shipped_browser_repair_migration_v6',
   // Package installs ledger (issue #198): last install summary + the ids of the
   // entities each installed package created, so re-installs are idempotent and
   // the status endpoint can report the last outcome. Never stores secret values.
@@ -89,6 +92,7 @@ export const StorageKeys = {
   MCP_INTERNAL_BROWSER_MIGRATION_V3: StorageKey.MCP_INTERNAL_BROWSER_MIGRATION_V3,
   MCP_SHIPPED_SERVERS_MIGRATION_V4: StorageKey.MCP_SHIPPED_SERVERS_MIGRATION_V4,
   MCP_SHIPPED_SERVER_ROOTS_MIGRATION_V5: StorageKey.MCP_SHIPPED_SERVER_ROOTS_MIGRATION_V5,
+  MCP_SHIPPED_BROWSER_REPAIR_MIGRATION_V6: StorageKey.MCP_SHIPPED_BROWSER_REPAIR_MIGRATION_V6,
   PACKAGE_INSTALLS: StorageKey.PACKAGE_INSTALLS,
   EXPERIMENTAL_SETTINGS: StorageKey.EXPERIMENTAL_SETTINGS,
   REGISTRY_ACCOUNT: StorageKey.REGISTRY_ACCOUNT,

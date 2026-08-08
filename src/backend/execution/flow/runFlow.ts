@@ -470,8 +470,14 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   // Approval/debug resumes are continuations of the same logical run. A new
   // user turn on a completed/error conversation receives a fresh id below.
   const resumingPausedLogicalRun = Boolean(
+    !userTurn
+    &&
     loadedState?.logicalRunId
-    && (loadedState.status === 'awaiting_tool_approval' || loadedState.status === 'paused_debug')
+    && (
+      loadedState.status === 'awaiting_tool_approval'
+      || loadedState.status === 'paused_debug'
+      || loadedState.debugResumeAfterDetach
+    )
   );
 
   let sharedState: SharedState;
@@ -514,6 +520,9 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       sharedState.errorEventEmitted = false;
       sharedState.pendingToolCalls = undefined;
       sharedState.handoffRequested = undefined;
+      sharedState.debugPendingAction = undefined;
+      sharedState.debugPendingToolCalls = undefined;
+      sharedState.debugPauseRequested = false;
       sharedState.isCancelled = false;
 
       sharedState.trackingInfo = {
@@ -656,6 +665,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   }
   const logicalRunId = sharedState.logicalRunId ?? input.runId ?? crypto.randomUUID();
   sharedState.logicalRunId = logicalRunId;
+  sharedState.debugResumeAfterDetach = false;
   sharedState.statisticsRunStartedAt ??= Date.now();
   initializeRecovery(sharedState, logicalRunId);
   if (input.lane) sharedState.subflowLane = input.lane;
@@ -718,6 +728,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
           outputTokens: result.usage.completionTokens,
           totalTokens: result.usage.totalTokens,
           cachedInputTokens: result.usage.cacheReadTokens,
+          cacheWriteTokens: result.usage.cacheWriteTokens,
         } : undefined,
       }));
       sharedState.statisticsRunFinished = true;
@@ -866,7 +877,24 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       sharedState.debugMode = flujodebug;
     }
     if (userTurn) {
+      // A real message is allowed to recover a conversation whose debugger UI
+      // was closed/reloaded while the run was parked. Treat it as a fresh run,
+      // not as a hidden debugger resume: clear the parked status and, unless the
+      // caller explicitly requested debugging again, disarm old breakpoints.
+      if (sharedState.status === 'paused_debug') {
+        sharedState.status = 'running';
+        sharedState.lastResponse = undefined;
+        sharedState.lastError = undefined;
+        sharedState.errorEventEmitted = false;
+        sharedState.isCancelled = false;
+      }
+      if (!flujodebug) {
+        sharedState.breakpoints = [];
+        sharedState.lastBreakNodeId = undefined;
+      }
       sharedState.debugPendingToolCalls = undefined;
+      sharedState.debugPendingAction = undefined;
+      sharedState.debugPauseRequested = false;
     }
     if (sharedState.debugMode) {
       if (FEATURES.ENABLE_EXECUTION_TRACKER && !sharedState.executionTrace) {
@@ -1014,12 +1042,15 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     // so state persisted before #87 (no cacheReadTokens) doesn't produce NaN.
     const msgCacheRead = msg.usage.cacheReadTokens ?? 0;
     if (msgCacheRead) totals.cacheReadTokens = (totals.cacheReadTokens ?? 0) + msgCacheRead;
+    const msgCacheWrite = msg.usage.cacheWriteTokens ?? 0;
+    if (msgCacheWrite) totals.cacheWriteTokens = (totals.cacheWriteTokens ?? 0) + msgCacheWrite;
     const nodeKey = msg.processNodeId || 'unknown';
     const node = totals.byNode[nodeKey] ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0 };
     node.promptTokens += msg.usage.promptTokens;
     node.completionTokens += msg.usage.completionTokens;
     node.totalTokens += msg.usage.totalTokens;
     if (msgCacheRead) node.cacheReadTokens = (node.cacheReadTokens ?? 0) + msgCacheRead;
+    if (msgCacheWrite) node.cacheWriteTokens = (node.cacheWriteTokens ?? 0) + msgCacheWrite;
     totals.byNode[nodeKey] = node;
     sharedState.usage = totals;
     emit({
@@ -1030,6 +1061,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       totalTokens: msg.usage.totalTokens,
       costUsd: 0,
       ...(msgCacheRead ? { cacheReadTokens: msgCacheRead } : {}),
+      ...(msgCacheWrite ? { cacheWriteTokens: msgCacheWrite } : {}),
     });
   };
 
@@ -1229,9 +1261,56 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       toolCalls,
       (name) => decodeToolName(name, sharedState.toolNameMap),
     );
-  const pauseForDebug = () => {
+  const hasAttachRequest = () =>
+    !!sharedState.debugPauseRequested
+    || !!sharedState.breakpoints?.includes(ATTACH_BREAKPOINT);
+  const consumeAttachRequest = () => {
+    const requested = hasAttachRequest();
+    if (!requested) return false;
+    sharedState.debugPauseRequested = false;
+    // Backward compatibility for clients that still arm the legacy sentinel.
+    sharedState.breakpoints = (sharedState.breakpoints ?? []).filter(b => b !== ATTACH_BREAKPOINT);
+    return true;
+  };
+  const pauseForDebug = (options: {
+    reason?: 'debug' | 'breakpoint';
+    phase?: 'before-node' | 'after-model' | 'before-tool' | 'after-tool' | 'before-handoff';
+    nodeId?: string;
+    kind?: 'node' | 'tool' | 'attach';
+    toolName?: string;
+  } = {}) => {
+    const nodeId = options.nodeId ?? sharedState.currentNodeId;
     sharedState.status = 'paused_debug';
-    emit({ type: 'run:paused', reason: 'debug', node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined });
+    sharedState.debugMode = true;
+    if (options.kind && nodeId) {
+      emit({
+        type: 'breakpoint:hit',
+        node: { nodeId },
+        kind: options.kind,
+        ...(options.toolName ? { toolName: options.toolName } : {}),
+      });
+    }
+    emit({
+      type: 'run:paused',
+      reason: options.reason ?? 'debug',
+      ...(nodeId ? { node: { nodeId } } : {}),
+      ...(options.phase ? { phase: options.phase } : {}),
+      ...(options.toolName ? { toolName: options.toolName } : {}),
+    });
+  };
+  const pauseForAttachAtSafePoint = async (
+    phase: 'before-node' | 'after-model' | 'before-tool' | 'after-tool' | 'before-handoff',
+  ): Promise<boolean> => {
+    if (!consumeAttachRequest()) return false;
+    pauseForDebug({ reason: 'breakpoint', phase, kind: 'attach' });
+    FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+    try {
+      sharedState.updatedAt = Date.now();
+      await persistState(storageKey, sharedState);
+    } catch (error) {
+      log.error(`Failed to save state while attaching debugger for conv ${effectiveConvId}:`, error);
+    }
+    return true;
   };
 
   try {
@@ -1265,8 +1344,19 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
         // run that ended before its inbox was drained.
         await drainSteering();
 
+        // A completed model turn can be parked before its action is applied.
+        // Consume that action exactly once on resume instead of calling the
+        // model again and potentially producing a different decision.
+        let actionReadyFromDebugPause = false;
+        if (sharedState.debugPendingAction) {
+          currentAction = sharedState.debugPendingAction.action;
+          sharedState.debugPendingAction = undefined;
+          actionReadyFromDebugPause = true;
+          log.info(`[Debug Resume] Applying pending action "${currentAction}" for conv ${effectiveConvId}.`);
+        }
+
         // Debug step granularity: execute tool calls a previous step paused before.
-        if (sharedState.debugPendingToolCalls && sharedState.debugPendingToolCalls.length > 0) {
+        if (!actionReadyFromDebugPause && sharedState.debugPendingToolCalls && sharedState.debugPendingToolCalls.length > 0) {
           const pendingCalls = sharedState.debugPendingToolCalls;
           sharedState.debugPendingToolCalls = undefined;
           log.info(`[Debug Step] Executing ${pendingCalls.length} pending tool call(s) for conv ${effectiveConvId}.`);
@@ -1302,18 +1392,20 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
           } catch (error) {
             log.error(`Failed to save state after debug tool execution for conv ${effectiveConvId}:`, error);
           }
-          if (singleStep) {
+          const attachedAfterTool = await pauseForAttachAtSafePoint('after-tool');
+          if (singleStep && !attachedAfterTool) {
             log.info(`[Debug Step] Paused after tool execution for conv ${effectiveConvId}.`);
-            pauseForDebug();
-            break;
+            pauseForDebug({ phase: 'after-tool' });
           }
+          if (singleStep || attachedAfterTool) break;
           continue;
         }
 
-        // Breakpoint check (node-scoped; `tool:` breakpoints are evaluated at
-        // the tool-call gate further down, not here).
+        if (!actionReadyFromDebugPause) {
+        // Breakpoint check (node-scoped; `tool:` breakpoints are evaluated after
+        // the model returns, before any resulting action is applied).
         const armedNodeBreakpoints = nodeBreakpoints(sharedState.breakpoints);
-        const attachArmed = !!sharedState.breakpoints?.includes(ATTACH_BREAKPOINT);
+        const attachArmed = hasAttachRequest();
         if (!singleStep && (armedNodeBreakpoints.length > 0 || attachArmed)) {
           const nextNodeId = await FlowExecutor.peekNextNodeId(sharedState);
           // '*' is a one-shot "attach" breakpoint set by the Debugger button
@@ -1322,16 +1414,18 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
           // normally instead of re-pausing at every node.
           const wildcard = attachArmed;
           const hit = !!nextNodeId && (wildcard || armedNodeBreakpoints.includes(nextNodeId));
-          if (hit && sharedState.lastBreakNodeId !== nextNodeId) {
+          if (hit && (attachArmed || sharedState.lastBreakNodeId !== nextNodeId)) {
             if (wildcard) {
-              sharedState.breakpoints = (sharedState.breakpoints ?? []).filter(b => b !== ATTACH_BREAKPOINT);
+              consumeAttachRequest();
             }
             log.info(`Breakpoint hit at node ${nextNodeId}${wildcard ? ' (attach)' : ''} for conv ${effectiveConvId}. Pausing.`);
-            sharedState.status = 'paused_debug';
-            sharedState.debugMode = true;
             sharedState.lastBreakNodeId = nextNodeId;
-            emit({ type: 'breakpoint:hit', node: { nodeId: nextNodeId } });
-            emit({ type: 'run:paused', reason: 'breakpoint', node: { nodeId: nextNodeId } });
+            pauseForDebug({
+              reason: 'breakpoint',
+              phase: 'before-node',
+              nodeId: nextNodeId,
+              kind: wildcard ? 'attach' : 'node',
+            });
             try {
               sharedState.updatedAt = Date.now();
               await persistState(storageKey, sharedState); // chokepoint refuses ephemeral states
@@ -1361,6 +1455,9 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
           nodeId: checkpointNodeId,
           safe: true,
         }, recoveryEmit);
+        const assistantMessageIdBeforeStep = [...sharedState.messages].reverse().find(
+          message => message.role === 'assistant',
+        )?.id;
         const stepResult = await FlowExecutor.executeStep(sharedState, emit);
         sharedState = stepResult.sharedState;
         currentAction = stepResult.action;
@@ -1384,7 +1481,82 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
         log.info(`Step ${internalIterations} completed for conv ${effectiveConvId}. Action: ${currentAction}`, { currentNodeId: sharedState.currentNodeId });
         log.verbose(`Shared state after step ${internalIterations}`, sharedState);
 
+        // A Process node execution is one complete model turn. Park HERE —
+        // after the assistant narration/tool arguments are durable, but before
+        // tools, approvals, handoffs, or finalization consume its action. This
+        // is the missing boundary that previously made Step jump straight from
+        // narration to a handoff (and made Attach wait for that handoff).
+        const latestAssistant = [...sharedState.messages].reverse().find(
+          message => message.role === 'assistant',
+        );
+        const completedModelTurn =
+          !!latestAssistant
+          && latestAssistant.id !== assistantMessageIdBeforeStep
+          && latestAssistant.processNodeId === checkpointNodeId;
+        // Only inspect calls produced by this model turn. Looking backwards for
+        // the last assistant with calls would re-trigger an old tool breakpoint
+        // when a later assistant turn contains only final narration.
+        const producedToolCalls = latestAssistant?.tool_calls;
+        const toolBreakpointName = matchedToolBreakpointName(producedToolCalls);
+        const attachRequested = hasAttachRequest();
+
+        if (
+          currentAction !== ERROR_ACTION
+          && completedModelTurn
+          && (singleStep || attachRequested || !!toolBreakpointName)
+        ) {
+          const attached = attachRequested ? consumeAttachRequest() : false;
+          const pendingCalls = currentAction === TOOL_CALL_ACTION ? producedToolCalls : undefined;
+
+          // Without approvals, the next Step executes exactly this captured
+          // batch and pauses after its results. With approvals enabled, retain
+          // the action instead so resuming still passes through the permission /
+          // approval gate rather than accidentally bypassing it.
+          if (pendingCalls?.length && !requireApproval) {
+            sharedState.debugPendingToolCalls = pendingCalls;
+          } else {
+            sharedState.debugPendingAction = {
+              action: currentAction,
+              nodeId: checkpointNodeId,
+              phase: 'after-model',
+            };
+          }
+
+          const isHandoffCall = producedToolCalls?.some(call =>
+            call.type === 'function'
+            && (
+              call.function?.name === 'handoff'
+              || call.function?.name?.startsWith('handoff_to_')
+            ),
+          );
+          pauseForDebug({
+            reason: attached || toolBreakpointName ? 'breakpoint' : 'debug',
+            phase: isHandoffCall
+              ? 'before-handoff'
+              : pendingCalls?.length
+                ? 'before-tool'
+                : 'after-model',
+            nodeId: checkpointNodeId,
+            kind: attached ? 'attach' : toolBreakpointName ? 'tool' : undefined,
+            ...(toolBreakpointName ? { toolName: toolBreakpointName } : {}),
+          });
+          FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+          try {
+            sharedState.updatedAt = Date.now();
+            await persistState(storageKey, sharedState);
+          } catch (error) {
+            log.error(`Failed to save state at post-model debug boundary for conv ${effectiveConvId}:`, error);
+          }
+          break;
+        }
+        }
+
         log.debug(`[Action Handling] Step ${internalIterations}: Received action "${currentAction}" for conv ${effectiveConvId}`);
+
+        if (!currentAction) {
+          sharedState.lastResponse = { success: false, error: 'Execution reached action handling without a node action.' };
+          currentAction = ERROR_ACTION;
+        }
 
         // 2b. Handle the action returned by the step
         if (currentAction === ERROR_ACTION) {
@@ -1589,6 +1761,11 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                 // If no calls need approval, continue the loop
                 if (toolCallsForApproval.length === 0) {
                   FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+                  const attachedAfterTool = await pauseForAttachAtSafePoint('after-tool');
+                  if (singleStep && !attachedAfterTool) {
+                    pauseForDebug({ phase: 'after-tool' });
+                  }
+                  if (singleStep || attachedAfterTool) break;
                   continue;
                 }
 
@@ -1612,34 +1789,6 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                   log.error(`Failed to save state before pausing for approval for conv ${effectiveConvId}:`, error);
                 }
                 emit({ type: 'run:awaiting_approval', pendingToolCalls: lastAssistantMsg.tool_calls });
-                break;
-              } else if (singleStep || matchedToolBreakpointName(lastAssistantMsg.tool_calls)) {
-                // Two ways to stop here: single-stepping (every tool batch is a
-                // step boundary), or an armed `tool:` breakpoint — the tool-call
-                // equivalent of a node breakpoint, so a freely running flow can
-                // be caught right before a specific tool fires (and inspected /
-                // stepped from there).
-                const toolBreakpointName = singleStep ? null : matchedToolBreakpointName(lastAssistantMsg.tool_calls);
-                log.info(`[Debug] Paused before executing ${lastAssistantMsg.tool_calls.length} tool call(s) for conv ${effectiveConvId}.`, {
-                  reason: toolBreakpointName ? `tool breakpoint (${toolBreakpointName})` : 'single step',
-                });
-                sharedState.debugPendingToolCalls = lastAssistantMsg.tool_calls;
-                if (toolBreakpointName) {
-                  // Entering the debugger from a normal run: turn debug mode on
-                  // so the trace builds and Step/Continue behave as expected.
-                  sharedState.debugMode = true;
-                }
-                FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
-                try {
-                  sharedState.updatedAt = Date.now();
-                  await persistState(storageKey, sharedState); // chokepoint refuses ephemeral states
-                } catch (error) {
-                  log.error(`Failed to save state before debug tool pause for conv ${effectiveConvId}:`, error);
-                }
-                if (toolBreakpointName && sharedState.currentNodeId) {
-                  emit({ type: 'breakpoint:hit', node: { nodeId: sharedState.currentNodeId } });
-                }
-                pauseForDebug();
                 break;
               } else {
                 log.info(`[flujo=true, requireApproval=false] Processing ${lastAssistantMsg.tool_calls.length} tools internally for conv ${effectiveConvId}`);
@@ -1673,6 +1822,8 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                 FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
                 emitNewMessages();
                 await commitToolCheckpoint(storageKey, sharedState, lastAssistantMsg.tool_calls, 'completed', recoveryEmit);
+                const attachedAfterTool = await pauseForAttachAtSafePoint('after-tool');
+                if (attachedAfterTool) break;
                 log.info(`Continuing loop for conv ${effectiveConvId} after internal tool processing (no approval needed).`);
                 continue;
               }
@@ -2068,6 +2219,18 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   const finalExecutionTime = Date.now() - startTime;
   const finalStatus = sharedState.status || (currentAction === FINAL_RESPONSE_ACTION ? 'completed' : (currentAction === ERROR_ACTION ? 'error' : 'running'));
   log.info(`Execution finished for conv ${effectiveConvId}. Final Action: ${currentAction}, Final Status: ${finalStatus}`, { duration: `${finalExecutionTime}ms` });
+
+  // Debugging is run-scoped. Once this run is terminal, do not leave a hidden
+  // debugMode/breakpoint payload attached to the conversation for its next user
+  // turn (or paint the sidebar as though an old debug session were still live).
+  if (finalStatus === 'completed' || finalStatus === 'error' || finalStatus === 'capped') {
+    sharedState.debugMode = false;
+    sharedState.debugPauseRequested = false;
+    sharedState.debugPendingAction = undefined;
+    sharedState.debugPendingToolCalls = undefined;
+    sharedState.breakpoints = [];
+    sharedState.lastBreakNodeId = undefined;
+  }
 
   // Persist the precise recovery transition before the legacy terminal event.
   // Existing status values remain unchanged for backward compatibility.

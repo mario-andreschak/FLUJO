@@ -42,11 +42,17 @@ node mcp-servers/browser/dist/index.js
 
 The browser server is seeded disabled by default. Enable it in MCP Manager, or set `FLUJO_BROWSER_ENABLED=1` before first startup to seed it enabled. Its shipped record enables MCP Apps so the browser view is immediately available once the server is enabled; disabling the server still blocks both app resource access and tool calls. The browser package's npm `install` lifecycle runs `patchright install chromium`, so normal FLUJO, standalone package, and graphical-installer installations automatically download the version-matched managed browser. The Docker image also installs the required Linux libraries and uses a shared browser cache readable by its unprivileged runtime user. Installations that deliberately suppress npm lifecycle scripts with `--ignore-scripts` must run `npx patchright install chromium` themselves. Patchright supports current Windows, macOS, and Linux platforms covered by its Chromium distribution; failures to launch are returned as a stable `BROWSER_UNAVAILABLE` MCP error.
 
-Every session uses a new incognito context inside a lazily launched, shared Chromium process. Profiles are never taken from a host browser. Downloads are rejected, and service workers are blocked unless `FLUJO_BROWSER_ALLOW_SERVICE_WORKERS=1` is set (some streaming sites fetch their media through one). The full `chromium` channel is preferred over the reduced headless shell so compositing, animation, and video decode behave like a real browser, and autoplay does not require a user gesture. Each screenshot remains in the MCP payload and is also written to a bounded per-session `viewport.png` or `full-page.png`; the tool result always reports that artifact's absolute host path. Patchright's temporary/download root lives under an isolated OS temp directory that is removed at shutdown. Sessions are bounded, expire when idle, close on cancellation, and can be explicitly discarded with `browser_close`.
+The default `FLUJO_BROWSER_MODE=sandbox` gives every session a new incognito context inside a lazily launched, shared managed Chromium process. Downloads are rejected, and service workers are blocked unless `FLUJO_BROWSER_ALLOW_SERVICE_WORKERS=1` is set. `FLUJO_BROWSER_MODE=trusted` instead launches installed Chrome headed by default through `launchPersistentContext`, using a dedicated profile under `<FLUJO_DATA_DIR>/browser-profile/trusted` (or `FLUJO_BROWSER_PROFILE_DIR`). Trusted session tabs share cookies and storage, service workers default to allowed, and `browser_close` closes only the tab while retaining profile state. FLUJO never attaches to or mutates the user's ordinary Chrome profile.
+
+The full `chromium` channel is preferred over the reduced headless shell in sandbox mode so compositing, animation, and video decode behave like a real browser. Trusted mode prefers the installed `chrome` channel and falls back to the managed full Chromium build when Chrome is unavailable. Locale and timezone default to the host and can be pinned coherently. Each screenshot remains in the MCP payload and is also written to a bounded per-session `viewport.png` or `full-page.png`; the tool result always reports that artifact's absolute host path. Patchright's temporary/download root lives under an isolated OS temp directory that is removed at shutdown. Sessions are bounded, expire when idle, close on cancellation, and can be explicitly discarded with `browser_close`.
+
+Extensions belong only to the dedicated trusted profile. A user can install ordinary extensions manually in its headed Chrome window; FLUJO never reads or copies the personal Chrome profile. `browser_extensions` lists profile-installed extensions, explicitly configured unpacked directories, and active extension targets without returning extension settings. Operators may allowlist unpacked directories with `FLUJO_BROWSER_EXTENSION_DIRS`; every entry must be an absolute directory with a valid manifest. Current Google Chrome/Edge releases removed command-line side-loading, so this explicit unpacked mode requires `FLUJO_BROWSER_CHANNEL=chromium` as documented by [Playwright](https://playwright.dev/docs/chrome-extensions) and [Chrome for Developers](https://developer.chrome.com/blog/extension-news-june-2025#removing-flag).
 
 `sessionId` is optional on every browser tool. When omitted, the server targets the most recently used live session. `browser_open` creates a new random session only when no live session exists; supplying an explicit id remains the way to select, reuse, or create a particular session.
 
 Navigation permits only HTTP(S), rejects URL credentials, and blocks localhost/private-network destinations (including DNS resolutions, memoised for one minute so a media-heavy page does not pay a lookup per subresource) unless `FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS=1` is explicitly set. Set `FLUJO_BROWSER_ALLOWED_ORIGINS` to a comma-separated exact-origin allowlist for a narrower policy. Only top-level documents count against the redirect cap, so embed-heavy pages are not blocked by their tenth iframe.
+
+`browser_diagnostics` reports the configured and actual mode/channel, headless and profile state, locale/timezone, service-worker policy, and the active page's browser fingerprint. Tool errors include a `category` (`policy`, `runtime`, `input`, or `cancelled`), and successful navigations expose destination-site/WAF challenge detection separately from FLUJO's request-policy counters.
 
 ### Deterministic capture and recording (#366)
 
@@ -75,7 +81,13 @@ Browser controls:
 - `FLUJO_BROWSER_ENABLED=1`: seed the ordinary browser MCP record enabled on first migration; default is disabled.
 - `FLUJO_BROWSER_ALLOWED_ORIGINS=https://example.com,https://docs.example.com`: optional exact-origin allowlist.
 - `FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS=1`: allow loopback/private/local destinations (off by default).
+- `FLUJO_BROWSER_MODE=sandbox|trusted`: isolated managed Chromium (default) or headed installed Chrome with a dedicated persistent profile.
 - `FLUJO_BROWSER_EXECUTABLE_PATH`: use an operator-managed Chromium executable instead of Patchright's managed binary.
+- `FLUJO_BROWSER_PROFILE_DIR`: trusted-mode profile directory; defaults to `<FLUJO_DATA_DIR>/browser-profile/trusted`.
+- `FLUJO_BROWSER_LOCALE`: browser locale and `Accept-Language` identity; defaults to the host locale.
+- `FLUJO_BROWSER_TIMEZONE_ID`: browser IANA timezone; defaults to the host timezone.
+- `FLUJO_BROWSER_EXTENSION_DIRS`: path-delimiter-separated allowlist of absolute unpacked-extension directories; trusted mode only and requires channel `chromium`.
+- `FLUJO_BROWSER_WINDOW_VISIBILITY=visible|offscreen|minimized`: keep trusted Chrome headed while controlling where its real desktop window appears; defaults to `visible`.
 - `FLUJO_BROWSER_MAX_SESSIONS`: concurrent isolated contexts, 1–32 (default 4).
 - `FLUJO_BROWSER_IDLE_TIMEOUT_MS`: idle cleanup interval, 10 seconds–24 hours (default 10 minutes).
 - `FLUJO_BROWSER_MAX_REDIRECTS`: per-navigation document redirect cap, 0–50 (default 10).
@@ -87,10 +99,10 @@ Browser controls:
 - `FLUJO_BROWSER_STREAM_MAX_WIDTH` / `FLUJO_BROWSER_STREAM_MAX_HEIGHT`: streamed frame bounds (defaults 1600×1200).
 - `FLUJO_BROWSER_STREAM_AUDIO=0`: stop capturing page audio (on by default).
 - `FLUJO_BROWSER_VIEWPORT_WIDTH` / `FLUJO_BROWSER_VIEWPORT_HEIGHT`: initial viewport before the app reports its own size (defaults 1280×720).
-- `FLUJO_BROWSER_CHANNEL`: Chromium channel to launch (default `chromium`; falls back to the headless shell when unavailable).
-- `FLUJO_BROWSER_HEADED=1`: run the managed browser with a visible window.
+- `FLUJO_BROWSER_CHANNEL`: browser channel (sandbox default `chromium`; trusted default `chrome`, with managed Chromium fallback).
+- `FLUJO_BROWSER_HEADED=1|0`: headed state (sandbox defaults off; trusted defaults on).
 - `FLUJO_BROWSER_AUDIO=1`: also let the managed browser play audio on the host's speakers.
-- `FLUJO_BROWSER_ALLOW_SERVICE_WORKERS=1`: allow service workers (needed by some streaming sites).
+- `FLUJO_BROWSER_ALLOW_SERVICE_WORKERS=1|0`: service-worker policy (sandbox defaults blocked; trusted defaults allowed).
 
 The exposed contract is deliberately narrow: open, navigate/history/reload, snapshot, selector or coordinate click, focused or selector typing, key press, scroll, persisted PNG screenshot, and close. Apart from its own bounded screenshot artifact directory, it exposes no process execution, arbitrary host filesystem access, cookies, storage dumps, raw profiles, or unrestricted downloads.
 

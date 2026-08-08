@@ -4,9 +4,12 @@ import type { Page } from 'patchright';
 import {
   BrowserMcpError,
   assertNavigationAllowed,
+  browserDiagnostics,
+  browserExtensions,
   closeSession,
   createCaptureContext,
   defaultViewport,
+  failureCategoryForCode,
   getSession,
   openSession,
   publicPageState,
@@ -15,6 +18,7 @@ import {
   timeoutMs,
   writeScreenshotArtifact,
   type BrowserErrorCode,
+  type BrowserFailureCategory,
   type BrowserSession,
 } from './runtime.js';
 import { BROWSER_APP_URI } from './resources.js';
@@ -66,7 +70,7 @@ export function browserToolDefinitions(): Tool[] {
   return [
     {
       name: 'browser_open',
-      description: 'Open or reuse an isolated incognito browser session, optionally navigating to an allowed HTTP(S) URL. Omitting sessionId reuses the most recently used live session, or creates one when none exists.',
+      description: 'Open or reuse a browser session in the configured mode: isolated incognito sandbox, or trusted persistent Chrome. Optionally navigates to an allowed HTTP(S) URL.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -81,7 +85,7 @@ export function browserToolDefinitions(): Tool[] {
     },
     {
       name: 'browser_navigate',
-      description: 'Navigate an existing isolated browser session to an allowed HTTP(S) URL.',
+      description: 'Navigate an existing browser session to an allowed HTTP(S) URL. The result distinguishes FLUJO policy blocks from destination-site/WAF blocks.',
       inputSchema: {
         type: 'object',
         properties: { sessionId: SESSION_PROPERTY, url: { type: 'string' }, timeoutMs: TIMEOUT_PROPERTY },
@@ -337,8 +341,30 @@ export function browserToolDefinitions(): Tool[] {
       _meta: APP_META,
     },
     {
+      name: 'browser_diagnostics',
+      description: 'Report configured/actual browser mode, channel, headless state, persistence, locale, service-worker policy, and the active page fingerprint without opening a destination site.',
+      inputSchema: {
+        type: 'object',
+        properties: { sessionId: SESSION_PROPERTY },
+        additionalProperties: false,
+      },
+      annotations: READ_ANNOTATIONS,
+      _meta: APP_META,
+    },
+    {
+      name: 'browser_extensions',
+      description: 'List extensions installed in FLUJO\'s dedicated trusted Chrome profile, explicitly configured unpacked-extension directories, and currently active extension targets. Never reads the personal Chrome profile.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+        additionalProperties: false,
+      },
+      annotations: READ_ANNOTATIONS,
+      _meta: APP_META,
+    },
+    {
       name: 'browser_close',
-      description: 'Close an isolated browser session and discard its cookies, storage, and temporary state.',
+      description: 'Close the session tab. Sandbox state is discarded; trusted-mode cookies and profile state remain in the dedicated persistent profile.',
       inputSchema: {
         type: 'object',
         properties: { sessionId: SESSION_PROPERTY },
@@ -357,8 +383,12 @@ function success(data: Record<string, unknown>, extraContent: CallToolResult['co
   };
 }
 
-function failure(code: BrowserErrorCode, message: string): CallToolResult {
-  const data = { success: false, error: { code, message } };
+function failure(
+  code: BrowserErrorCode,
+  message: string,
+  category?: BrowserFailureCategory,
+): CallToolResult {
+  const data = { success: false, error: { code, category: category ?? failureCategoryForCode(code), message } };
   return {
     isError: true,
     content: [{ type: 'text', text: JSON.stringify(data) }],
@@ -585,7 +615,44 @@ async function captureElementMetricsTool(
   return { success: true, metrics: await evaluateElementMetrics(session.page, selectors) };
 }
 
-async function pageState(session: BrowserSession, timeout: number): Promise<Record<string, unknown>> {
+type NavigationResponse = Awaited<ReturnType<Page['goto']>>;
+
+function siteBlockClassification(
+  status: number | undefined,
+  title: string,
+  text: string,
+  url: string,
+): Record<string, unknown> | undefined {
+  const challengeText = `${title}\n${text.slice(0, 4_000)}`;
+  const challengePattern = /just a moment|verify (?:that )?you are human|unusual traffic|ungewöhnlichen datenverkehr|tr[aá]fico inusual|trafic inhabituel|attention required|access denied|captcha|security check|request unsuccessful/i;
+  const challengeUrlPattern = /\/(?:sorry|captcha)(?:\/|$)|\/challenge(?:\/|$)|\/cdn-cgi\/challenge-platform(?:\/|$)/i;
+  if (status !== undefined && [401, 403, 407, 429, 451].includes(status)) {
+    return {
+      classification: 'site',
+      blocked: true,
+      status,
+      reason: `The destination returned HTTP ${status}; this was not blocked by FLUJO policy.`,
+    };
+  }
+  if (challengeUrlPattern.test(url) || challengePattern.test(challengeText)) {
+    return {
+      classification: 'site',
+      blocked: true,
+      ...(status !== undefined ? { status } : {}),
+      reason: 'The destination rendered an anti-bot, CAPTCHA, or access-denied challenge; this was not blocked by FLUJO policy.',
+    };
+  }
+  if (status !== undefined) {
+    return { classification: 'none', blocked: false, status };
+  }
+  return undefined;
+}
+
+async function pageState(
+  session: BrowserSession,
+  timeout: number,
+  response?: NavigationResponse,
+): Promise<Record<string, unknown>> {
   const [title, bodyText] = await Promise.all([
     session.page.title(),
     session.page.locator('body').innerText({ timeout }).catch(() => ''),
@@ -593,7 +660,14 @@ async function pageState(session: BrowserSession, timeout: number): Promise<Reco
   const text = bodyText.length > MAX_TEXT_CHARS
     ? `${bodyText.slice(0, MAX_TEXT_CHARS)}\n…[truncated]`
     : bodyText;
-  return { success: true, ...publicPageState(session), title, text };
+  const navigation = siteBlockClassification(response?.status(), title, text, session.page.url());
+  return {
+    success: true,
+    ...publicPageState(session),
+    title,
+    text,
+    ...(navigation ? { navigation } : {}),
+  };
 }
 
 async function navigate(session: BrowserSession, rawUrl: string, timeout: number, signal: AbortSignal): Promise<Record<string, unknown>> {
@@ -601,14 +675,14 @@ async function navigate(session: BrowserSession, rawUrl: string, timeout: number
   resetNavigationCounter(session);
   return runCancellable(session, signal, async () => {
     try {
-      await session.page.goto(url.href, { waitUntil: 'domcontentloaded', timeout });
+      const response = await session.page.goto(url.href, { waitUntil: 'domcontentloaded', timeout });
+      return pageState(session, timeout, response);
     } catch (error) {
       if (session.navigationBlocked) {
         throw new BrowserMcpError('NAVIGATION_BLOCKED', 'The navigation or one of its redirects was blocked by browser policy.');
       }
       throw error;
     }
-    return pageState(session, timeout);
   });
 }
 
@@ -643,6 +717,22 @@ export async function browserCallTool(
       }
       const closed = await closeSession(sessionId);
       return success({ success: true, sessionId, closed });
+    }
+    if (name === 'browser_diagnostics') {
+      let session: BrowserSession | undefined;
+      if (typeof args.sessionId === 'string' && args.sessionId.length > 0) {
+        session = getSession(args.sessionId);
+      } else {
+        try {
+          session = getSession(undefined);
+        } catch (error) {
+          if (!(error instanceof BrowserMcpError) || error.code !== 'NOT_FOUND') throw error;
+        }
+      }
+      return success(await browserDiagnostics(session));
+    }
+    if (name === 'browser_extensions') {
+      return success(await browserExtensions());
     }
 
     const timeout = timeoutMs(args.timeoutMs);
@@ -812,6 +902,6 @@ export async function browserCallTool(
     return failure('NOT_FOUND', `Unknown browser tool: ${name}`);
   } catch (error) {
     const normalized = normalizedError(error);
-    return failure(normalized.code, normalized.message);
+    return failure(normalized.code, normalized.message, normalized.category);
   }
 }

@@ -15,10 +15,15 @@
  *                     matched against the model-facing tool name, the decoded
  *                     `server:tool` pair, and the bare decoded tool name, so a
  *                     breakpoint survives the mcp_<slug>_<hash> namespacing.
+ *   - `'tool-node:<id>'` pause before a call supplied by one MCP attachment
+ *                        node. MCP nodes are configuration, not executable graph
+ *                        nodes, so the canvas translates clicks on them to this
+ *                        runtime breakpoint instead of creating a dead node BP.
  */
 
 export const ATTACH_BREAKPOINT = '*';
 export const TOOL_BREAKPOINT_PREFIX = 'tool:';
+export const TOOL_NODE_BREAKPOINT_PREFIX = 'tool-node:';
 export const ANY_TOOL_BREAKPOINT = 'tool:*';
 
 /** A tool call as seen by the loop (only the name matters here). */
@@ -27,10 +32,11 @@ export interface BreakpointToolCall {
 }
 
 /** Decoded (server, tool) for a namespaced MCP tool name, when available. */
-export type ToolNameDecoder = (name: string) => { server: string; tool: string } | null | undefined;
+export type ToolNameDecoder = (name: string) => { server: string; tool: string; nodeId?: string } | null | undefined;
 
 export const isToolBreakpoint = (breakpoint: string): boolean =>
-  breakpoint.startsWith(TOOL_BREAKPOINT_PREFIX);
+  breakpoint.startsWith(TOOL_BREAKPOINT_PREFIX)
+  || breakpoint.startsWith(TOOL_NODE_BREAKPOINT_PREFIX);
 
 /** Node-scoped breakpoints only (everything that is not a tool breakpoint or the attach sentinel). */
 export const nodeBreakpoints = (breakpoints: readonly string[] | undefined): string[] =>
@@ -39,8 +45,14 @@ export const nodeBreakpoints = (breakpoints: readonly string[] | undefined): str
 /** Tool breakpoints only, without the `tool:` prefix (`['*']`, `['read_file']`, …). */
 export const toolBreakpointNames = (breakpoints: readonly string[] | undefined): string[] =>
   (breakpoints ?? [])
-    .filter(isToolBreakpoint)
+    .filter(b => b.startsWith(TOOL_BREAKPOINT_PREFIX))
     .map(b => b.slice(TOOL_BREAKPOINT_PREFIX.length));
+
+/** MCP attachment node IDs carrying an "any tool from this attachment" breakpoint. */
+export const toolNodeBreakpointIds = (breakpoints: readonly string[] | undefined): string[] =>
+  (breakpoints ?? [])
+    .filter(b => b.startsWith(TOOL_NODE_BREAKPOINT_PREFIX))
+    .map(b => b.slice(TOOL_NODE_BREAKPOINT_PREFIX.length));
 
 export const hasAnyToolBreakpoint = (breakpoints: readonly string[] | undefined): boolean =>
   (breakpoints ?? []).some(isToolBreakpoint);
@@ -58,7 +70,8 @@ export function matchToolBreakpoint(
   if (!breakpoints || breakpoints.length === 0) return null;
   if (!toolCalls || toolCalls.length === 0) return null;
   const armed = toolBreakpointNames(breakpoints);
-  if (armed.length === 0) return null;
+  const armedNodeIds = toolNodeBreakpointIds(breakpoints);
+  if (armed.length === 0 && armedNodeIds.length === 0) return null;
   const wildcard = armed.includes('*');
 
   for (const call of toolCalls) {
@@ -69,6 +82,7 @@ export function matchToolBreakpoint(
     const aliases = [name];
     if (decoded) {
       aliases.push(`${decoded.server}:${decoded.tool}`, decoded.tool);
+      if (decoded.nodeId && armedNodeIds.includes(decoded.nodeId)) return name;
     }
     if (armed.some(target => aliases.includes(target))) return name;
   }

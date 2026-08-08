@@ -2,13 +2,12 @@
  * promptCacheMetrics.ts — measure provider prompt-cache effectiveness, and
  * attribute misses to a cause.
  *
- * Every stateless Chat Completions turn re-sends the whole prefix: the tool
- * block, then the system message, then the history. Providers auto-cache long
- * identical prefixes and bill the re-read at a discount, so on a healthy agentic
- * loop `prompt_tokens_details.cached_tokens` should climb to cover almost all of
- * `prompt_tokens` after the first turn. When it doesn't, the interesting question
- * is never "how many tokens" — the UI already shows that (ConversationStats
- * reads usage.cacheReadTokens) — it is WHICH prefix segment stopped being
+ * Every stateless Chat Completions turn re-sends tools plus the messages array.
+ * Conventional wires put system instructions first; the GPT-5.6 explicit-cache
+ * path puts node-specific instructions after an explicitly marked conversation
+ * prefix. Providers bill cache re-reads separately, so on a healthy agentic loop
+ * `prompt_tokens_details.cached_tokens` should climb after the first turn. When
+ * it doesn't, the useful question is WHICH cacheable segment stopped being
  * byte-identical.
  *
  * So this module records a fingerprint of each cacheable prefix segment per
@@ -20,10 +19,9 @@
  *                     request routed to a cold machine), not ours
  *   drift: 'tools'  — the tool block changed. Worst case: tools serialize AHEAD
  *                     of everything, so the ENTIRE prefix is invalidated
- *   drift: 'system' — the system message changed (re-rendered resource pill,
- *                     resolved ${var:}/${res:}, resource-node block). Everything
- *                     from the system message on is fresh; the tool block still
- *                     hits
+ *   drift: 'system' — a LEADING system message changed. Everything from that
+ *                     message on is fresh; a deliberately late system message
+ *                     is outside the explicit cached prefix and is not drift
  *   drift: 'both'
  *
  * Deliberately observation-only: nothing here changes a request. The per-
@@ -51,14 +49,16 @@ export type PrefixDrift = 'first' | 'none' | 'tools' | 'system' | 'history' | 'b
 export interface PrefixFingerprint {
   /** Hash of the serialized tool block (undefined when no tools are sent). */
   tools?: string;
-  /** Hash of the leading system message's content (undefined when there is none). */
+  /** Hash of all system-message content (undefined when there is none). */
   system?: string;
+  /** Whether every system message is at the beginning or end of the wire. */
+  systemPosition?: 'leading' | 'trailing' | 'mixed';
   /** Tool count and serialized length, for a readable log line. */
   toolCount: number;
   toolChars: number;
   /**
-   * Per-message hash of the whole wire array, in order (index 0 is the leading
-   * system message when there is one).
+   * Per-message hash of the cacheable wire array, in order. Deliberately late
+   * system messages are excluded because the explicit breakpoint precedes them.
    *
    * Hashing only tools + system was misleading: FLUJO rewrites the wire history on
    * every turn — compactForWire rewrites old oversized tool results into
@@ -86,20 +86,34 @@ export function fingerprintPrefix(
   tools: OpenAI.ChatCompletionFunctionTool[] | undefined,
 ): PrefixFingerprint {
   const toolJson = tools && tools.length > 0 ? JSON.stringify(tools) : '';
-  const first = messages[0];
-  const systemContent =
-    first && first.role === 'system'
-      ? typeof first.content === 'string'
-        ? first.content
-        : JSON.stringify(first.content)
-      : undefined;
+  const systemMessages = messages.filter(message => message.role === 'system');
+  const firstNonSystem = messages.findIndex(message => message.role !== 'system');
+  const leadingSystemCount = firstNonSystem === -1 ? messages.length : firstNonSystem;
+  let trailingSystemCount = 0;
+  for (let index = messages.length - 1; index >= 0 && messages[index].role === 'system'; index--) {
+    trailingSystemCount++;
+  }
+  const systemPosition = systemMessages.length === 0
+    ? undefined
+    : leadingSystemCount === systemMessages.length
+      ? 'leading' as const
+      : trailingSystemCount === systemMessages.length
+        ? 'trailing' as const
+        : 'mixed' as const;
+  const cacheableMessages = systemPosition === 'trailing'
+    ? messages.slice(0, messages.length - trailingSystemCount)
+    : messages;
+  const systemContent = systemMessages.length > 0
+    ? JSON.stringify(systemMessages.map(message => message.content))
+    : undefined;
 
   return {
     ...(toolJson ? { tools: shortHash(toolJson) } : {}),
     ...(systemContent != null ? { system: shortHash(systemContent) } : {}),
+    ...(systemPosition ? { systemPosition } : {}),
     toolCount: tools?.length ?? 0,
     toolChars: toolJson.length,
-    messageHashes: messages.map(hashMessage),
+    messageHashes: cacheableMessages.map(hashMessage),
     messageChars: JSON.stringify(messages).length,
   };
 }
@@ -138,8 +152,17 @@ export function firstDivergentIndex(prev: string[], next: string[]): number {
  * when there are no tools, because it re-renders per turn (resource pills,
  * ${var:}) and would otherwise make the key unstable turn to turn.
  */
-export function derivePromptCacheKey(fp: PrefixFingerprint): string | undefined {
+export function derivePromptCacheKey(
+  fp: PrefixFingerprint,
+  options?: { conversationId?: string; preferConversation?: boolean },
+): string | undefined {
   if (fp.tools) return `flujo-t${fp.tools}`;
+  // With the GPT-5.6 late-instruction strategy, the reusable prefix is the
+  // conversation rather than the node-specific system message. Keep no-tool
+  // calls for that conversation on one cache shard even as nodes change.
+  if (options?.preferConversation && options.conversationId) {
+    return `flujo-c${shortHash(options.conversationId)}`;
+  }
   if (fp.system) return `flujo-s${fp.system}`;
   return undefined;
 }
@@ -158,8 +181,8 @@ export interface DriftReport {
   drift: PrefixDrift;
   /**
    * Index of the first message whose bytes changed since the previous call, or -1
-   * when the history was only appended to. With the system message at index 0, a
-   * value of 0 means the system prompt itself was re-rendered.
+   * when the history was only appended to. Deliberately late system instructions
+   * are excluded because they occur after the explicit cache boundary.
    */
   divergedAt: number;
   /** How many leading messages were byte-identical, i.e. how far the cache reaches. */
@@ -196,7 +219,10 @@ export function classifyDrift(
   const stable = diverged === -1 ? Math.min(prev.messageHashes.length, total) : diverged;
 
   const toolsChanged = prev.tools !== fp.tools;
-  const systemChanged = prev.system !== fp.system;
+  const systemChanged =
+    prev.system !== fp.system &&
+    prev.systemPosition !== 'trailing' &&
+    fp.systemPosition !== 'trailing';
   // A rewrite anywhere PAST the system message — compaction, collapse, scope
   // change, handoff strip. Distinguished from 'system' so the two causes can be
   // fixed independently: they need completely different remedies.
@@ -236,6 +262,8 @@ export interface CacheOutcome {
   completionTokens: number;
   /** undefined ⇒ the provider does not report caching at all. */
   cachedTokens?: number;
+  /** undefined ⇒ the provider does not report cache writes. */
+  cacheWriteTokens?: number;
   drift: DriftReport;
   fingerprint: PrefixFingerprint;
 }
@@ -266,6 +294,7 @@ export function logCacheOutcome(o: CacheOutcome): void {
     // null (not undefined) so it survives JSON-serializing log transports and
     // stays distinguishable from "provider reports 0 cached".
     cachedTokens: cached ?? null,
+    cacheWriteTokens: o.cacheWriteTokens ?? null,
     freshTokens: cached == null ? o.promptTokens : o.promptTokens - cached,
     hitRatio: hitRatio ?? null,
     // Why the miss, if there was one, and how far the cache still reached.

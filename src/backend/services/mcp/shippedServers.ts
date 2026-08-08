@@ -6,6 +6,7 @@ type Environment = Readonly<Record<string, string | undefined>>;
 export type ShippedMcpServerDescriptor = {
   defaultName: string;
   packageId: string;
+  legacyPackageIds?: readonly string[];
   packageDirectory: string;
   disabledByDefault?: (env: Environment) => boolean;
   enableMcpApps?: boolean;
@@ -51,6 +52,7 @@ export const SHIPPED_MCP_SERVERS: readonly ShippedMcpServerDescriptor[] = [
   {
     defaultName: 'browser',
     packageId: '@mario.andreschak/mcp-browser',
+    legacyPackageIds: ['@flujo-ai/mcp-browser'],
     packageDirectory: 'browser',
     icons: [{ src: '/mcp-icons/browser.svg', mimeType: 'image/svg+xml' }],
     enableMcpApps: true,
@@ -101,7 +103,13 @@ export function shippedServerEnv(
       'FLUJO_BROWSER_ENABLED',
       'FLUJO_BROWSER_ALLOWED_ORIGINS',
       'FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS',
+      'FLUJO_BROWSER_MODE',
       'FLUJO_BROWSER_EXECUTABLE_PATH',
+      'FLUJO_BROWSER_PROFILE_DIR',
+      'FLUJO_BROWSER_LOCALE',
+      'FLUJO_BROWSER_TIMEZONE_ID',
+      'FLUJO_BROWSER_EXTENSION_DIRS',
+      'FLUJO_BROWSER_WINDOW_VISIBILITY',
       'FLUJO_BROWSER_MAX_SESSIONS',
       'FLUJO_BROWSER_IDLE_TIMEOUT_MS',
       'FLUJO_BROWSER_MAX_REDIRECTS',

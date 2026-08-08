@@ -23,24 +23,62 @@ export type BrowserErrorCode =
   | 'TIMEOUT'
   | 'UNEXPECTED';
 
+export type BrowserFailureCategory = 'cancelled' | 'input' | 'policy' | 'runtime' | 'site';
+export type BrowserMode = 'sandbox' | 'trusted';
+export type BrowserWindowVisibility = 'minimized' | 'offscreen' | 'visible';
+
+export function failureCategoryForCode(code: BrowserErrorCode): BrowserFailureCategory {
+  if (code === 'CANCELLED') return 'cancelled';
+  if (code === 'INVALID_ARGUMENT' || code === 'NOT_FOUND' || code === 'SESSION_LIMIT') return 'input';
+  if (code === 'NAVIGATION_BLOCKED') return 'policy';
+  return 'runtime';
+}
+
 export class BrowserMcpError extends Error {
-  constructor(public readonly code: BrowserErrorCode, message: string) {
+  constructor(
+    public readonly code: BrowserErrorCode,
+    message: string,
+    public readonly category: BrowserFailureCategory = failureCategoryForCode(code),
+  ) {
     super(message);
     this.name = 'BrowserMcpError';
   }
 }
 
+export type PolicyBlock = {
+  url: string;
+  reason: string;
+  topLevel: boolean;
+};
+
 export type BrowserSession = {
   id: string;
+  mode: BrowserMode;
   context: BrowserContext;
   page: Page;
   touchedAt: number;
   documentRequests: number;
   navigationBlocked: boolean;
+  blockedRequestCount: number;
+  lastPolicyBlock?: PolicyBlock;
 };
 
-let browser: Browser | undefined;
-let browserPromise: Promise<Browser> | undefined;
+type RuntimeLaunchState = {
+  mode: BrowserMode;
+  channel: string;
+  headless: boolean;
+  persistent: boolean;
+  windowVisibility: BrowserWindowVisibility;
+  extensionDirectories: string[];
+  profileDir?: string;
+  version?: string;
+};
+
+let sandboxBrowser: Browser | undefined;
+let sandboxBrowserPromise: Promise<Browser> | undefined;
+let trustedContext: BrowserContext | undefined;
+let trustedContextPromise: Promise<BrowserContext> | undefined;
+const launchStates: Partial<Record<BrowserMode, RuntimeLaunchState>> = {};
 let runtimeRoot: string | undefined;
 let lastSessionId: string | undefined;
 const sessions = new Map<string, BrowserSession>();
@@ -52,6 +90,52 @@ export function integerEnv(name: string, fallback: number, min: number, max: num
 
 export function enabledEnv(name: string): boolean {
   return /^(1|true|yes|on)$/i.test(process.env[name]?.trim() ?? '');
+}
+
+function booleanEnv(name: string): boolean | undefined {
+  const raw = process.env[name]?.trim();
+  if (!raw) return undefined;
+  if (/^(1|true|yes|on)$/i.test(raw)) return true;
+  if (/^(0|false|no|off)$/i.test(raw)) return false;
+  return undefined;
+}
+
+export function browserMode(): BrowserMode {
+  return process.env.FLUJO_BROWSER_MODE?.trim().toLowerCase() === 'trusted'
+    ? 'trusted'
+    : 'sandbox';
+}
+
+function browserLocale(): string {
+  const configured = process.env.FLUJO_BROWSER_LOCALE?.trim();
+  if (configured) return configured;
+  return Intl.DateTimeFormat().resolvedOptions().locale || 'en-US';
+}
+
+function browserTimezone(): string {
+  const configured = process.env.FLUJO_BROWSER_TIMEZONE_ID?.trim();
+  if (configured) return configured;
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+}
+
+function headed(mode: BrowserMode): boolean {
+  return booleanEnv('FLUJO_BROWSER_HEADED') ?? mode === 'trusted';
+}
+
+function allowServiceWorkers(mode: BrowserMode): boolean {
+  return booleanEnv('FLUJO_BROWSER_ALLOW_SERVICE_WORKERS') ?? mode === 'trusted';
+}
+
+function browserWindowVisibility(): BrowserWindowVisibility {
+  const configured = process.env.FLUJO_BROWSER_WINDOW_VISIBILITY?.trim().toLowerCase();
+  if (configured === 'offscreen' || configured === 'minimized') return configured;
+  return 'visible';
+}
+
+function extensionDirectoryInputs(): string[] {
+  const raw = process.env.FLUJO_BROWSER_EXTENSION_DIRS?.trim();
+  if (!raw) return [];
+  return [...new Set(raw.split(path.delimiter).map((entry) => entry.trim()).filter(Boolean))];
 }
 
 /** Viewport the live view starts at before the app reports its real size. */
@@ -209,6 +293,7 @@ export async function writeScreenshotArtifact(
 }
 
 type LaunchOptions = NonNullable<Parameters<typeof chromium.launch>[0]>;
+type PersistentLaunchOptions = NonNullable<Parameters<typeof chromium.launchPersistentContext>[1]>;
 
 /**
  * Chromium flags that make embedded media behave the way a user expects.
@@ -221,11 +306,24 @@ const MEDIA_LAUNCH_ARGS = [
   '--autoplay-policy=no-user-gesture-required',
 ];
 
-function launchOptions(downloadsPath: string, channel: string | undefined): LaunchOptions {
+function launchOptions(
+  downloadsPath: string,
+  channel: string | undefined,
+  mode: BrowserMode,
+): LaunchOptions {
+  const args = [...MEDIA_LAUNCH_ARGS];
+  if (headed(mode)) {
+    const visibility = browserWindowVisibility();
+    if (visibility === 'offscreen') {
+      args.push('--window-position=-32000,-32000', `--window-size=${defaultViewport().width},${defaultViewport().height}`);
+    } else if (visibility === 'minimized') {
+      args.push('--start-minimized');
+    }
+  }
   const options: LaunchOptions = {
-    headless: !enabledEnv('FLUJO_BROWSER_HEADED'),
+    headless: !headed(mode),
     downloadsPath,
-    args: MEDIA_LAUNCH_ARGS,
+    args,
   };
   if (channel) options.channel = channel;
   // Patchright mutes audio by default. Unmuting only matters where the operator
@@ -245,34 +343,125 @@ function launchOptions(downloadsPath: string, channel: string | undefined): Laun
  * The full `chromium` channel runs modern headless instead, so screencast
  * frames advance like they do in a headed browser.
  */
-function preferredChannel(): string | undefined {
+function preferredChannel(mode: BrowserMode): string | undefined {
   const configured = process.env.FLUJO_BROWSER_CHANNEL?.trim();
   if (configured) return configured === 'default' ? undefined : configured;
-  return process.env.FLUJO_BROWSER_EXECUTABLE_PATH ? undefined : 'chromium';
+  if (process.env.FLUJO_BROWSER_EXECUTABLE_PATH) return undefined;
+  return mode === 'trusted' && extensionDirectoryInputs().length === 0 ? 'chrome' : 'chromium';
+}
+
+function trustedProfileDir(): string {
+  const configured = process.env.FLUJO_BROWSER_PROFILE_DIR?.trim();
+  if (configured) return path.resolve(configured);
+  const dataRoot = process.env.FLUJO_DATA_DIR?.trim() || process.cwd();
+  return path.resolve(dataRoot, 'browser-profile', 'trusted');
+}
+
+type ExtensionDescriptor = {
+  directory: string;
+  manifestVersion: number;
+  name: string;
+  version: string;
+};
+
+async function configuredExtensions(): Promise<ExtensionDescriptor[]> {
+  const inputs = extensionDirectoryInputs();
+  if (inputs.length > 16) {
+    throw new BrowserMcpError('INVALID_ARGUMENT', 'FLUJO_BROWSER_EXTENSION_DIRS accepts at most 16 unpacked extension directories.');
+  }
+  const extensions: ExtensionDescriptor[] = [];
+  for (const input of inputs) {
+    if (!path.isAbsolute(input)) {
+      throw new BrowserMcpError('INVALID_ARGUMENT', 'Every FLUJO_BROWSER_EXTENSION_DIRS entry must be an absolute directory.');
+    }
+    let directory: string;
+    let manifest: Record<string, unknown>;
+    try {
+      directory = await fs.realpath(input);
+      const stat = await fs.stat(directory);
+      if (!stat.isDirectory()) throw new Error('not a directory');
+      const raw = await fs.readFile(path.join(directory, 'manifest.json'), 'utf8');
+      if (raw.length > 1_000_000) throw new Error('manifest too large');
+      manifest = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      throw new BrowserMcpError('INVALID_ARGUMENT', `Extension directory is unreadable or has no valid manifest.json: ${input}`);
+    }
+    const manifestVersion = Number(manifest.manifest_version);
+    const name = typeof manifest.name === 'string' ? manifest.name : path.basename(directory);
+    const version = typeof manifest.version === 'string' ? manifest.version : '';
+    if ((manifestVersion !== 2 && manifestVersion !== 3) || !version) {
+      throw new BrowserMcpError('INVALID_ARGUMENT', `Extension manifest must declare manifest_version 2/3 and a version: ${input}`);
+    }
+    extensions.push({ directory, manifestVersion, name, version });
+  }
+  return extensions;
+}
+
+function persistentLaunchOptions(
+  downloadsPath: string,
+  channel: string | undefined,
+  extensions: ExtensionDescriptor[],
+): PersistentLaunchOptions {
+  const base = launchOptions(downloadsPath, channel, 'trusted');
+  const extensionPaths = extensions.map(({ directory }) => directory);
+  const extensionArgs = extensionPaths.length > 0
+    ? [
+        `--disable-extensions-except=${extensionPaths.join(',')}`,
+        `--load-extension=${extensionPaths.join(',')}`,
+      ]
+    : [];
+  return {
+    ...base,
+    args: [...(base.args ?? []), ...extensionArgs],
+    acceptDownloads: false,
+    locale: browserLocale(),
+    serviceWorkers: allowServiceWorkers('trusted') ? 'allow' : 'block',
+    timezoneId: browserTimezone(),
+    viewport: defaultViewport(),
+  };
+}
+
+async function launchSandboxBrowser(downloadsPath: string): Promise<{ browser: Browser; channel: string }> {
+  const requested = preferredChannel('sandbox');
+  try {
+    return {
+      browser: await chromium.launch(launchOptions(downloadsPath, requested, 'sandbox')),
+      channel: requested ?? 'default',
+    };
+  } catch (error) {
+    if (!requested) throw error;
+    return {
+      browser: await chromium.launch(launchOptions(downloadsPath, undefined, 'sandbox')),
+      channel: 'default',
+    };
+  }
 }
 
 /** Exported for the recording/capture modules, which need their own contexts on the same browser instance. */
 export async function acquireBrowser(): Promise<Browser> {
-  if (browser?.isConnected()) return browser;
-  if (browserPromise) return browserPromise;
-  browserPromise = (async () => {
+  if (sandboxBrowser?.isConnected()) return sandboxBrowser;
+  if (sandboxBrowserPromise) return sandboxBrowserPromise;
+  sandboxBrowserPromise = (async () => {
     const downloadsPath = await ensureRuntimeRoot();
     try {
-      const channel = preferredChannel();
-      let launched: Browser;
-      try {
-        launched = await chromium.launch(launchOptions(downloadsPath, channel));
-      } catch (error) {
-        // Deployments that only installed the headless shell have no `chromium`
-        // channel; fall back rather than losing the browser entirely.
-        if (!channel) throw error;
-        launched = await chromium.launch(launchOptions(downloadsPath, undefined));
-      }
-      browser = launched;
+      const { browser: launched, channel } = await launchSandboxBrowser(downloadsPath);
+      sandboxBrowser = launched;
+      launchStates.sandbox = {
+        mode: 'sandbox',
+        channel,
+        headless: !headed('sandbox'),
+        persistent: false,
+        windowVisibility: browserWindowVisibility(),
+        extensionDirectories: [],
+        version: typeof launched.version === 'function' ? launched.version() : undefined,
+      };
       launched.once('disconnected', () => {
-        if (browser === launched) browser = undefined;
-        sessions.clear();
-        lastSessionId = undefined;
+        if (sandboxBrowser === launched) sandboxBrowser = undefined;
+        delete launchStates.sandbox;
+        for (const [id, session] of sessions) {
+          if (session.mode === 'sandbox') sessions.delete(id);
+        }
+        if (lastSessionId && !sessions.has(lastSessionId)) lastSessionId = undefined;
       });
       return launched;
     } catch {
@@ -281,10 +470,76 @@ export async function acquireBrowser(): Promise<Browser> {
         'Patchright could not start Chromium. Install the managed browser binary and check the server platform prerequisites.',
       );
     } finally {
-      browserPromise = undefined;
+      sandboxBrowserPromise = undefined;
     }
   })();
-  return browserPromise;
+  return sandboxBrowserPromise;
+}
+
+async function acquireTrustedContext(): Promise<BrowserContext> {
+  if (trustedContext) return trustedContext;
+  if (trustedContextPromise) return trustedContextPromise;
+  trustedContextPromise = (async () => {
+    try {
+      const downloadsPath = await ensureRuntimeRoot();
+    const profileDir = trustedProfileDir();
+    await fs.mkdir(profileDir, { recursive: true });
+    const extensions = await configuredExtensions();
+    const requested = preferredChannel('trusted');
+    if (extensions.length > 0 && requested !== 'chromium') {
+      throw new BrowserMcpError(
+        'INVALID_ARGUMENT',
+        'Unpacked extensions require FLUJO_BROWSER_CHANNEL=chromium because current Google Chrome/Edge releases removed the side-load command-line flags.',
+      );
+    }
+      let context: BrowserContext;
+      let channel = requested ?? 'default';
+      try {
+        context = await chromium.launchPersistentContext(
+          profileDir,
+          persistentLaunchOptions(downloadsPath, requested, extensions),
+        );
+      } catch (error) {
+        if (!requested) throw error;
+        const fallbackChannel = requested === 'chromium' ? undefined : 'chromium';
+        context = await chromium.launchPersistentContext(
+          profileDir,
+          persistentLaunchOptions(downloadsPath, fallbackChannel, extensions),
+        );
+        channel = fallbackChannel ?? 'default';
+      }
+      trustedContext = context;
+      launchStates.trusted = {
+        mode: 'trusted',
+        channel,
+        headless: !headed('trusted'),
+        persistent: true,
+        windowVisibility: browserWindowVisibility(),
+        extensionDirectories: extensions.map(({ directory }) => directory),
+        profileDir,
+        version: context.browser()?.version(),
+      };
+      await installRequestPolicy(context);
+      context.once('close', () => {
+        if (trustedContext === context) trustedContext = undefined;
+        delete launchStates.trusted;
+        for (const [id, session] of sessions) {
+          if (session.mode === 'trusted') sessions.delete(id);
+        }
+        if (lastSessionId && !sessions.has(lastSessionId)) lastSessionId = undefined;
+      });
+      return context;
+    } catch (error) {
+      if (error instanceof BrowserMcpError) throw error;
+      throw new BrowserMcpError(
+        'BROWSER_UNAVAILABLE',
+        'Patchright could not start the trusted Chrome profile. Install Chrome (or configure FLUJO_BROWSER_EXECUTABLE_PATH), ensure the profile is not in use, and check that a desktop display is available.',
+      );
+    } finally {
+      trustedContextPromise = undefined;
+    }
+  })();
+  return trustedContextPromise;
 }
 
 function validateSessionId(value: unknown): string {
@@ -301,9 +556,9 @@ function touchSession(session: BrowserSession): BrowserSession {
   return session;
 }
 
-function lastLiveSession(): BrowserSession | undefined {
+function lastLiveSession(mode?: BrowserMode): BrowserSession | undefined {
   const remembered = lastSessionId ? sessions.get(lastSessionId) : undefined;
-  if (remembered && !remembered.page.isClosed()) return remembered;
+  if (remembered && !remembered.page.isClosed() && (!mode || remembered.mode === mode)) return remembered;
 
   let latest: BrowserSession | undefined;
   for (const session of sessions.values()) {
@@ -311,7 +566,7 @@ function lastLiveSession(): BrowserSession | undefined {
       sessions.delete(session.id);
       continue;
     }
-    if (!latest || session.touchedAt >= latest.touchedAt) latest = session;
+    if ((!mode || session.mode === mode) && (!latest || session.touchedAt >= latest.touchedAt)) latest = session;
   }
   lastSessionId = latest?.id;
   return latest;
@@ -322,14 +577,95 @@ async function closeSessionInternal(id: string): Promise<boolean> {
   if (!session) return false;
   sessions.delete(id);
   if (lastSessionId === id) lastSessionId = undefined;
-  await session.context.close().catch(() => undefined);
+  if (session.mode === 'trusted') {
+    await session.page.close().catch(() => undefined);
+  } else {
+    await session.context.close().catch(() => undefined);
+  }
   return true;
+}
+
+function policyDisplayUrl(rawUrl: string): string {
+  try {
+    const url = new URL(rawUrl);
+    url.username = '';
+    url.password = '';
+    url.search = '';
+    url.hash = '';
+    return url.href;
+  } catch {
+    return '';
+  }
+}
+
+function sessionForPage(page: Page | undefined): BrowserSession | undefined {
+  if (!page) return undefined;
+  for (const session of sessions.values()) {
+    if (session.page === page) return session;
+  }
+  return undefined;
+}
+
+/** Enforce the same SSRF/navigation policy on sessions, recordings, and capture contexts. */
+export async function installRequestPolicy(context: BrowserContext): Promise<void> {
+  await context.route('**/*', async (route) => {
+    const request = route.request();
+    let session: BrowserSession | undefined;
+    let mainDocument = false;
+    try {
+      const frame = request.frame();
+      session = sessionForPage(frame.page());
+      mainDocument = Boolean(
+        session
+        && request.resourceType() === 'document'
+        && frame === session.page.mainFrame(),
+      );
+    } catch {
+      // Service-worker and pre-frame requests still receive the URL policy, but
+      // cannot be attributed to a user-facing tab.
+    }
+
+    try {
+      if (mainDocument && session) {
+        session.documentRequests += 1;
+        const maxRedirects = integerEnv('FLUJO_BROWSER_MAX_REDIRECTS', DEFAULT_MAX_REDIRECTS, 0, 50);
+        if (session.documentRequests > maxRedirects + 1) {
+          throw new BrowserMcpError('NAVIGATION_BLOCKED', 'The navigation exceeded the redirect limit.');
+        }
+      }
+      await assertNavigationAllowed(request.url());
+      await route.continue();
+    } catch (error) {
+      if (session) {
+        session.blockedRequestCount += 1;
+        session.lastPolicyBlock = {
+          url: policyDisplayUrl(request.url()),
+          reason: error instanceof BrowserMcpError
+            ? error.message
+            : 'The request was blocked by browser policy.',
+          topLevel: mainDocument,
+        };
+        // A blocked tracker/CDN must not turn the next click into a bogus
+        // top-level NAVIGATION_BLOCKED result.
+        if (mainDocument) session.navigationBlocked = true;
+      }
+      await route.abort('blockedbyclient').catch(() => undefined);
+    }
+  });
+}
+
+function reusableTrustedPage(context: BrowserContext): Page | undefined {
+  const used = new Set([...sessions.values()].map((session) => session.page));
+  return context.pages().find((page) =>
+    !used.has(page) && !page.isClosed() && page.url() === 'about:blank'
+  );
 }
 
 export async function openSession(requestedId: unknown, signal: AbortSignal): Promise<BrowserSession> {
   if (signal.aborted) throw new BrowserMcpError('CANCELLED', 'The browser request was cancelled.');
+  const mode = browserMode();
   if (requestedId === undefined || requestedId === '') {
-    const latest = lastLiveSession();
+    const latest = lastLiveSession(mode);
     if (latest) return touchSession(latest);
   }
   const id = validateSessionId(requestedId);
@@ -340,77 +676,52 @@ export async function openSession(requestedId: unknown, signal: AbortSignal): Pr
     throw new BrowserMcpError('SESSION_LIMIT', `The browser session limit (${maxSessions}) has been reached.`);
   }
 
-  const activeBrowser = await acquireBrowser();
-  if (signal.aborted) throw new BrowserMcpError('CANCELLED', 'The browser request was cancelled.');
-
   let context: BrowserContext | undefined;
-  let contextClosePromise: Promise<void> | undefined;
+  let page: Page | undefined;
+  let closeCreatedPromise: Promise<void> | undefined;
   let cancelled = false;
-  const closeContext = (): Promise<void> => {
+  const closeCreated = (): Promise<void> => {
     if (!context) return Promise.resolve();
-    contextClosePromise ??= context.close().catch(() => undefined);
-    return contextClosePromise;
+    closeCreatedPromise ??= mode === 'trusted'
+      ? (page?.close().catch(() => undefined) ?? Promise.resolve())
+      : context.close().catch(() => undefined);
+    return closeCreatedPromise;
   };
   const onAbort = () => {
     cancelled = true;
-    void closeContext();
+    void closeCreated();
   };
   signal.addEventListener('abort', onAbort, { once: true });
 
   try {
-    context = await activeBrowser.newContext({
-      acceptDownloads: false,
-      // Many streaming and app-shell sites route their media fetches through a
-      // service worker, so operators can opt into allowing them.
-      serviceWorkers: enabledEnv('FLUJO_BROWSER_ALLOW_SERVICE_WORKERS') ? 'allow' : 'block',
-      viewport: defaultViewport(),
-    });
-    if (cancelled || signal.aborted) {
-      throw new BrowserMcpError('CANCELLED', 'The browser request was cancelled.');
+    if (mode === 'trusted') {
+      context = await acquireTrustedContext();
+      page = reusableTrustedPage(context) ?? await context.newPage();
+    } else {
+      const activeBrowser = await acquireBrowser();
+      if (cancelled || signal.aborted) {
+        throw new BrowserMcpError('CANCELLED', 'The browser request was cancelled.');
+      }
+      context = await activeBrowser.newContext({
+        acceptDownloads: false,
+        locale: browserLocale(),
+        serviceWorkers: allowServiceWorkers('sandbox') ? 'allow' : 'block',
+        timezoneId: browserTimezone(),
+        viewport: defaultViewport(),
+      });
+      page = await context.newPage();
+      await installRequestPolicy(context);
     }
-
     const session: BrowserSession = {
       id,
+      mode,
       context,
-      page: await context.newPage(),
+      page,
       touchedAt: Date.now(),
       documentRequests: 0,
       navigationBlocked: false,
+      blockedRequestCount: 0,
     };
-    if (cancelled || signal.aborted) {
-      throw new BrowserMcpError('CANCELLED', 'The browser request was cancelled.');
-    }
-    const maxRedirects = integerEnv('FLUJO_BROWSER_MAX_REDIRECTS', DEFAULT_MAX_REDIRECTS, 0, 50);
-
-    const mainFrame = session.page.mainFrame();
-    await context.route('**/*', async (route) => {
-      const request = route.request();
-      // Only a top-level document counts toward the redirect budget. Counting
-      // every `document` request meant an ad- or embed-heavy page tripped the
-      // limit on its tenth <iframe> and wedged the whole session.
-      let mainDocument = false;
-      try {
-        mainDocument = request.resourceType() === 'document' && request.frame() === mainFrame;
-      } catch {
-        mainDocument = false;
-      }
-      try {
-        if (mainDocument) {
-          session.documentRequests += 1;
-          if (session.documentRequests > maxRedirects + 1) {
-            throw new BrowserMcpError('NAVIGATION_BLOCKED', 'The navigation exceeded the redirect limit.');
-          }
-        }
-        await assertNavigationAllowed(request.url());
-        await route.continue();
-      } catch {
-        // Likewise, a blocked tracker pixel or third-party CDN asset must not
-        // poison the session flag and make the next click report a bogus
-        // NAVIGATION_BLOCKED.
-        if (mainDocument) session.navigationBlocked = true;
-        await route.abort('blockedbyclient').catch(() => undefined);
-      }
-    });
     if (cancelled || signal.aborted) {
       throw new BrowserMcpError('CANCELLED', 'The browser request was cancelled.');
     }
@@ -422,7 +733,7 @@ export async function openSession(requestedId: unknown, signal: AbortSignal): Pr
     sessions.set(id, session);
     return touchSession(session);
   } catch (error) {
-    await closeContext();
+    await closeCreated();
     if (cancelled || signal.aborted) {
       throw new BrowserMcpError('CANCELLED', 'The browser request was cancelled.');
     }
@@ -457,10 +768,14 @@ export async function createCaptureContext(
     viewport: { width: viewport.width, height: viewport.height },
     deviceScaleFactor: viewport.deviceScaleFactor ?? 1,
     colorScheme: viewport.colorScheme ?? 'light',
+    locale: browserLocale(),
+    timezoneId: browserTimezone(),
     reducedMotion: 'reduce',
     acceptDownloads: false,
+    serviceWorkers: 'block',
   });
   try {
+    await installRequestPolicy(context);
     const page = await context.newPage();
     if (signal.aborted) throw new BrowserMcpError('CANCELLED', 'The browser request was cancelled.');
     return { context, page };
@@ -538,9 +853,16 @@ export async function runCancellable<T>(
 export function resetNavigationCounter(session: BrowserSession): void {
   session.documentRequests = 0;
   session.navigationBlocked = false;
+  session.blockedRequestCount = 0;
+  session.lastPolicyBlock = undefined;
 }
 
-export function publicPageState(session: BrowserSession): { sessionId: string; url: string } {
+export function publicPageState(session: BrowserSession): {
+  sessionId: string;
+  url: string;
+  mode: BrowserMode;
+  policy: { blockedRequestCount: number; lastBlockedRequest?: PolicyBlock };
+} {
   let url = session.page.url();
   try {
     const parsed = new URL(url);
@@ -550,16 +872,119 @@ export function publicPageState(session: BrowserSession): { sessionId: string; u
   } catch {
     url = url === 'about:blank' ? url : '';
   }
-  return { sessionId: session.id, url };
+  return {
+    sessionId: session.id,
+    url,
+    mode: session.mode,
+    policy: {
+      blockedRequestCount: session.blockedRequestCount,
+      ...(session.lastPolicyBlock ? { lastBlockedRequest: session.lastPolicyBlock } : {}),
+    },
+  };
+}
+
+export async function browserDiagnostics(session?: BrowserSession): Promise<Record<string, unknown>> {
+  const mode = session?.mode ?? browserMode();
+  const state = launchStates[mode];
+  const page = session?.page;
+  let fingerprint: Record<string, unknown> | undefined;
+  if (page && !page.isClosed()) {
+    fingerprint = await page.evaluate(() => {
+      const nav = navigator as Navigator & {
+        userAgentData?: { brands: Array<{ brand: string; version: string }>; mobile: boolean; platform: string };
+        webdriver?: boolean;
+      };
+      return {
+        userAgent: nav.userAgent,
+        userAgentBrands: nav.userAgentData?.brands ?? [],
+        userAgentPlatform: nav.userAgentData?.platform,
+        webdriver: nav.webdriver,
+        language: nav.language,
+        languages: [...nav.languages],
+        platform: nav.platform,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      };
+    }).catch(() => undefined);
+  }
+  return {
+    success: true,
+    mode,
+    launched: Boolean(state),
+    channel: state?.channel ?? preferredChannel(mode) ?? 'default',
+    headless: state?.headless ?? !headed(mode),
+    persistentProfile: state?.persistent ?? mode === 'trusted',
+    windowVisibility: state?.windowVisibility ?? browserWindowVisibility(),
+    version: state?.version,
+    locale: browserLocale(),
+    timezone: browserTimezone(),
+    serviceWorkers: allowServiceWorkers(mode) ? 'allow' : 'block',
+    privateHosts: enabledEnv('FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS') ? 'allow' : 'block',
+    allowedOrigins: [...allowedOrigins()],
+    ...(session ? { session: publicPageState(session) } : {}),
+    ...(fingerprint ? { fingerprint } : {}),
+  };
+}
+
+async function installedProfileExtensions(): Promise<Array<Record<string, unknown>>> {
+  const preferencesPath = path.join(trustedProfileDir(), 'Default', 'Preferences');
+  try {
+    const stat = await fs.stat(preferencesPath);
+    if (!stat.isFile() || stat.size > 50_000_000) return [];
+    const preferences = JSON.parse(await fs.readFile(preferencesPath, 'utf8')) as {
+      extensions?: { settings?: Record<string, Record<string, unknown>> };
+    };
+    const settings = preferences.extensions?.settings ?? {};
+    return Object.entries(settings).flatMap(([id, entry]) => {
+      const manifest = entry.manifest;
+      if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) return [];
+      const record = manifest as Record<string, unknown>;
+      return [{
+        id,
+        name: typeof record.name === 'string' ? record.name : id,
+        version: typeof record.version === 'string' ? record.version : '',
+        enabled: entry.state === 1,
+        source: 'profile',
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+export async function browserExtensions(): Promise<Record<string, unknown>> {
+  const configured = await configuredExtensions();
+  const activeUrls = trustedContext
+    ? [
+        ...trustedContext.serviceWorkers().map((worker) => worker.url()),
+        ...trustedContext.backgroundPages().map((page) => page.url()),
+      ]
+    : [];
+  const activeIds = [...new Set(activeUrls.flatMap((url) => {
+    const match = /^chrome-extension:\/\/([a-p]{32})(?:\/|$)/i.exec(url);
+    return match ? [match[1]] : [];
+  }))];
+  return {
+    success: true,
+    profile: trustedProfileDir(),
+    configuredUnpacked: configured,
+    installed: await installedProfileExtensions(),
+    activeExtensionIds: activeIds,
+    note: 'Extensions belong only to FLUJO\'s dedicated trusted profile. Unpacked directories are operator allowlisted; FLUJO never copies extensions from the personal Chrome profile.',
+  };
 }
 
 export async function shutdownBrowserRuntime(): Promise<void> {
   const ids = [...sessions.keys()];
   await Promise.all(ids.map((id) => closeSessionInternal(id)));
-  const active = browser;
-  browser = undefined;
+  const activeSandbox = sandboxBrowser;
+  const activeTrusted = trustedContext;
+  sandboxBrowser = undefined;
+  trustedContext = undefined;
   lastSessionId = undefined;
-  await active?.close().catch(() => undefined);
+  delete launchStates.sandbox;
+  delete launchStates.trusted;
+  await activeTrusted?.close().catch(() => undefined);
+  await activeSandbox?.close().catch(() => undefined);
   if (runtimeRoot) {
     const root = runtimeRoot;
     runtimeRoot = undefined;

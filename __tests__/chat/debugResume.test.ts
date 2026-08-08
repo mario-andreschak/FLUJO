@@ -145,9 +145,28 @@ describe('debug step resume (regression: stuck on start node)', () => {
     expect(ranNodes[0]).toBe(PROCESS);
     expect(ranNodes).not.toContain(START);
 
-    // And the run should make progress to completion.
-    expect(body.status).toBe('completed');
+    // The model's completed narration is now a real debugger boundary: the
+    // first step parks after the model turn and before FINAL_RESPONSE is
+    // applied, rather than silently completing underneath the debugger.
+    expect(body.status).toBe('paused_debug');
+    expect(conversationStates.get(CONV_ID)?.debugPendingAction).toMatchObject({ action: 'FINAL_RESPONSE' });
     expect(conversationStates.get(CONV_ID)?.currentNodeId).toBe(PROCESS);
+
+    // A second step consumes the saved action without invoking the model again.
+    const secondResponse = await processChatCompletion(
+      simulatedRequest,
+      true,
+      false,
+      false,
+      CONV_ID,
+      false,
+      false,
+    );
+    const secondBody: any = await (secondResponse as any).json();
+    expect(secondBody.status).toBe('completed');
+    expect(ranNodes).toEqual([PROCESS]);
+    expect(conversationStates.get(CONV_ID)?.debugMode).toBe(false);
+    expect(conversationStates.get(CONV_ID)?.breakpoints).toEqual([]);
   });
 
   it('a genuine new user turn (userTurn=true) still honors the message processNodeId', async () => {
@@ -169,5 +188,45 @@ describe('debug step resume (regression: stuck on start node)', () => {
     // With userTurn=true the redirect fires, so execution restarts at the start
     // node (preserving the round-2 "stranded on finish node" fix).
     expect(ranNodes[0]).toBe(START);
+  });
+
+  it('a new non-debug message cleanly abandons an old debugger pause', async () => {
+    const state = seedPausedAtProcess();
+    state.logicalRunId = 'old-debug-run';
+    state.breakpoints = [PROCESS, 'tool:*'];
+    state.debugPauseRequested = true;
+    state.debugPendingAction = {
+      action: 'FINAL_RESPONSE',
+      nodeId: PROCESS,
+      phase: 'after-model',
+    };
+
+    const response = await processChatCompletion(
+      {
+        ...simulatedRequest,
+        messages: [
+          ...simulatedRequest.messages,
+          { role: 'user', content: 'new question', processNodeId: START },
+        ],
+      },
+      true,
+      false,
+      false, // this new message did not ask to open the debugger again
+      CONV_ID,
+      false,
+      true,
+    );
+    const body: any = await (response as any).json();
+    const resumed = conversationStates.get(CONV_ID)!;
+
+    expect(body.status).toBe('completed');
+    expect(resumed.debugMode).toBe(false);
+    expect(resumed.breakpoints).toEqual([]);
+    expect(resumed.debugPauseRequested).toBe(false);
+    expect(resumed.debugPendingAction).toBeUndefined();
+    expect(resumed.logicalRunId).not.toBe('old-debug-run');
+    // The stale Process breakpoint was disarmed, so the new turn can traverse
+    // start -> process normally instead of falling straight back into debug.
+    expect(ranNodes).toEqual([START, PROCESS]);
   });
 });

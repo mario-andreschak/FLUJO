@@ -20,6 +20,7 @@ import { normalizeMessageInput } from './messageNormalization';
 import { startCodexToolBridge, BridgeTool } from './codexToolBridge';
 import { resolveCodexModelCatalogPath } from './codexModelCatalog';
 import { prepareCodexRuntimeEnvironment } from './codexRuntimeHome';
+import { mapCodexUsage, type CodexUsageLike } from './codexUsage';
 import {
   codexSessionKey,
   computeCodexPrefixHash,
@@ -115,13 +116,6 @@ type TranscriptMessage = OpenAI.ChatCompletionMessageParam & {
   ui?: ToolUi;
   media?: import('@/shared/types/model/media').ModelMediaPart[];
 };
-
-/** The Codex SDK usage block (turn.completed). */
-interface CodexUsage {
-  input_tokens?: number;
-  cached_input_tokens?: number;
-  output_tokens?: number;
-}
 
 /**
  * Codex adapter — drives OpenAI's `codex` CLI through the Codex SDK
@@ -605,7 +599,7 @@ export class CodexAdapter implements CompletionAdapter {
 
     let bridge: Awaited<ReturnType<typeof startCodexToolBridge>> | undefined;
     let resultText = '';
-    let usage: CodexUsage | undefined;
+    let usage: CodexUsageLike | undefined;
     let streamedText = false;
     let failure: string | undefined;
     let completedTurn = false;
@@ -792,7 +786,7 @@ export class CodexAdapter implements CompletionAdapter {
               // handlers already record each call/result pair (with approval and
               // bounding applied), so mirroring the item would duplicate them.
             } else if (event.type === 'turn.completed') {
-              usage = event.usage as CodexUsage;
+              usage = event.usage as CodexUsageLike;
               completedTurn = true;
             } else if (event.type === 'turn.failed') {
               attemptFailure = new Error(
@@ -936,9 +930,7 @@ export class CodexAdapter implements CompletionAdapter {
       });
     }
 
-    const promptTokens = usage?.input_tokens ?? 0;
-    const completionTokens = usage?.output_tokens ?? 0;
-    const cachedTokens = usage?.cached_input_tokens ?? 0;
+    const mappedUsage = mapCodexUsage(usage);
 
     const completion: OpenAI.Chat.Completions.ChatCompletion = {
       id: `codex_${uuidv4()}`,
@@ -959,12 +951,21 @@ export class CodexAdapter implements CompletionAdapter {
         },
       ],
       usage: {
-        prompt_tokens: promptTokens,
-        completion_tokens: completionTokens,
-        total_tokens: promptTokens + completionTokens,
+        prompt_tokens: mappedUsage.promptTokens,
+        completion_tokens: mappedUsage.completionTokens,
+        total_tokens: mappedUsage.totalTokens,
         // Same fresh/cached split surfaced for the Claude path (#87): the cheap
-        // cache RE-READ subset rides in OpenAI's own usage-detail field.
-        ...(cachedTokens > 0 ? { prompt_tokens_details: { cached_tokens: cachedTokens } } : {}),
+        // cache RE-READ and cache-write subsets ride in OpenAI's usage details.
+        ...(
+          mappedUsage.cacheReadTokens != null || mappedUsage.cacheWriteTokens != null
+            ? {
+                prompt_tokens_details: {
+                  cached_tokens: mappedUsage.cacheReadTokens ?? 0,
+                  cache_write_tokens: mappedUsage.cacheWriteTokens ?? 0,
+                },
+              }
+            : {}
+        ),
       },
     };
 

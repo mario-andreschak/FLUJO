@@ -17,8 +17,10 @@ import {
   matchToolBreakpoint,
   nodeBreakpoints,
   toolBreakpointNames,
+  toolNodeBreakpointIds,
   ANY_TOOL_BREAKPOINT,
   ATTACH_BREAKPOINT,
+  TOOL_NODE_BREAKPOINT_PREFIX,
 } from '@/utils/shared/debugBreakpoints';
 
 const PROCESS = 'ef2a3c01-process';
@@ -32,25 +34,29 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => {
   const TOOL_CALL = 'TOOL_CALL';
   const conversationStates = new Map();
   const executeStep = jest.fn(async (sharedState: any) => {
+    const handoff = !!sharedState.__debugTestHandoff;
+    const final = !!sharedState.__debugTestFinal;
     sharedState.currentNodeId = P;
     sharedState.messages.push({
       role: 'assistant',
-      content: '',
+      content: final ? 'All done.' : '',
       id: `assistant-${sharedState.messages.length}`,
       timestamp: 1,
       processNodeId: P,
-      tool_calls: [
-        { id: 'tc1', type: 'function', function: { name: 'mcp_filesystem_ab12cd', arguments: '{}' } },
+      tool_calls: final ? undefined : [
+        { id: 'tc1', type: 'function', function: { name: handoff ? 'handoff_to_finish' : 'mcp_filesystem_ab12cd', arguments: '{}' } },
       ],
     });
-    return { sharedState, action: TOOL_CALL };
+    return { sharedState, action: final ? 'FINAL_RESPONSE' : handoff ? 'process->finish' : TOOL_CALL };
   });
   return {
     FlowExecutor: {
       conversationStates,
       clearFlowCache: jest.fn(),
       executeStep,
-      resolveHandoff: jest.fn(async () => ({ isSuccessorEdge: false, targetNodeId: null })),
+      resolveHandoff: jest.fn(async (_state: any, action: string) => action === 'process->finish'
+        ? ({ isSuccessorEdge: true, targetNodeId: 'finish' })
+        : ({ isSuccessorEdge: false, targetNodeId: null })),
       peekNextNodeId: jest.fn(async (s: any) => s.currentNodeId ?? P),
     },
   };
@@ -134,6 +140,16 @@ describe('breakpoint vocabulary', () => {
     // Node breakpoints never fire on tool calls.
     expect(matchToolBreakpoint(['node-1'], calls, decode)).toBeNull();
   });
+
+  it('matches a passive MCP canvas node through its advertised tool origin', () => {
+    const calls = [{ function: { name: WIRE_TOOL_NAME } }];
+    const breakpoint = `${TOOL_NODE_BREAKPOINT_PREFIX}mcp-node-1`;
+    const decode = () => ({ server: 'filesystem', tool: 'read_file', nodeId: 'mcp-node-1' });
+
+    expect(toolNodeBreakpointIds([breakpoint])).toEqual(['mcp-node-1']);
+    expect(nodeBreakpoints([breakpoint])).toEqual([]);
+    expect(matchToolBreakpoint([breakpoint], calls, decode)).toBe(WIRE_TOOL_NAME);
+  });
 });
 
 describe('tool breakpoints pause a normal (non-single-step) run', () => {
@@ -168,5 +184,73 @@ describe('tool breakpoints pause a normal (non-single-step) run', () => {
     expect(processToolCalls).toHaveBeenCalled();
     expect(state.debugPendingToolCalls).toBeUndefined();
     expect(state.status).not.toBe('paused_debug');
+  });
+
+  it('pauses before the permission/approval gate when approvals are enabled', async () => {
+    seedRunningState([ANY_TOOL_BREAKPOINT]);
+    await processChatCompletion(request, true, true, false, CONV_ID, false, false);
+
+    const state = conversationStates.get(CONV_ID)!;
+    expect(processToolCalls).not.toHaveBeenCalled();
+    expect(state.status).toBe('paused_debug');
+    expect(state.debugPendingAction).toMatchObject({ action: 'TOOL_CALL' });
+
+    await processChatCompletion(
+      { ...request, messages: state.messages } as any,
+      true,
+      true,
+      false,
+      CONV_ID,
+      true,
+      false,
+    );
+    expect(conversationStates.get(CONV_ID)?.status).toBe('awaiting_tool_approval');
+  });
+
+  it('catches handoff tool calls before the graph transition is applied', async () => {
+    const state = seedRunningState([ANY_TOOL_BREAKPOINT]);
+    (state as any).__debugTestHandoff = true;
+
+    await run();
+
+    expect(conversationStates.get(CONV_ID)).toMatchObject({
+      status: 'paused_debug',
+      currentNodeId: PROCESS,
+      debugPendingAction: { action: 'process->finish', phase: 'after-model' },
+    });
+  });
+
+  it('attach pauses after the active model turn without replacing authored breakpoints', async () => {
+    const state = seedRunningState(['node-kept']);
+    state.debugPauseRequested = true;
+
+    await run();
+
+    expect(processToolCalls).not.toHaveBeenCalled();
+    expect(conversationStates.get(CONV_ID)).toMatchObject({
+      status: 'paused_debug',
+      debugPauseRequested: false,
+      breakpoints: ['node-kept'],
+    });
+  });
+
+  it('does not re-trigger a tool breakpoint from an older assistant turn', async () => {
+    const state = seedRunningState(['tool:read_file']);
+    state.messages.push({
+      role: 'assistant',
+      content: '',
+      id: 'assistant-old-tool-call',
+      timestamp: 1,
+      processNodeId: PROCESS,
+      tool_calls: [
+        { id: 'old-tc', type: 'function', function: { name: WIRE_TOOL_NAME, arguments: '{}' } },
+      ],
+    } as any);
+    (state as any).__debugTestFinal = true;
+
+    await run();
+
+    expect(conversationStates.get(CONV_ID)?.status).toBe('completed');
+    expect(conversationStates.get(CONV_ID)?.debugPendingAction).toBeUndefined();
   });
 });

@@ -61,12 +61,10 @@ export async function POST(
       messages: sharedState.messages,
     };
 
-    // 4. Run exactly one productive step. Because the conversation is in debug
-    // mode (debugMode true) and continueDebug is left false, processChatCompletion
-    // executes one node, processes its action (handoff/tool/etc.) so currentNodeId
-    // actually advances, and then pauses (status back to paused_debug). This is
-    // the fix for the old behavior, which ran the node but never resolved its
-    // action — leaving execution stuck on the same node every step.
+    // 4. Run exactly one debugger-safe boundary. A Process-node model turn
+    // pauses after its completed narration/arguments and before its action;
+    // the next step consumes that saved action without invoking the model again.
+    // Non-model nodes still advance through their graph transition in one step.
     log.info(`Executing debug step via processChatCompletion`, { requestId, conversationId, currentNodeId: sharedState.currentNodeId });
     const response = await processChatCompletion(
       simulatedRequestData,

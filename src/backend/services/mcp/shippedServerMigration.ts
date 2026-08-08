@@ -1,4 +1,5 @@
 import type { MCPStdioConfig } from '@/shared/types/mcp';
+import path from 'node:path';
 import { Settings, StorageKey } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
 import { loadItem, saveItem } from '@/utils/storage/backend';
@@ -53,8 +54,15 @@ function marketplacePackageId(stored: StoredServer): string | undefined {
     : undefined;
 }
 
-function isInstalledPackage(stored: StoredServer, packageId: string): boolean {
-  return marketplacePackageId(stored) === packageId || stored.internalPackage === packageId;
+function descriptorPackageIds(descriptor: ShippedMcpServerDescriptor): readonly string[] {
+  return [descriptor.packageId, ...(descriptor.legacyPackageIds ?? [])];
+}
+
+function isInstalledPackage(stored: StoredServer, descriptor: ShippedMcpServerDescriptor): boolean {
+  const sourceId = marketplacePackageId(stored);
+  return descriptorPackageIds(descriptor).some((packageId) =>
+    sourceId === packageId || stored.internalPackage === packageId
+  );
 }
 
 function hasInstalledPackage(
@@ -140,7 +148,7 @@ function isLegacyShippedRecord(
   stored: StoredServer,
   descriptor: ShippedMcpServerDescriptor,
 ): boolean {
-  if (isInstalledPackage(stored, descriptor.packageId)) return true;
+  if (isInstalledPackage(stored, descriptor)) return true;
   return stored.transport === 'stdio'
     && stored.command === 'npx'
     && Array.isArray(stored.args)
@@ -244,6 +252,54 @@ async function runShippedServerRootsMigration(): Promise<void> {
   await saveItem(StorageKey.MCP_SHIPPED_SERVER_ROOTS_MIGRATION_V5, true);
 }
 
+/**
+ * Repair browser records written under the former package id. V4/V5 could not
+ * recognize those records after the package rename, so a completed migration
+ * marker left their relative entrypoint and stale process error untouched.
+ */
+async function runBrowserRecordRepairMigration(): Promise<void> {
+  const completed = await loadItem<boolean>(StorageKey.MCP_SHIPPED_BROWSER_REPAIR_MIGRATION_V6, false);
+  if (completed === true) return;
+
+  const loaded = await loadItem<StoredServers>(StorageKey.MCP_SERVERS, {});
+  const nextServers = { ...(loaded && typeof loaded === 'object' ? loaded : {}) };
+  const descriptor = SHIPPED_MCP_SERVERS.find((candidate) => candidate.packageDirectory === 'browser');
+  let changed = false;
+
+  if (descriptor) {
+    const expected = persistedConfig(createShippedServerConfig(descriptor));
+    for (const [recordName, stored] of Object.entries(nextServers)) {
+      if (!isInstalledPackage(stored, descriptor)) continue;
+      const repaired = normalizedInstalledRecord(stored, descriptor, undefined);
+      repaired.rootPath = expected.rootPath;
+      const repairedEnv = repaired.env && typeof repaired.env === 'object' && !Array.isArray(repaired.env)
+        ? repaired.env as Record<string, unknown>
+        : {};
+      const dataDir = repairedEnv.FLUJO_DATA_DIR;
+      const dataDirValue = dataDir && typeof dataDir === 'object' && !Array.isArray(dataDir) && 'value' in dataDir
+        ? (dataDir as { value?: unknown }).value
+        : dataDir;
+      if (typeof dataDirValue === 'string' && dataDirValue.trim() && !path.isAbsolute(dataDirValue)) {
+        const absoluteDataDir = path.resolve(String(expected.cwd ?? process.cwd()), dataDirValue);
+        repairedEnv.FLUJO_DATA_DIR = dataDir && typeof dataDir === 'object' && !Array.isArray(dataDir)
+          ? { ...dataDir, value: absoluteDataDir }
+          : absoluteDataDir;
+        repaired.env = repairedEnv;
+      }
+      for (const transient of ['error', 'path', 'status', 'stderrOutput', 'tools']) {
+        delete repaired[transient];
+      }
+      if (JSON.stringify(repaired) !== JSON.stringify(stored)) {
+        nextServers[recordName] = repaired;
+        changed = true;
+      }
+    }
+  }
+
+  if (changed) await saveItem(StorageKey.MCP_SERVERS, nextServers);
+  await saveItem(StorageKey.MCP_SHIPPED_BROWSER_REPAIR_MIGRATION_V6, true);
+}
+
 /** Provision and upgrade shipped packages without synthetic runtime injection. */
 export function migrateShippedMcpServers(): Promise<void> {
   if (migrationInFlight) return migrationInFlight;
@@ -253,6 +309,7 @@ export function migrateShippedMcpServers(): Promise<void> {
       await runBrowserSeedMigration();
       await runOrdinaryStdioMigration();
       await runShippedServerRootsMigration();
+      await runBrowserRecordRepairMigration();
     } finally {
       migrationInFlight = undefined;
     }

@@ -1004,6 +1004,27 @@ export interface SharedState {
     /** The node we most recently paused at for a breakpoint, so a resume from it does not immediately re-break. */
     lastBreakNodeId?: string;
     /**
+     * One-shot request made by the live "Attach debugger" control. Unlike the
+     * legacy `'*'` breakpoint sentinel, this does not overwrite authored
+     * breakpoints and is checked at every safe runtime boundary (after a model
+     * turn, after tools, and before the next node).
+    */
+    debugPauseRequested?: boolean;
+    /** One-shot marker set by Continue after it changes paused_debug -> running.
+     * Keeps that detached resume on the same logical run even though its public
+     * status is already updated for other clients. */
+    debugResumeAfterDetach?: boolean;
+    /**
+     * An action already produced by a node but deliberately not applied yet
+     * because the debugger paused after the completed model turn. Resuming
+     * consumes this action without invoking the model a second time.
+     */
+    debugPendingAction?: {
+        action: string;
+        nodeId?: string;
+        phase: 'after-model';
+    };
+    /**
      * Tool calls a Process node's model just produced that are waiting to be
      * executed, captured ONLY while single-stepping in the debugger. It lets a
      * step pause *before* running the tools (so the user can inspect the model's

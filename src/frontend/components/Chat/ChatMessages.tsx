@@ -69,6 +69,7 @@ import McpAppFrame from './McpAppFrame'; // #97: read-only, sandboxed MCP App (u
 import { createLogger } from '@/utils/logger'; // Import the logger
 import type { LazyToolPayloadRef, McpAppModelContext } from '@/shared/types/chat';
 import { mediaDataUrl, type ModelMediaPart } from '@/shared/types/model/media';
+import { summarizeTokenMeter } from '@/shared/utils/tokenUsage';
 import {
   MARKDOWN_LINK_COMPONENTS,
   MarkdownLink,
@@ -1058,20 +1059,25 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
           />
         )}
 
-        {message.usage && (
-          <Tooltip title={t('chat.messages.tokenUsage', {
-            prompt: formatNumber(message.usage.promptTokens),
-            completion: formatNumber(message.usage.completionTokens),
-          })}>
-            <Chip
-              label={`${formatTokenCount(message.usage.totalTokens)} tok`}
-              size="small"
-              color="default"
-              variant="outlined"
-              sx={{ height: 20, fontSize: '0.7rem', mr: 1 }}
-            />
-          </Tooltip>
-        )}
+        {message.usage && (() => {
+          const meter = summarizeTokenMeter(message.usage);
+          return (
+            <Tooltip title={t('chat.messages.tokenUsage', {
+              prompt: formatNumber(meter.freshPromptTokens),
+              completion: formatNumber(meter.completionTokens),
+              cached: formatNumber(meter.cacheReadTokens),
+              written: formatNumber(meter.cacheWriteTokens),
+            })}>
+              <Chip
+                label={`${formatTokenCount(meter.meterTotalTokens)} tok`}
+                size="small"
+                color="default"
+                variant="outlined"
+                sx={{ height: 20, fontSize: '0.7rem', mr: 1 }}
+              />
+            </Tooltip>
+          );
+        })()}
 
         <IconButton
           size="small"

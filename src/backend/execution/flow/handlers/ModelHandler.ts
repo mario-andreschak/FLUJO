@@ -29,6 +29,7 @@ import { normalizeMaxTokens } from '@/shared/types/model';
 import { isSelfOrchestratingAdapter } from '@/shared/types/model/provider';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
 import { mapOpenAiUsage, OpenAiUsageLike } from '@/backend/services/model/adapters/openaiUsage';
+import { prepareOpenAiPromptCacheWire } from '@/backend/services/model/adapters/openaiPromptCaching';
 import { fingerprintPrefix, classifyDrift, logCacheOutcome, derivePromptCacheKey } from './promptCacheMetrics';
 import { trimTools } from './trimToolBlock';
 import { mcpService } from '@/backend/services/mcp';
@@ -1780,9 +1781,32 @@ export class ModelHandler {
         }
       }
 
+      // Official OpenAI Chat Completions cache strategy. Process-node calls move
+      // their node-specific system instruction behind the wired conversation;
+      // GPT-5.6+ additionally retain explicit breakpoints on the latest reusable
+      // history boundaries.
+      // This happens after every other wire rewrite so the fingerprint,
+      // debugger snapshot, and provider all observe the exact same ordering.
+      const preparedPromptCache = prepareOpenAiPromptCacheWire(apiMessages, model, {
+        lateNodeInstruction: Boolean(opts?.nodeId),
+      });
+      apiMessages = preparedPromptCache.messages;
+      const promptCacheMode = preparedPromptCache.explicit ? 'explicit' as const : undefined;
+      if (preparedPromptCache.lateSystem) {
+        log.debug('Prepared history-first OpenAI prompt-cache wire', {
+          model: model.name,
+          conversationId: opts?.conversationId,
+          nodeId: opts?.nodeId,
+          breakpointCount: preparedPromptCache.breakpointCount,
+          movedSystemMessages: preparedPromptCache.movedSystemMessages,
+          explicit: preparedPromptCache.explicit,
+        });
+      }
+
       // Capture the actual final generic provider wire after visual routing,
-      // lossless compaction, tool trimming, and proactive budget refit. Image
-      // data URLs are bounded by the ProcessNode observer before debugger storage.
+      // lossless compaction, tool trimming, proactive budget refit, and prompt-
+      // cache ordering. Image data URLs are bounded by the ProcessNode observer
+      // before debugger storage.
       try {
         opts?.onFinalWire?.(apiMessages, visualDiagnostic);
       } catch (error) {
@@ -1825,6 +1849,7 @@ export class ModelHandler {
         const promptDetails = raw.prompt_tokens_details as Record<string, unknown> | undefined;
         const inputDetails = raw.input_tokens_details as Record<string, unknown> | undefined;
         const cachedInputTokens = promptDetails?.cached_tokens ?? inputDetails?.cached_tokens;
+        const cacheWriteTokens = promptDetails?.cache_write_tokens ?? inputDetails?.cache_write_tokens;
         const numeric = (candidate: unknown) => typeof candidate === 'number' && Number.isFinite(candidate)
           ? candidate
           : undefined;
@@ -1833,6 +1858,7 @@ export class ModelHandler {
           outputTokens: numeric(outputTokens),
           totalTokens: numeric(totalTokens),
           cachedInputTokens: numeric(cachedInputTokens),
+          cacheWriteTokens: numeric(cacheWriteTokens),
           contextWindow: model.contextWindow,
         };
         return Object.values(usage).some(item => item !== undefined) ? usage : undefined;
@@ -1989,10 +2015,15 @@ export class ModelHandler {
               onCodexSessionChange: opts?.onCodexSessionChange,
               runResourceMarkers: opts?.runResourceMarkers,
               sessionResume: opts?.sessionResume,
-              // Derived from the tool-block hash, so every request sharing this
-              // prefix routes to the same prompt-cache shard (see
-              // derivePromptCacheKey). Adapters that don't support it ignore it.
-              promptCacheKey: derivePromptCacheKey(prefixFingerprint),
+              // Derived from the tool-block hash, or from the conversation for a
+              // no-tool history-first wire, so requests sharing the reusable
+              // prefix route to one prompt-cache shard (see derivePromptCacheKey).
+              // Adapters that don't support it ignore it.
+              promptCacheKey: derivePromptCacheKey(prefixFingerprint, {
+                conversationId: opts?.conversationId,
+                preferConversation: preparedPromptCache.lateSystem,
+              }),
+              promptCacheMode,
               };
               return opts?.onModelDelta && adapter.createStreamCompletion
                 ? adapter.createStreamCompletion(input)
@@ -2038,6 +2069,7 @@ export class ModelHandler {
               promptTokens: rawUsage.prompt_tokens ?? 0,
               completionTokens: rawUsage.completion_tokens ?? 0,
               cachedTokens: rawUsage.prompt_tokens_details?.cached_tokens,
+              cacheWriteTokens: rawUsage.prompt_tokens_details?.cache_write_tokens,
               drift: prefixDrift,
               fingerprint: prefixFingerprint,
             });
@@ -2173,6 +2205,7 @@ export class ModelHandler {
                 outputTokens: attemptUsage.completion_tokens,
                 totalTokens: attemptUsage.total_tokens,
                 cachedInputTokens: attemptUsage.prompt_tokens_details?.cached_tokens,
+                cacheWriteTokens: attemptUsage.prompt_tokens_details?.cache_write_tokens,
                 contextWindow: model.contextWindow,
               } : undefined,
             });

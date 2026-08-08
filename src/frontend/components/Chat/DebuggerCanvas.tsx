@@ -41,6 +41,8 @@ import {
   ANY_TOOL_BREAKPOINT,
   nodeBreakpoints,
   toolBreakpointNames,
+  toolNodeBreakpointIds,
+  TOOL_NODE_BREAKPOINT_PREFIX,
 } from '@/utils/shared/debugBreakpoints';
 import RunResourcesPanel from './RunResourcesPanel';
 import DebuggerConversation from './DebuggerConversation';
@@ -504,6 +506,19 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
     return null;
   }, [canvasFrame, liveActivity, now]);
 
+  const breakpointKeyForNode = useCallback((node: Node): string | null => {
+    // Child runs currently stream into the parent debugger but execute in their
+    // own SharedState. Do not pretend a parent breakpoint can stop them.
+    if (canvasFrame.key !== DEBUGGER_ROOT_FRAME_KEY) return null;
+    const nodeType = typeof node.data?.type === 'string' ? node.data.type : node.type;
+    // MCP nodes are passive attachments. Translate the canvas affordance into
+    // "break on any runtime tool supplied by this attachment".
+    if (nodeType === 'mcp') return `${TOOL_NODE_BREAKPOINT_PREFIX}${node.id}`;
+    // Resource/trigger nodes are data/event wiring, not executable visits.
+    if (nodeType === 'resource' || nodeType === 'trigger') return null;
+    return node.id;
+  }, [canvasFrame.key]);
+
   // Derived nodes for display: highlight the inspected step's node (warning),
   // live activity (primary/teal, fading by age), and breakpoint nodes (error).
   // Precedence: debug step > live activity > breakpoint. Computed, not
@@ -512,7 +527,8 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
     const highlightId = canvasFrame.key === DEBUGGER_ROOT_FRAME_KEY ? currentStepData?.nodeId : undefined;
     return nodes.map((node: Node) => {
       const isCurrent = node.id === highlightId;
-      const isBreakpoint = breakpoints?.includes(node.id);
+      const breakpointKey = breakpointKeyForNode(node);
+      const isBreakpoint = !!breakpointKey && !!breakpoints?.includes(breakpointKey);
       const live = isCurrent ? null : liveActivityFor(node);
       const liveOpacity = live ? Math.max(0.25, 1 - (now - live.ts) / LIVE_HIGHLIGHT_TTL_MS) : 0;
       const liveColor = live?.kind === 'active' ? theme.palette.primary.main : RESOURCE_HIGHLIGHT;
@@ -541,13 +557,19 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
         },
       };
     });
-  }, [nodes, canvasFrame.key, currentStepData, breakpoints, theme, liveActivityFor, now]);
+  }, [nodes, canvasFrame.key, currentStepData, breakpoints, theme, liveActivityFor, now, breakpointKeyForNode]);
 
   // --- Breakpoint context menu ---------------------------------------------
   // Right-clicking a node (or the empty canvas) opens the breakpoint menu:
   // discoverable, and it also carries the bulk actions that have nowhere else
   // to live (clear all, break on every tool call).
-  const [bpMenu, setBpMenu] = useState<{ x: number; y: number; nodeId?: string; nodeLabel?: string } | null>(null);
+  const [bpMenu, setBpMenu] = useState<{
+    x: number;
+    y: number;
+    breakpointKey?: string;
+    nodeLabel?: string;
+    unavailableReason?: string;
+  } | null>(null);
   const closeBpMenu = useCallback(() => setBpMenu(null), []);
   const activeBreakpoints = breakpoints ?? [];
   const toolBreakOn = activeBreakpoints.includes(ANY_TOOL_BREAKPOINT);
@@ -555,8 +577,19 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   const handleNodeContextMenu = useCallback((event: React.MouseEvent, node: Node) => {
     event.preventDefault();
     const label = typeof node.data?.label === 'string' ? node.data.label : node.id;
-    setBpMenu({ x: event.clientX, y: event.clientY, nodeId: node.id, nodeLabel: label });
-  }, []);
+    const breakpointKey = breakpointKeyForNode(node);
+    setBpMenu({
+      x: event.clientX,
+      y: event.clientY,
+      ...(breakpointKey ? { breakpointKey } : {}),
+      nodeLabel: label,
+      ...(!breakpointKey
+        ? { unavailableReason: canvasFrame.key === DEBUGGER_ROOT_FRAME_KEY
+            ? t('chat.debug.breakpointPassiveNode')
+            : t('chat.debug.breakpointChildRun') }
+        : {}),
+    });
+  }, [breakpointKeyForNode, canvasFrame.key, t]);
 
   const handlePaneContextMenu = useCallback((event: React.MouseEvent | MouseEvent) => {
     event.preventDefault();
@@ -865,7 +898,8 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
                   zoomOnDoubleClick={false}
                   onNodeClick={(e, node) => {
                     e.preventDefault();
-                    if (onToggleBreakpoint) onToggleBreakpoint(node.id);
+                    const breakpointKey = breakpointKeyForNode(node);
+                    if (onToggleBreakpoint && breakpointKey) onToggleBreakpoint(breakpointKey);
                   }}
                   onNodeContextMenu={handleNodeContextMenu}
                   onPaneContextMenu={handlePaneContextMenu}
@@ -880,19 +914,19 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
               anchorReference="anchorPosition"
               anchorPosition={bpMenu ? { top: bpMenu.y, left: bpMenu.x } : undefined}
             >
-              {bpMenu?.nodeId && (
+              {bpMenu?.nodeLabel && (
                 <MenuItem
-                  onClick={() => { onToggleBreakpoint?.(bpMenu.nodeId!); closeBpMenu(); }}
-                  disabled={!onToggleBreakpoint}
+                  onClick={() => { if (bpMenu.breakpointKey) onToggleBreakpoint?.(bpMenu.breakpointKey); closeBpMenu(); }}
+                  disabled={!onToggleBreakpoint || !bpMenu.breakpointKey}
                 >
                   <ListItemIcon>
-                    {activeBreakpoints.includes(bpMenu.nodeId) ? <RemoveCircleOutlineIcon fontSize="small" color="error" /> : <FiberManualRecordIcon fontSize="small" color="error" />}
+                    {bpMenu.breakpointKey && activeBreakpoints.includes(bpMenu.breakpointKey) ? <RemoveCircleOutlineIcon fontSize="small" color="error" /> : <FiberManualRecordIcon fontSize="small" color={bpMenu.breakpointKey ? 'error' : 'disabled'} />}
                   </ListItemIcon>
                   <ListItemText
-                    primary={activeBreakpoints.includes(bpMenu.nodeId)
+                    primary={bpMenu.breakpointKey && activeBreakpoints.includes(bpMenu.breakpointKey)
                       ? t('chat.debug.menu.removeBreakpoint')
                       : t('chat.debug.menu.addBreakpoint')}
-                    secondary={bpMenu.nodeLabel}
+                    secondary={bpMenu.unavailableReason || bpMenu.nodeLabel}
                   />
                 </MenuItem>
               )}
@@ -1096,6 +1130,19 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
                   label={name === '*' ? t('chat.debug.anyToolBreakpoint') : name}
                   onDelete={onSetBreakpoints
                     ? () => onSetBreakpoints(activeBreakpoints.filter(b => b !== `tool:${name}`))
+                    : undefined}
+                />
+              ))}
+              {toolNodeBreakpointIds(activeBreakpoints).map(nodeId => (
+                <Chip
+                  key={`tool-node:${nodeId}`}
+                  size="small"
+                  variant="outlined"
+                  color="error"
+                  icon={<BuildOutlinedIcon />}
+                  label={t('chat.debug.toolNodeBreakpoint', { id: nodeId.slice(0, 8) })}
+                  onDelete={onSetBreakpoints
+                    ? () => onSetBreakpoints(activeBreakpoints.filter(b => b !== `${TOOL_NODE_BREAKPOINT_PREFIX}${nodeId}`))
                     : undefined}
                 />
               ))}

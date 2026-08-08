@@ -1151,7 +1151,13 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // the last turn's context size + the summed output of all turns. cacheRead
     // is the prefix re-read cheaply from the prompt cache — kept out of the
     // "fresh" headline so a warmed-cache conversation stops reporting millions.
-    const { promptTokens, completionTokens, cacheReadTokens } = mapSdkUsage(usage, {
+    const {
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
+    } = mapSdkUsage(usage, {
       lastTurnUsage,
       totalOutputTokens,
     });
@@ -1225,6 +1231,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         watermark: messages.length + transcript.length,
         promptTokens,
         cacheReadTokens,
+        cacheWriteTokens,
         completionTokens,
         endedByHandoff: handoffCalls.length > 0,
       });
@@ -1251,11 +1258,13 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       usage: {
         prompt_tokens: promptTokens,
         completion_tokens: completionTokens,
-        total_tokens: promptTokens + completionTokens,
-        // Surface the cheap cache RE-READ subset via OpenAI's own usage detail
-        // field so downstream (ModelHandler → usage totals → UI) can present a
-        // "fresh (+cached)" split instead of one inflated number (#87).
-        ...(cacheReadTokens > 0 ? { prompt_tokens_details: { cached_tokens: cacheReadTokens } } : {}),
+        total_tokens: totalTokens,
+        // Surface both cache subsets through the OpenAI-shaped neutral boundary
+        // so Chat Completions, Codex, and the Agent SDK drive one token meter.
+        prompt_tokens_details: {
+          cached_tokens: cacheReadTokens,
+          cache_write_tokens: cacheWriteTokens,
+        },
       },
     };
 

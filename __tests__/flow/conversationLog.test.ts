@@ -590,6 +590,25 @@ describe('repairDanglingToolCalls (issue #256)', () => {
     expect(synthesized[0].content).toBe('Tool execution cancelled by user before it finished.');
   });
 
+  it('does not repair tool calls intentionally parked by debugger or approval state', () => {
+    const debugState = makeState('conv-repair-debug-pause');
+    debugState.messages = [asstToolCall('a1', ['call_1'])];
+    debugState.status = 'paused_debug';
+    debugState.debugPendingAction = { action: 'TOOL_CALL', phase: 'after-model' };
+
+    expect(repairDanglingToolCalls(debugState)).toEqual([]);
+    expect(debugState.messages).toHaveLength(1);
+
+    const approvalState = makeState('conv-repair-approval-pause');
+    const pending = asstToolCall('a2', ['call_2']).tool_calls!;
+    approvalState.messages = [asstToolCall('a2', ['call_2'])];
+    approvalState.status = 'awaiting_tool_approval';
+    approvalState.pendingToolCalls = pending;
+
+    expect(repairDanglingToolCalls(approvalState)).toEqual([]);
+    expect(approvalState.messages).toHaveLength(1);
+  });
+
   it('folds synthesized results into the projection via appendRawForState', async () => {
     const convId = 'conv-repair-projection';
     const state = makeState(convId);

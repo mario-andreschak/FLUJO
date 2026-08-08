@@ -204,6 +204,13 @@ export interface CompletionInput {
    * adapter also drops it permanently for a provider that rejects it.
    */
   promptCacheKey?: string;
+  /**
+   * Request-level OpenAI prompt-cache policy. Present only after the execution
+   * layer has added compatible explicit breakpoints to the message content.
+   * The OpenAI adapter negotiates this option independently from
+   * `prompt_cache_key` and retries without it if an endpoint rejects it.
+   */
+  promptCacheMode?: 'explicit';
 }
 
 /**

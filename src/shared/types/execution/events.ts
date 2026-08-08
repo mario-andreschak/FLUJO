@@ -185,6 +185,10 @@ export interface RunPausedEvent extends ExecutionEventBase {
   type: 'run:paused';
   reason: 'debug' | 'breakpoint';
   node?: NodeRef;
+  /** Stable runtime boundary at which execution was parked. */
+  phase?: 'before-node' | 'after-model' | 'before-tool' | 'after-tool' | 'before-handoff';
+  /** Model-facing tool name when a tool breakpoint caused the pause. */
+  toolName?: string;
 }
 export interface RunAwaitingApprovalEvent extends ExecutionEventBase {
   type: 'run:awaiting_approval';
@@ -367,6 +371,8 @@ export interface UsageEvent extends ExecutionEventBase {
   costUsd?: number;
   /** Subset of promptTokens re-read cheaply from the provider prompt cache (#87). */
   cacheReadTokens?: number;
+  /** Subset of promptTokens written to the provider prompt cache. */
+  cacheWriteTokens?: number;
 }
 /** A new message was appended to the conversation (assistant, tool result, etc.). */
 export interface MessageEvent extends ExecutionEventBase {
@@ -455,6 +461,8 @@ export interface ResourceWriteEvent extends ExecutionEventBase {
 export interface BreakpointHitEvent extends ExecutionEventBase {
   type: 'breakpoint:hit';
   node: NodeRef;
+  kind?: 'node' | 'tool' | 'attach';
+  toolName?: string;
 }
 /** One task in a `todo:update` event (issue #259) — mirrors SharedState.todos. */
 export interface TodoEventItem {
@@ -539,5 +547,14 @@ export interface UsageTotals {
    * show the honest "fresh (+cached)" split.
    */
   cacheReadTokens?: number;
-  byNode: Record<string, { promptTokens: number; completionTokens: number; totalTokens: number; costUsd: number; cacheReadTokens?: number }>;
+  /** Sum of prompt tokens written to provider caches. */
+  cacheWriteTokens?: number;
+  byNode: Record<string, {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    costUsd: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+  }>;
 }

@@ -14,7 +14,9 @@ describe('mapSdkUsage (#87)', () => {
     expect(result).toEqual({
       promptTokens: 100,
       completionTokens: 50,
+      totalTokens: 150,
       cacheReadTokens: 0,
+      cacheWriteTokens: 0,
     });
   });
 
@@ -29,7 +31,9 @@ describe('mapSdkUsage (#87)', () => {
     });
     expect(result.promptTokens).toBe(5202); // 2 + 200 + 5000 (full context)
     expect(result.cacheReadTokens).toBe(5000); // the cheap re-read subset
+    expect(result.cacheWriteTokens).toBe(200);
     expect(result.completionTokens).toBe(30);
+    expect(result.totalTokens).toBe(5232);
     // The "fresh" figure the UI shows excludes the re-read.
     expect(result.promptTokens - result.cacheReadTokens).toBe(202);
   });
@@ -42,6 +46,7 @@ describe('mapSdkUsage (#87)', () => {
     expect(result.promptTokens).toBe(110); // 10 + 100
     expect(result.cacheReadTokens).toBe(100);
     expect(result.completionTokens).toBe(40);
+    expect(result.cacheWriteTokens).toBe(0);
   });
 
   it('prefers the result message usage over the fallback when both are present', () => {
@@ -58,7 +63,9 @@ describe('mapSdkUsage (#87)', () => {
     expect(mapSdkUsage(undefined)).toEqual({
       promptTokens: 0,
       completionTokens: 0,
+      totalTokens: 0,
       cacheReadTokens: 0,
+      cacheWriteTokens: 0,
     });
   });
 });

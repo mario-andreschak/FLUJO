@@ -539,7 +539,14 @@ function toChatCompletion(
       // Only when the provider actually reported cache buckets, so consumers can
       // tell "0 cached" apart from "this endpoint doesn't cache at all" — the
       // same contract mapOpenAiUsage documents.
-      ...(reportsCache ? { prompt_tokens_details: { cached_tokens: cacheRead } } : {}),
+      ...(reportsCache
+        ? {
+            prompt_tokens_details: {
+              cached_tokens: cacheRead,
+              cache_write_tokens: cacheCreation,
+            },
+          }
+        : {}),
     },
   };
   return { completion, media };

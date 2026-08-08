@@ -171,6 +171,8 @@ export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
      * cache reads as fresh input on every turn (#87). Absent when unknown.
      */
     cacheReadTokens?: number;
+    /** Subset of `promptTokens` written to the provider prompt cache. */
+    cacheWriteTokens?: number;
   };
 
   /**

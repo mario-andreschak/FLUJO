@@ -202,6 +202,10 @@ describe('chatService REST methods', () => {
     fetchMock.mockResolvedValueOnce(makeResponse(200, { status: 'completed' }));
     await chatService.debugContinue('c');
     expect(fetchMock).toHaveBeenLastCalledWith('/v1/chat/conversations/c/debug/continue', { method: 'POST' });
+
+    fetchMock.mockResolvedValueOnce(makeResponse(200, { success: true }));
+    await chatService.attachDebugger('c');
+    expect(fetchMock).toHaveBeenLastCalledWith('/v1/chat/conversations/c/debug/attach', { method: 'POST' });
   });
 
   it('setBreakpoints: PUT with breakpoints array', async () => {

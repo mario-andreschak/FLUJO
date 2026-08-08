@@ -131,6 +131,13 @@ export async function POST(
       } catch (repairError) {
         log.warn(`Failed to synthesize tool results on cancel; continuing`, { requestId, conversationId, repairError });
       }
+      sharedState.debugMode = false;
+      sharedState.debugPauseRequested = false;
+      sharedState.debugResumeAfterDetach = false;
+      sharedState.debugPendingAction = undefined;
+      sharedState.debugPendingToolCalls = undefined;
+      sharedState.breakpoints = [];
+      sharedState.lastBreakNodeId = undefined;
     }
 
     // 4. Save updated state (both memory and storage)

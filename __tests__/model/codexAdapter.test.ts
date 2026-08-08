@@ -140,7 +140,12 @@ beforeEach(() => {
   runStreamedMock.mockImplementation(async () => ({
     events: eventStream([
       agentMessage('hello from codex'),
-      turnCompleted({ input_tokens: 100, cached_input_tokens: 40, output_tokens: 7 }),
+      turnCompleted({
+        input_tokens: 100,
+        cached_input_tokens: 40,
+        cache_write_input_tokens: 25,
+        output_tokens: 7,
+      }),
     ])(),
   }));
 });
@@ -243,6 +248,7 @@ describe('CodexAdapter — transcript & usage', () => {
     expect(completion.usage?.prompt_tokens).toBe(100);
     expect(completion.usage?.completion_tokens).toBe(7);
     expect(completion.usage?.prompt_tokens_details?.cached_tokens).toBe(40);
+    expect(completion.usage?.prompt_tokens_details?.cache_write_tokens).toBe(25);
 
     // The assistant text streamed live is the SAME (single) transcript entry —
     // no duplicate final message.
