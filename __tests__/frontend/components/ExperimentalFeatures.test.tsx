@@ -102,7 +102,39 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
     expect(within(moreSections).getByRole('tab', { name: 'Activity' })).toHaveAttribute('href', '/statistics');
   });
 
-  it('puts Automations, Extensions, Activity, Help, and Settings in More when experiments are enabled', () => {
+  it('hides the experimental Chain Chat destination while experiments are off', () => {
+    mockPathname = '/automation/triggers';
+    mockStorageValue = { settings: {}, settingsHydrated: true, updateSettings: mockUpdateSettings };
+    render(<Navigation />);
+
+    const moreSections = screen.getByRole('tablist', { name: 'More sections' });
+    const tabs = within(moreSections).getAllByRole('tab');
+    expect(tabs.map((tab) => tab.getAttribute('href'))).toEqual([
+      '/automation/triggers',
+      '/packages',
+      '/statistics',
+      '/docs',
+      '/settings',
+    ]);
+    expect(within(moreSections).queryByRole('tab', { name: 'Chain Chat' })).toBeNull();
+  });
+
+  it('selects Chain Chat in More when its experimental route is open', () => {
+    mockPathname = '/chain-chat';
+    mockStorageValue = {
+      settings: { experimental: { enabled: true } },
+      settingsHydrated: true,
+      updateSettings: mockUpdateSettings,
+    };
+    render(<Navigation />);
+
+    const moreSections = screen.getByRole('tablist', { name: 'More sections' });
+    const chainChat = within(moreSections).getByRole('tab', { name: 'Chain Chat' });
+    expect(chainChat).toHaveAttribute('href', '/chain-chat');
+    expect(chainChat).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('puts Automations, Extensions, Activity, Chain Chat, Help, and Settings in More when experiments are enabled', () => {
     mockPathname = '/automation/triggers';
     mockStorageValue = {
       settings: { experimental: { enabled: true } },
@@ -117,6 +149,7 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
       'Automations',
       'Extensions',
       'Activity',
+      'Chain Chat',
       'Help',
       'Settings',
     ]);
@@ -124,6 +157,7 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
       '/automation/triggers',
       '/packages',
       '/statistics',
+      '/chain-chat',
       '/docs',
       '/settings',
     ]);

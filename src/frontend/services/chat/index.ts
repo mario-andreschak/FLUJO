@@ -7,6 +7,7 @@ import type {
   ConversationListItem,
 } from '@/frontend/components/Chat';
 import type { Flow } from '@/shared/types/flow';
+import type { ConversationChainsResponse } from '@/shared/types/conversationChain';
 
 // Create a logger instance for this file
 const log = createLogger('frontend/services/chat/index');
@@ -93,6 +94,8 @@ export interface SubflowRecoveryResult {
 }
 
 const BASE = '/v1/chat/conversations';
+// Read-only chain projection for the experimental chain-chat page (#405).
+const CHAINS_BASE = '/v1/chat/conversation-chains';
 
 // Parse a fetch Response, throwing ChatApiError on non-2xx. For 204/empty
 // bodies returns undefined.
@@ -164,6 +167,30 @@ class ChatService {
     log.debug('getConversation: Entering method', { conversationId: id });
     const response = await fetch(`${BASE}/${encodeURIComponent(id)}?compactToolPayloads=1`);
     return parse<Conversation>(response);
+  }
+
+  /**
+   * GET /v1/chat/conversation-chains — read-only chain projection (#405).
+   * Returns active conversations grouped by chain root with ONE bounded
+   * message preview per node; never a full history. Accepts an AbortSignal so
+   * the page can drop a stale request on refresh/unmount.
+   */
+  async getConversationChains(
+    options: { rootId?: string; limit?: number; signal?: AbortSignal } = {}
+  ): Promise<ConversationChainsResponse> {
+    log.debug('getConversationChains: Entering method', { rootId: options.rootId, limit: options.limit });
+    const params = new URLSearchParams();
+    // URLSearchParams encodes both the id and the limit for us.
+    if (options.rootId) params.set('root', options.rootId);
+    if (typeof options.limit === 'number' && Number.isFinite(options.limit)) {
+      params.set('limit', String(Math.trunc(options.limit)));
+    }
+    const query = params.toString();
+    const response = await fetch(
+      query ? `${CHAINS_BASE}?${query}` : CHAINS_BASE,
+      options.signal ? { signal: options.signal } : undefined
+    );
+    return parse<ConversationChainsResponse>(response);
   }
 
   /** POST /v1/chat/conversations — create and persist a new conversation. */

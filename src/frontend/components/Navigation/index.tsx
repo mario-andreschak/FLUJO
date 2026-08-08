@@ -28,6 +28,7 @@ import {
   ChatBubbleRounded,
   CloseRounded,
   HubRounded,
+  BubbleChartRounded,
   InsightsRounded,
   Inventory2Rounded,
   MemoryRounded,
@@ -42,6 +43,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
 import BugReportButton from '@/frontend/components/BugReport/BugReportButton';
 import AskFlujoButton from '@/frontend/components/AskFlujo/AskFlujoButton';
+import QuickActionsMenu from '@/frontend/components/Navigation/QuickActionsMenu';
 import LanguageMenu from '@/frontend/components/LanguageMenu';
 import CopyLinkButton from '@/frontend/components/shared/CopyLinkButton';
 import { useI18n } from '@/frontend/contexts/I18nContext';
@@ -103,6 +105,16 @@ const navItems: NavItem[] = [
         path: '/statistics',
         tour: 'nav-statistics',
         icon: InsightsRounded,
+      },
+      {
+        // Chain Chat (issue #405): experimental, so it only appears once the
+        // experimental flag is on — the page itself redirects otherwise.
+        type: 'link',
+        label: 'nav.chainChat',
+        path: '/chain-chat',
+        tour: 'nav-chain-chat',
+        icon: BubbleChartRounded,
+        experimental: true,
       },
       { type: 'link', label: 'nav.help', path: '/docs', tour: 'nav-docs', icon: MenuBookRounded },
       { type: 'link', label: 'nav.settings', path: '/settings', tour: 'nav-settings', icon: SettingsRounded },
@@ -405,7 +417,18 @@ export default function Navigation() {
     handleNavClick(href)(event);
   };
 
+  /**
+   * Programmatic sibling of `handleNavClick` for controls that are not links
+   * (the quick-actions menu, #396). Route changes keep flowing through the same
+   * navigation-guard contract, so a page with unsaved work can still defer or
+   * refuse them.
+   */
+  const navigateTo = (href: string) => {
+    if (!interceptNavigation(() => router.push(href))) router.push(href);
+  };
+
   return (
+    <>
     <AppBar position="sticky" color="default" elevation={0} data-app-navigation>
       <Toolbar
         data-app-navigation-toolbar
@@ -616,6 +639,8 @@ export default function Navigation() {
         }}
         PaperProps={{
           sx: {
+            display: 'flex',
+            flexDirection: 'column',
             width: { xs: 'min(88vw, 340px)', sm: 340 },
             p: 1,
             borderRight: `1px solid ${alpha(theme.palette.primary.main, 0.16)}`,
@@ -668,7 +693,7 @@ export default function Navigation() {
           </Stack>
         </Box>
 
-        <List disablePadding>
+        <List disablePadding sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
           <NavigationEntries
             items={visibleNavItems}
             pathname={pathname}
@@ -676,7 +701,37 @@ export default function Navigation() {
             onNavigate={handleDrawerNavClick}
           />
         </List>
+
+        {/* #396: the compact layout has no viewport corner to own, so the same
+            quick action is pinned to the bottom of the navigation Drawer. */}
+        <Box sx={{ mt: 'auto', px: 1, pt: 1.4, pb: 0.6 }}>
+          <QuickActionsMenu
+            variant="drawer"
+            pathname={pathname}
+            onNavigate={navigateTo}
+            onAction={() => setDrawerOpen(false)}
+          />
+        </Box>
       </Drawer>
     </AppBar>
+
+    {/* #396: bottom-left quick actions. Rendered as a sibling of the sticky
+        AppBar so it is anchored to the viewport corner rather than to the top
+        bar, and only in the desktop layout — below 1280px the equivalent
+        control lives at the bottom of the navigation Drawer. */}
+    {!isCompact && (
+      <Box
+        data-app-quick-actions-dock
+        sx={{
+          position: 'fixed',
+          bottom: 24,
+          left: 24,
+          zIndex: theme.zIndex.drawer - 1,
+        }}
+      >
+        <QuickActionsMenu pathname={pathname} onNavigate={navigateTo} />
+      </Box>
+    )}
+    </>
   );
 }
