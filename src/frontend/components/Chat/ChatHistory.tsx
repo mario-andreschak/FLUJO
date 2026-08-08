@@ -48,6 +48,7 @@ import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded';
 import AccessTimeRoundedIcon from '@mui/icons-material/AccessTimeRounded';
 import LinkOffRoundedIcon from '@mui/icons-material/LinkOffRounded';
 import { ConversationListItem } from './index'; // Import ConversationListItem instead
+import type { ChatRevealRequest } from './index';
 import { isQuickChatFlowId } from '@/utils/shared/quickChat';
 import CopyLinkButton from '@/frontend/components/shared/CopyLinkButton';
 import { recencyBucket } from '@/utils/shared/flowGrouping';
@@ -85,6 +86,10 @@ interface ChatHistoryProps {
   /** Explicitly materialize all pages for complete bulk-action semantics. */
   onLoadAll?: () => Promise<ConversationListItem[]>;
   currentConversationId: string | null;
+  /** One-shot, URL-originated request to reveal a conversation (issue #397):
+   *  expands the group/chain that contains it and scrolls its row into view
+   *  exactly once. Ordinary selection changes intentionally do NOT scroll. */
+  revealRequest?: ChatRevealRequest | null;
   onSelectConversation: (id: string) => void;
   onDeleteConversation: (id: string) => void;
   /** Bulk-delete a set of conversations by id (Delete All / Delete Visible). */
@@ -125,6 +130,11 @@ const PREF = {
   searchDim: 'flujo-ui:chat-sidebar:search-dim',
 } as const;
 
+// Bounded retry budget for a URL reveal (issue #397). A row can be one frame
+// late (Collapse mount, list re-render); it must never retry forever when a
+// filter or a closed mobile drawer keeps it unmounted.
+const MAX_REVEAL_ATTEMPTS = 10;
+
 const STATUS_OPTIONS: StatusFilter[] = ['all', 'running', 'awaiting_tool_approval', 'paused_debug', 'completed', 'error'];
 const DATE_OPTIONS: DateFilter[] = ['all', 'today', '7d', '30d'];
 const GROUP_OPTIONS: GroupMode[] = ['none', 'date', 'flow', 'origin', 'wave', 'chain'];
@@ -148,6 +158,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   onLoadMore,
   onLoadAll,
   currentConversationId,
+  revealRequest = null,
   onSelectConversation,
   onDeleteConversation,
   onBulkDelete,
@@ -438,6 +449,117 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     return map;
   }, [groupMode, groups]);
 
+  // --- URL reveal (issue #397) ---------------------------------------------
+  // Opening a chat through `/chat?conversation=<id>` must actually SHOW that
+  // row: un-collapse the group / chain ancestors hiding it, then scroll it into
+  // view exactly once per request. Everything is keyed to the parent's
+  // monotonic `requestKey`, so ordinary clicks, streamed status updates and
+  // unrelated rerenders never scroll the sidebar (and nothing ever calls
+  // `.focus()`, which would steal focus from the chat composer).
+  const listRef = React.useRef<HTMLUListElement | null>(null);
+  const revealedKeyRef = React.useRef<number | null>(null);
+  const pendingRevealKeyRef = React.useRef<number | null>(null);
+  const revealAttemptsRef = React.useRef(0);
+  const [revealAttempt, setRevealAttempt] = React.useState(0);
+
+  React.useEffect(() => {
+    if (!revealRequest) return;
+    const { id, requestKey } = revealRequest;
+    if (revealedKeyRef.current === requestKey) return; // already revealed once
+    // The reveal follows the selection: a mismatch means the request is stale,
+    // or the parent's selection has not committed yet (this effect re-runs).
+    if (id !== currentConversationId) return;
+    if (typeof window === 'undefined') return;
+
+    if (pendingRevealKeyRef.current !== requestKey) {
+      pendingRevealKeyRef.current = requestKey;
+      revealAttemptsRef.current = 0;
+    }
+
+    // Search/filters may legitimately exclude the row. Never silently clear the
+    // user's persisted preferences -- stay pending (without burning the retry
+    // budget) until the effective list contains the target again.
+    if (!filtered.some((c) => c.id === id)) return;
+
+    // 1. Grouped modes: explicitly OPEN the containing group (never toggle, so
+    //    the effect is idempotent). The key comes from the same `groups` memo
+    //    that renders the sections, so it cannot drift from what is rendered.
+    const group = groupMode !== 'none' && groupMode !== 'chain'
+      ? groups.find((g) => g.items.some((item) => item.id === id))
+      : undefined;
+    if (group && collapsedGroups[group.key]) {
+      setCollapsedGroups((prev) => (prev[group.key] ? { ...prev, [group.key]: false } : prev));
+      return; // re-runs once the group has committed open
+    }
+
+    // 2. Tree modes (chain, and the per-wave trees): expand every collapsed
+    //    ancestor on the rendered path. `ConversationTree` unmounts collapsed
+    //    children, so an ancestor left closed keeps the row out of the DOM.
+    const tree = groupMode === 'chain'
+      ? chainIndex
+      : group
+        ? waveChainByGroup.get(group.key)
+        : undefined;
+    if (tree) {
+      const parentOf = new Map<string, string>();
+      const childrenByParent = tree.childrenByParent as Map<string, ConversationListItem[]>;
+      for (const [parentId, children] of childrenByParent) {
+        for (const child of children) parentOf.set(child.id, parentId);
+      }
+      const collapsedAncestors: string[] = [];
+      const seen = new Set<string>([id]);
+      let cursor = parentOf.get(id);
+      while (cursor && !seen.has(cursor)) {
+        seen.add(cursor);
+        if (expandedChains[cursor] === false) collapsedAncestors.push(cursor);
+        cursor = parentOf.get(cursor);
+      }
+      if (collapsedAncestors.length > 0) {
+        setExpandedChains((prev) => {
+          const next = { ...prev };
+          for (const ancestor of collapsedAncestors) next[ancestor] = true;
+          return next;
+        });
+        return; // re-runs once the ancestors have committed open
+      }
+    }
+
+    // 3. Scroll the mounted row once. `block: 'nearest'` keeps an already
+    //    visible row exactly where it is instead of re-centering the list.
+    const frame = window.requestAnimationFrame(() => {
+      const row = listRef.current
+        ? Array.from(listRef.current.querySelectorAll<HTMLElement>('[data-conversation-id]'))
+            .find((element) => element.getAttribute('data-conversation-id') === id)
+        : undefined;
+      if (row) {
+        revealedKeyRef.current = requestKey;
+        row.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+        return;
+      }
+      revealAttemptsRef.current += 1;
+      if (revealAttemptsRef.current >= MAX_REVEAL_ATTEMPTS) {
+        // Bounded: e.g. a closed mobile drawer never mounts the row. Consume
+        // the request rather than spinning frames forever.
+        revealedKeyRef.current = requestKey;
+        return;
+      }
+      setRevealAttempt((attempt) => attempt + 1);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    revealRequest,
+    currentConversationId,
+    filtered,
+    groups,
+    groupMode,
+    collapsedGroups,
+    setCollapsedGroups,
+    chainIndex,
+    waveChainByGroup,
+    expandedChains,
+    revealAttempt,
+  ]);
+
   const activeFilterCount =
     (statusFilter !== 'all' ? 1 : 0) +
     (flowFilter !== 'all' ? 1 : 0) +
@@ -472,6 +594,10 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     return (
       <ListItem
         key={conversation.id}
+        // Stable reveal target for URL deep links (issue #397). Looked up by
+        // attribute comparison (not selector interpolation) so an arbitrary id
+        // can never break or inject into the query.
+        data-conversation-id={conversation.id}
         data-conversation-origin={origin.key}
         disablePadding
         secondaryAction={
@@ -956,6 +1082,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
       <Divider />
 
       <List
+        ref={listRef}
         aria-label={t('chat.history.title')}
         sx={{
           overflow: 'auto',

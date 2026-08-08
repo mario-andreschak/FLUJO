@@ -104,6 +104,7 @@ import { useAskFlujoPage } from '@/frontend/contexts/AskFlujoContext';
 import type { AskFlujoUiAction } from '@/frontend/types/askFlujo';
 import { highlightAskFlujoElement } from '@/frontend/utils/askFlujoActions';
 import { useEntityDeepLink } from '@/frontend/hooks/useEntityDeepLink';
+import { magicLinkPath } from '@/frontend/utils/magicLink';
 import {
   latestMcpAppResultIdsByResource,
   observeNewMcpAppResultIds,
@@ -309,6 +310,20 @@ export interface ConversationListItem {
    *  redacted provider details/stack) so the sidebar's bulk listing stays
    *  small. Present when status === 'error'. */
   lastError?: { message: string; code?: string; errorClass?: NormalizedChatError['errorClass'] };
+}
+
+/**
+ * One-shot request to REVEAL a conversation in the sidebar (issue #397).
+ *
+ * Deliberately separate from `currentConversationId`: ordinary clicks and
+ * streamed list updates must never scroll the sidebar, only a URL-originated
+ * deep link may. `requestKey` is monotonic so navigating away and back to the
+ * SAME conversation still issues a fresh reveal, while unrelated rerenders
+ * (same object identity) cannot.
+ */
+export interface ChatRevealRequest {
+  id: string;
+  requestKey: number;
 }
 
 /** Field-wise list equality, so the periodic silent refresh can keep the
@@ -1516,6 +1531,60 @@ const Chat: React.FC = () => {
     replacePath: '/chat',
   });
 
+  // --- URL-originated sidebar reveal (issue #397) ---------------------------
+  // A chat opened through a URL must not only be selected, it must be made
+  // VISIBLE in the sidebar: materialized across pagination, un-collapsed and
+  // scrolled into view. That intent is carried by a one-shot request object
+  // rather than by `currentConversationId`, so ordinary clicks, list refreshes
+  // and streamed updates keep their current (silent) behavior.
+  const [sidebarRevealRequest, setSidebarRevealRequest] = useState<ChatRevealRequest | null>(null);
+  const sidebarRevealKeyRef = useRef(0);
+  const requestSidebarReveal = useCallback((id: string) => {
+    sidebarRevealKeyRef.current += 1;
+    setSidebarRevealRequest({ id, requestKey: sidebarRevealKeyRef.current });
+  }, []);
+
+  // Latest id the URL asked for, plus an in-flight guard, so a slow
+  // "load every page" response can never select/reveal a stale conversation
+  // after the user has navigated on.
+  const deepLinkConversationIdRef = useRef<string | null>(null);
+  const deepLinkMaterializingRef = useRef(false);
+  const resolveConversationDeepLink = useCallback((id: string) => {
+    deepLinkConversationIdRef.current = id;
+
+    // Already on a loaded page → select + reveal immediately.
+    if (conversationList.some((c) => c.id === id)) {
+      setCurrentConversationId(id);
+      requestSidebarReveal(id);
+      return;
+    }
+
+    // Outside the loaded window: materialize every page through the existing
+    // bulk loader (it filters pending deletes, merges local-only rows, sorts
+    // and updates pagination) and only then decide.
+    if (!conversationPaginationRef.current.hasMore || deepLinkMaterializingRef.current) {
+      log.warn('Conversation deep link target does not exist, ignoring', { id });
+      return;
+    }
+    deepLinkMaterializingRef.current = true;
+    void loadAllConversations()
+      .then((merged) => {
+        if (deepLinkConversationIdRef.current !== id) return; // superseded by a newer URL
+        if (!merged.some((c) => c.id === id)) {
+          log.warn('Conversation deep link target does not exist, ignoring', { id });
+          return;
+        }
+        setCurrentConversationId(id);
+        requestSidebarReveal(id);
+      })
+      .catch((error) => {
+        log.warn('Could not materialize conversation deep link target', { id, error });
+      })
+      .finally(() => {
+        deepLinkMaterializingRef.current = false;
+      });
+  }, [conversationList, loadAllConversations, requestSidebarReveal, setCurrentConversationId]);
+
   // Deep link: `?conversation=<id>` selects an existing conversation (issue
   // #374 — `magicLink.ts` has built this link since Phase 1, but nothing
   // consumed it). Durable (not consumed): kept in the URL so refresh/Back
@@ -1525,8 +1594,12 @@ const Chat: React.FC = () => {
   useEntityDeepLink({
     param: 'conversation',
     ready: !isLoadingHistory,
-    exists: (id) => conversationList.some((c) => c.id === id),
-    onResolve: (id) => setCurrentConversationId(id),
+    // The sidebar is paginated, so "not on the loaded page" is NOT the same as
+    // "does not exist" (#397). Accept the id when more pages exist and let
+    // `resolveConversationDeepLink` materialize + verify it before selecting.
+    exists: (id) =>
+      conversationList.some((c) => c.id === id) || conversationPaginationRef.current.hasMore,
+    onResolve: (id) => resolveConversationDeepLink(id),
   });
 
   // #374: `?message=<id>` (optionally alongside `?conversation=<id>`) scrolls
@@ -1540,8 +1613,59 @@ const Chat: React.FC = () => {
     exists: (id) => !!detailedConversation?.messages?.some((m) => m.id === id),
     onResolve: (id) => setAnchorMessageId(id),
     consume: true,
-    replacePath: '/chat',
+    // Drop only `?message=`; keep the conversation magic link in the URL (#398)
+    // so the navbar link survives a message deep link.
+    replacePath: currentConversationId
+      ? magicLinkPath({ kind: 'conversation', id: currentConversationId })
+      : '/chat',
   });
+
+  /**
+   * #398: keep the canonical conversation magic link in the address bar so the
+   * navbar (and the browser itself) always exposes a shareable URL for whatever
+   * chat is on screen. Every selection path — sidebar click, newly created
+   * conversation, post-delete fallback, deep link — funnels through
+   * `currentConversationId`, so synchronizing here covers all of them without
+   * sprinkling router calls over individual controls.
+   *
+   * Ordering matters: this effect is declared *after* the `?conversation=`
+   * deep-link hook, so on the render where the history finishes loading the
+   * inbound link has already selected its target (which updates
+   * `currentConversationIdRef` synchronously) and we never overwrite an inbound
+   * link with the previously persisted conversation. While the list is still
+   * loading — or a paginated deep-link target is still being materialized — the
+   * query stays untouched and remains the source of truth.
+   *
+   * `replace` (not `push`) so a session of sidebar clicks does not bury the
+   * previous page under one history entry per conversation.
+   */
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (isLoadingHistory || deepLinkMaterializingRef.current) return;
+
+    const params = new URLSearchParams(window.location.search);
+
+    // `?flow=` and `?message=` are one-shot links consumed by their own hooks
+    // (which then rewrite the URL themselves, `?message=` back to the canonical
+    // conversation link). Rewriting the query first would swallow them.
+    if (params.get('flow') || params.get('message')) return;
+
+    const activeId = currentConversationIdRef.current;
+    const paramId = params.get('conversation');
+
+    if (activeId) {
+      // Idempotent: re-resolving the id already in the query is a no-op, which
+      // is what keeps this effect and the deep-link hook from ping-ponging.
+      if (paramId !== activeId) {
+        router.replace(magicLinkPath({ kind: 'conversation', id: activeId }));
+      }
+      return;
+    }
+
+    // No active conversation (cleared, deleted with nothing left, or an invalid
+    // inbound id that was rejected): never leave a stale link behind.
+    if (paramId) router.replace('/chat');
+  }, [currentConversationId, conversationList, isLoadingHistory, router]);
 
   // Clear the highlight a couple of seconds after landing so it doesn't linger
   // forever, and reset it whenever the viewed conversation changes.
@@ -4237,6 +4361,7 @@ const Chat: React.FC = () => {
       onLoadAll={loadAllConversations}
       flowNames={flowNames}
       currentConversationId={currentConversationId}
+      revealRequest={sidebarRevealRequest}
       onSelectConversation={selectSidebarConversation}
       onDeleteConversation={sidebarDeleteConversation}
       onBulkDelete={sidebarBulkDeleteConversations}
