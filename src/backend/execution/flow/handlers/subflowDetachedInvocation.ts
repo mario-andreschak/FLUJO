@@ -71,10 +71,11 @@ export async function executeDetachedSubflowStart(
   args: Record<string, unknown>,
   ctx: { conversationId?: string; emit?: EmitFn },
 ): Promise<{ success: boolean; data?: unknown; error?: string }> {
-  if (!ctx.conversationId) return { success: false, error: 'No active conversation to start a detached subflow.' };
+  const originConversationId = ctx.conversationId;
+  if (!originConversationId) return { success: false, error: 'No active conversation to start a detached subflow.' };
   try {
     const { FlowExecutor } = await import('../FlowExecutor');
-    const shared = FlowExecutor.conversationStates.get(ctx.conversationId);
+    const shared = FlowExecutor.conversationStates.get(originConversationId);
     const targetNodeId = shared?.subflowDetachedToolNameMap?.[name];
     if (!shared || !targetNodeId) return { success: false, error: `Unknown detached subflow tool "${name}".` };
 
@@ -92,7 +93,10 @@ export async function executeDetachedSubflowStart(
     const task = await createTask({
       status: 'working',
       pollInterval: props.detachedPollIntervalMs,
-      originConversationId: shared.conversationId,
+      // SharedState.conversationId is optional; the launching conversation id is
+      // the durable owner of the task, so fall back to it rather than widening
+      // the record type to `string | undefined`.
+      originConversationId: shared.conversationId ?? originConversationId,
       originNodeId: targetNodeId,
       flowId: props.subflowId,
       childConversationId: crypto.randomUUID(),
