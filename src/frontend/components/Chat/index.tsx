@@ -715,6 +715,14 @@ const Chat: React.FC = () => {
 
   // Live execution stats, driven by the SSE event stream while a run is active.
   const [liveStats, setLiveStats] = useState<LiveRunStats | null>(null);
+  // Issue #400: the server hit a bounded provider session/rate limit and is
+  // WAITING before it replays the same model call. Carries the owning
+  // conversation so a background run can never paint a countdown onto whatever
+  // conversation is on screen. The deadline is absolute (server clock); the UI
+  // only counts down to it and NEVER re-sends anything itself.
+  const [retryWait, setRetryWait] = useState<
+    { conversationId: string; attempt: number; maxAttempts?: number; retryAt: number } | null
+  >(null);
   // Live node/resource activity (Tier 3): which nodes/artifacts the run is
   // touching RIGHT NOW, for canvas highlighting in the debugger. Entries decay
   // by age (LIVE_HIGHLIGHT_TTL_MS); pruned on each event application.
@@ -1800,6 +1808,16 @@ const Chat: React.FC = () => {
       });
     }
 
+    // Issue #400: a pending session-limit wait is superseded by ANY later event
+    // from the same conversation — further progress, a terminal run:done/error,
+    // or a cancellation. Clearing it here keeps the countdown self-healing
+    // without a second source of truth for "is the run still waiting?".
+    if (event.type !== 'recovery:retry') {
+      setRetryWait(prev =>
+        prev && (!event.conversationId || prev.conversationId === event.conversationId) ? null : prev
+      );
+    }
+
     const touch = (patch: Partial<{ totalTokens: number; activeNode: string | null }>) =>
       setLiveStats(prev => ({
         totalTokens: patch.totalTokens ?? prev?.totalTokens ?? 0,
@@ -2153,6 +2171,24 @@ const Chat: React.FC = () => {
           fetchConversations(undefined, { silent: true });
         }
         break;
+      case 'recovery:retry':
+        // NOT terminal: the server is waiting out a bounded provider session /
+        // rate limit before replaying the same call. Keep the conversation
+        // running (so the input stays gated and Stop stays live) and show a
+        // countdown instead of the terminal error banner. The frontend never
+        // re-issues the request when the countdown hits zero — the server owns
+        // the timer and the replay.
+        if (event.conversationId) {
+          setRetryWait({
+            conversationId: event.conversationId,
+            attempt: event.attempt,
+            maxAttempts: event.maxAttempts,
+            retryAt: event.retryAt,
+          });
+          patchConversationStatus(event.conversationId, 'running');
+        }
+        touch({}); // a deliberate wait is activity, not a stall
+        break;
       case 'error':
         setError(event.message || t('chat.page.executionError'));
         // Issue #383: carry the normalized code/status/class alongside the
@@ -2258,6 +2294,7 @@ const Chat: React.FC = () => {
       setLoadingConversationId(null);
       setLiveStats(null);
       setLiveLanes(EMPTY_LIVE_LANES);
+      setRetryWait(null); // #400: no countdown for a conversation being deleted
     }
     markConvRunning(conversationId, false);
     // Drop any queued (not-yet-sent) messages for the deleted conversation (#177).
@@ -2343,6 +2380,7 @@ const Chat: React.FC = () => {
       setLoadingConversationId(null);
       setLiveStats(null);
       setLiveLanes(EMPTY_LIVE_LANES);
+      setRetryWait(null); // #400: no countdown for a conversation being deleted
     }
     ids.forEach((id) => {
       markConvRunning(id, false);
@@ -4018,6 +4056,7 @@ const Chat: React.FC = () => {
     setBreakpoints([]);
     closeEventStream();
     setPendingToolCalls(null);
+    setRetryWait(null); // #400: Stop during a session-limit wait ends the wait too
     setError(null); // a deliberate Stop is not an error to surface
     setErrorInfo(null); // Issue #383: keep errorInfo in sync with error
 
@@ -4859,6 +4898,8 @@ const Chat: React.FC = () => {
                   onOpenLane={setCurrentConversationId}
                   onStop={handleCancelRequest}
                   stopDisabled={!currentConversationId}
+                  // #400: only the conversation on screen may paint a countdown.
+                  retryWait={retryWait && retryWait.conversationId === currentConversationId ? retryWait : null}
                 />
               )}
 
@@ -4993,6 +5034,8 @@ const Chat: React.FC = () => {
             onOpenLane={setCurrentConversationId}
             onStop={handleCancelRequest}
             stopDisabled={!currentConversationId}
+            // #400: only the conversation on screen may paint a countdown.
+            retryWait={retryWait && retryWait.conversationId === currentConversationId ? retryWait : null}
           />
         )}
         {isPhoneLayout && !viewedConversationRunning && viewedConversationAwaitingApproval && !isDebugPaused && (

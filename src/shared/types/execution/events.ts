@@ -246,11 +246,26 @@ export interface RecoveryTransitionEvent extends ExecutionEventBase {
   type: 'recovery:transition';
   recovery: RecoveryRecord;
 }
+/**
+ * The run hit a bounded, replayable provider limit and is WAITING before it
+ * retries the same call (issue #400). It is not a terminal event: the run stays
+ * alive and cancellable, and a later `run:done`/`error` (or simply further
+ * progress) supersedes it.
+ *
+ * Only sanitized timing/classification metadata is carried — never provider
+ * bodies, headers beyond the parsed delay, credentials, or prompt content.
+ */
 export interface RecoveryRetryEvent extends ExecutionEventBase {
   type: 'recovery:retry';
+  /** 1-based number of the attempt that will run once the wait elapses. */
   attempt: number;
+  /** Absolute deadline (ms since epoch, server clock) of the wait. */
   retryAt: number;
   failure: RecoveryFailureDetails;
+  /** Total attempts this run may make, so the UI can show "2 of 4". */
+  maxAttempts?: number;
+  /** Node that owns the waiting model call, when known. */
+  node?: NodeRef;
 }
 export interface NodeEnterEvent extends ExecutionEventBase {
   type: 'node:enter';

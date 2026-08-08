@@ -35,6 +35,11 @@ import { trimTools } from './trimToolBlock';
 import { mcpService } from '@/backend/services/mcp';
 import { registerToolCall, releaseToolCall } from '../toolCancelRegistry';
 import { combineAbortSignals } from '../combineAbortSignals';
+import {
+  MAX_AUTOMATIC_MODEL_RETRIES,
+  planAutomaticRetry,
+  waitForRetryWindow,
+} from '../retryAfter';
 import { runWithConcurrency } from '@/backend/services/mcp/utils/boundedConcurrency';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { extractUiResourceUri } from '@/shared/utils/mcpApps';
@@ -56,6 +61,7 @@ import { isSubflowToolName, executeSubflowToolCall } from './subflowToolInvocati
 import { executeDetachedSubflowStart, executeTaskCancel, executeTaskGet, SUBFLOW_DETACHED_TOOL_PREFIX } from './subflowDetachedInvocation';
 import type { RunResourceSettings } from '@/shared/types/runResources';
 import type { ModelStreamDelta, ToolResourceMarker } from '@/backend/services/model/adapters/types';
+import type { RecoveryFailureDetails } from '@/shared/types/execution/events';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { mediaTypeFromMime } from '@/shared/types/model/media';
 import { requireFunctionToolCalls } from '@/shared/types/openai';
@@ -1319,6 +1325,20 @@ export class ModelHandler {
       runResourceMarkers,
       sessionResume,
       onFinalWire,
+      // Issue #400: project the handler's bounded session-limit wait onto the
+      // existing recovery:retry execution event, so the chat shows a live
+      // countdown (and keeps Stop working) instead of a terminal error while
+      // the server waits. Non-terminal: no run:done is emitted here.
+      onRecoveryRetry: ({ attempt, retryAt, maxAttempts, failure }) => {
+        emit?.({
+          type: 'recovery:retry',
+          attempt,
+          retryAt,
+          maxAttempts,
+          failure,
+          node: nodeId ? { nodeId } : undefined,
+        });
+      },
     });
 
     if (!response.success) {
@@ -1562,6 +1582,16 @@ export class ModelHandler {
        * and node eligibility. */
       sessionResume?: boolean;
       onFinalWire?: ModelCallInput['onFinalWire'];
+      /** Issue #400: called when a bounded session/rate limit is about to be
+       *  waited out and retried. callModel projects this onto the existing
+       *  `recovery:retry` execution event so the chat can show a countdown
+       *  while the run stays alive and cancellable. */
+      onRecoveryRetry?: (info: {
+        attempt: number;
+        retryAt: number;
+        maxAttempts: number;
+        failure: RecoveryFailureDetails;
+      }) => void;
     }
   ): Promise<Result<ModelCallResult>> {
     log.debug('Preparing provider completion', {
@@ -1582,6 +1612,15 @@ export class ModelHandler {
         cancelWatch = undefined;
       }
     };
+
+    // Issue #400 (automatic session-limit retry). Replaying a provider call is
+    // only safe while the failed attempt produced NOTHING observable: any
+    // streamed delta, transcript message, or in-loop tool execution flips this
+    // flag and permanently disables replay for that attempt. `automaticRetriesUsed`
+    // is a single budget for the whole logical model call, so the context-overflow
+    // refit below can never multiply the number of waits.
+    let attemptProducedOutput = false;
+    let automaticRetriesUsed = 0;
 
     try {
       // Get the model
@@ -1969,9 +2008,33 @@ export class ModelHandler {
         // a later SDK failure can compensate only its incomplete narration.
         const streamedAssistantProseIds = new Set<string>();
         const onTranscriptMessage = (message: FlujoChatMessage) => {
+          // Anything the adapter already materialized is observable output: this
+          // attempt is no longer safe to replay automatically (issue #400).
+          attemptProducedOutput = true;
           if (ModelHandler.isStreamedAssistantProse(message)) streamedAssistantProseIds.add(message.id);
           opts?.onTranscriptMessage?.(message);
         };
+
+        // Same guard for streamed deltas and for virtual tools executed in-loop
+        // by self-orchestrating adapters: a side effect (or user-visible text)
+        // means the call must fail terminally instead of being replayed.
+        const onModelDelta = opts?.onModelDelta
+          ? (delta: ModelStreamDelta) => {
+              attemptProducedOutput = true;
+              opts.onModelDelta!(delta);
+            }
+          : undefined;
+        const localToolExecutors = opts?.localToolExecutors
+          ? Object.fromEntries(
+              Object.entries(opts.localToolExecutors).map(([toolName, executor]) => [
+                toolName,
+                async (args: Record<string, unknown>): Promise<unknown> => {
+                  attemptProducedOutput = true;
+                  return executor(args);
+                },
+              ])
+            )
+          : undefined;
 
         try {
           // Fingerprint the cacheable prefix of THIS attempt (tool block + system
@@ -2026,12 +2089,12 @@ export class ModelHandler {
               // for any caller that doesn't pass one. Undefined ⇒ adapter default.
               maxTokens: opts?.maxTokens ?? normalizeMaxTokens(model.maxTokens),
               toolNameMap: opts?.toolNameMap,
-              localToolExecutors: opts?.localToolExecutors,
+              localToolExecutors,
               maxTurns: opts?.maxTurns,
               requestToolApproval: opts?.requestToolApproval,
               onTranscriptMessage,
               consumeSteeringMessages: opts?.consumeSteeringMessages,
-              onModelDelta: opts?.onModelDelta,
+              onModelDelta,
               signal: abortController.signal,
               conversationId: opts?.conversationId,
               runId: opts?.runId,
@@ -2238,7 +2301,99 @@ export class ModelHandler {
         }
       };
 
-      let result = await attempt(apiMessages, sanitizedTools);
+      /**
+       * Bounded, abort-aware session-limit retry around ONE provider call
+       * (issue #400).
+       *
+       * When the provider answers "you've hit your session limit" AND hands
+       * back a valid, small `Retry-After`, the chat turn should wait rather
+       * than fail: we emit `recovery:retry` (so the UI can count down while the
+       * run stays alive and cancellable), sleep on an abort-aware timer tied to
+       * the same AbortSignal the Stop button drives, then replay the SAME
+       * request. Exactly one timer and one provider attempt exist at a time.
+       *
+       * Deliberately conservative — replay is skipped when:
+       *  - the run was cancelled (Stop) before or during the wait;
+       *  - the attempt already produced observable output or ran a tool, so a
+       *    replay could duplicate a side effect;
+       *  - the adapter runs its own connection retries (codex-cli), which would
+       *    multiply attempts beyond the approved cap;
+       *  - the failure is not a session/rate limit, carries no usable
+       *    `Retry-After`, or asks for a wait beyond the configured maximum;
+       *  - the per-call retry budget is exhausted.
+       * In every one of those cases the original normalized provider error is
+       * returned unchanged, so runFlow's existing recovery classification,
+       * persistence, and terminal `run:done` handling stay exactly as they were.
+       */
+      const attemptWithLimitRetry = async (
+        attemptMessages: OpenAI.ChatCompletionMessageParam[],
+        attemptTools: OpenAI.ChatCompletionFunctionTool[] | undefined
+      ): Promise<Result<ModelCallResult>> => {
+        for (;;) {
+          attemptProducedOutput = false;
+          const attemptResult = await attempt(attemptMessages, attemptTools);
+          if (attemptResult.success) return attemptResult;
+
+          if (abortController.signal.aborted || opts?.shouldAbort?.()) return attemptResult;
+          if (attemptProducedOutput) return attemptResult;
+          if (model.adapter === 'codex-cli') return attemptResult;
+          if (automaticRetriesUsed >= MAX_AUTOMATIC_MODEL_RETRIES) {
+            log.warn('Automatic session-limit retries exhausted; returning the provider error', {
+              modelId,
+              retries: automaticRetriesUsed,
+            });
+            return attemptResult;
+          }
+
+          const plan = planAutomaticRetry(attemptResult.error);
+          if (!plan) return attemptResult;
+
+          automaticRetriesUsed += 1;
+          const nextAttempt = automaticRetriesUsed + 1;
+          log.warn('Provider reported a bounded session/rate limit; waiting before an automatic retry', {
+            modelId,
+            attempt: nextAttempt,
+            delayMs: plan.delayMs,
+            status: plan.status,
+            code: plan.code,
+          });
+
+          try {
+            opts?.onRecoveryRetry?.({
+              attempt: nextAttempt,
+              retryAt: plan.retryAt,
+              maxAttempts: MAX_AUTOMATIC_MODEL_RETRIES + 1,
+              failure: {
+                category: 'rate_limit',
+                message: attemptResult.error.message,
+                code: plan.code,
+                status: plan.status,
+                retryable: true,
+              },
+            });
+          } catch (error) {
+            log.warn('recovery:retry observer failed; continuing with the wait', { error });
+          }
+
+          const waited = await waitForRetryWindow(plan.delayMs, {
+            signal: abortController.signal,
+            shouldAbort: opts?.shouldAbort,
+          });
+          if (waited === 'aborted') {
+            // Stop during the wait: clear the timer (waitForRetryWindow already
+            // did), never call the provider again, and take the normal clean
+            // cancellation path.
+            abortController.abort();
+            log.info('Cancellation during a session-limit wait; skipping the retry.', { modelId });
+            return {
+              success: false,
+              error: createModelError('cancelled', 'Execution cancelled by user.', modelId),
+            };
+          }
+        }
+      };
+
+      let result = await attemptWithLimitRetry(apiMessages, sanitizedTools);
 
       // Context-length overflow recovery. A single unexpectedly-large tool
       // result in the RECENT tail (a big search dump, a file read) can blow the
@@ -2290,7 +2445,7 @@ export class ModelHandler {
           } catch (error) {
             log.warn('Final-wire observer failed during overflow refit; continuing retry', { error });
           }
-          result = await attempt(refitMessages, refitTools);
+          result = await attemptWithLimitRetry(refitMessages, refitTools);
         } else {
           log.warn('Context-length overflow but nothing on the wire left to compact; returning the original error', { modelId });
         }

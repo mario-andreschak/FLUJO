@@ -39,6 +39,12 @@ interface LiveRunIndicatorProps {
    * It moved to the composer's single Debugger toggle, which owns BOTH arming
    * the next run and attaching to a run already in flight — two controls for
    * one concept was the confusing part. */
+  /** Issue #400: the server hit a bounded provider session/rate limit and is
+   *  WAITING before it replays the same call. Non-terminal — the run is still
+   *  alive, Stop still works, and no error banner is shown. The countdown is
+   *  derived from the absolute `retryAt` deadline, so it stays correct across
+   *  re-renders and tab throttling. */
+  retryWait?: { attempt: number; maxAttempts?: number; retryAt: number } | null;
   /** Docked, single-row treatment used above the phone composer. */
   compact?: boolean;
 }
@@ -100,7 +106,7 @@ const LaneRow: React.FC<{ lane: LiveLane; onOpenLane?: (conversationId: string) 
  * only while the viewed conversation is running, so the interval's lifecycle
  * is simply this component's lifecycle.
  */
-const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, stopDisabled, awaitingApproval, lanes, onOpenLane, compact = false }) => {
+const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, stopDisabled, awaitingApproval, lanes, onOpenLane, retryWait, compact = false }) => {
   const { locale, t, tp, formatNumber, formatList } = useI18n();
   const [nowTick, setNowTick] = useState<number>(() => Date.now());
   const [mountedAt] = useState<number>(() => Date.now());
@@ -113,7 +119,9 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
 
   const elapsed = liveStats ? Math.max(0, Math.round((nowTick - liveStats.startedAt) / 1000)) : 0;
   const sinceLast = liveStats ? Math.round((nowTick - liveStats.lastEventAt) / 1000) : 0;
-  const stuck = !awaitingApproval && !!liveStats && sinceLast >= 60;
+  // A deliberate session-limit wait is not a stall: suppress the "may be stuck"
+  // warning while the server is counting down to its own retry (issue #400).
+  const stuck = !awaitingApproval && !retryWait && !!liveStats && sinceLast >= 60;
   const messageStartedAt = liveStats?.startedAt ?? mountedAt;
   const messageSequence = Math.floor(
     Math.max(0, nowTick - messageStartedAt) / WORKING_MESSAGE_INTERVAL_MS,
@@ -121,6 +129,19 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
   const workingMessage = locale === 'en'
     ? getWorkingMessage(messageSequence, messageStartedAt)
     : t(`chat.live.working.${messageSequence % 6}` as any);
+
+  // Issue #400: countdown to the server-owned retry deadline. This is display
+  // only — the frontend never re-issues the request when it reaches zero.
+  const retrySeconds = retryWait ? Math.max(0, Math.ceil((retryWait.retryAt - nowTick) / 1000)) : 0;
+  const retryMessage = retryWait
+    ? (retryWait.maxAttempts
+        ? t('chat.live.retryWaitAttempt', {
+            seconds: formatNumber(retrySeconds),
+            attempt: formatNumber(retryWait.attempt),
+            total: formatNumber(retryWait.maxAttempts),
+          })
+        : t('chat.live.retryWait', { seconds: formatNumber(retrySeconds) }))
+    : null;
 
   const laneRows = lanes ? laneList(lanes) : [];
   const summary = laneRows.length > 0 ? (() => {
@@ -173,8 +194,15 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
           ) : (
             <CircularProgress size={18} color={stuck ? 'warning' : 'primary'} />
           )}
-          <Typography variant="body2" noWrap aria-live="polite" sx={{ flex: 1, minWidth: 0 }}>
-            {status}
+          <Typography
+            variant="body2"
+            noWrap
+            aria-live="polite"
+            {...(retryMessage ? { 'data-testid': 'retry-wait' } : {})}
+            color={retryMessage ? 'warning.main' : undefined}
+            sx={{ flex: 1, minWidth: 0 }}
+          >
+            {retryMessage ?? status}
           </Typography>
           {!awaitingApproval && (
             <Typography variant="caption" color={stuck ? 'warning.main' : 'text.secondary'} sx={{ whiteSpace: 'nowrap' }}>
@@ -251,10 +279,15 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
         ) : (
           <CircularProgress size={20} color={stuck ? 'warning' : 'primary'} />
         )}
-        <Typography variant="body2" color="textSecondary">
-          {awaitingApproval
+        <Typography
+          variant="body2"
+          color={retryMessage ? 'warning.main' : 'textSecondary'}
+          {...(retryMessage ? { 'data-testid': 'retry-wait' } : {})}
+          aria-live="polite"
+        >
+          {retryMessage ?? (awaitingApproval
             ? t('chat.live.waitingApproval')
-            : liveStats?.activeNode ? t('chat.live.running', { node: liveStats.activeNode }) : t('chat.live.working')}
+            : liveStats?.activeNode ? t('chat.live.running', { node: liveStats.activeNode }) : t('chat.live.working'))}
         </Typography>
         <Button
           variant="outlined"
