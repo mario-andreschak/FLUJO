@@ -27,39 +27,6 @@ export { WORKSPACE_LAYOUT_VERSION } from './layoutVersion';
 
 const log = createLogger('backend/services/workspace/migration');
 
-/**
- * Workspace layout bootstrap + legacy migration (#406).
- *
- * Before #406 the three writable subtrees lived directly under the data root:
- *
- *   <data root>/db, <data root>/mcp-servers, <data root>/userdata
- *
- * They now live one level deeper, inside a workspace:
- *
- *   <data root>/workspaces/default-workspace/{db,mcp-servers,userdata}
- *
- * This module runs BEFORE storage verification, MCP startup and the scheduler,
- * so nothing ever opens a legacy path after the move has started. It follows the
- * conventions already used by the shipped-server migration: one in-flight promise
- * shared by concurrent callers, cleared in `finally` so a failure is retryable,
- * and a durable marker so a completed migration is a cheap no-op forever after.
- *
- * The cardinal rule is **never merge and never overwrite**. Each subtree is
- * migrated independently and one of five things is true for it:
- *
- *   - no source            -> create the destination (fresh install)
- *   - source, empty dest   -> move it (rename, or verified copy across volumes)
- *   - empty source, dest   -> already migrated, drop the empty leftover
- *   - no source, dest      -> already migrated
- *   - both have content    -> preserve both copies; use the workspace copy
- *
- * That makes a fresh install, a legacy install, an already-migrated install, an
- * interrupted migration and two racing startups all deterministic.
- */
-
-/** Bump when the on-disk layout changes again; older markers then re-run. */
-export const WORKSPACE_LAYOUT_VERSION = 1;
-
 const MARKER_FILE = '.workspace-layout.json';
 const JOURNAL_FILE = '.workspace-layout.transaction.json';
 const FAST_JOURNAL_FILE = '.workspace-layout.fast-transaction.json';
