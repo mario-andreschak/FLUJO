@@ -75,6 +75,7 @@ import {
   markdownLinkVars,
 } from '@/frontend/components/shared/MarkdownLink';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { formatPartialJson } from '@/frontend/utils/partialJson';
 import {
   groupMcpAppOccurrences,
   latestMcpAppResultIdsByResource,
@@ -638,13 +639,9 @@ const ToolCallDetails: React.FC<{
         window.location.assign(`/mcp?${query.toString()}`);
       }
     : undefined;
-  const formattedArgs = useMemo(() => {
-    try {
-      return JSON.stringify(JSON.parse(args.value), null, 2);
-    } catch {
-      return args.value;
-    }
-  }, [args.value]);
+  // This preview is intentionally display-only; execution and approval continue
+  // to use the authoritative raw argument string.
+  const formattedArgs = useMemo(() => formatPartialJson(args.value), [args.value]);
 
   return (
     <Box sx={{ mt: 1, p: 1, borderRadius: 1, bgcolor: 'rgba(0, 0, 0, 0.03)' }}>
@@ -656,6 +653,9 @@ const ToolCallDetails: React.FC<{
           size="small" color="default" variant="outlined"
           sx={{ ml: 1, height: 20, fontSize: '0.7rem' }}
         />
+        {!formattedArgs.complete && (
+          <Chip label="streaming…" size="small" color="primary" sx={{ ml: 1, height: 20, fontSize: '0.7rem' }} />
+        )}
       </Box>
       {args.loading ? (
         <Typography variant="body2" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 1, my: 1 }}>
@@ -670,8 +670,11 @@ const ToolCallDetails: React.FC<{
             bgcolor: 'action.hover', p: 1, borderRadius: '4px', overflowX: 'auto', fontFamily: 'monospace',
             fontSize: '0.75rem', my: 0.5, maxHeight: '150px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
           }}>
-            {formattedArgs}
+            {formattedArgs.text}
           </Box>
+          <Typography variant="caption" color="text.secondary">
+            {args.value.length.toLocaleString()} characters
+          </Typography>
         </>
       )}
       {openInToolTester && (
