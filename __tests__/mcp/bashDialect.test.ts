@@ -33,6 +33,17 @@ describe('detectDialectMismatch', () => {
     expect(detectDialectMismatch('ffmpeg -version | head -2', 'powershell', allAvailable)).toEqual([]);
   });
 
+  it('warns about missing rg and arbitrary command heads, including pipeline stages', () => {
+    const warnings = detectDialectMismatch('rg -n needle . | head -1; custom-tool --version', 'cmd', noneAvailable);
+    expect(warnings.join(' ')).toMatch(/"rg" is a POSIX utility/);
+    expect(warnings.join(' ')).toMatch(/"head" is a POSIX utility/);
+    expect(warnings.join(' ')).toMatch(/"custom-tool" was not found on PATH/);
+  });
+
+  it('does not mistake builtins, assignments, paths, or PowerShell cmdlets for executables', () => {
+    expect(detectDialectMismatch('$p="x"; Get-ChildItem .; dir', 'powershell', noneAvailable)).toEqual([]);
+  });
+
   it('flags backtick substitution and redundant 2>&1 under PowerShell', () => {
     expect(detectDialectMismatch('echo `date`', 'pwsh', allAvailable).join(' '))
       .toMatch(/Backticks are the line-continuation/);

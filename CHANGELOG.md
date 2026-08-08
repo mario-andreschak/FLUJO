@@ -3,6 +3,12 @@
 ## [Unreleased]
 
 ### Fixed
+- Bash MCP now explicitly substitutes Windows PowerShell 5.1 only when an explicit `pwsh`
+  request cannot find PowerShell 7, reporting the requested shell, effective shell, and reason (#314).
+- Bash MCP preflights missing command heads (including pipeline stages) with locale-independent
+  diagnostics and adds an exit-code hint for common executable-not-found failures (#314).
+- Bash MCP ignores WSL relay launchers when resolving Git Bash and recognizes multi-letter switches
+  for Windows file utilities without treating them as external POSIX paths (#314).
 - OpenRouter multimodal chat models (e.g. `outputModalities: ["text","image"]`) were routed to the
   dedicated `/images` / `/videos` media endpoints and failed with a route-not-found error even for
   plain text turns (#370). Routing to the dedicated media route is now reserved for models that are
