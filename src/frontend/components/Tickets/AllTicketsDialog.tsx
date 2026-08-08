@@ -60,7 +60,9 @@ export function AllTicketsDialog({ open, onClose, onChanged }: AllTicketsDialogP
         ...(label ? { label } : {}),
         limit: 100,
       });
-      setItems(page.items);
+      // Defensive: a degraded/stubbed API may answer without a usable `items`
+      // array; the dialog must render empty rather than throw (#379).
+      setItems(Array.isArray(page?.items) ? page.items : []);
       setError(null);
     } catch (loadError) {
       log.warn('Failed to load tickets', loadError);
@@ -82,7 +84,8 @@ export function AllTicketsDialog({ open, onClose, onChanged }: AllTicketsDialogP
   }, [open]);
 
   const labelOptions = useMemo(
-    () => Array.from(new Set(items.flatMap((ticket) => ticket.labels))).sort((a, b) => a.localeCompare(b)),
+    () => Array.from(new Set(items.flatMap((ticket) => (Array.isArray(ticket?.labels) ? ticket.labels : []))))
+      .sort((a, b) => a.localeCompare(b)),
     [items],
   );
 

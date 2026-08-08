@@ -42,6 +42,11 @@ export function TicketCard({
 }: TicketCardProps) {
   const router = useRouter();
   const { t } = useI18n();
+  // Ticket records are agent-authored and reach the card through the network;
+  // a malformed record must degrade to "no labels" instead of throwing (#379).
+  const labels = Array.isArray(ticket.labels)
+    ? ticket.labels.filter((label): label is string => typeof label === 'string')
+    : [];
 
   const openConversation = () => {
     if (!ticket.conversationId) return;
@@ -63,7 +68,7 @@ export function TicketCard({
       '--- BEGIN TICKET ---',
       ticket.title ?? '',
       ticket.message,
-      ticket.labels.length ? `Labels: ${ticket.labels.join(', ')}` : '',
+      labels.length ? `Labels: ${labels.join(', ')}` : '',
       '--- END TICKET ---',
     ]
       .filter(Boolean)
@@ -118,9 +123,9 @@ export function TicketCard({
             </Typography>
           </Box>
 
-          {ticket.labels.length > 0 && (
+          {labels.length > 0 && (
             <Stack direction="row" flexWrap="wrap" gap={0.75}>
-              {ticket.labels.map((label) => (
+              {labels.map((label) => (
                 <Chip key={label} label={label} size="small" variant="outlined" />
               ))}
             </Stack>

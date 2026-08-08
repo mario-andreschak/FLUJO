@@ -28,11 +28,17 @@ export function TicketsSection() {
   const load = useCallback(async () => {
     try {
       const page = await ticketService.listTickets({ status: 'open', limit: DASHBOARD_TICKET_LIMIT });
-      setItems(page.items);
-      setTotal(page.total);
+      // The service normalises the payload, but the dashboard must survive a
+      // stubbed/degraded API too: never let `items`/`total` become undefined,
+      // otherwise the whole home page crashes on `items.map` (#379).
+      const list = Array.isArray(page?.items) ? page.items : [];
+      setItems(list);
+      setTotal(typeof page?.total === 'number' && Number.isFinite(page.total) ? page.total : list.length);
       setError(null);
     } catch (loadError) {
       log.warn('Failed to load tickets', loadError);
+      setItems([]);
+      setTotal(0);
       setError(t('tickets.toast.loadFailed'));
     } finally {
       setLoading(false);
