@@ -41,10 +41,16 @@ import type {
   FlujoPackage,
   PackagedFlow,
   PackagedMcpServer,
+  PackagedMcpTransport,
   PackagedModel,
   PackagedPlannedExecution,
 } from '@/shared/types/package/package';
-import type { EnvDeclaration } from '@/shared/types/package/installOrigin';
+import type { EnvDeclaration, McpInstallOrigin, McpSourceType } from '@/shared/types/package/installOrigin';
+import {
+  effectiveName,
+  validateRenameMap,
+  type RenameCandidate,
+} from '@/utils/shared/packageRename';
 import { fetchPackageManifest } from './packageRegistry';
 import { installRegistryServer } from '@/backend/services/mcp/registryInstall';
 import { installGithubServer } from '@/backend/services/mcp/githubInstall';
@@ -83,6 +89,159 @@ export interface InstallServerResult {
   error?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Inspection contract (issue #407)
+//
+// The install wizard needs to SHOW a package before touching the host: which
+// apps/MCP servers it carries, where they come from, what they need, which
+// flows and triggers it contains, and which secrets/globals feed what. These
+// types are ADDITIVE — every pre-existing `InstallPreview` / `InstallSummary`
+// field is preserved for older clients.
+//
+// Secrets posture: inspection data is derived from the PUBLIC manifest only.
+// Declaration NAMES and reference NAMES are exposed; submitted secret VALUES
+// never are.
+// ---------------------------------------------------------------------------
+
+/** Where a single env/header declaration of a packaged server gets its value. */
+export type PackageDeclarationSource = 'secret' | 'global' | 'template' | 'environment';
+
+export interface PackageDeclarationInfo {
+  /** The env var / header name the server reads. */
+  name: string;
+  /** The package marked this value as sensitive (masked, encrypted at rest). */
+  isSecret: boolean;
+  source: PackageDeclarationSource;
+  /** Manifest secret this declaration binds to (`source: 'secret'`). */
+  secretRef?: string;
+  /** Host global this declaration binds to (`source: 'global'`). */
+  globalVar?: string;
+  /** True when the bound manifest secret is declared required. */
+  required: boolean;
+  /** True when a value for the bound secret was supplied with this request. */
+  provided: boolean;
+}
+
+/** Everything the wizard shows about one packaged app / MCP server. */
+export interface PackageServerInfo {
+  localName: string;
+  transport: PackagedMcpTransport;
+  sourceType: McpSourceType;
+  /** Same compact `type:ref` string the legacy preview/result uses. */
+  source: string;
+  /** Safe, absolute http(s) link to the repository / registry entry, if any. */
+  link?: string;
+  ref?: string;
+  gitRef?: string;
+  subdirectory?: string;
+  installCommand?: string;
+  buildCommand?: string;
+  url?: string;
+  /** The package ships this server disabled. */
+  disabled: boolean;
+  folder?: string;
+  autoApprove: string[];
+  /** Positional argument templates the origin declares (no secret values). */
+  argTemplates: Array<{ index: number; value: string }>;
+  env: PackageDeclarationInfo[];
+  headers: PackageDeclarationInfo[];
+  /** Env/header names whose REQUIRED secret has no value yet. */
+  requiredEnvMissing: string[];
+}
+
+/** A packaged flow, including a read-only graph payload for browsing. */
+export interface PackageFlowInfo {
+  /** Manifest-local flow id (stable rename key). */
+  localId: string;
+  name: string;
+  /** Display name after the requested bulk rename (equals `name` by default). */
+  effectiveName: string;
+  nodeCount: number;
+  edgeCount: number;
+  /** Textual fallback for screen readers and unrenderable graphs. */
+  nodeSummary: Array<{ id: string; type: string; label: string }>;
+  /** Raw, non-executing ReactFlow payload. Null when the graph is malformed. */
+  graph: { nodes: unknown[]; edges: unknown[] } | null;
+  /** Why `graph` is null. */
+  graphError?: string;
+  references?: { flowIds?: string[]; modelIds?: string[]; mcpServerNames?: string[] };
+}
+
+/** A packaged planned execution + its trigger, described without secrets. */
+export interface PackageTriggerInfo {
+  /** Manifest execution name (stable rename key AND deterministic-id source). */
+  key: string;
+  name: string;
+  effectiveName: string;
+  triggerType: string;
+  /** Manifest-local flow id this execution runs. */
+  flowLocalId: string;
+  flowName?: string;
+  /** Planned executions are always installed disabled for review. */
+  enabledAfterInstall: false;
+  /** Safe key/value trigger configuration (tokens and secrets excluded). */
+  details: Array<{ label: string; value: string }>;
+}
+
+export interface PackageSecretInfo {
+  key: string;
+  description?: string;
+  required: boolean;
+  provided: boolean;
+  /** Entities that stop working (or install disabled) without this secret. */
+  usedBy: Array<{ type: PackageEntityType; name: string }>;
+}
+
+export interface PackageGlobalInfo {
+  name: string;
+  description?: string;
+  required: boolean;
+  isSecret: boolean;
+  /** True when this host already has the global set in Settings. */
+  present: boolean;
+  usedBy: Array<{ type: PackageEntityType; name: string }>;
+}
+
+export interface PackageIdentityInfo {
+  id: string;
+  name: string;
+  version: string;
+  description?: string;
+  author?: string;
+  publisher?: string;
+  tags: string[];
+}
+
+/** One ordered, user-visible installation step. */
+export type InstallStepStatus =
+  | 'ok'
+  | 'created'
+  | 'updated'
+  | 'adopted'
+  | 'skipped'
+  | 'disabled'
+  | 'failed';
+
+export type InstallStepPhase =
+  | 'manifest'
+  | 'server'
+  | 'model'
+  | 'flow'
+  | 'plannedExecution';
+
+export interface InstallStep {
+  /** 1-based position in the real execution order. */
+  order: number;
+  phase: InstallStepPhase;
+  entityType?: PackageEntityType;
+  name: string;
+  status: InstallStepStatus;
+  /** Persisted id / server name, when the step produced one. */
+  id?: string;
+  /** Sanitized reason — always present for skipped/disabled/failed steps. */
+  detail?: string;
+}
+
 export interface InstallPreview {
   servers: Array<{
     localName: string;
@@ -105,6 +264,22 @@ export interface InstallPreview {
    * consent screen surfaces them so the user knows to set them afterwards.
    */
   missingGlobals: string[];
+
+  // --- issue #407 inspection data (additive; always present on new servers) ---
+  /** Package identity/description metadata for the wizard header. */
+  info?: PackageIdentityInfo;
+  /** Full per-server metadata (superset of `servers[]`). */
+  serverDetails?: PackageServerInfo[];
+  /** Packaged flows with read-only graph payloads. */
+  flowDetails?: PackageFlowInfo[];
+  /** Packaged planned executions / triggers. */
+  triggerDetails?: PackageTriggerInfo[];
+  /** Declared secrets plus which entities depend on them. */
+  secretDetails?: PackageSecretInfo[];
+  /** Declared host globals plus which entities depend on them. */
+  globalDetails?: PackageGlobalInfo[];
+  /** Errors produced by validating the requested bulk-rename map. */
+  renameErrors?: string[];
 }
 
 export interface InstallSummary {
@@ -122,6 +297,13 @@ export interface InstallSummary {
   errors: string[];
   /** `requiredGlobals` names that are still unset on this host after install. */
   missingGlobals: string[];
+  /**
+   * Ordered per-entity outcome of the real install (issue #407), in the exact
+   * order the orchestrator executed them. Every packaged entity appears here
+   * exactly once with a terminal status and — when not successful — a safe
+   * reason, so the wizard can show partial success honestly.
+   */
+  steps?: InstallStep[];
 }
 
 export interface InstallPackageInput {
@@ -132,6 +314,16 @@ export interface InstallPackageInput {
   secrets?: Record<string, string>;
   /** Package-local model id -> id of an already installed model to substitute. */
   modelMappings?: Record<string, string>;
+  /**
+   * Bulk display-name renames (issue #407). Keys are manifest-local flow ids
+   * and manifest planned-execution NAMES. Only display names change —
+   * deterministic ids, webhook identities and flow-event topics stay derived
+   * from the original manifest values so reinstall/uninstall stay stable.
+   */
+  renames?: {
+    flows?: Record<string, string>;
+    plannedExecutions?: Record<string, string>;
+  };
   /**
    * When false (or omitted) the orchestrator performs a DRY RUN: it validates
    * the manifest and returns a consent preview WITHOUT mutating anything. The
@@ -273,6 +465,209 @@ async function computeMissingGlobals(manifest: Pick<FlujoPackage, 'requiredGloba
 }
 
 // ---------------------------------------------------------------------------
+// Bulk display-name renames (issue #407)
+// ---------------------------------------------------------------------------
+
+/** Keep only well-formed string entries so a hostile body cannot smuggle values in. */
+function sanitizeRenameRecord(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const out: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof entry === 'string') out[key] = entry.trim();
+  }
+  return out;
+}
+
+function flowRenameCandidates(manifest: FlujoPackage): RenameCandidate[] {
+  return (manifest.flows ?? []).map((f) => ({
+    key: f.flow?.id ?? '',
+    original: f.flow?.name ?? '',
+    kind: 'flow' as const,
+  }));
+}
+
+function executionRenameCandidates(manifest: FlujoPackage): RenameCandidate[] {
+  return (manifest.plannedExecutions ?? []).map((p) => ({
+    key: p.name,
+    original: p.name,
+    kind: 'plannedExecution' as const,
+  }));
+}
+
+/**
+ * Re-run the wizard's rename validation on the server. Host entities this
+ * package already owns (deterministic ids) are excluded from the collision set
+ * so a re-install never collides with itself.
+ */
+async function collectRenameErrors(
+  manifest: FlujoPackage,
+  flowRenames: Record<string, string>,
+  executionRenames: Record<string, string>,
+): Promise<string[]> {
+  const flowCandidates = flowRenameCandidates(manifest);
+  const executionCandidates = executionRenameCandidates(manifest);
+  if (Object.keys(flowRenames).length === 0 && Object.keys(executionRenames).length === 0) return [];
+
+  let existingFlowNames: string[] = [];
+  try {
+    const ownedFlowIds = new Set(flowCandidates.map((c) => deterministicFlowId(manifest.name, c.key)));
+    const flows = await flowService.loadFlows();
+    existingFlowNames = (flows ?? [])
+      .filter((f) => !ownedFlowIds.has(f.id))
+      .map((f) => f.name)
+      .filter((n): n is string => typeof n === 'string');
+  } catch (err) {
+    log.warn('installPackage: failed to load flows for rename validation', err);
+  }
+
+  let existingExecutionNames: string[] = [];
+  try {
+    // The scheduler is mocked in tests — tolerate a service without `list()`.
+    const scheduler = getSchedulerService() as unknown as {
+      list?: () => Promise<Array<{ execution?: { id?: string; name?: string } }>>;
+    };
+    if (typeof scheduler?.list === 'function') {
+      const ownedIds = new Set(executionCandidates.map((c) => deterministicExecutionId(manifest.name, c.key)));
+      const executions = await scheduler.list();
+      existingExecutionNames = (executions ?? [])
+        .map((entry) => entry?.execution)
+        .filter((e): e is { id?: string; name?: string } => Boolean(e))
+        .filter((e) => typeof e.id !== 'string' || !ownedIds.has(e.id))
+        .map((e) => e.name)
+        .filter((n): n is string => typeof n === 'string');
+    }
+  } catch (err) {
+    log.warn('installPackage: failed to load planned executions for rename validation', err);
+  }
+
+  return [
+    ...validateRenameMap(flowRenames, flowCandidates, {
+      existingNames: existingFlowNames,
+      label: 'flow rename',
+    }),
+    ...validateRenameMap(executionRenames, executionCandidates, {
+      existingNames: existingExecutionNames,
+      label: 'trigger rename',
+    }),
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Ordered install steps (issue #407)
+// ---------------------------------------------------------------------------
+
+/**
+ * Project the summary buckets back onto the manifest's real execution order so
+ * the wizard can render "what happened, in order" with one terminal status per
+ * packaged entity. Derived (rather than emitted inline) so the install
+ * primitives, their idempotency and their fail-soft posture stay untouched.
+ */
+export function buildInstallSteps(
+  manifest: FlujoPackage,
+  summary: InstallSummary,
+  renames: { flows?: Record<string, string>; plannedExecutions?: Record<string, string> } = {},
+): InstallStep[] {
+  const steps: InstallStep[] = [];
+  let order = 0;
+  const next = (step: Omit<InstallStep, 'order'>): void => {
+    order += 1;
+    steps.push({ order, ...step });
+  };
+
+  next({
+    phase: 'manifest',
+    name: `${manifest.name} v${manifest.version}`,
+    status: 'ok',
+    detail: 'Manifest validated',
+  });
+
+  // Servers keep manifest order in `summary.servers`.
+  for (const server of summary.servers) {
+    const status: InstallStepStatus = server.error
+      ? 'failed'
+      : server.disabled
+        ? 'disabled'
+        : server.alreadyExisted
+          ? 'adopted'
+          : server.installed
+            ? 'created'
+            : 'skipped';
+    const detail =
+      server.error ??
+      (server.needsEnv && server.needsEnv.length > 0
+        ? `Missing required configuration: ${server.needsEnv.join(', ')}`
+        : server.alreadyExisted
+          ? 'Already installed — existing server reused'
+          : server.disabled
+            ? 'Installed disabled until its configuration is complete'
+            : undefined);
+    next({
+      phase: 'server',
+      entityType: 'server',
+      name: server.localName,
+      status,
+      ...(server.serverName ? { id: server.serverName } : {}),
+      ...(detail ? { detail } : {}),
+    });
+  }
+
+  const find = (type: PackageEntityType, name: string): { status: InstallStepStatus; ref?: InstallEntityRef } => {
+    const match = (bucket: InstallEntityRef[]) => bucket.find((r) => r.type === type && r.name === name);
+    const failed = match(summary.skipped);
+    const disabled = match(summary.disabled);
+    const updated = match(summary.updated);
+    const created = match(summary.created);
+    if (disabled) return { status: 'disabled', ref: disabled };
+    if (failed) return { status: 'skipped', ref: failed };
+    if (updated) return { status: 'updated', ref: updated };
+    if (created) return { status: 'created', ref: created };
+    return { status: 'skipped' };
+  };
+
+  for (const model of manifest.models ?? []) {
+    const name = model.displayName || model.name;
+    const { status, ref } = find('model', name);
+    next({
+      phase: 'model',
+      entityType: 'model',
+      name,
+      status,
+      ...(ref?.id ? { id: ref.id } : {}),
+      ...(ref?.note ? { detail: ref.note } : status === 'skipped' ? { detail: 'Not reported by the installer' } : {}),
+    });
+  }
+
+  for (const packaged of manifest.flows ?? []) {
+    const original = packaged.flow?.name ?? '';
+    const shown = effectiveName(renames.flows, packaged.flow?.id ?? '', original);
+    const { status, ref } = find('flow', shown);
+    next({
+      phase: 'flow',
+      entityType: 'flow',
+      name: shown,
+      status,
+      ...(ref?.id ? { id: ref.id } : {}),
+      ...(ref?.note ? { detail: ref.note } : status === 'skipped' ? { detail: 'Not reported by the installer' } : {}),
+    });
+  }
+
+  for (const pe of manifest.plannedExecutions ?? []) {
+    const shown = effectiveName(renames.plannedExecutions, pe.name, pe.name);
+    const { status, ref } = find('plannedExecution', shown);
+    next({
+      phase: 'plannedExecution',
+      entityType: 'plannedExecution',
+      name: shown,
+      status,
+      ...(ref?.id ? { id: ref.id } : {}),
+      ...(ref?.note ? { detail: ref.note } : status === 'skipped' ? { detail: 'Not reported by the installer' } : {}),
+    });
+  }
+
+  return steps;
+}
+
+// ---------------------------------------------------------------------------
 // Orchestrator
 // ---------------------------------------------------------------------------
 
@@ -320,6 +715,12 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
   const secretRequired = (name: string): boolean =>
     (manifest.secrets ?? []).some((s) => s.name === name && s.required === true);
 
+  // 2b. Bulk display-name renames (issue #407): validated identically on the
+  //     client and here, so a hand-crafted request cannot bypass the wizard.
+  const flowRenames = sanitizeRenameRecord(input.renames?.flows);
+  const executionRenames = sanitizeRenameRecord(input.renames?.plannedExecutions);
+  const renameErrors = await collectRenameErrors(manifest, flowRenames, executionRenames);
+
   // 3. Consent preview (dry-run): no mutations.
   if (input.consentGranted !== true) {
     return {
@@ -327,7 +728,7 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
       dryRun: true,
       package: { name: manifest.name, version: manifest.version, ...(manifest.publisher ? { publisher: manifest.publisher } : {}) },
       preview: {
-        ...await buildPreview(manifest, secretProvided),
+        ...await buildPreview(manifest, secretProvided, { flowRenames, executionRenames, renameErrors }),
         missingGlobals: await computeMissingGlobals(manifest),
       },
       created: [],
@@ -338,6 +739,15 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
       errors: [],
       missingGlobals: [],
     };
+  }
+
+  // A rename the user asked for must never be silently dropped: refuse BEFORE
+  // touching the host rather than installing under the original names.
+  if (renameErrors.length > 0) {
+    const s = empty();
+    s.dryRun = false;
+    s.errors.push(...renameErrors);
+    return s;
   }
 
   const installedModels = await modelService.loadModels();
@@ -451,12 +861,18 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
   }
 
   // 6. Flows — fresh deterministic ids + internal reference remapping.
-  const flowIdMap = await installFlows(manifest.name, resolvedFlows, modelIdMap, summary, ledgerEntities, ledgerCreated);
+  const flowIdMap = await installFlows(manifest.name, resolvedFlows, modelIdMap, summary, ledgerEntities, ledgerCreated, flowRenames);
 
   // 7. Planned executions — remapped flowId, created DISABLED.
   for (const pe of resolvedPlannedExecutions) {
-    await installPlannedExecution(pe, manifest.name, flowIdMap, summary, ledgerEntities, ledgerCreated);
+    await installPlannedExecution(pe, manifest.name, flowIdMap, summary, ledgerEntities, ledgerCreated, executionRenames);
   }
+
+  // 7b. Ordered, per-entity outcomes for the install wizard.
+  summary.steps = buildInstallSteps(manifest, summary, {
+    flows: flowRenames,
+    plannedExecutions: executionRenames,
+  });
 
   // 8. Persist the ledger (idempotency + last-summary for the status endpoint).
   try {
@@ -653,9 +1069,319 @@ function serverSecretRefs(server: PackagedMcpServer): string[] {
     .filter((v): v is string => typeof v === 'string' && v.length > 0);
 }
 
-async function buildPreview(manifest: FlujoPackage, secretProvided: (name: string) => boolean): Promise<Omit<InstallPreview, 'missingGlobals'>> {
+/** Every host-global name a server's env/header declarations reference. */
+function serverGlobalRefs(server: PackagedMcpServer): string[] {
+  return [...server.envDeclarations, ...(server.headerDeclarations ?? [])]
+    .map((d) => d.globalVar)
+    .filter((v): v is string => typeof v === 'string' && v.length > 0);
+}
+
+// ---------------------------------------------------------------------------
+// Inspection builders (issue #407)
+// ---------------------------------------------------------------------------
+
+/**
+ * Derive a SAFE, absolute http(s) link for a packaged server so the wizard can
+ * show "where does this come from". Anything that is not a plain http(s) URL
+ * (javascript:, data:, file:, ...) is dropped rather than rendered.
+ */
+export function safeOriginLink(origin: McpInstallOrigin): string | undefined {
+  const candidates = [origin.url, origin.ref].filter(
+    (v): v is string => typeof v === 'string' && v.trim() !== '',
+  );
+  for (const candidate of candidates) {
+    const value = candidate.trim();
+    try {
+      const url = new URL(value);
+      if (url.protocol === 'https:' || url.protocol === 'http:') return url.toString();
+      continue;
+    } catch {
+      // Not an absolute URL — fall through to the shorthand handling below.
+    }
+    if (origin.sourceType === 'github' && /^[\w.-]+\/[\w.-]+$/.test(value)) {
+      return `https://github.com/${value}`;
+    }
+  }
+  return undefined;
+}
+
+function describeDeclarations(
+  declarations: EnvDeclaration[],
+  manifest: FlujoPackage,
+  secretProvided: (name: string) => boolean,
+): PackageDeclarationInfo[] {
+  return declarations.map((decl) => {
+    const source: PackageDeclarationSource = decl.secretRef
+      ? 'secret'
+      : decl.globalVar
+        ? 'global'
+        : decl.globalTemplate
+          ? 'template'
+          : 'environment';
+    return {
+      name: decl.name,
+      isSecret: decl.isSecret === true,
+      source,
+      ...(decl.secretRef ? { secretRef: decl.secretRef } : {}),
+      ...(decl.globalVar ? { globalVar: decl.globalVar } : {}),
+      required: decl.secretRef
+        ? (manifest.secrets ?? []).some((s) => s.name === decl.secretRef && s.required === true)
+        : decl.globalVar
+          ? (manifest.globals ?? []).some((g) => g.name === decl.globalVar && g.required === true)
+          : false,
+      provided: decl.secretRef ? secretProvided(decl.secretRef) : false,
+    };
+  });
+}
+
+function buildServerDetails(
+  manifest: FlujoPackage,
+  secretProvided: (name: string) => boolean,
+): PackageServerInfo[] {
+  return (manifest.mcpServers ?? []).map((server) => {
+    const origin = server.installOrigin;
+    const link = safeOriginLink(origin);
+    return {
+      localName: server.name,
+      transport: server.transport,
+      sourceType: origin.sourceType,
+      source: serverSource(server),
+      ...(link ? { link } : {}),
+      ...(origin.ref ? { ref: origin.ref } : {}),
+      ...(origin.gitRef ? { gitRef: origin.gitRef } : {}),
+      ...(origin.subdirectory ? { subdirectory: origin.subdirectory } : {}),
+      ...(origin.installCommand ? { installCommand: origin.installCommand } : {}),
+      ...(origin.buildCommand ? { buildCommand: origin.buildCommand } : {}),
+      ...(origin.url ? { url: origin.url } : {}),
+      disabled: server.disabled === true,
+      ...(server.folder ? { folder: server.folder } : {}),
+      autoApprove: server.autoApprove ?? [],
+      argTemplates: (server.argTemplates ?? []).map((a) => ({ index: a.index, value: a.value })),
+      env: describeDeclarations(server.envDeclarations ?? [], manifest, secretProvided),
+      headers: describeDeclarations(server.headerDeclarations ?? [], manifest, secretProvided),
+      requiredEnvMissing: serverSecretRefs(server).filter(
+        (name) =>
+          (manifest.secrets ?? []).some((sec) => sec.name === name && sec.required) && !secretProvided(name),
+      ),
+    };
+  });
+}
+
+function buildFlowDetails(
+  manifest: FlujoPackage,
+  flowRenames: Record<string, string>,
+): PackageFlowInfo[] {
+  return (manifest.flows ?? []).map((packaged) => {
+    const flow = packaged.flow;
+    const nodes = Array.isArray(flow?.nodes) ? flow.nodes : [];
+    const edges = Array.isArray(flow?.edges) ? flow.edges : [];
+    const info: PackageFlowInfo = {
+      localId: flow?.id ?? '',
+      name: flow?.name ?? '',
+      effectiveName: effectiveName(flowRenames, flow?.id ?? '', flow?.name ?? ''),
+      nodeCount: nodes.length,
+      edgeCount: edges.length,
+      nodeSummary: nodes.map((node) => {
+        const n = node as { id?: unknown; type?: unknown; data?: { label?: unknown; type?: unknown } };
+        return {
+          id: typeof n.id === 'string' ? n.id : '',
+          type: typeof n.type === 'string' ? n.type : typeof n.data?.type === 'string' ? n.data.type : 'unknown',
+          label: typeof n.data?.label === 'string' ? n.data.label : (typeof n.id === 'string' ? n.id : ''),
+        };
+      }),
+      graph: null,
+      ...(packaged.references ? { references: packaged.references } : {}),
+    };
+
+    // The graph payload is manifest content only — the schema already forbids
+    // encrypted blobs and secret VALUES, so it is safe to hand to the
+    // read-only canvas. Serialize defensively: a cyclic/oversized graph must
+    // degrade to the textual summary, never break the whole preview.
+    try {
+      const serialized = JSON.stringify({ nodes, edges });
+      if (serialized.length > 2_000_000) {
+        info.graphError = 'graph too large to preview';
+      } else {
+        info.graph = JSON.parse(serialized) as { nodes: unknown[]; edges: unknown[] };
+      }
+    } catch (err) {
+      info.graphError = err instanceof Error ? err.message : String(err);
+    }
+    return info;
+  });
+}
+
+/** Human-readable, secret-free description of one packaged trigger. */
+function describeTrigger(trigger: unknown): { type: string; details: Array<{ label: string; value: string }> } {
+  const t = (trigger ?? {}) as Record<string, unknown>;
+  const type = typeof t.type === 'string' ? t.type : 'unknown';
+  const details: Array<{ label: string; value: string }> = [];
+  const push = (label: string, value: unknown) => {
+    if (value === undefined || value === null || value === '') return;
+    if (typeof value === 'object') {
+      details.push({ label, value: JSON.stringify(value) });
+      return;
+    }
+    details.push({ label, value: String(value) });
+  };
+
+  switch (type) {
+    case 'schedule':
+      push('cron', t.cron);
+      push('timezone', t.timezone);
+      push('catchUp', t.catchUp);
+      break;
+    case 'webhook':
+      // NEVER expose the shared secret — only whether one is required.
+      push('token', typeof t.token === 'string' && t.token !== '' ? 'provided by package' : 'generated on install');
+      push('allowExternal', t.allowExternal === true);
+      break;
+    case 'file-watch':
+      push('path', t.path);
+      push('events', Array.isArray(t.events) ? t.events.join(', ') : undefined);
+      break;
+    case 'mcp-poll':
+      push('server', t.serverName);
+      push('tool', t.toolName);
+      push('intervalMs', t.intervalMs);
+      break;
+    case 'url-watch':
+      push('url', t.url);
+      push('intervalMs', t.intervalMs);
+      break;
+    case 'flow-event':
+      push('source', t.source);
+      push('on', Array.isArray(t.on) ? t.on.join(', ') : undefined);
+      push('maxChainDepth', t.maxChainDepth);
+      break;
+    default:
+      break;
+  }
+  return { type, details };
+}
+
+function buildTriggerDetails(
+  manifest: FlujoPackage,
+  executionRenames: Record<string, string>,
+): PackageTriggerInfo[] {
+  const flowNames = new Map(
+    (manifest.flows ?? []).map((f) => [f.flow?.id ?? '', f.flow?.name ?? '']),
+  );
+  return (manifest.plannedExecutions ?? []).map((pe) => {
+    const described = describeTrigger((pe as { trigger?: unknown }).trigger);
+    const flowName = flowNames.get(pe.flowId);
+    return {
+      key: pe.name,
+      name: pe.name,
+      effectiveName: effectiveName(executionRenames, pe.name, pe.name),
+      triggerType: described.type,
+      flowLocalId: pe.flowId,
+      ...(flowName ? { flowName } : {}),
+      enabledAfterInstall: false as const,
+      details: described.details,
+    };
+  });
+}
+
+/** Which packaged entities depend on each declared secret / host global. */
+function buildDependencyIndex(manifest: FlujoPackage): {
+  secrets: Map<string, Array<{ type: PackageEntityType; name: string }>>;
+  globals: Map<string, Array<{ type: PackageEntityType; name: string }>>;
+} {
+  const secrets = new Map<string, Array<{ type: PackageEntityType; name: string }>>();
+  const globals = new Map<string, Array<{ type: PackageEntityType; name: string }>>();
+  const add = (
+    index: Map<string, Array<{ type: PackageEntityType; name: string }>>,
+    key: string,
+    entry: { type: PackageEntityType; name: string },
+  ) => {
+    if (!key) return;
+    const list = index.get(key) ?? [];
+    if (!list.some((e) => e.type === entry.type && e.name === entry.name)) list.push(entry);
+    index.set(key, list);
+  };
+
+  for (const server of manifest.mcpServers ?? []) {
+    for (const name of serverSecretRefs(server)) add(secrets, name, { type: 'server', name: server.name });
+    for (const name of serverGlobalRefs(server)) add(globals, name, { type: 'server', name: server.name });
+  }
+  for (const model of manifest.models ?? []) {
+    const label = model.displayName || model.name;
+    if (model.apiKeyRef.kind === 'secret') add(secrets, model.apiKeyRef.secret, { type: 'model', name: label });
+    if (model.apiKeyRef.kind === 'global') add(globals, model.apiKeyRef.var, { type: 'model', name: label });
+  }
+
+  // Free-text `{{secret.NAME}}` placeholders inside flows / planned executions.
+  const scanPlaceholders = (value: unknown, entry: { type: PackageEntityType; name: string }) => {
+    const serialized = (() => {
+      try {
+        return JSON.stringify(value ?? '');
+      } catch {
+        return '';
+      }
+    })();
+    const re = new RegExp(SECRET_PLACEHOLDER_REGEX.source, 'g');
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(serialized)) !== null) add(secrets, match[1], entry);
+    const globalRe = /\$\{global:([A-Za-z_][A-Za-z0-9_]*)\}/g;
+    let globalMatch: RegExpExecArray | null;
+    while ((globalMatch = globalRe.exec(serialized)) !== null) add(globals, globalMatch[1], entry);
+  };
+  for (const packaged of manifest.flows ?? []) {
+    scanPlaceholders(packaged.flow, { type: 'flow', name: packaged.flow?.name ?? '' });
+  }
+  for (const pe of manifest.plannedExecutions ?? []) {
+    scanPlaceholders(pe, { type: 'plannedExecution', name: pe.name });
+  }
+
+  return { secrets, globals };
+}
+
+async function buildPreview(
+  manifest: FlujoPackage,
+  secretProvided: (name: string) => boolean,
+  options: {
+    flowRenames?: Record<string, string>;
+    executionRenames?: Record<string, string>;
+    renameErrors?: string[];
+  } = {},
+): Promise<Omit<InstallPreview, 'missingGlobals'>> {
   const installedModels = await modelService.loadModels();
+  const flowRenames = options.flowRenames ?? {};
+  const executionRenames = options.executionRenames ?? {};
+  const dependencies = buildDependencyIndex(manifest);
+  const storedGlobals = await loadItem<Record<string, unknown>>(StorageKey.GLOBAL_ENV_VARS, {});
   return {
+    info: {
+      id: manifest.id,
+      name: manifest.name,
+      version: manifest.version,
+      ...(manifest.description ? { description: manifest.description } : {}),
+      ...(manifest.author ? { author: manifest.author } : {}),
+      ...(manifest.publisher ? { publisher: manifest.publisher } : {}),
+      tags: manifest.tags ?? [],
+    },
+    serverDetails: buildServerDetails(manifest, secretProvided),
+    flowDetails: buildFlowDetails(manifest, flowRenames),
+    triggerDetails: buildTriggerDetails(manifest, executionRenames),
+    secretDetails: (manifest.secrets ?? []).map((s) => ({
+      key: s.name,
+      ...(s.description ? { description: s.description } : {}),
+      required: s.required === true,
+      provided: secretProvided(s.name),
+      usedBy: dependencies.secrets.get(s.name) ?? [],
+    })),
+    globalDetails: (manifest.globals ?? []).map((g) => ({
+      name: g.name,
+      ...(g.description ? { description: g.description } : {}),
+      required: g.required === true,
+      isSecret: g.isSecret === true,
+      present: Object.prototype.hasOwnProperty.call(storedGlobals ?? {}, g.name),
+      usedBy: dependencies.globals.get(g.name) ?? [],
+    })),
+    ...(options.renameErrors && options.renameErrors.length > 0
+      ? { renameErrors: options.renameErrors }
+      : {}),
     servers: (manifest.mcpServers ?? []).map((s) => ({
       localName: s.name,
       source: serverSource(s),
@@ -1223,6 +1949,8 @@ async function installFlows(
   summary: InstallSummary,
   ledgerEntities: PackageInstallRecord['entities'],
   ledgerCreated: LedgerCreated,
+  /** Manifest-local flow id -> requested display name (issue #407). */
+  flowRenames: Record<string, string> = {},
 ): Promise<Record<string, string>> {
   // Build the manifest-local-id -> installed-id map first, so cross-flow
   // (subflow) references can be remapped regardless of flow order.
@@ -1238,18 +1966,22 @@ async function installFlows(
     const newId = idMap[localId];
     const flow = remapFlow(packagedFlow, newId, idMap, modelIdMap);
     flow.folder = packageName;
+    // Display-name-only rename: the deterministic id above is derived from the
+    // manifest-local id, so renaming never breaks reinstall / uninstall.
+    const displayName = effectiveName(flowRenames, localId, packagedFlow.flow.name);
+    flow.name = displayName;
     const wasPresent = existingIds.has(newId);
     const res = await flowService.saveFlow(flow);
     if (res.success) {
       ledgerEntities.flows[localId] = newId;
-      const ref: InstallEntityRef = { type: 'flow', name: packagedFlow.flow.name, id: newId };
+      const ref: InstallEntityRef = { type: 'flow', name: displayName, id: newId };
       if (wasPresent) summary.updated.push(ref);
       else {
         ledgerCreated.flows.push(newId);
         summary.created.push(ref);
       }
     } else {
-      summary.skipped.push({ type: 'flow', name: packagedFlow.flow.name, note: res.error });
+      summary.skipped.push({ type: 'flow', name: displayName, note: res.error });
     }
   }
   return idMap;
@@ -1300,9 +2032,15 @@ async function installPlannedExecution(
   summary: InstallSummary,
   ledgerEntities: PackageInstallRecord['entities'],
   ledgerCreated: LedgerCreated,
+  /** Manifest execution name -> requested display name (issue #407). */
+  executionRenames: Record<string, string> = {},
 ): Promise<void> {
   const scheduler = getSchedulerService();
+  // The deterministic id stays derived from the ORIGINAL manifest name so a
+  // renamed execution still updates in place on re-install and is still found
+  // by uninstall. Only the display name changes.
   const id = deterministicExecutionId(packageName, pe.name);
+  const displayName = effectiveName(executionRenames, pe.name, pe.name);
   const mappedFlowId = flowIdMap[pe.flowId] ?? pe.flowId;
 
   // Strip manifest-local id/timestamps; force enabled:false; remap flowId.
@@ -1310,6 +2048,7 @@ async function installPlannedExecution(
   const config = {
     ...rest,
     id,
+    name: displayName,
     flowId: mappedFlowId,
     folder: packageName,
     enabled: false,
@@ -1319,8 +2058,8 @@ async function installPlannedExecution(
   if (created.execution) {
     ledgerEntities.plannedExecutions.push(id);
     ledgerCreated.plannedExecutions.push(id);
-    summary.created.push({ type: 'plannedExecution', name: pe.name, id });
-    summary.disabled.push({ type: 'plannedExecution', name: pe.name, id, note: 'created disabled — enable it after review' });
+    summary.created.push({ type: 'plannedExecution', name: displayName, id });
+    summary.disabled.push({ type: 'plannedExecution', name: displayName, id, note: 'created disabled — enable it after review' });
     return;
   }
 
@@ -1330,13 +2069,13 @@ async function installPlannedExecution(
     const updated = await scheduler.update(id, patch as Parameters<typeof scheduler.update>[1]);
     if (updated.execution) {
       ledgerEntities.plannedExecutions.push(id);
-      summary.updated.push({ type: 'plannedExecution', name: pe.name, id });
-      summary.disabled.push({ type: 'plannedExecution', name: pe.name, id, note: 'updated (disabled) — enable it after review' });
+      summary.updated.push({ type: 'plannedExecution', name: displayName, id });
+      summary.disabled.push({ type: 'plannedExecution', name: displayName, id, note: 'updated (disabled) — enable it after review' });
     } else {
-      summary.skipped.push({ type: 'plannedExecution', name: pe.name, note: updated.error });
+      summary.skipped.push({ type: 'plannedExecution', name: displayName, note: updated.error });
     }
     return;
   }
 
-  summary.skipped.push({ type: 'plannedExecution', name: pe.name, note: created.error });
+  summary.skipped.push({ type: 'plannedExecution', name: displayName, note: created.error });
 }
