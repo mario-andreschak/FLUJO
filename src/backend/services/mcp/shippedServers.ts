@@ -112,6 +112,9 @@ export function shippedServerEnv(
       'FLUJO_BROWSER_STREAM_PORT',
       'FLUJO_BROWSER_STREAM_PUBLIC_ORIGIN',
       'FLUJO_BROWSER_STREAM_QUALITY',
+      // Escape hatch: relax the live-view gateway origin allowlist for hosted
+      // deployments behind a rewriting reverse proxy (see gateway.ts).
+      'FLUJO_MCP_APP_SANDBOX_ALLOW_ALL',
       'FLUJO_BROWSER_STREAM_MAX_WIDTH',
       'FLUJO_BROWSER_STREAM_MAX_HEIGHT',
       'FLUJO_BROWSER_STREAM_AUDIO',

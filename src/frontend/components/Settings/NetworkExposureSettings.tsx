@@ -1,10 +1,12 @@
 'use client';
 
-import { useEffect, useMemo, useState, type MouseEvent } from 'react';
+import { useEffect, useMemo, useState, type ChangeEvent, type MouseEvent } from 'react';
 import {
   Alert,
   Box,
+  FormControlLabel,
   Stack,
+  Switch,
   ToggleButton,
   ToggleButtonGroup,
   Typography,
@@ -85,6 +87,14 @@ export default function NetworkExposureSettings() {
     void updateSettings({
       ...settings,
       network: { exposure: value },
+    });
+  };
+
+  const allowAll = settings.network?.allowAllMcpAppContent === true;
+  const toggleAllowAll = (_event: ChangeEvent<HTMLInputElement>, checked: boolean) => {
+    void updateSettings({
+      ...settings,
+      network: { ...settings.network, allowAllMcpAppContent: checked },
     });
   };
 
@@ -174,6 +184,33 @@ export default function NetworkExposureSettings() {
       {runtime?.installMode === 'container' && selected !== 'localhost' && (
         <Alert severity="warning">{t('settings.network.containerPorts')}</Alert>
       )}
+
+      <Box sx={{ borderTop: 1, borderColor: 'divider', pt: 2 }}>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={allowAll}
+              onChange={toggleAllowAll}
+              color="warning"
+            />
+          }
+          label={
+            <Stack spacing={0.5}>
+              <Typography fontWeight={600}>
+                {t('settings.network.allowAllMcpAppContent')}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                {t('settings.network.allowAllMcpAppContentDescription')}
+              </Typography>
+            </Stack>
+          }
+        />
+        {allowAll && (
+          <Alert severity="error" sx={{ mt: 1 }}>
+            {t('settings.network.allowAllMcpAppContentWarning')}
+          </Alert>
+        )}
+      </Box>
     </Stack>
   );
 }

@@ -84,9 +84,28 @@ function streamEnabled(): boolean {
   return /^(1|true|yes|on)$/i.test(raw);
 }
 
+/**
+ * Escape hatch for hosted deployments behind a reverse proxy that rewrites
+ * `Host`/`Referer` headers. Mirrors the MCP Apps sandbox escape hatch: when the
+ * persisted `network.allowAllMcpAppContent` setting is enabled (propagated here
+ * by scripts/exposure-mode.mjs as `FLUJO_MCP_APP_SANDBOX_ALLOW_ALL`), the
+ * browser live-view gateway accepts any `Host` header and widens its CSP grants
+ * so the app can frame the gateway regardless of origin. This disables the
+ * DNS-rebinding guard and is intended only as a temporary escape hatch; the
+ * long-term fix is correct `FLUJO_BROWSER_STREAM_PUBLIC_ORIGIN` config.
+ */
+function sandboxAllowAll(): boolean {
+  const value = process.env.FLUJO_MCP_APP_SANDBOX_ALLOW_ALL;
+  if (!value) return false;
+  return value === '1' || value === 'true' || value === 'yes' || value === 'on';
+}
+
 function bindHost(): string {
   const configured = process.env.FLUJO_BROWSER_STREAM_HOST?.trim();
-  return configured || '127.0.0.1';
+  if (configured) return configured;
+  // Under the escape hatch, bind all interfaces so a hosted reverse proxy can
+  // reach the gateway; otherwise stay on loopback.
+  return sandboxAllowAll() ? '0.0.0.0' : '127.0.0.1';
 }
 
 /**
@@ -108,6 +127,11 @@ function publicOrigin(port: number): string {
   return `http://${literal.includes(':') ? `[${literal}]` : literal}:${port}`;
 }
 
+/** Exported for tests: whether the escape hatch is active. */
+export function browserSandboxAllowAll(): boolean {
+  return sandboxAllowAll();
+}
+
 function tokenMatches(provided: string | null): boolean {
   if (!endpoint || !provided) return false;
   const expected = Buffer.from(endpoint.token, 'utf8');
@@ -117,6 +141,9 @@ function tokenMatches(provided: string | null): boolean {
 
 /** Reject DNS-rebinding attempts that resolve some public name to our port. */
 function hostHeaderAllowed(req: IncomingMessage): boolean {
+  // Escape hatch: accept any Host header so a hosted reverse proxy that
+  // rewrites Host can forward to the gateway. Disables the DNS-rebinding guard.
+  if (sandboxAllowAll()) return true;
   const header = (req.headers.host ?? '').toLowerCase();
   if (!header) return false;
   const hostname = header.startsWith('[')

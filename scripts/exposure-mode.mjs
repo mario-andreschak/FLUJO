@@ -4,6 +4,11 @@ import path from 'node:path';
 
 export const EXPOSURE_MODE_ENV = 'FLUJO_EXPOSURE_MODE';
 export const EXPOSURE_MODES = new Set(['localhost', 'network', 'public']);
+// Escape hatch: when the persisted network setting is enabled, this env var is
+// set so the MCP Apps sandbox and the browser live-view gateway relax their
+// origin allowlists. Read by src/backend/mcpApps/sandboxServer.ts and
+// mcp-servers/browser/src/gateway.ts.
+export const SANDBOX_ALLOW_ALL_ENV = 'FLUJO_MCP_APP_SANDBOX_ALLOW_ALL';
 
 function normalizedMode(value) {
   if (typeof value !== 'string') return undefined;
@@ -53,6 +58,27 @@ export function readExposureMode(env = process.env, cwd = process.cwd()) {
   return readPersistedExposureMode(env, cwd) || legacyMode(env) || 'localhost';
 }
 
+/**
+ * Read the persisted `network.allowAllMcpAppContent` escape hatch before Next
+ * starts. Mirrors readPersistedExposureMode so the launcher can expose a single
+ * immutable env value to the sandbox and browser gateway. Missing/false => false.
+ */
+export function readPersistedAllowAll(env = process.env, cwd = process.cwd()) {
+  const dataDir = env.FLUJO_DATA_DIR?.trim()
+    ? path.resolve(env.FLUJO_DATA_DIR)
+    : path.resolve(cwd);
+  const settingsFile = path.join(dataDir, 'db', 'speech_settings.json');
+  try {
+    const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+    return settings?.network?.allowAllMcpAppContent === true;
+  } catch (error) {
+    if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) {
+      console.warn(`[FLUJO] Could not read allow-all MCP app setting from ${settingsFile}:`, error);
+    }
+  }
+  return false;
+}
+
 function isPrivateAddress(address) {
   const normalized = address.toLowerCase().split('%')[0];
   const ipv4 = normalized.split('.');
@@ -97,6 +123,11 @@ export function applyExposureRuntimeEnv(env, cwd = process.cwd()) {
         ? 'legacy'
         : 'default';
   next.FLUJO_RUNTIME_LOCAL_HOSTS = discoverLocalHostnames();
+  // Escape hatch: propagate the persisted allow-all setting to the sandbox and
+  // browser gateway as a single immutable env value. Explicit env always wins.
+  if (env[SANDBOX_ALLOW_ALL_ENV] === undefined) {
+    next[SANDBOX_ALLOW_ALL_ENV] = readPersistedAllowAll(env, cwd) ? '1' : '0';
+  }
   return next;
 }
 

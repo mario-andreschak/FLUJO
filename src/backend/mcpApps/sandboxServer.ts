@@ -59,6 +59,21 @@ export const SANDBOX_BIND_HOST_ENV = 'FLUJO_MCP_APP_SANDBOX_HOST';
 
 const MAX_CONFIGURED_HOST_ORIGINS = 16;
 
+/**
+ * Escape hatch for hosted deployments behind a reverse proxy that rewrites
+ * `Host`/`Referer` headers. When the persisted `network.allowAllMcpAppContent`
+ * setting is enabled (propagated here by scripts/exposure-mode.mjs as
+ * `FLUJO_MCP_APP_SANDBOX_ALLOW_ALL`), the sandbox accepts any embedder/child
+ * origin instead of enforcing the host-origin allowlist. This disables the
+ * cross-origin isolation boundary and is intended only as a temporary escape
+ * hatch; the long-term fix is correct `FLUJO_MCP_APP_HOST_ORIGINS` config.
+ */
+export function sandboxAllowAllContent(): boolean {
+  const value = process.env.FLUJO_MCP_APP_SANDBOX_ALLOW_ALL;
+  if (!value) return false;
+  return value === '1' || value === 'true' || value === 'yes' || value === 'on';
+}
+
 function shouldUseLegacySandboxConfiguration(): boolean {
   const source = process.env.FLUJO_EXPOSURE_MODE_SOURCE;
   return !source
@@ -494,6 +509,9 @@ function sanitizeFrameAncestor(origin?: string): string {
  */
 function sanitizeFrameAncestors(origins?: string | readonly string[]): string {
   const candidates = typeof origins === 'string' ? [origins] : origins ?? [];
+  // Escape hatch: a literal '*' (from sandboxAllowAllContent) means "any
+  // ancestor may frame this document" and must survive sanitization verbatim.
+  if (candidates.includes('*')) return '*';
   const clean: string[] = [];
   const seen = new Set<string>();
   for (const candidate of candidates) {
@@ -608,6 +626,7 @@ export function buildSandboxProxyHtml(
   configuredHostOrigins: readonly string[] = getConfiguredSandboxHostOrigins(),
   hostAllowlistConfigured = hasConfiguredSandboxHostOrigins(),
   csp?: ResourceCsp,
+  allowAll = false,
 ): string {
   const innerCspMeta = buildInnerCspMeta(csp);
 
@@ -632,6 +651,7 @@ export function buildSandboxProxyHtml(
   var SANDBOX_PREFIX = ${JSON.stringify(SANDBOX_NOTIFICATION_PREFIX)};
   var CONFIGURED_HOST_ORIGINS = ${JSON.stringify([...configuredHostOrigins])};
   var HOST_ALLOWLIST_CONFIGURED = ${JSON.stringify(hostAllowlistConfigured)};
+  var ALLOW_ALL = ${JSON.stringify(allowAll)};
   var INNER_CSP_META = ${JSON.stringify(innerCspMeta)};
   var DEFAULT_VIEW_SANDBOX = ${JSON.stringify(MCP_APP_IFRAME_SANDBOX)};
   var ALLOWED_SANDBOX_TOKENS = ${JSON.stringify([...MCP_APP_IFRAME_SANDBOX_ALLOWED_TOKENS])};
@@ -656,10 +676,12 @@ export function buildSandboxProxyHtml(
   var loopback = /^(localhost|127\\.0\\.0\\.1|\\[::1\\]|::1)$/;
   var allowedByConfig = CONFIGURED_HOST_ORIGINS.indexOf(referrerOrigin) !== -1;
   var allowedByDefault = !HOST_ALLOWLIST_CONFIGURED && (loopback.test(refHost) || refHost === ownHost);
-  if (!(allowedByConfig || allowedByDefault)) {
+  // Escape hatch: when ALLOW_ALL is set, accept any embedder origin and relay
+  // to any host origin. Disables the cross-origin isolation boundary.
+  if (!(ALLOW_ALL || allowedByConfig || allowedByDefault)) {
     throw new Error("Sandbox proxy: embedder origin not allowed: " + referrerOrigin);
   }
-  var EXPECTED_HOST_ORIGIN = referrerOrigin;
+  var EXPECTED_HOST_ORIGIN = ALLOW_ALL ? "*" : referrerOrigin;
   // The View is same-origin with this proxy, so its messages carry this origin
   // rather than "null". Both are accepted so a narrowing sandbox override that
   // drops allow-same-origin cannot silently mute the View's bridge.
@@ -1026,6 +1048,9 @@ function isTrustedEmbedderOrigin(origin: string, req: http.IncomingMessage): boo
  * An empty result stays fail-closed (`'none'`) in {@link sanitizeFrameAncestors}.
  */
 export function getAllowedFrameAncestors(req: http.IncomingMessage): string[] {
+  // Escape hatch: accept any embedder origin. The literal '*' is preserved by
+  // sanitizeFrameAncestors and becomes `frame-ancestors *`.
+  if (sandboxAllowAllContent()) return ['*'];
   const state = getOrInitRuntimeState();
   const ancestors: string[] = [];
   const seen = new Set<string>();
@@ -1160,7 +1185,12 @@ function handleSandboxRequest(
     ...state.configuredHostOrigins,
     ...state.hostOrigins,
   ]));
-  res.end(buildSandboxProxyHtml(embedderOrigins, hasConfiguredSandboxHostOrigins(), csp));
+  res.end(buildSandboxProxyHtml(
+    embedderOrigins,
+    hasConfiguredSandboxHostOrigins(),
+    csp,
+    sandboxAllowAllContent(),
+  ));
 }
 
 /**

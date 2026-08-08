@@ -143,6 +143,14 @@ export interface NetworkSettings {
    * is intended only behind an authenticating HTTPS reverse proxy.
    */
   exposure: ExposureMode;
+  /**
+   * When true, the MCP Apps sandbox accepts any embedder/child origin instead
+   * of enforcing the host-origin allowlist. This disables the cross-origin
+   * isolation boundary and is intended only as an escape hatch for hosted
+   * deployments behind a reverse proxy that rewrites Host/Referer headers.
+   * Defaults to false (secure).
+   */
+  allowAllMcpAppContent?: boolean;
 }
 
 /**

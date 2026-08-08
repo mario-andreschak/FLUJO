@@ -1,5 +1,5 @@
 import type { Resource, ReadResourceResult } from '@modelcontextprotocol/sdk/types.js';
-import { ensureBrowserGateway, type BrowserGatewayEndpoint } from './gateway.js';
+import { ensureBrowserGateway, browserSandboxAllowAll, type BrowserGatewayEndpoint } from './gateway.js';
 
 const MCP_APPS_PROTOCOL_VERSION = '2026-01-26';
 const APP_MIME_TYPE = 'text/html;profile=mcp-app';
@@ -28,6 +28,14 @@ export async function browserReadResource(uri: string): Promise<ReadResourceResu
   if (uri !== BROWSER_APP_URI) throw new Error(`Unknown browser resource: ${uri}`);
   const gateway = await ensureBrowserGateway();
   const origins = gateway ? [gateway.origin] : [];
+  // Escape hatch: when the persisted `network.allowAllMcpAppContent` setting is
+  // enabled (propagated as FLUJO_MCP_APP_SANDBOX_ALLOW_ALL), widen the CSP so
+  // the shell can frame the gateway regardless of origin. This is intended only
+  // for hosted deployments behind a rewriting reverse proxy.
+  const allowAll = browserSandboxAllowAll();
+  const frameDomains = allowAll ? ['*'] : origins;
+  const connectDomains = allowAll ? ['*'] : origins;
+  const resourceDomains = allowAll ? ['*'] : origins;
   return {
     contents: [{
       uri,
@@ -39,9 +47,9 @@ export async function browserReadResource(uri: string): Promise<ReadResourceResu
           csp: {
             // frameDomains carries the live view; connect/resource keep the
             // screenshot fallback working when the gateway is unavailable.
-            frameDomains: origins,
-            connectDomains: origins,
-            resourceDomains: origins,
+            frameDomains,
+            connectDomains,
+            resourceDomains,
           },
           permissions: {},
         },
