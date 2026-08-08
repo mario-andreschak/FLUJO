@@ -4,6 +4,7 @@
 export enum StorageKey {
   MODELS = 'models',
   FLOWS = 'flows',
+  TICKETS = 'tickets',
   CHAT_HISTORY = 'history',
   THEME = 'theme',
   // Visual generation is stored separately from light/dark for backwards

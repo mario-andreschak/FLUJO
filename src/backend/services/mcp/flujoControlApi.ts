@@ -50,6 +50,7 @@ export const FLUJO_AUTOMATION_TOOLS = [
   'update_planned_execution',
   'create_planned_execution',
   'delete_planned_execution',
+  'create_ticket_for_human',
 ] as const;
 
 export const FLUJO_STATE_TOOLS = [
