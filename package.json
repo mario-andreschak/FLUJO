@@ -1,6 +1,14 @@
 {
   "name": "flujo-ai",
   "version": "3.42.1",
+  "homepage": "https://flujo.com.co/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mario-andreschak/FLUJO.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mario-andreschak/FLUJO/issues"
+  },
   "engines": {
     "node": ">=22.0.0"
   },

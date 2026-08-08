@@ -1,9 +1,12 @@
 import OpenAI from 'openai';
+import { createLogger } from '@/utils/logger';
 import {
   getRunResourceLocalPath,
   readRunResource,
 } from '@/backend/services/runResources';
 import type { ModelMediaPart } from '@/shared/types/model/media';
+
+const log = createLogger('backend/services/model/mediaHandoff');
 
 type WirePart = Record<string, any>;
 
@@ -79,6 +82,7 @@ function replaceReferencedUri(
   dataUrl: string,
   mimeType: string,
   blob: string,
+  strictOpenAiAudioFormats: boolean,
 ): WirePart {
   if (part.type === 'image_url') {
     return { ...part, image_url: { ...part.image_url, url: dataUrl } };
@@ -94,8 +98,19 @@ function replaceReferencedUri(
       mimeType === 'audio/mpeg' ? 'mp3'
         : mimeType === 'audio/wav' || mimeType === 'audio/x-wav' ? 'wav'
           : undefined;
-    return format
-      ? { type: 'input_audio', input_audio: { data: blob, format } }
+    if (format) {
+      return { type: 'input_audio', input_audio: { data: blob, format } };
+    }
+    // OpenAI's input_audio contract accepts only MP3/WAV. Never relabel OGG,
+    // FLAC or M4A bytes as WAV: that corrupts the declared format and still
+    // fails at the provider. Keep the companion artifact summary/path as the
+    // usable fallback. Native adapters (for example Gemini) remain permissive
+    // and receive their supported MIME as an inline audio URL.
+    return strictOpenAiAudioFormats
+      ? {
+          type: 'text',
+          text: `[${mimeType} audio attachment is available as an artifact but this OpenAI input channel accepts only MP3 or WAV]`,
+        }
       : {
           ...part,
           audio_url: { ...part.audio_url, url: dataUrl, mime_type: mimeType },
@@ -121,10 +136,18 @@ function replaceReferencedUri(
  * The conversation and the pre-flight wire keep only small URIs, so history
  * storage, debugger snapshots, cache fingerprints, and context estimates do not
  * balloon with base64. Native/provider adapters receive ordinary data URLs.
+ *
+ * An unresolvable reference DEGRADES rather than throwing. Tool-produced media
+ * flows through here on every turn now, and run resources are swept on a
+ * retention timer, so a replayed or long-lived conversation will legitimately
+ * contain references whose payload is gone. Failing the whole model call over a
+ * missing thumbnail would turn a cosmetic gap into a dead flow; the model gets
+ * an explicit note instead and can carry on.
  */
 export async function hydrateRunResourceMedia(
   messages: OpenAI.ChatCompletionMessageParam[],
   nodeId?: string,
+  options: { strictOpenAiAudioFormats?: boolean } = {},
 ): Promise<OpenAI.ChatCompletionMessageParam[]> {
   return Promise.all(messages.map(async (message) => {
     if (!Array.isArray(message.content)) return message;
@@ -132,24 +155,39 @@ export async function hydrateRunResourceMedia(
       const part = rawPart as unknown as WirePart;
       const uri = referencedUri(part);
       if (!uri?.startsWith('flujo://run/')) return rawPart;
-      const read = await readRunResource(uri, {
-        at: Date.now(),
-        source: 'node',
-        nodeId,
-      });
+      let read: Awaited<ReturnType<typeof readRunResource>> = null;
+      try {
+        read = await readRunResource(uri, {
+          at: Date.now(),
+          source: 'node',
+          nodeId,
+        });
+      } catch (error) {
+        log.warn(`Failed to read media run resource ${uri}; sending a placeholder instead`, error);
+      }
       const contentItem = read?.contents.contents[0];
       const blob =
         contentItem && typeof (contentItem as { blob?: unknown }).blob === 'string'
           ? (contentItem as { blob: string }).blob
           : undefined;
       if (!read || !blob) {
-        throw new Error(`Generated media resource is unavailable: ${uri}`);
+        log.warn(`Media run resource is unavailable, degrading to a text note: ${uri}`);
+        return {
+          type: 'text',
+          text: `[media attachment unavailable — its stored payload (${uri}) could not be read; it may have passed the run-resource retention window]`,
+        } as unknown as typeof rawPart;
       }
       const mimeType =
         (contentItem as { mimeType?: string }).mimeType ??
         read.entry.mimeType ??
         'application/octet-stream';
-      return replaceReferencedUri(part, `data:${mimeType};base64,${blob}`, mimeType, blob);
+      return replaceReferencedUri(
+        part,
+        `data:${mimeType};base64,${blob}`,
+        mimeType,
+        blob,
+        options.strictOpenAiAudioFormats === true,
+      );
     }));
     return { ...message, content } as OpenAI.ChatCompletionMessageParam;
   }));

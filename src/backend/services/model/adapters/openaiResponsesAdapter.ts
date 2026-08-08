@@ -172,10 +172,21 @@ function userContent(content: unknown): ResponseInputItem {
       if (p?.type === 'audio_url' && typeof p.audio_url?.url === 'string') {
         const parsed = parseDataUrl(p.audio_url.url);
         if (parsed) {
+          const format = parsed.mimeType === 'audio/mpeg'
+            ? 'mp3' as const
+            : parsed.mimeType === 'audio/wav' || parsed.mimeType === 'audio/x-wav'
+              ? 'wav' as const
+              : undefined;
+          if (format) {
+            return {
+              type: 'input_audio' as const,
+              data: parsed.base64,
+              format,
+            };
+          }
           return {
-            type: 'input_audio' as const,
-            data: parsed.base64,
-            format: parsed.mimeType === 'audio/mpeg' ? 'mp3' as const : 'wav' as const,
+            type: 'input_text' as const,
+            text: `[${parsed.mimeType} audio attachment omitted: OpenAI input_audio accepts only MP3 or WAV]`,
           };
         }
       }

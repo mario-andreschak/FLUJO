@@ -8,6 +8,7 @@ import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
 import { getRunResourceSettings } from '@/backend/services/runResources';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
+import { splitToolResultMedia } from '@/backend/services/runResources/toolResultMedia';
 import {
   resolveInvokedToolUiLink,
   toolCancellationReason,
@@ -433,7 +434,13 @@ export class CodexAdapter implements CompletionAdapter {
             let resultContent: string;
             if (result.success) {
               callResult = result.data as CallToolResult;
-              resultContent = JSON.stringify(result.data);
+              // Media is exempt from the size bound, same rationale as the
+              // subscription path: base64 measured against a byte budget
+              // silently deleted every real image (a ~37 KB picture already
+              // blows the 50 KB default once stringified). Bound the text,
+              // forward the media blocks untouched over the MCP bridge.
+              const { mediaItems, textResult } = splitToolResultMedia(callResult);
+              resultContent = JSON.stringify(textResult);
               // Tool-boundary bound (#251), same as the subscription path: this
               // bypasses ModelHandler's processToolCalls, so bound here or the
               // guarantee silently wouldn't apply on Codex runs.
@@ -451,7 +458,10 @@ export class CodexAdapter implements CompletionAdapter {
                   });
                   if (bounded.spilled) {
                     resultContent = bounded.content;
-                    callResult = { content: [{ type: 'text', text: bounded.content }] };
+                    callResult = {
+                      ...callResult,
+                      content: [...mediaItems, { type: 'text', text: bounded.content }],
+                    };
                   }
                 } catch (err) {
                   log.warn('boundToolResult failed on Codex path; keeping full result', err);

@@ -120,6 +120,38 @@ describe('runFlow keystone', () => {
     expect(FlowExecutor.executeStep as jest.Mock).not.toHaveBeenCalled();
   });
 
+  it('preserves conversation origin while deriving attendance from the current invocation', async () => {
+    const conversationId = 'scheduled-resume';
+    conversationStates.set(conversationId, {
+      trackingInfo: { executionId: 'scheduled-run', startTime: 1, nodeExecutionTracker: [] },
+      messages: [],
+      flowId: FLOW_ID,
+      conversationId,
+      currentNodeId: PROCESS,
+      status: 'completed',
+      source: 'schedule',
+      unattended: true,
+      createdAt: 1,
+      updatedAt: 1,
+    } as unknown as SharedState);
+
+    const result = await runFlowWithContext({
+      flowId: FLOW_ID,
+      conversationId,
+      messages: [],
+      mode: 'conversation',
+      source: 'chat',
+    });
+
+    expect(result.status).toBe('completed');
+    expect(result.sharedState.source).toBe('schedule');
+    expect(result.sharedState.unattended).toBe(false);
+    expect(persistedStates[persistedStates.length - 1]).toMatchObject({
+      source: 'schedule',
+      unattended: false,
+    });
+  });
+
   it('maps `prompt` to a user message and runs to completion (flowId input)', async () => {
     const result = await runFlow({
       flowId: FLOW_ID,

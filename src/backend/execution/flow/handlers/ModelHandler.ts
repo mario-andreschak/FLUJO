@@ -45,6 +45,7 @@ import {
   getRunResourceLocalPath,
 } from '@/backend/services/runResources';
 import { captureToolResult } from '@/backend/services/runResources/capture';
+import { mediaPartFromToolItem, splitToolResultMedia } from '@/backend/services/runResources/toolResultMedia';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
 import { isRunResourceToolName, executeRunResourceTool, buildReadResourceTool, WRITE_RESOURCE_TOOL_NAME, READ_RESOURCE_TOOL_NAME } from './runResourceTools';
 import { isQuestionToolName, executeQuestionTool, QUESTION_TOOL_NAME } from './runQuestionTool';
@@ -1948,6 +1949,10 @@ export class ModelHandler {
               const hydratedMessages = await hydrateRunResourceMedia(
                 attemptMessages,
                 opts?.nodeId,
+                {
+                  strictOpenAiAudioFormats:
+                    model.adapter === 'openai' || model.adapter === 'openai-responses',
+                },
               );
               const input = {
               model,
@@ -2750,6 +2755,12 @@ export class ModelHandler {
           // Capture never breaks the run: on any failure the original result
           // is kept untouched.
           let effectiveData = result.data;
+          // Media captured out of this tool result. Stubbing it in the tool
+          // message is only half the round-trip: these parts ride along on the
+          // tool message so toApiMessages can fold them into the next user turn
+          // as genuine image_url/input_audio INPUT parts. Without this a model
+          // can never perceive what its own tools produced.
+          let capturedMedia: ModelMediaPart[] = [];
           if (result.success && conversationId && runResourceSettings) {
             try {
               if (runResourceSettings.autoCaptureEnabled) {
@@ -2763,6 +2774,9 @@ export class ModelHandler {
                   settings: runResourceSettings,
                 });
                 effectiveData = outcome.result;
+                // Keep compatibility with old/mocked CaptureOutcome values while
+                // the new media field rolls through every call site.
+                capturedMedia = outcome.media ?? [];
                 for (const entry of outcome.captured) {
                   emit?.({
                     type: 'resource:write',
@@ -2782,6 +2796,25 @@ export class ModelHandler {
                 errorClass: classifyStatisticsError(error),
               });
               effectiveData = result.data;
+              capturedMedia = [];
+            }
+          }
+
+          // Persistence is preferred, but media delivery must not depend on it.
+          // Ephemeral subflows have no conversation id, capture can be disabled,
+          // and stores can hit a cap. In every one of those cases split any
+          // remaining media out of the text projection and carry it inline on
+          // the tool message so toApiMessages still emits a genuine model-input
+          // part. Successful captures have already replaced media with stubs, so
+          // this is a no-op for the normal URI-backed path.
+          if (result.success && effectiveData && typeof effectiveData === 'object') {
+            const split = splitToolResultMedia(effectiveData as CallToolResult);
+            if (split.hasMedia) {
+              effectiveData = split.textResult;
+              const inlineMedia = split.mediaItems
+                .map(mediaPartFromToolItem)
+                .filter((part): part is ModelMediaPart => Boolean(part));
+              capturedMedia = [...capturedMedia, ...inlineMedia];
             }
           }
 
@@ -2924,6 +2957,7 @@ export class ModelHandler {
               tool_call_id: id,
               content: resultContent,
               timestamp: Date.now(), // Add timestamp
+              ...(capturedMedia.length ? { media: capturedMedia } : {}),
               ...(uiLink
                 ? {
                     ui: {

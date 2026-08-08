@@ -75,8 +75,9 @@ jest.mock('@/backend/services/mcp', () => ({
 jest.mock('@/backend/services/runResources', () => ({
   getRunResourceSettings: jest.fn(async () => ({})),
 }));
+const boundToolResultMock = jest.fn(async ({ content }: { content: string }) => ({ spilled: false, content }));
 jest.mock('@/backend/services/runResources/boundToolResult', () => ({
-  boundToolResult: jest.fn(async ({ content }: { content: string }) => ({ spilled: false, content })),
+  boundToolResult: (...args: unknown[]) => boundToolResultMock(...(args as [{ content: string }])),
 }));
 jest.mock('@/backend/services/model/adapters/codexModelCatalog', () => ({
   resolveCodexModelCatalogPath: jest.fn(async () => 'C:\\Users\\test\\.codex\\models_cache.json'),
@@ -131,6 +132,8 @@ beforeEach(() => {
   ]);
   listServerToolsMock.mockResolvedValue({ tools: [] });
   bridgeCloseMock.mockClear();
+  boundToolResultMock.mockReset();
+  boundToolResultMock.mockImplementation(async ({ content }: { content: string }) => ({ spilled: false, content }));
   capturedBridgeTools = [];
   capturedBridgeInstructions = undefined;
   _clearCodexSessionsForTests();
@@ -512,6 +515,41 @@ describe('CodexAdapter — tool bridging', () => {
     const roles = transcript!.map(m => m.role);
     // assistant(tool_call) + tool(result) + final assistant answer.
     expect(roles).toEqual(['assistant', 'tool', 'assistant']);
+  });
+
+  it('preserves native media when oversized text is replaced by a bounded preview', async () => {
+    const image = { type: 'image' as const, data: 'BASE64_IMAGE', mimeType: 'image/png' };
+    callToolMock.mockResolvedValueOnce({
+      success: true,
+      data: { content: [{ type: 'text', text: 'x'.repeat(60_000) }, image] },
+    });
+    boundToolResultMock.mockResolvedValueOnce({ spilled: true, content: '[bounded text preview]' });
+    let bridgeResult: unknown;
+    runStreamedMock.mockImplementationOnce(async () => ({
+      events: (async function* () {
+        bridgeResult = await capturedBridgeTools[0].handler({ q: 'x' });
+        yield agentMessage('done');
+        yield turnCompleted({ input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 });
+      })(),
+    }));
+
+    const { transcript } = await new CodexAdapter().createCompletion(
+      baseInput({
+        conversationId: 'conv-1',
+        tools: [mcpTool],
+        toolNameMap: { mcp_hashed_name: { server: 'my-server', tool: 'list_things' } },
+      }),
+    );
+
+    expect(bridgeResult).toMatchObject({
+      content: [image, { type: 'text', text: '[bounded text preview]' }],
+    });
+    const toolMessage = transcript!.find(message => message.role === 'tool');
+    expect(toolMessage?.content).toContain('[bounded text preview]');
+    expect(toolMessage?.content).not.toContain('BASE64_IMAGE');
+    expect(boundToolResultMock).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.not.stringContaining('BASE64_IMAGE'),
+    }));
   });
 
   it('streams a pending tool call before the bridge result resolves', async () => {

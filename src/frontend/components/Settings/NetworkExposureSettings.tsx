@@ -86,7 +86,7 @@ export default function NetworkExposureSettings() {
   const persist = (value: ExposureMode) => {
     void updateSettings({
       ...settings,
-      network: { exposure: value },
+      network: { ...settings.network, exposure: value },
     });
   };
 
@@ -94,7 +94,11 @@ export default function NetworkExposureSettings() {
   const toggleAllowAll = (_event: ChangeEvent<HTMLInputElement>, checked: boolean) => {
     void updateSettings({
       ...settings,
-      network: { ...settings.network, allowAllMcpAppContent: checked },
+      network: {
+        ...settings.network,
+        exposure: selected,
+        allowAllMcpAppContent: checked,
+      },
     });
   };
 

@@ -9,6 +9,7 @@ import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
 import { getRunResourceSettings } from '@/backend/services/runResources';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
+import { splitToolResultMedia } from '@/backend/services/runResources/toolResultMedia';
 import {
   resolveInvokedToolUiLink,
   toolCancellationReason,
@@ -616,8 +617,20 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           let resultContent: string;
           if (result.success) {
             callResult = result.data as CallToolResult;
-            // Match the OpenAI path's tool-result encoding (JSON of the result data).
-            resultContent = JSON.stringify(result.data);
+            // Media is split out BEFORE anything is measured or stringified.
+            // The Agent SDK accepts native image/audio blocks inside a
+            // tool_result, so this path is one of the few that can give the
+            // model real vision — but base64 counted against a byte budget
+            // destroyed exactly that: a ~37 KB image already exceeds the 50 KB
+            // default once JSON-stringified, so the bound replaced the whole
+            // content array (picture included) with a text marker. Bounding is
+            // a guard against TEXT flooding the context; media has its own
+            // size story and must be exempt from it.
+            const { mediaItems, textResult } = splitToolResultMedia(callResult);
+            // Match the OpenAI path's tool-result encoding (JSON of the result
+            // data), minus the media payloads — this string is also what gets
+            // recorded into the transcript, which should never carry base64.
+            resultContent = JSON.stringify(textResult);
             // Tool-boundary bound (#251): this path bypasses ModelHandler's
             // processToolCalls, so without bounding here the guarantee would
             // silently not apply on Claude-subscription runs. Spill oversized
@@ -638,8 +651,13 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
                   resultContent = bounded.content;
                   // callResult is what the SDK feeds the MODEL, so it must be
                   // bounded too (not just the recorded transcript) or the model
-                  // still sees the full result on this path.
-                  callResult = { content: [{ type: 'text', text: bounded.content }] };
+                  // still sees the full result on this path. Media blocks are
+                  // re-attached verbatim: the text was too big, the picture was
+                  // never the problem.
+                  callResult = {
+                    ...callResult,
+                    content: [...mediaItems, { type: 'text', text: bounded.content }],
+                  };
                 }
               } catch (err) {
                 log.warn('boundToolResult failed on subscription path; keeping full result', err);

@@ -63,6 +63,14 @@ jest.mock('@/backend/services/mcp', () => ({
   },
 }));
 
+const boundToolResultMock = jest.fn(async ({ content }: { content: string }) => ({ spilled: false, content }));
+jest.mock('@/backend/services/runResources', () => ({
+  getRunResourceSettings: jest.fn(async () => ({})),
+}));
+jest.mock('@/backend/services/runResources/boundToolResult', () => ({
+  boundToolResult: (...args: unknown[]) => boundToolResultMock(...(args as [{ content: string }])),
+}));
+
 import { ClaudeSubscriptionAdapter } from '@/backend/services/model/adapters/claudeSubscriptionAdapter';
 
 // A single terminal success `result` message ends the adapter's message loop
@@ -99,6 +107,8 @@ beforeEach(() => {
   loadServerConfigsMock.mockResolvedValue([
     { name: 'my-server', enableMcpApps: true },
   ]);
+  boundToolResultMock.mockReset();
+  boundToolResultMock.mockImplementation(async ({ content }: { content: string }) => ({ spilled: false, content }));
   sdkToolsMock = [];
   queryMock.mockImplementation(() => successStream());
 });
@@ -604,6 +614,46 @@ describe('ClaudeSubscriptionAdapter — MCP App transcript lifecycle', () => {
       tool_calls: [{ id: 'call-live-1' }],
     });
     expect(transcript?.[1]).toMatchObject({ role: 'tool', tool_call_id: 'call-live-1' });
+  });
+
+  it('preserves native media when oversized text is replaced by a bounded preview', async () => {
+    const image = { type: 'image' as const, data: 'BASE64_IMAGE', mimeType: 'image/png' };
+    callToolMock.mockResolvedValueOnce({
+      success: true,
+      data: { content: [{ type: 'text', text: 'x'.repeat(60_000) }, image] },
+    });
+    boundToolResultMock.mockResolvedValueOnce({ spilled: true, content: '[bounded text preview]' });
+    let sdkResult: unknown;
+    queryMock.mockImplementation(() => (async function* () {
+      sdkResult = await sdkToolsMock[0].handler({ q: 'x' });
+      yield {
+        type: 'result',
+        subtype: 'success',
+        result: 'done',
+        session_id: 'sess-1',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    })());
+
+    const { transcript } = await new ClaudeSubscriptionAdapter().createCompletion(
+      baseInput({
+        conversationId: 'conv-1',
+        tools: [mcpAppTool],
+        toolNameMap: {
+          mcp_hashed_name: { server: 'my-server', tool: 'list_things' },
+        },
+      }),
+    );
+
+    expect(sdkResult).toMatchObject({
+      content: [image, { type: 'text', text: '[bounded text preview]' }],
+    });
+    const toolMessage = transcript!.find(message => message.role === 'tool');
+    expect(toolMessage?.content).toContain('[bounded text preview]');
+    expect(toolMessage?.content).not.toContain('BASE64_IMAGE');
+    expect(boundToolResultMock).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.not.stringContaining('BASE64_IMAGE'),
+    }));
   });
 
   it('preserves the advertised UI, ignores a result redirect, and propagates abort', async () => {

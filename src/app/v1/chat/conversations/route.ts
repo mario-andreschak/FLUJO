@@ -462,8 +462,8 @@ export async function POST(req: NextRequest) {
       status: undefined, // Initial status should be undefined or a valid state
       createdAt: payload.createdAt,
       // This control-plane create route is used by the interactive chat UI
-      // (including Quick Chat / flow-generation chats). runFlow overwrites the
-      // field at execution boundaries if a different source starts the run.
+      // (including Quick Chat / flow-generation chats). The seeded value is the
+      // conversation's durable origin; runFlow preserves it across resumes.
       source: 'chat',
       updatedAt: payload.updatedAt,
       // Add other necessary initial fields from SharedState if any

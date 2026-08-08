@@ -1089,10 +1089,11 @@ export interface SharedState {
     rootConversationId?: string;
 
     /**
-     * Where this run originated (issue #113/#339). Set by runFlow from the
-     * required FlowRunInput.source at every run boundary and surfaced read-only
-     * by GET /api/runs/active. Optional only for persisted legacy states created
-     * before the invocation-context contract existed.
+     * Where this conversation originated (issue #113/#339). Set by runFlow from
+     * the first required FlowRunInput.source and preserved across later resume
+     * boundaries; per-invocation behavior uses FlowRunInput.source directly.
+     * Surfaced read-only by GET /api/runs/active. Optional only for persisted
+     * legacy states created before the invocation-context contract existed.
      */
     source?: FlowInvocationSource;
 

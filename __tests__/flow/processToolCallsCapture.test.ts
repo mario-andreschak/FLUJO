@@ -80,6 +80,11 @@ beforeEach(() => {
   captureToolResultMock.mockResolvedValue({
     result: { content: [{ type: 'text', text: '[FLUJO stored this image/png as flujo://run/conv-1/res-1]' }] },
     captured: [capturedEntry],
+    media: [{
+      type: 'image',
+      mimeType: 'image/png',
+      resourceUri: 'flujo://run/conv-1/res-1',
+    }],
   });
 });
 
@@ -107,6 +112,10 @@ describe('processToolCalls auto-capture', () => {
     const toolMsg = result.success ? result.value.toolCallMessages[0] : undefined;
     expect(toolMsg?.content).toContain('flujo://run/conv-1/res-1');
     expect(toolMsg?.content).not.toContain('aGVsbG8=');
+    expect(toolMsg?.media).toEqual([expect.objectContaining({
+      type: 'image',
+      resourceUri: 'flujo://run/conv-1/res-1',
+    })]);
 
     expect(emit).toHaveBeenCalledWith(expect.objectContaining({
       type: 'resource:write',
@@ -118,7 +127,7 @@ describe('processToolCalls auto-capture', () => {
     }));
   });
 
-  it('does NOT capture without a conversationId (backcompat)', async () => {
+  it('delivers inline media without a conversationId while keeping base64 out of tool text', async () => {
     const emit = jest.fn();
     const result = await ModelHandler.processToolCalls({
       toolCalls: [toolCall('call1', 'mcp_srv_abc123', {})],
@@ -130,9 +139,14 @@ describe('processToolCalls auto-capture', () => {
     expect(getRunResourceSettingsMock).not.toHaveBeenCalled();
     expect(captureToolResultMock).not.toHaveBeenCalled();
     expect(emit.mock.calls.map(([e]) => e.type)).not.toContain('resource:write');
-    // The original result reaches the message untouched.
     const toolMsg = result.success ? result.value.toolCallMessages[0] : undefined;
-    expect(toolMsg?.content).toContain('aGVsbG8=');
+    expect(toolMsg?.content).not.toContain('aGVsbG8=');
+    expect(toolMsg?.content).toContain('native image input');
+    expect(toolMsg?.media).toEqual([expect.objectContaining({
+      type: 'image',
+      mimeType: 'image/png',
+      data: 'aGVsbG8=',
+    })]);
   });
 
   it('respects autoCaptureEnabled=false', async () => {
@@ -182,7 +196,13 @@ describe('processToolCalls auto-capture', () => {
 
     expect(result.success).toBe(true); // the run survives
     const toolMsg = result.success ? result.value.toolCallMessages[0] : undefined;
-    expect(toolMsg?.content).toContain('aGVsbG8='); // original passthrough
+    expect(toolMsg?.content).not.toContain('aGVsbG8=');
+    expect(toolMsg?.content).toContain('native image input');
+    expect(toolMsg?.media).toEqual([expect.objectContaining({
+      type: 'image',
+      mimeType: 'image/png',
+      data: 'aGVsbG8=',
+    })]);
   });
 
   it('does not capture failed tool calls', async () => {

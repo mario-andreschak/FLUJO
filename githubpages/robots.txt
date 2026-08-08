@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /short/tools/
+Disallow: /short/voiceover/
+
+Sitemap: https://flujo.com.co/sitemap.xml

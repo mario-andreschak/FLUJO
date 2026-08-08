@@ -1,7 +1,14 @@
 import { createLogger } from '@/utils/logger';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { RunResourceEntry, RunResourceKind, RunResourceSettings } from '@/shared/types/runResources';
-import { writeRunResource } from './index';
+import type { ModelMediaPart, ModelMediaType } from '@/shared/types/model/media';
+import { writeRunResource, getRunResourceLocalPath } from './index';
+import {
+  mediaPartFromEntry,
+  toolMediaData,
+  toolMediaMime,
+  toolMediaType,
+} from './toolResultMedia';
 
 /**
  * Auto-capture of MCP tool results as run-scoped resources.
@@ -16,6 +23,16 @@ import { writeRunResource } from './index';
  * message costs context and helps no model. Large TEXT is captured for
  * lineage but kept inline unless `replaceLargeTextWithStub` is enabled,
  * because mutating text results can break flows that parse tool output.
+ *
+ * Stubbing binary content is only half the job. A model that cannot SEE a
+ * screenshot a tool just took is strictly worse off than one that never called
+ * the tool, so every captured image/audio/video is ALSO returned as a
+ * `ModelMediaPart` in `CaptureOutcome.media`. The caller attaches those parts
+ * to the tool message, and `toApiMessages` folds them into the next user turn
+ * as real `image_url`/`input_audio` input parts — the media round-trips out of
+ * the tool channel and back into the model's INPUT channel, carrying only the
+ * durable `flujo://run/...` URI until `hydrateRunResourceMedia` resolves it
+ * immediately before the provider call.
  *
  * Capture must never break a run: any store failure keeps the original item
  * and logs.
@@ -40,6 +57,12 @@ export interface CaptureOutcome {
   result: CallToolResult;
   /** Every run resource stored for this call (emit resource:write per entry). */
   captured: RunResourceEntry[];
+  /**
+   * Provider-neutral media captured from this result, to be re-attached as
+   * genuine model INPUT (see the module docstring). Carries `resourceUri`, not
+   * base64.
+   */
+  media: ModelMediaPart[];
 }
 
 function formatKb(bytes: number): string {
@@ -53,13 +76,32 @@ function stubText(entry: RunResourceEntry): string {
     `Read it back with the 'read_resource' tool (or the 'flujo' MCP server's resources/read) if needed.]`;
 }
 
+/**
+ * Stub for media that is simultaneously being re-attached as model input.
+ * Says so explicitly: a model that receives the pixels should not waste a turn
+ * calling `read_resource` to "look at" what it can already see.
+ */
+function mediaStubText(entry: RunResourceEntry, mediaType: ModelMediaType): string {
+  return `[FLUJO stored this ${entry.mimeType ?? entry.kind} (${formatKb(entry.size)}) as run resource ${entry.uri} ` +
+    `and attached it to this turn as ${mediaType} input, so you can perceive it directly if this model accepts ` +
+    `${mediaType} input. Use 'read_resource' with that uri for a host-local path (e.g. to pass it to another tool).]`;
+}
+
+/** Run-resource kind used to persist a given media type. */
+function mediaResourceKind(mediaType: ModelMediaType): RunResourceKind {
+  if (mediaType === 'image') return 'image';
+  if (mediaType === 'audio') return 'audio';
+  return 'blob';
+}
+
 export async function captureToolResult(input: CaptureToolResultInput): Promise<CaptureOutcome> {
   const { conversationId, server, toolName, toolCallId, nodeId, result, settings } = input;
   const captured: RunResourceEntry[] = [];
+  const media: ModelMediaPart[] = [];
 
   // Failed calls are diagnostics, not data artifacts.
   if (result.isError || !Array.isArray(result.content)) {
-    return { result, captured };
+    return { result, captured, media };
   }
 
   const producedBy = {
@@ -99,15 +141,56 @@ export async function captureToolResult(input: CaptureToolResultInput): Promise<
   };
 
   const newContent: ContentItem[] = [];
+
+  /**
+   * Capture one media item: persist the bytes, replace the item with a compact
+   * stub, and record a media part so the caller can re-attach it as real model
+   * input. Covers image/audio/video items and media-typed embedded blobs.
+   */
+  const captureMedia = async (
+    item: ContentItem,
+    mediaType: ModelMediaType,
+    origin?: { server: string; uri: string },
+  ): Promise<void> => {
+    const base64 = toolMediaData(item);
+    if (!base64) {
+      // Declared media with no payload (e.g. a bare annotation) — nothing to
+      // store and nothing to show; leave it exactly as the server sent it.
+      newContent.push(item);
+      return;
+    }
+    const entry = await store(mediaResourceKind(mediaType), { base64 }, toolMediaMime(item), origin);
+    if (!entry) {
+      newContent.push(item);
+      return;
+    }
+    let localPath: string | null = null;
+    try {
+      localPath = await getRunResourceLocalPath(entry.uri);
+    } catch (error) {
+      // A missing host projection only costs tool-side convenience — the
+      // resourceUri still delivers the bytes to the model.
+      log.warn(`Could not materialize a local path for ${entry.uri}`, error);
+    }
+    media.push(mediaPartFromEntry(entry, mediaType, localPath));
+    newContent.push({ type: 'text', text: mediaStubText(entry, mediaType) });
+  };
+
   for (const item of result.content) {
+    // Media first, so 'video' (absent from the MCP SDK's content union, but
+    // emitted by FLUJO's own filesystem server) can never reach the default
+    // branch and leak raw base64 into the context window.
+    const mediaType = toolMediaType(item);
+    if (mediaType) {
+      const loose = item as { type?: string; resource?: { uri?: unknown } };
+      const originUri = loose.type === 'resource' && typeof loose.resource?.uri === 'string'
+        ? loose.resource.uri
+        : undefined;
+      await captureMedia(item, mediaType, originUri ? { server, uri: originUri } : undefined);
+      continue;
+    }
+
     switch (item.type) {
-      case 'image':
-      case 'audio': {
-        // Binary payloads: always capture, always stub.
-        const entry = await store(item.type, { base64: item.data }, item.mimeType);
-        newContent.push(entry ? { type: 'text', text: stubText(entry) } : item);
-        break;
-      }
       case 'resource_link': {
         // A native MCP resource pointer: register for lineage, keep the item
         // itself — it's already a compact reference the model can use.
@@ -159,7 +242,7 @@ export async function captureToolResult(input: CaptureToolResultInput): Promise<
   }
 
   if (captured.length === 0) {
-    return { result, captured };
+    return { result, captured, media };
   }
-  return { result: { ...result, content: newContent }, captured };
+  return { result: { ...result, content: newContent }, captured, media };
 }

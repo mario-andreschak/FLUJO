@@ -156,6 +156,25 @@ describe('toResponsesInput', () => {
     ]);
   });
 
+  it('never relabels unsupported audio bytes as WAV', () => {
+    const input = toResponsesInput([{
+      role: 'user',
+      content: [{
+        type: 'audio_url',
+        audio_url: { url: 'data:audio/ogg;base64,T0dH' },
+      }] as never,
+    }]);
+
+    expect(input).toEqual([{
+      role: 'user',
+      content: [{
+        type: 'input_text',
+        text: '[audio/ogg audio attachment omitted: OpenAI input_audio accepts only MP3 or WAV]',
+      }],
+    }]);
+    expect(JSON.stringify(input)).not.toContain('format\":\"wav');
+  });
+
   it('inserts carried reasoning immediately before its anchoring tool call', () => {
     const carried = new Map([
       ['call_1', [{ type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'BLOB' }]],

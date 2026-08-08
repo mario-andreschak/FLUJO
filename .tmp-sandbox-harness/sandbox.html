@@ -19,6 +19,7 @@
   var SANDBOX_PREFIX = "ui/notifications/sandbox-";
   var CONFIGURED_HOST_ORIGINS = [];
   var HOST_ALLOWLIST_CONFIGURED = false;
+  var ALLOW_ALL = false;
   var INNER_CSP_META = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'none'; media-src 'self' data:; connect-src 'none'; worker-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'\">";
   var DEFAULT_VIEW_SANDBOX = "allow-scripts allow-same-origin allow-forms";
   var ALLOWED_SANDBOX_TOKENS = ["allow-scripts","allow-same-origin","allow-forms"];
@@ -43,10 +44,12 @@
   var loopback = /^(localhost|127\.0\.0\.1|\[::1\]|::1)$/;
   var allowedByConfig = CONFIGURED_HOST_ORIGINS.indexOf(referrerOrigin) !== -1;
   var allowedByDefault = !HOST_ALLOWLIST_CONFIGURED && (loopback.test(refHost) || refHost === ownHost);
-  if (!(allowedByConfig || allowedByDefault)) {
+  // Escape hatch: when ALLOW_ALL is set, accept any embedder origin and relay
+  // to any host origin. Disables the cross-origin isolation boundary.
+  if (!(ALLOW_ALL || allowedByConfig || allowedByDefault)) {
     throw new Error("Sandbox proxy: embedder origin not allowed: " + referrerOrigin);
   }
-  var EXPECTED_HOST_ORIGIN = referrerOrigin;
+  var EXPECTED_HOST_ORIGIN = ALLOW_ALL ? "*" : referrerOrigin;
   // The View is same-origin with this proxy, so its messages carry this origin
   // rather than "null". Both are accepted so a narrowing sandbox override that
   // drops allow-same-origin cannot silently mute the View's bridge.

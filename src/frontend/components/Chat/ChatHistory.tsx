@@ -46,6 +46,7 @@ import ExtensionRoundedIcon from '@mui/icons-material/ExtensionRounded';
 import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
 import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded';
 import AccessTimeRoundedIcon from '@mui/icons-material/AccessTimeRounded';
+import LinkOffRoundedIcon from '@mui/icons-material/LinkOffRounded';
 import { ConversationListItem } from './index'; // Import ConversationListItem instead
 import { isQuickChatFlowId } from '@/utils/shared/quickChat';
 import CopyLinkButton from '@/frontend/components/shared/CopyLinkButton';
@@ -402,10 +403,15 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
 
   // "By chain" grouping (issue #182): nest child conversations under the parent
   // that spawned them, using the persisted parentConversationId links. The
-  // index is only built while that mode is active; a filter that hides a parent
-  // but keeps a child renders the child as a root (see buildChainIndex).
+  // index is only built while that mode is active. When a parent is missing
+  // from this page/filter the child falls back to its chain root, and if that
+  // is missing too it renders at the top level flagged as detached, so a
+  // subagent run is never mistaken for a real chain root (see buildChainIndex).
   const chainIndex = useMemo(
-    () => (groupMode === 'chain' ? buildChainIndex(filtered) : { roots: [], childrenByParent: new Map() }),
+    () =>
+      groupMode === 'chain'
+        ? buildChainIndex(filtered)
+        : { roots: [], childrenByParent: new Map(), detachedIds: new Set<string>() },
     [groupMode, filtered],
   );
   // Per-node expand state is session-only (not persisted): a node is expanded
@@ -434,7 +440,13 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     (flowFilter !== 'all' ? 1 : 0) +
     (dateFilter !== 'all' ? 1 : 0);
 
-  const renderConversation = (conversation: ConversationListItem) => {
+  // `detached` = this row's parent chain could not be resolved in the current
+  // view; the tree placement is a fallback, so the card says so explicitly.
+  const renderConversation = (
+    conversation: ConversationListItem,
+    opts?: { detached?: boolean },
+  ) => {
+    const detached = opts?.detached === true;
     // Any conversation whose run is still alive — executing or holding
     // tool calls (awaiting approval) — gets a stop button, so a run can
     // be stopped without first switching to its conversation.
@@ -624,6 +636,32 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                         borderColor: modern ? alpha(originColor, 0.72) : undefined,
                         bgcolor: modern ? alpha(originColor, 0.13) : undefined,
                         '& .MuiChip-icon': { fontSize: 14, color: modern ? originColor : undefined },
+                        '& .MuiChip-label': {
+                          px: 0.75,
+                          fontSize: '0.68rem',
+                          fontWeight: modern ? 700 : 500,
+                        },
+                      }}
+                    />
+                  </Tooltip>
+                )}
+                {/* Parent chain unresolved in this view (paginated off the page,
+                    hidden by a filter, deleted, or an ephemeral parent that was
+                    never persisted). Without this the row is indistinguishable
+                    from a genuine top-level automation/user chat. */}
+                {detached && (
+                  <Tooltip title={t('chat.chain.detachedHelp')}>
+                    <Chip
+                      icon={<LinkOffRoundedIcon />}
+                      label={t('chat.chain.detached')}
+                      size="small"
+                      variant="outlined"
+                      sx={{
+                        height: modern ? 22 : 20,
+                        color: muiTheme.palette.text.secondary,
+                        borderColor: alpha(muiTheme.palette.text.secondary, 0.45),
+                        borderStyle: 'dashed',
+                        '& .MuiChip-icon': { fontSize: 14, color: muiTheme.palette.text.secondary },
                         '& .MuiChip-label': {
                           px: 0.75,
                           fontSize: '0.68rem',
@@ -943,12 +981,13 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
           <ConversationTree
             nodes={chainIndex.roots}
             childrenByParent={chainIndex.childrenByParent}
-            renderItem={(c) => renderConversation(c)}
+            renderItem={(c) => renderConversation(c, { detached: chainIndex.detachedIds.has(c.id) })}
             expanded={expandedChains}
             onToggle={toggleChain}
           />
         ) : groupMode === 'none' ? (
-          filtered.map(renderConversation)
+          // NB: wrap the call — Array.map would pass the index as `opts`.
+          filtered.map((c) => renderConversation(c))
         ) : (
           groups.map((group) => {
             const collapsed = !!collapsedGroups[group.key];
@@ -976,12 +1015,12 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                     <ConversationTree
                       nodes={waveChain.roots}
                       childrenByParent={waveChain.childrenByParent}
-                      renderItem={(c) => renderConversation(c)}
+                      renderItem={(c) => renderConversation(c, { detached: waveChain.detachedIds.has(c.id) })}
                       expanded={expandedChains}
                       onToggle={toggleChain}
                     />
                   ) : (
-                    group.items.map(renderConversation)
+                    group.items.map((c) => renderConversation(c))
                   )}
                 </Collapse>
               </Box>

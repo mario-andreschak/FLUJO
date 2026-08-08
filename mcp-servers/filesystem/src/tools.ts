@@ -80,6 +80,15 @@ const DESTRUCTIVE_WRITE_ANNOTATIONS: ToolAnnotations = {
  * large file from silently flooding the model's context on a bare read.
  */
 const LARGE_FILE_BYTES = 100_000;
+/**
+ * #365: media never enters the context as text — it is captured to a run
+ * resource and re-attached as a native media input — so LARGE_FILE_BYTES (a
+ * context-flood guard for TEXT) must not apply to it. What DOES need a cap is
+ * memory: the file is buffered whole and base64 costs another ~1.33x. This
+ * bound sits under the 50 MB per-run-resource cap so an accepted read can
+ * always be stored.
+ */
+const MAX_MEDIA_BYTES = 32 * 1024 * 1024;
 /** #287: skip files bigger than this during content search (perf/binary guard). */
 const SEARCH_MAX_FILE_BYTES = 5_000_000;
 /** #287: how many files to scan concurrently during a content search. */
@@ -152,9 +161,10 @@ export function filesystemToolDefinitions(): Tool[] {
       name: 'read_file',
       annotations: READ_ONLY_ANNOTATIONS,
       description:
-        'Read one text file with "path", or up to 25 files in input order with mutually exclusive "paths". Optional "from"/"to" (1-based, inclusive) and "pattern" settings apply to every target. Media files (images, audio, video) are automatically detected and returned as MCP media content items (type: image/audio/video); the capture infrastructure persists them as run resources and models can access them with same-turn vision. ' +
-        `For large files (> ${LARGE_FILE_BYTES / 1000} KB) read WHOLE (no "from"/"to"), a "pattern" is REQUIRED: the server greps the file and returns only matching lines (with a little surrounding context) so you can follow up with targeted "from"/"to" reads. Pass pattern "*" to force-read the entire large file anyway. ` +
-        'Single reads return { path, from, to, totalLines, content, truncated, contentHash, matches? } unchanged. Batch reads return { files }, with one ordered success or { requestedPath, path?, error } record per input; individual failures do not discard successful reads. Batch output is limited to 1,000,000 serialized characters. Pass contentHash back as "expectedHash" on a follow-up edit_file/write_file to guard against the file changing in between (TOCTOU).',
+        'Read one text file with "path", or up to 25 files in input order with mutually exclusive "paths". Optional "from"/"to" (1-based, inclusive) and "pattern" settings apply to every target. ' +
+        `Media files (images, audio, video) are detected automatically and returned as MCP media content items; read them with "path" alone ("pattern"/"from"/"to" do not apply to binary media, and the large-file rule below is waived for them, up to ${MAX_MEDIA_BYTES / (1024 * 1024)} MB). FLUJO persists the bytes as a run resource and re-attaches them to the conversation as a real media input, so a model that accepts that modality perceives the file directly; a model that does not receives the run-resource URI and can still pass it to other tools. ` +
+        `For large NON-MEDIA files (> ${LARGE_FILE_BYTES / 1000} KB) read WHOLE (no "from"/"to"), a "pattern" is REQUIRED: the server greps the file and returns only matching lines (with a little surrounding context) so you can follow up with targeted "from"/"to" reads. Pass pattern "*" to force-read the entire large file anyway. ` +
+        'Single text reads return { path, from, to, totalLines, content, truncated, contentHash, matches? } unchanged; media reads return { path, mediaType, mimeType, size, encoding } alongside the media item. Batch reads return { files }, with one ordered success or { requestedPath, path?, error } record per input; individual failures do not discard successful reads. Batch output is limited to 1,000,000 serialized characters. Pass contentHash back as "expectedHash" on a follow-up edit_file/write_file to guard against the file changing in between (TOCTOU).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -547,7 +557,17 @@ function mediaResult(
     mimeType,
   };
   const result: StructuredResult = {
-    content: [item as CallToolResult['content'][number]],
+    content: [
+      item as CallToolResult['content'][number],
+      // Text fallback alongside the media item: every other read_file path
+      // returns one (dualResult), MCP clients without media support would
+      // otherwise see an empty result, and the capture layer replaces the media
+      // item with a stub — leaving no trace of WHAT was read without this.
+      {
+        type: 'text',
+        text: JSON.stringify(payload, null, 2),
+      } as CallToolResult['content'][number],
+    ],
     structuredContent: payload,
   };
   return result;
@@ -603,7 +623,34 @@ async function readSingleFileTool(args: Record<string, unknown>, roots: string[]
   }
   const size = Number(stat?.size ?? 0);
 
-  if (size > LARGE_FILE_BYTES && !hasRange && !pattern) {
+  // #365: decide whether this is media BEFORE the text-oriented size gate.
+  // Start with the cheap extension signal, then probe a bounded header when the
+  // extension is missing or misleading. The probe is essential for large media
+  // with extensionless paths: without it `pattern: "*"` could still bypass the
+  // media cap and make readFile buffer an arbitrarily large payload.
+  const likelyMediaMime = mimeTypeFromExtension(filePath);
+  let likelyMedia = likelyMediaMime !== null && mediaTypeFromMime(likelyMediaMime) !== 'file';
+  if (!likelyMedia && size > LARGE_FILE_BYTES) {
+    let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+    try {
+      handle = await fs.open(filePath, 'r');
+      const header = Buffer.alloc(Math.min(size, 512));
+      const { bytesRead } = await handle.read(header, 0, header.length, 0);
+      likelyMedia = detectMediaFile(header.subarray(0, bytesRead), filePath) !== null;
+    } finally {
+      await handle?.close();
+    }
+  }
+
+  if (likelyMedia && size > MAX_MEDIA_BYTES) {
+    return errorResult(
+      `Media file is too large to load (${size} bytes > ${MAX_MEDIA_BYTES} limit). ` +
+      `Reading it would buffer the whole file in memory and exceed the run-resource size cap. ` +
+      `Use the file path directly with a tool that streams it instead.`
+    );
+  }
+
+  if (!likelyMedia && size > LARGE_FILE_BYTES && !hasRange && !pattern) {
     return errorResult(
       `File is large (${size} bytes > ${LARGE_FILE_BYTES} threshold). Reading it whole would flood the context. ` +
       `Provide a "pattern" to grep for (matching lines + context are returned, then read targeted ranges with "from"/"to"), ` +
@@ -619,12 +666,14 @@ async function readSingleFileTool(args: Record<string, unknown>, roots: string[]
   // #365: Check if this is a media file (image/audio/video).
   const mediaDetection = detectMediaFile(buf, filePath);
   if (mediaDetection) {
-    // Media files cannot be pattern-grepped or range-read as text.
+    // Media files cannot be pattern-grepped or range-read as text. A bare read
+    // is always allowed now (see the size-gate note above), so this no longer
+    // contradicts any other guard — it just rejects a nonsensical request.
     if (hasRange || (pattern && pattern !== '*')) {
       return errorResult(
-        `File appears to be binary (${mediaDetection.mimeType} media). ` +
-        `Cannot perform pattern grep or line-range reads on binary files. ` +
-        `Read the file without pattern/range options to get the media content.`
+        `File is ${mediaDetection.mimeType} media, not text. ` +
+        `Pattern grep and line-range reads do not apply to it. ` +
+        `Read it with "path" alone to get the media content.`
       );
     }
     // Media files are returned as-is (no line ranges or pattern grepping for media).
@@ -741,6 +790,12 @@ async function readFileTool(args: Record<string, unknown>, roots: string[]): Pro
   }
 
   const files: Array<Record<string, unknown>> = [];
+  // #365: a batch read used to keep only each result's structuredContent, so an
+  // image requested via "paths" had its bytes silently discarded while the
+  // single-"path" route returned them. Carry the media items through instead —
+  // the per-file record still describes them, and downstream capture turns them
+  // into run resources plus real model input.
+  const batchMedia: CallToolResult['content'] = [];
   for (const requestedPath of args.paths as string[]) {
     let resolvedPath: string | undefined;
     let record: Record<string, unknown>;
@@ -751,6 +806,11 @@ async function readFileTool(args: Record<string, unknown>, roots: string[]): Pro
       record = result.isError
         ? { requestedPath, path: resolvedPath, error: String(payload.error ?? 'File read failed.') }
         : payload;
+      if (!result.isError) {
+        for (const contentItem of result.content) {
+          if (contentItem.type !== 'text') batchMedia.push(contentItem);
+        }
+      }
     } catch (err) {
       record = {
         requestedPath,
@@ -769,7 +829,10 @@ async function readFileTool(args: Record<string, unknown>, roots: string[]): Pro
     }
     files.push(record);
   }
-  return dualResult({ files });
+  const batch = dualResult({ files });
+  return batchMedia.length > 0
+    ? { ...batch, content: [...batchMedia, ...batch.content] }
+    : batch;
 }
 
 async function writeFileTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {

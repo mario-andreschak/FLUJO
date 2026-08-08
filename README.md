@@ -10,14 +10,14 @@ FLUJO is open-source and local-first: connect models, tools, and reusable subflo
 
 **Visual flows** · **MCP-native** · **Multi-model** · **Built-in debugger** · **Automation**
 
-[**Watch the 2:28 product film →**](https://mario-andreschak.github.io/FLUJO/githubpages/short/) · [**Install FLUJO ↓**](#-quick-install-recommended) · [**Explore features ↓**](#-key-features) · [**Try FLUJO online →**](https://try.flujo.com.co/)
+[**Visit flujo.com.co →**](https://flujo.com.co/) · [**Watch the 2:28 product film →**](https://flujo.com.co/short/) · [**Install FLUJO ↓**](#-quick-install-recommended) · [**Explore features ↓**](#-key-features) · [**Try FLUJO online →**](https://try.flujo.com.co/)
 
 [![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-3.42.1-green.svg)](package.json)
 
 </div>
 
-[![Watch FLUJO — Your AI. In Flow.](githubpages/img/short-poster.png)](https://mario-andreschak.github.io/FLUJO/githubpages/short/)
+[![Watch FLUJO — Your AI. In Flow.](githubpages/img/short-poster.png)](https://flujo.com.co/short/)
 
 <p align="center"><em>Click the preview to see FLUJO in motion.</em></p>
 

@@ -579,10 +579,24 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   // The conversation's approval setting (single source of truth).
   sharedState.requireApproval = requireApproval;
 
-  // Tag the explicit invocation origin and derive the run-local unattended flag
-  // from it (issue #339). Overwrite both on every call so a legacy persisted
-  // state or flow-level `unattended` property can never influence this run.
-  sharedState.source = input.source;
+  // Tag the invocation origin and derive the run-local unattended flag from it
+  // (issue #339).
+  //
+  // `source` is the CONVERSATION's provenance and is immutable once recorded:
+  // it answers "what created this conversation", not "how was it re-entered".
+  // Every resume path — approval release, debug step/continue, respond — goes
+  // back through chatCompletionService, which hardcodes source:'chat'. Blindly
+  // overwriting therefore relabelled a scheduled/triggered run as a user chat
+  // (wrong origin badge, wrong "by origin" bucket) AND, worse, bypassed the
+  // `source !== 'schedule' && source !== 'trigger'` guard on the run:done emit
+  // below, so a scheduler-owned run that happened to pause for approval sprayed
+  // a duplicate flow-run event on resume. Keep the first origin; only fill it
+  // in when absent (fresh state, or a legacy record from before this field).
+  sharedState.source = sharedState.source ?? input.source;
+  // `unattended`, by contrast, stays strictly RUN-local and is always derived
+  // from THIS invocation: a human releasing an approval on a scheduled run is
+  // genuinely attended for that turn. Overwritten every call so a legacy
+  // persisted value or a flow-level property can never influence this run.
   sharedState.unattended = isUnattendedFlowInvocation(input.source);
   if (input.plannedExecutionId) {
     sharedState.plannedExecutionId = input.plannedExecutionId;
