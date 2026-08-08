@@ -68,6 +68,7 @@ import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
 import { useScrollRestoration } from '@/frontend/hooks/useScrollRestoration';
 import ScrollControlsStack from '@/frontend/components/shared/ScrollControlsStack';
+import StickySearchBar from '@/frontend/components/shared/StickySearchBar';
 import { useGroupScrollNavigation } from '@/frontend/hooks/useGroupScrollNavigation';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useTheme as useAppTheme } from '@/frontend/contexts/ThemeContext';
@@ -256,9 +257,11 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   // Toolbar state. The view preferences (#93) persist across navigation via
   // localStorage; search + the transient menu anchors stay session-scoped.
   const [searchTerm, setSearchTerm] = useState('');
-  // #372: place the caret in the search field automatically. This toolbar Paper
-  // sits outside the inner scroll container below, so it stays visible without
-  // a sticky wrapper — only auto-focus is needed here.
+  // #372: place the caret in the search field automatically and keep the field
+  // visible while the server list scrolls. Unlike the Flows dashboard, this page
+  // has no height-constrained ancestor, so the list Box below never becomes its
+  // own scrollport — the document scrolls instead. The toolbar therefore needs
+  // the same `StickySearchBar mode="page"` wrapper as Models/Automations.
   const searchInputRef = useAutoFocusSearch();
   const [sortOption, setSortOption] = useUiPreference<ServerSortOption>('flujo-ui:mcp:sort', 'name-asc');
   const [filterOption, setFilterOption] = useUiPreference<FilterOption>('flujo-ui:mcp:filter', 'all');
@@ -790,10 +793,14 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
       />
 
       {/* Toolbar with search, sort, and bulk actions */}
+      {/* #372: the outer spacing lives on the sticky wrapper (as padding rather
+          than the Paper's margin) so the pinned strip stays fully opaque and
+          scrolled cards cannot bleed through above/below the toolbar. */}
+      <StickySearchBar mode="page" sx={{ pt: 3, pb: 1.5 }}>
       <Paper
         elevation={0}
         variant="outlined"
-        sx={{ mx: { xs: 2, md: 3, lg: 4 }, mt: 3, mb: 1.5, p: 1.2, borderRadius: 3 }}
+        sx={{ mx: { xs: 2, md: 3, lg: 4 }, p: 1.2, borderRadius: 3 }}
       >
         <Box sx={{ 
           display: 'flex', 
@@ -917,6 +924,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
           </Box>
         </Box>
       </Paper>
+      </StickySearchBar>
       
       {/* Statistics bar */}
       <Box sx={{ 
