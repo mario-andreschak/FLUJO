@@ -108,6 +108,45 @@ describe('MCP App consent decisions (#331)', () => {
     await expect(getMcpAppConsent(external(), 'acme', URI)).resolves.toBe('prompt');
   });
 
+  it('never leaks a previously written grant into a missing or malformed read', async () => {
+    // Regression: loadStore() used to return a shared module-level empty object
+    // that setMcpAppConsent then mutated, so this grant survived into every
+    // later fail-closed fallback and rendered third-party apps without consent.
+    await setMcpAppConsent('acme', URI, 'allow-always');
+    await expect(getMcpAppConsent(external(), 'acme', URI)).resolves.toBe('granted');
+
+    delete store[StorageKey.MCP_APP_CONSENT];
+    await expect(getMcpAppConsent(external(), 'acme', URI)).resolves.toBe('prompt');
+
+    store[StorageKey.MCP_APP_CONSENT] = ['not', 'an', 'object'];
+    await expect(getMcpAppConsent(external(), 'acme', URI)).resolves.toBe('prompt');
+
+    store[StorageKey.MCP_APP_CONSENT] = null;
+    await expect(getMcpAppConsent(external(), 'acme', URI)).resolves.toBe('prompt');
+  });
+
+  it('does not hand out the persisted object by reference', async () => {
+    await setMcpAppConsent('acme', URI, 'allow-always');
+
+    const persisted = store[StorageKey.MCP_APP_CONSENT] as Record<string, unknown>;
+    await setMcpAppConsent('acme', 'ui://acme/other', 'deny-always');
+
+    // The first snapshot must not have grown a key behind the caller's back.
+    expect(Object.keys(persisted)).toEqual([mcpAppConsentKey('acme', URI)]);
+  });
+
+  it('drops persisted entries that are not well-formed consent records', async () => {
+    store[StorageKey.MCP_APP_CONSENT] = {
+      [mcpAppConsentKey('acme', URI)]: { decision: 'allow-everything', updatedAt: 1 },
+      [mcpAppConsentKey('acme', 'ui://acme/other')]: 'allow-always',
+      [mcpAppConsentKey('acme', 'ui://acme/third')]: null,
+    };
+
+    await expect(getMcpAppConsent(external(), 'acme', URI)).resolves.toBe('prompt');
+    await expect(getMcpAppConsent(external(), 'acme', 'ui://acme/other')).resolves.toBe('prompt');
+    await expect(getMcpAppConsent(external(), 'acme', 'ui://acme/third')).resolves.toBe('prompt');
+  });
+
   it('lets a later decision override an earlier one', async () => {
     await setMcpAppConsent('acme', URI, 'allow-always');
     await expect(getMcpAppConsent(external(), 'acme', URI)).resolves.toBe('granted');
