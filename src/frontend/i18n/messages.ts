@@ -12,6 +12,7 @@ import { flowMessageRows } from './catalogs/flows';
 import { chatMessageRows } from './catalogs/chat';
 import { docsMessageRows } from './catalogs/docs';
 import { validationMessageRows } from './catalogs/validation';
+import { ticketsMessageRows } from './catalogs/tickets';
 import type { MessageRow } from './schema';
 
 /**
@@ -159,6 +160,7 @@ const messageRows = {
   ...chatMessageRows,
   ...docsMessageRows,
   ...validationMessageRows,
+  ...ticketsMessageRows,
 } satisfies Record<string, MessageRow>;
 
 export type TranslationKey = keyof typeof messageRows;

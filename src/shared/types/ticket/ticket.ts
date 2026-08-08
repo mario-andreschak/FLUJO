@@ -1,5 +1,11 @@
 export type TicketStatus = 'open' | 'done';
 
+/**
+ * sessionStorage key used to hand a one-shot composer draft from a ticket card
+ * ("Ask FLUJO") to the chat composer. Lives here so both sides agree on it.
+ */
+export const TICKET_DRAFT_STORAGE_KEY = 'flujo.ticketDraft';
+
 export interface Ticket {
   id: string;
   message: string;

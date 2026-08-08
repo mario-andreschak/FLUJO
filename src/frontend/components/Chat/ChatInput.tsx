@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { createLogger } from '@/utils/logger';
 import { transcribe } from '@/frontend/services/transcription';
 import { useStorage } from '@/frontend/contexts/StorageContext';
+import { TICKET_DRAFT_STORAGE_KEY } from '@/shared/types/ticket';
 
 const log = createLogger('frontend/components/Chat/ChatInput');
 import {
@@ -119,6 +120,20 @@ const ChatInput: React.FC<ChatInputProps> = ({
   );
   const [message, setMessage] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+
+  // Agent tickets (#379): "Ask FLUJO" on a dashboard ticket card routes here and
+  // hands over a one-shot composer draft through sessionStorage. The draft is
+  // consumed (and cleared) exactly once so a later reload starts empty.
+  useEffect(() => {
+    try {
+      const draft = sessionStorage.getItem(TICKET_DRAFT_STORAGE_KEY);
+      if (!draft) return;
+      sessionStorage.removeItem(TICKET_DRAFT_STORAGE_KEY);
+      setMessage((current) => (current ? current : draft));
+    } catch (error) {
+      log.debug('Could not read ticket draft from sessionStorage', { error });
+    }
+  }, []);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   const [recordingInterval, setRecordingInterval] = useState<NodeJS.Timeout | null>(null);

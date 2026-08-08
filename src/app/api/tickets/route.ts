@@ -1,10 +1,12 @@
 import { NextRequest } from 'next/server';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 import { ticketService } from '@/backend/services/ticket';
 import { CreateTicketInputSchema } from '@/backend/services/ticket/schema';
 import { json } from './_helpers';
 
 export async function GET(request: NextRequest) {
+  const notLocal = assertLocalRequest(request); if (notLocal) return notLocal;
   const lock = await assertUnlocked(); if (lock) return lock;
   const { searchParams } = request.nextUrl;
   if (searchParams.get('presence') === '1') {
@@ -23,6 +25,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const notLocal = assertLocalRequest(request); if (notLocal) return notLocal;
   const lock = await assertUnlocked(); if (lock) return lock;
   const body = await request.json().catch(() => null);
   const parsed = CreateTicketInputSchema.safeParse(body);
@@ -32,6 +35,7 @@ export async function POST(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
+  const notLocal = assertLocalRequest(request); if (notLocal) return notLocal;
   const lock = await assertUnlocked(); if (lock) return lock;
   const body = await request.json().catch(() => null);
   if (!body || !Array.isArray(body.ids) || body.ids.length > 500 || !body.ids.every((id: unknown) => typeof id === 'string')) {

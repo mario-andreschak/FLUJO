@@ -25,7 +25,7 @@
   `static-toolcall-unverifiable-json` warning instead and are parsed at run time (#381).
 
 ### Added
-- Agents can now create guarded dashboard tickets for human review, with label pills, related conversation/flow links, a full searchable list, and bulk deletion (#379).
+- Agents can now create guarded dashboard tickets for human review, with label pills, related conversation/flow links, a full searchable list with status/label filters, mark-as-done, multi-select and bulk deletion, fully localized in all seven UI languages; "Ask FLUJO" pre-fills the chat composer with a clearly delimited (untrusted) ticket excerpt, and the `/api/tickets` routes are local-only (#379).
 - Experimental `experimental.subflowSessions` flag gating resumable Subflow child conversations, with an Experimental-features toggle and user documentation for the `per-run` session scope (#391, follow-up to #363).
 - The model card "Test" dialog now shows which adapter/endpoint the flow engine actually resolves
   for a model (`Adapter used by flows`) and exercises that exact adapter, so a green test result now
