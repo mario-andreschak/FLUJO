@@ -79,6 +79,27 @@ const LABEL_TOP = 'Scroll to top of loaded messages';
 const LABEL_LAST = 'Scroll to beginning of last message';
 const LABEL_LATEST = 'Scroll to latest messages';
 
+const CLUSTER_SELECTOR = '[data-scroll-nav-cluster]';
+
+/**
+ * `ScrollNavCluster` wraps its buttons in `<Fade … unmountOnExit>`, so hiding
+ * the cluster is a two-step affair: the idle timer flips the visibility flag,
+ * and only when the exit transition has finished does the node leave the DOM.
+ * MUI's default `leavingScreen` duration is ~195ms and react-transition-group
+ * schedules a fallback `setTimeout` for it, so with fake timers the unmount is
+ * fully deterministic *if* we advance past that transition instead of
+ * asserting on the idle deadline alone (which is what raced the animation).
+ */
+const FADE_EXIT_BUDGET_MS = 1000;
+
+function settleFadeExit(): void {
+  for (let i = 0; i < 5 && document.querySelector(CLUSTER_SELECTOR) !== null; i += 1) {
+    act(() => {
+      jest.advanceTimersByTime(FADE_EXIT_BUDGET_MS);
+    });
+  }
+}
+
 describe('chat scroll navigation (#376)', () => {
   it('keeps every control reachable while pinned to the bottom', () => {
     renderChat({ messages: ['m1', 'm2', 'm3'] });
@@ -180,10 +201,15 @@ describe('chat scroll navigation (#376)', () => {
       expect(screen.getByRole('button', { name: LABEL_TOP })).toBeInTheDocument();
 
       act(() => {
-        jest.advanceTimersByTime(500);
+        jest.advanceTimersByTime(500); // the idle deadline: visibility flips to hidden
       });
+      settleFadeExit(); // …then let the Fade exit transition run to completion
+
+      expect(document.querySelector(CLUSTER_SELECTOR)).toBeNull();
       expect(screen.queryByRole('button', { name: LABEL_TOP })).toBeNull();
 
+      // Scrolling pokes the idle timer, which re-shows the cluster; `Fade`
+      // mounts on enter immediately, so no transition flush is needed here.
       act(() => {
         container.scrollTop = 400;
         fireEvent.scroll(container);
