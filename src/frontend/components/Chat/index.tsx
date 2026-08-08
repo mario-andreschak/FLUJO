@@ -4,7 +4,8 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation';
 import { Box, Paper, Typography, Divider, CircularProgress, Alert, Button, Chip, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, Drawer, IconButton, Tooltip, Fab, Zoom, TextField, useMediaQuery } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
-import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import ScrollControlsStack from '@/frontend/components/shared/ScrollControlsStack';
+import { useAutoHideControls } from '@/frontend/hooks/useAutoHideControls';
 import BoltIcon from '@mui/icons-material/Bolt';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
@@ -771,6 +772,7 @@ const Chat: React.FC = () => {
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef<boolean>(true);
   const [showScrollToBottom, setShowScrollToBottom] = useState<boolean>(false);
+  const { visible: scrollControlsVisible, reveal: revealScrollControls } = useAutoHideControls();
 
   const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
     const el = messagesScrollRef.current;
@@ -785,6 +787,20 @@ const Chat: React.FC = () => {
     const atBottom = distanceFromBottom < 80; // px tolerance
     stickToBottomRef.current = atBottom;
     setShowScrollToBottom(!atBottom);
+    revealScrollControls();
+  }, [revealScrollControls]);
+
+  const scrollMessagesToTop = useCallback(() => {
+    stickToBottomRef.current = false;
+    setShowScrollToBottom(true);
+    messagesScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+  }, []);
+
+  const scrollToLastMessageStart = useCallback(() => {
+    stickToBottomRef.current = false;
+    setShowScrollToBottom(true);
+    const messages = messagesScrollRef.current?.querySelectorAll<HTMLElement>('[data-ask-flujo-message-id]');
+    messages?.[messages.length - 1]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, []);
 
   const jumpToLatest = useCallback(() => {
@@ -4820,19 +4836,18 @@ const Chat: React.FC = () => {
             </Typography>
           )}
         </Box>
-        {/* Jump-to-latest: appears only when the user has scrolled up from the
-            bottom. Clicking re-enables stick-to-bottom and scrolls down. */}
-        <Zoom in={showScrollToBottom} unmountOnExit>
-          <Fab
-            size="small"
-            color="primary"
-            aria-label={t('chat.page.scrollLatest')}
-            onClick={jumpToLatest}
-            sx={{ position: 'absolute', bottom: 16, right: 24, zIndex: 2 }}
-          >
-            <KeyboardArrowDownIcon />
-          </Fab>
-        </Zoom>
+        <ScrollControlsStack
+          show={showScrollToBottom && scrollControlsVisible}
+          onTop={scrollMessagesToTop}
+          onPrevious={scrollToLastMessageStart}
+          onBottom={jumpToLatest}
+          labels={{
+            top: t('chat.page.scrollTop'),
+            previous: t('chat.page.scrollLastMessage'),
+            bottom: t('chat.page.scrollLatest'),
+          }}
+          sx={{ position: 'absolute', bottom: 16, right: 24, zIndex: 2 }}
+        />
         </Box>
 
         {/* #216: docked, tabbed MCP Apps canvas surface. Pinned above the input,

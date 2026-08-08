@@ -17,6 +17,8 @@ export interface CollapsibleCardSectionProps {
   onToggle: () => void;
   /** Show a small folder glyph before the label (used for #71 folder view). */
   showFolderIcon?: boolean;
+  /** Stable identifier used by list scroll navigation. */
+  groupKey?: string;
   children: React.ReactNode;
 }
 
@@ -32,6 +34,7 @@ const CollapsibleCardSection = ({
   expanded,
   onToggle,
   showFolderIcon = false,
+  groupKey,
   children,
 }: CollapsibleCardSectionProps) => {
   const theme = useTheme();
@@ -43,6 +46,7 @@ const CollapsibleCardSection = ({
         role="button"
         tabIndex={0}
         aria-expanded={expanded}
+        data-card-group-key={groupKey}
         onClick={onToggle}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {

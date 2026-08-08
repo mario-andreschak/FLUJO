@@ -67,7 +67,8 @@ import { ServerSortOption, deriveServerSortGroup, sortServersFavoritesFirst } fr
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
 import { useScrollRestoration } from '@/frontend/hooks/useScrollRestoration';
-import BackToTopButton from '@/frontend/components/shared/BackToTopButton';
+import ScrollControlsStack from '@/frontend/components/shared/ScrollControlsStack';
+import { useGroupScrollNavigation } from '@/frontend/hooks/useGroupScrollNavigation';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useTheme as useAppTheme } from '@/frontend/contexts/ThemeContext';
 
@@ -552,6 +553,9 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     { deps: [isLoading, filteredAndSortedServers.length] },
   );
 
+  const { scrollToPreviousGroup, scrollToNextGroup } = useGroupScrollNavigation(scrollRef);
+  const scrollToBottom = () => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+
   // Distinct folders currently in use, for the "Move to folder" picker (#71).
   const folders = useMemo(() => collectFolders(servers, (s: any) => s.folder), [servers]);
 
@@ -942,6 +946,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
           serverGroups.map((group) => (
             <CollapsibleCardSection
               key={group.key}
+              groupKey={group.key}
               label={group.label}
               count={group.items.length}
               expanded={!collapsedKeys.has(group.key)}
@@ -1160,7 +1165,14 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
         }}
       />
 
-      <BackToTopButton show={showBackToTop} onClick={scrollToTop} />
+      <ScrollControlsStack
+        show={showBackToTop}
+        onTop={scrollToTop}
+        onPrevious={scrollToPreviousGroup}
+        onNext={scrollToNextGroup}
+        onBottom={scrollToBottom}
+        labels={{ top: t('backToTop.action'), previous: t('scrollControls.previousGroup'), next: t('scrollControls.nextGroup'), bottom: t('scrollControls.bottom') }}
+      />
     </Box>
   );
 };

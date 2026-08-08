@@ -5,7 +5,9 @@ import { Box } from '@mui/material';
 import type { SxProps, Theme } from '@mui/material/styles';
 import type { DependencyList } from 'react';
 import { useScrollRestoration } from '@/frontend/hooks/useScrollRestoration';
-import BackToTopButton from './BackToTopButton';
+import ScrollControlsStack from './ScrollControlsStack';
+import { useGroupScrollNavigation } from '@/frontend/hooks/useGroupScrollNavigation';
+import { useI18n } from '@/frontend/contexts/I18nContext';
 
 export interface ScrollAreaProps {
   /** localStorage key under which the scroll position is persisted (namespaced `flujo-ui:scroll:*`). */
@@ -26,17 +28,31 @@ export interface ScrollAreaProps {
  * it packages the hook + button behind a single client boundary.
  */
 export default function ScrollArea({ storageKey, sx, threshold, deps, children }: ScrollAreaProps) {
+  const { t } = useI18n();
   const { ref, showBackToTop, scrollToTop } = useScrollRestoration<HTMLDivElement>(storageKey, {
     threshold,
     deps,
   });
+  const { scrollToPreviousGroup, scrollToNextGroup } = useGroupScrollNavigation(ref);
+  const scrollToBottom = () => {
+    const el = ref.current;
+    if (el && el.scrollHeight > el.clientHeight + 1) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    else window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
+  };
 
   return (
     <>
       <Box ref={ref} sx={{ ...sx, overflow: 'auto' }}>
         {children}
       </Box>
-      <BackToTopButton show={showBackToTop} onClick={scrollToTop} />
+      <ScrollControlsStack
+        show={showBackToTop}
+        onTop={scrollToTop}
+        onPrevious={scrollToPreviousGroup}
+        onNext={scrollToNextGroup}
+        onBottom={scrollToBottom}
+        labels={{ top: t('backToTop.action'), previous: t('scrollControls.previousGroup'), next: t('scrollControls.nextGroup'), bottom: t('scrollControls.bottom') }}
+      />
     </>
   );
 }
