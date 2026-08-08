@@ -178,17 +178,9 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     if (!selectedNode) return [];
     const properties = selectedNode.data.properties ?? {};
     const entries: Array<{ label: string; value: string }> = [];
-    if (typeof properties.boundModel === 'string' && properties.boundModel) {
-      const model = models.find((candidate) => candidate.id === properties.boundModel);
-      entries.push({
-        label: beginnerMode ? t('flows.inspector.summary.ai') : t('flows.inspector.summary.model'),
-        value: model?.displayName || model?.name || properties.boundModel,
-      });
-    } else if (typeof properties.modelId === 'string' && properties.modelId) {
-      entries.push({ label: beginnerMode ? t('flows.inspector.summary.ai') : t('flows.inspector.summary.model'), value: properties.modelId });
-    } else if (typeof properties.model === 'string' && properties.model) {
-      entries.push({ label: beginnerMode ? t('flows.inspector.summary.ai') : t('flows.inspector.summary.model'), value: properties.model });
-    }
+    // The bound model is deliberately NOT listed here: `InspectorModelBinding`
+    // is the single authoritative display for the connected model (and owns
+    // selection/removal), so a generic summary row would only duplicate it.
     const serverHasInlinePicker = selectedNode.data.type === 'mcp'
       && !!loadMcpServers
       && !!onSelectMcpNodeServer;
@@ -202,7 +194,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
       entries.push({ label: beginnerMode ? t('flows.inspector.summary.notification') : t('flows.inspector.summary.signal'), value: properties.signalName });
     }
     return entries;
-  }, [selectedNode, beginnerMode, models, t, loadMcpServers, onSelectMcpNodeServer]);
+  }, [selectedNode, beginnerMode, t, loadMcpServers, onSelectMcpNodeServer]);
 
   // Subflow nodes get their target flow shown as a pill in the node header. The
   // stored value is a flow id, so resolve it to the flow name when we know it
@@ -358,6 +350,21 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               )}
             </Stack>
 
+            {/* The escape hatch into advanced configuration sits directly below the
+                node context pills so it is reachable before the editable fields and
+                the variable-length connection sections further down. */}
+            <Button
+              variant={beginnerMode ? 'outlined' : 'contained'}
+              startIcon={<TuneRoundedIcon />}
+              endIcon={<OpenInNewRoundedIcon />}
+              onClick={() => {
+                const updatedNode = commitNode();
+                if (updatedNode) onOpenAdvanced(updatedNode);
+              }}
+            >
+              {beginnerMode ? t('flows.inspector.moreOptions') : t('flows.inspector.fullSettings')}
+            </Button>
+
             <TextField
               label={beginnerMode ? t('flows.inspector.stepName') : t('flows.inspector.nodeName')}
               size="small"
@@ -457,18 +464,6 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   loadServers={loadMcpServers}
                 />
               )}
-
-            <Button
-              variant={beginnerMode ? 'outlined' : 'contained'}
-              startIcon={<TuneRoundedIcon />}
-              endIcon={<OpenInNewRoundedIcon />}
-              onClick={() => {
-                const updatedNode = commitNode();
-                if (updatedNode) onOpenAdvanced(updatedNode);
-              }}
-            >
-              {beginnerMode ? t('flows.inspector.moreOptions') : t('flows.inspector.fullSettings')}
-            </Button>
 
             {selectedNode.data.type === 'process' && (
               <InspectorModelBinding

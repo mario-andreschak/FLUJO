@@ -202,7 +202,7 @@ export const flowMessageRows = {
   'flows.inspector.searchApps': ['Search apps…', 'Buscar aplicaciones…', 'Apps suchen…', 'Rechercher des applications…', 'Cerca app…', 'Pesquisar aplicativos…', '搜索应用…'],
   'flows.inspector.allAppToolsIncluded': ['All tools included', 'Incluye todas las herramientas', 'Alle Tools enthalten', 'Tous les outils sont inclus', 'Tutti gli strumenti inclusi', 'Todas as ferramentas incluídas', '包含所有工具'],
   'flows.inspector.stepAi': ['AI for this step', 'IA para este paso', 'KI für diesen Schritt', 'IA pour cette étape', 'IA per questo passaggio', 'IA para esta etapa', '此步骤使用的 AI'],
-  'flows.inspector.boundModel': ['(Connected) AI', 'IA (conectada)', '(Verbundene) KI', 'IA (connectée)', 'IA (connessa)', 'IA (conectada)', '（已连接的）AI'],
+  'flows.inspector.boundModel': ['Connected AI', 'IA (conectada)', '(Verbundene) KI', 'IA (connectée)', 'IA (connessa)', 'IA (conectada)', '（已连接的）AI'],
   'flows.inspector.noStepAi': ['No AI chosen yet.', 'Aún no se ha elegido una IA.', 'Noch keine KI ausgewählt.', 'Aucune IA choisie.', 'Nessuna IA scelta.', 'Nenhuma IA escolhida ainda.', '尚未选择 AI。'],
   'flows.inspector.noBoundModel': ['No AI connected.', 'No hay ninguna IA conectada.', 'Keine KI verbunden.', 'Aucune IA connectée.', 'Nessuna IA connessa.', 'Nenhuma IA conectada.', '未连接 AI。'],
   'flows.inspector.chooseAi': ['Choose an AI', 'Elegir una IA', 'KI auswählen', 'Choisir une IA', 'Scegli un’IA', 'Escolher uma IA', '选择 AI'],
