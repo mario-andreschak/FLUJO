@@ -194,11 +194,18 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
           ) : (
             <CircularProgress size={18} color={stuck ? 'warning' : 'primary'} />
           )}
+          {/* THE live region of this component (see the normal-mode twin
+            * below). It carries the only text a screen-reader user needs while
+            * a run is in flight: the active node, the approval wait, or the
+            * #400 session-limit countdown. aria-atomic keeps the sentence
+            * intact instead of announcing the changed seconds in isolation. */}
           <Typography
             variant="body2"
             noWrap
+            role="status"
             aria-live="polite"
-            {...(retryMessage ? { 'data-testid': 'retry-wait' } : {})}
+            aria-atomic="true"
+            data-testid={retryMessage ? 'retry-wait' : 'run-status'}
             color={retryMessage ? 'warning.main' : undefined}
             sx={{ flex: 1, minWidth: 0 }}
           >
@@ -237,7 +244,13 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
             data-testid="compact-working-message"
             variant="body2"
             color="text.primary"
-            aria-live="polite"
+            // Decorative flavor text that rotates every 10s. It used to be a
+            // second aria-live region, which (a) made the DOM ambiguous — the
+            // status region and this one were indistinguishable to any
+            // "[aria-live=polite]" query — and (b) spammed screen readers with
+            // jokes on top of the real status. The status region above is the
+            // single source of announcements.
+            aria-hidden="true"
             sx={{
               px: 1.5,
               pb: 0.75,
@@ -279,11 +292,17 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
         ) : (
           <CircularProgress size={20} color={stuck ? 'warning' : 'primary'} />
         )}
+        {/* The component's single live region: run status, approval wait, or
+          * the #400 retry countdown. Queries for the announced text should
+          * target role="status" (or data-testid run-status / retry-wait), never
+          * "the first [aria-live] node". */}
         <Typography
           variant="body2"
           color={retryMessage ? 'warning.main' : 'textSecondary'}
-          {...(retryMessage ? { 'data-testid': 'retry-wait' } : {})}
+          data-testid={retryMessage ? 'retry-wait' : 'run-status'}
+          role="status"
           aria-live="polite"
+          aria-atomic="true"
         >
           {retryMessage ?? (awaitingApproval
             ? t('chat.live.waitingApproval')
@@ -301,6 +320,7 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
       </Box>
       {!awaitingApproval && (
         <Typography
+          data-testid="working-message"
           variant="body2"
           color="text.primary"
           sx={{
@@ -315,7 +335,9 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
             textAlign: 'center',
             overflowWrap: 'anywhere',
           }}
-          aria-live="polite"
+          // Decorative: rotating flavor text, deliberately NOT announced (the
+          // status region above owns announcements). See the compact twin.
+          aria-hidden="true"
         >
           {workingMessage}
         </Typography>

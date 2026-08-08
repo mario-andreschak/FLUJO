@@ -57,13 +57,15 @@ describe('working chat messages', () => {
     jest.useFakeTimers();
     jest.setSystemTime(new Date('2026-07-31T12:00:00.000Z'));
     const startedAt = Date.now();
-    const { container, unmount } = render(
+    const { unmount } = render(
       <LiveRunIndicator
         liveStats={{ totalTokens: 123, activeNode: null, startedAt, lastEventAt: startedAt }}
         onStop={() => undefined}
       />,
     );
-    const message = () => container.querySelector('[aria-live="polite"]')?.textContent;
+    // Target the rotating message by its own testid: querying "the first
+    // [aria-live] node" used to silently bind to the static status line.
+    const message = () => screen.getByTestId('working-message').textContent;
     const initialMessage = message();
 
     expect(WORKING_MESSAGE_INTERVAL_MS).toBe(10_000);
@@ -73,6 +75,51 @@ describe('working chat messages', () => {
 
     act(() => { jest.advanceTimersByTime(1_000); });
     expect(message()).not.toBe(initialMessage);
+
+    unmount();
+    jest.useRealTimers();
+  });
+
+  it('announces run status through exactly one live region', () => {
+    const now = Date.now();
+    const { container } = render(
+      <LiveRunIndicator
+        liveStats={{ totalTokens: 0, activeNode: 'Reply', startedAt: now, lastEventAt: now }}
+        onStop={() => undefined}
+      />,
+    );
+
+    // Ambiguity was the bug: two sibling polite regions meant any DOM query
+    // (and any screen reader) could not tell status from decorative flavor.
+    expect(container.querySelectorAll('[aria-live]')).toHaveLength(1);
+    expect(screen.getByRole('status')).toHaveTextContent(/Reply/);
+    expect(screen.getByTestId('run-status')).toBe(screen.getByRole('status'));
+    expect(screen.getByTestId('working-message')).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  it('counts the #400 session-limit retry down inside the live region', () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-07-31T12:00:00.000Z'));
+    const now = Date.now();
+    const { unmount } = render(
+      <LiveRunIndicator
+        liveStats={{ totalTokens: 0, activeNode: 'Reply', startedAt: now, lastEventAt: now }}
+        onStop={() => undefined}
+        retryWait={{ attempt: 1, maxAttempts: 3, retryAt: now + 30_000 }}
+      />,
+    );
+
+    const status = () => screen.getByTestId('retry-wait');
+    expect(status()).toBe(screen.getByRole('status'));
+    expect(status()).toHaveTextContent(/30s/);
+    expect(status()).toHaveTextContent(/1 of 3/);
+
+    act(() => { jest.advanceTimersByTime(5_000); });
+    expect(status()).toHaveTextContent(/25s/);
+
+    // The countdown never runs past its deadline, and never turns terminal.
+    act(() => { jest.advanceTimersByTime(60_000); });
+    expect(status()).toHaveTextContent(/0s/);
 
     unmount();
     jest.useRealTimers();
@@ -111,7 +158,8 @@ describe('working chat messages', () => {
     );
 
     expect(screen.getByTestId('compact-live-run')).toBeInTheDocument();
-    expect(screen.getByTestId('compact-working-message')).toBeInTheDocument();
+    expect(screen.getByTestId('compact-working-message')).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getByTestId('run-status')).toBe(screen.getByRole('status'));
     expect(screen.getByText(/Reply/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /stop/i })).toBeInTheDocument();
     expect(screen.getAllByRole('progressbar')).toHaveLength(1);
