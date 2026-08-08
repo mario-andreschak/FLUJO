@@ -363,6 +363,7 @@ export async function authoringCallTool(
           'Set flow on a step to run an existing flow instead of a model.',
           'Omit routes for a linear flow. Routes are only for branches; omit when for the fallback.',
           'Start, Finish, layout, data handoff, and ordinary defaults are inferred.',
+          'Use ${var:NAME} only for values passed within this run. Generated flows must not use captureKv or ${kv:...}; persistent state needs an explicit Advanced authoring decision.',
         ],
       });
     }
@@ -749,13 +750,19 @@ export async function authoringCallTool(
       const record = spec && typeof spec === 'object' && !Array.isArray(spec)
         ? spec as Record<string, unknown>
         : {};
+      const explicitSimpleProfile = args.profile === 'simple';
       const profile = args.profile === 'advanced'
         ? 'advanced'
-        : args.profile === 'simple'
+        : explicitSimpleProfile
           ? 'simple'
           : Array.isArray(record.nodes) && Array.isArray(record.edges)
             ? 'advanced'
             : 'simple';
+      if (explicitSimpleProfile && ('nodes' in record || 'edges' in record)) {
+        return textResult({
+          error: 'Simple profile accepts name, goal, steps, and routes only. Use get_flow_authoring_guide(profile="advanced") and profile="advanced" for a nodes/edges FlowSpec.',
+        }, true);
+      }
       const keepPills = args.keepPills === true;
       const result = await compileSpec(spec, {
         save: toolName === 'create_flow',

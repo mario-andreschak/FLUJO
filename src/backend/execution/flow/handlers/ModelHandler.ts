@@ -1695,6 +1695,8 @@ export class ModelHandler {
         apiMessages = compactForWire(apiMessages, {
           keepRecentMessages,
           resourceMarkers: opts?.runResourceMarkers,
+          // Without an offered tool there is no usable read_resource path.
+          canUseTools: (effectiveTools?.length ?? 0) > 0,
         });
         // Truncation embeds a `flujo://run/...` URI when the full result was
         // captured (issue #168). ProcessNode.prep arms `read_resource` by
@@ -1768,6 +1770,7 @@ export class ModelHandler {
           }
           const refittedMessages = compactForWire(apiMessages, {
             resourceMarkers: budgetMarkers,
+            canUseTools: (sanitizedTools?.length ?? 0) > 0,
             compactRecentToolResults: true,
             toolResultHeadChars: ModelHandler.OVERFLOW_TOOL_RESULT_HEAD_CHARS,
           });
@@ -2228,6 +2231,7 @@ export class ModelHandler {
         }
         const refitMessages = compactForWire(apiMessages, {
           resourceMarkers: refitMarkers,
+          canUseTools: (sanitizedTools?.length ?? 0) > 0,
           compactRecentToolResults: true,
           allowLossyTruncation: true,
           toolResultHeadChars: ModelHandler.OVERFLOW_TOOL_RESULT_HEAD_CHARS,

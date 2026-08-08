@@ -14,7 +14,7 @@ import {
 } from './generationDraft';
 
 export const FLOW_GENERATOR_ID = 'system-flow-generator';
-export const FLOW_GENERATOR_VERSION = 3;
+export const FLOW_GENERATOR_VERSION = 4;
 export const FLOW_GENERATOR_ROLE = 'flow-generator';
 
 const SAFE_AUTHORING_TOOLS = [
@@ -53,7 +53,7 @@ On EVERY visit:
 4. If a required external capability is missing, search the MCP marketplace. Install only when the run's MCP installation policy explicitly permits it and installation tools are actually available.
 5. Return ONLY one complete advanced FlowSpec JSON object as your final response—no prose or Markdown fences.
 
-Use inline subflowSpec / parallelSubflowSpecs for newly-created subflows. Do not emit generateSubflow because the deterministic compiler cannot expand it. Do not merely explain what you would build.`;
+Use inline subflowSpec / parallelSubflowSpecs for newly-created subflows. Do not emit generateSubflow because the deterministic compiler cannot expand it. Use \${var:NAME} with captureVariable for values passed between steps in this run. Do not generate captureKv or \${kv:...}: persistent cross-run state requires an explicit author decision about scope and retention. Do not merely explain what you would build.`;
 
 const COMPILER_PROMPT = `You are the Generation Compiler and repair stage.
 
@@ -158,9 +158,9 @@ export function buildVendoredFlowGenerator(): Flow {
 }
 
 /**
- * Seed once when missing. Versions 1 and 2 were the incomplete conversions that did
- * not execute the production generator's deterministic pipeline. Upgrade those exact
- * versions once; saveFlow archives the prior definition so edits remain recoverable.
+ * Seed once when missing. Versions 1–3 predate the current authoring guidance.
+ * Upgrade those exact bundled versions once; saveFlow archives the prior definition
+ * so edits remain recoverable.
  */
 export async function ensureVendoredFlowGenerator(): Promise<Flow> {
   const existing = await flowService.getFlow(FLOW_GENERATOR_ID);
@@ -168,7 +168,7 @@ export async function ensureVendoredFlowGenerator(): Promise<Flow> {
     .filter((node) => node.type === 'process')
     .map((node) => Number(node.data?.properties?.systemFlowVersion ?? 0))
     .find((version) => version > 0);
-  if (existing && existingVersion !== 1 && existingVersion !== 2) return existing;
+  if (existing && existingVersion !== 1 && existingVersion !== 2 && existingVersion !== 3) return existing;
   const bundled = buildVendoredFlowGenerator();
   const saved = await flowService.saveFlow(bundled);
   if (!saved.success) {
