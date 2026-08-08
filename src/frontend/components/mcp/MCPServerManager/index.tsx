@@ -66,10 +66,9 @@ import {
 import { ServerSortOption, deriveServerSortGroup, sortServersFavoritesFirst } from '@/utils/shared/serverGrouping';
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
-import { useScrollRestoration } from '@/frontend/hooks/useScrollRestoration';
-import ScrollControlsStack from '@/frontend/components/shared/ScrollControlsStack';
+import ScrollNavCluster from '@/frontend/components/shared/ScrollNavCluster';
 import StickySearchBar from '@/frontend/components/shared/StickySearchBar';
-import { useGroupScrollNavigation } from '@/frontend/hooks/useGroupScrollNavigation';
+import { useListScrollNav } from '@/frontend/hooks/useListScrollNav';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useTheme as useAppTheme } from '@/frontend/contexts/ThemeContext';
 
@@ -551,13 +550,10 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   }, [servers, searchTerm, sortOption, filterOption]);
 
   // Persist scroll position + back-to-top (#185); re-restore once the list loads.
-  const { ref: scrollRef, showBackToTop, scrollToTop } = useScrollRestoration<HTMLDivElement>(
+  const { ref: scrollRef, clusterProps: scrollNavProps } = useListScrollNav<HTMLDivElement>(
     'flujo-ui:scroll:mcp',
-    { deps: [isLoading, filteredAndSortedServers.length] },
+    { deps: [isLoading, filteredAndSortedServers.length], groupsEnabled: groupMode !== 'none' },
   );
-
-  const { scrollToPreviousGroup, scrollToNextGroup } = useGroupScrollNavigation(scrollRef);
-  const scrollToBottom = () => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
 
   // Distinct folders currently in use, for the "Move to folder" picker (#71).
   const folders = useMemo(() => collectFolders(servers, (s: any) => s.folder), [servers]);
@@ -1173,14 +1169,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
         }}
       />
 
-      <ScrollControlsStack
-        show={showBackToTop}
-        onTop={scrollToTop}
-        onPrevious={scrollToPreviousGroup}
-        onNext={scrollToNextGroup}
-        onBottom={scrollToBottom}
-        labels={{ top: t('backToTop.action'), previous: t('scrollControls.previousGroup'), next: t('scrollControls.nextGroup'), bottom: t('scrollControls.bottom') }}
-      />
+      <ScrollNavCluster {...scrollNavProps} />
     </Box>
   );
 };

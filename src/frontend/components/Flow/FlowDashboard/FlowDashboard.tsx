@@ -47,9 +47,8 @@ import {
 import { FlowSortOption, deriveFlowSortGroup, sortFlowsFavoritesFirst } from '@/utils/shared/flowGrouping';
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
-import { useScrollRestoration } from '@/frontend/hooks/useScrollRestoration';
-import ScrollControlsStack from '@/frontend/components/shared/ScrollControlsStack';
-import { useGroupScrollNavigation } from '@/frontend/hooks/useGroupScrollNavigation';
+import ScrollNavCluster from '@/frontend/components/shared/ScrollNavCluster';
+import { useListScrollNav } from '@/frontend/hooks/useListScrollNav';
 import { Flow } from '@/frontend/types/flow/flow';
 import type { Model } from '@/shared/types/model';
 import type { FlowModelReplacementMap } from '@/utils/shared/flowModelReplacement';
@@ -260,13 +259,10 @@ const FlowDashboard = ({
   }, [flows, searchTerm, sortOption]);
 
   // Persist scroll position + back-to-top (#185); re-restore once the cards load.
-  const { ref: scrollRef, showBackToTop, scrollToTop } = useScrollRestoration<HTMLDivElement>(
+  const { ref: scrollRef, clusterProps: scrollNavProps } = useListScrollNav<HTMLDivElement>(
     'flujo-ui:scroll:flows',
-    { deps: [isLoading, filteredFlows.length] },
+    { deps: [isLoading, filteredFlows.length], groupsEnabled: groupMode !== 'none' },
   );
-
-  const { scrollToPreviousGroup, scrollToNextGroup } = useGroupScrollNavigation(scrollRef);
-  const scrollToBottom = () => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
 
   // Distinct folders currently in use, for the "Move to folder" picker.
   const folders = useMemo(() => collectFolders(flows, (f) => f.folder), [flows]);
@@ -675,14 +671,7 @@ const FlowDashboard = ({
         </MenuItem>
       </Menu>
 
-      <ScrollControlsStack
-        show={showBackToTop}
-        onTop={scrollToTop}
-        onPrevious={scrollToPreviousGroup}
-        onNext={scrollToNextGroup}
-        onBottom={scrollToBottom}
-        labels={{ top: t('backToTop.action'), previous: t('scrollControls.previousGroup'), next: t('scrollControls.nextGroup'), bottom: t('scrollControls.bottom') }}
-      />
+      <ScrollNavCluster {...scrollNavProps} />
 
       {onReplaceModels && (
         <QuickChangeModelsDialog

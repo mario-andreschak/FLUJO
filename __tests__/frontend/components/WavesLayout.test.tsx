@@ -19,7 +19,7 @@ jest.mock('@/frontend/hooks/useScrollRestoration', () => ({
   }),
 }));
 
-jest.mock('@/frontend/components/shared/BackToTopButton', () => ({
+jest.mock('@/frontend/components/shared/ScrollNavCluster', () => ({
   __esModule: true,
   default: () => null,
 }));

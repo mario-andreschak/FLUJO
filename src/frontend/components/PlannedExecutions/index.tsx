@@ -65,12 +65,11 @@ import {
 } from '@/utils/shared/plannedExecutionGrouping';
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
-import { useScrollRestoration } from '@/frontend/hooks/useScrollRestoration';
-import { useGroupScrollNavigation } from '@/frontend/hooks/useGroupScrollNavigation';
+import { useListScrollNav } from '@/frontend/hooks/useListScrollNav';
 import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCardSection';
 import PageHeader from '@/frontend/components/shared/PageHeader';
 import StickySearchBar from '@/frontend/components/shared/StickySearchBar';
-import ScrollControlsStack from '@/frontend/components/shared/ScrollControlsStack';
+import ScrollNavCluster from '@/frontend/components/shared/ScrollNavCluster';
 import { useThemeUtils } from '@/frontend/utils/theme';
 import ExecutionCard from './ExecutionCard';
 import ExecutionModal from './ExecutionModal';
@@ -261,12 +260,10 @@ const PlannedExecutionsManager = () => {
   const hasActiveFilters =
     searchTerm.trim() !== '' || statusFilter !== 'all' || triggerFilter !== 'all';
 
-  const { ref: scrollRef, showBackToTop, scrollToTop } = useScrollRestoration<HTMLDivElement>(
+  const { ref: scrollRef, clusterProps: scrollNavProps } = useListScrollNav<HTMLDivElement>(
     'flujo-ui:scroll:automations',
-    { deps: [loaded, filteredEntries.length] },
+    { deps: [loaded, filteredEntries.length], groupsEnabled: groupMode !== 'none' },
   );
-  const { scrollToPreviousGroup, scrollToNextGroup } = useGroupScrollNavigation(scrollRef);
-  const scrollToBottom = () => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
 
   const renderEntries = (items: PlannedExecutionListEntry[]) => (
     <Box
@@ -644,14 +641,7 @@ const PlannedExecutionsManager = () => {
         </MenuItem>
       </Menu>
 
-      <ScrollControlsStack
-        show={showBackToTop}
-        onTop={scrollToTop}
-        onPrevious={scrollToPreviousGroup}
-        onNext={scrollToNextGroup}
-        onBottom={scrollToBottom}
-        labels={{ top: t('backToTop.action'), previous: t('scrollControls.previousGroup'), next: t('scrollControls.nextGroup'), bottom: t('scrollControls.bottom') }}
-      />
+      <ScrollNavCluster {...scrollNavProps} />
 
       <ExecutionModal
         open={modalOpen}

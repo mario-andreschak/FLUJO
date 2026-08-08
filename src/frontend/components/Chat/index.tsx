@@ -2,10 +2,10 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'; // Added useCallback
 import { useRouter } from 'next/navigation';
-import { Box, Paper, Typography, Divider, CircularProgress, Alert, Button, Chip, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, Drawer, IconButton, Tooltip, Fab, Zoom, TextField, useMediaQuery } from '@mui/material';
+import { Box, Paper, Typography, Divider, CircularProgress, Alert, Button, Chip, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, Drawer, IconButton, Tooltip, TextField, useMediaQuery } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
-import ScrollControlsStack from '@/frontend/components/shared/ScrollControlsStack';
-import { useAutoHideControls } from '@/frontend/hooks/useAutoHideControls';
+import ScrollNavCluster from '@/frontend/components/shared/ScrollNavCluster';
+import { useChatScrollNav } from '@/frontend/components/Chat/hooks/useChatScrollNav';
 import BoltIcon from '@mui/icons-material/Bolt';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
@@ -769,58 +769,13 @@ const Chat: React.FC = () => {
   // and surface a "jump to latest" button instead. (This replaces the old
   // new-message-only scrollIntoView in ChatMessages, which had no position
   // awareness and did not follow in-place streaming updates.)
-  const messagesScrollRef = useRef<HTMLDivElement | null>(null);
-  const stickToBottomRef = useRef<boolean>(true);
-  const [showScrollToBottom, setShowScrollToBottom] = useState<boolean>(false);
-  const { visible: scrollControlsVisible, reveal: revealScrollControls } = useAutoHideControls();
-
-  const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
-    const el = messagesScrollRef.current;
-    if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior });
-  }, []);
-
-  const handleMessagesScroll = useCallback(() => {
-    const el = messagesScrollRef.current;
-    if (!el) return;
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    const atBottom = distanceFromBottom < 80; // px tolerance
-    stickToBottomRef.current = atBottom;
-    setShowScrollToBottom(!atBottom);
-    revealScrollControls();
-  }, [revealScrollControls]);
-
-  const scrollMessagesToTop = useCallback(() => {
-    stickToBottomRef.current = false;
-    setShowScrollToBottom(true);
-    messagesScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
-  }, []);
-
-  const scrollToLastMessageStart = useCallback(() => {
-    stickToBottomRef.current = false;
-    setShowScrollToBottom(true);
-    const messages = messagesScrollRef.current?.querySelectorAll<HTMLElement>('[data-ask-flujo-message-id]');
-    messages?.[messages.length - 1]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, []);
-
-  const jumpToLatest = useCallback(() => {
-    stickToBottomRef.current = true;
-    setShowScrollToBottom(false);
-    scrollMessagesToBottom('smooth');
-  }, [scrollMessagesToBottom]);
-
-  // Reset to "stick" whenever the viewed conversation changes.
-  useEffect(() => {
-    stickToBottomRef.current = true;
-    setShowScrollToBottom(false);
-  }, [currentConversationId]);
-
-  // Keep pinned to the bottom as messages change — new messages AND in-place
-  // streaming updates (the reducer rebuilds the array either way) — but only
-  // while the user hasn't scrolled up.
-  useEffect(() => {
-    if (stickToBottomRef.current) scrollMessagesToBottom('auto');
-  }, [detailedConversation?.messages, scrollMessagesToBottom]);
+  // Scroll navigation (#376): the hook owns the container ref, the sticky
+  // autoscroll flag, the mobile auto-hide timer and the three chat actions
+  // (top of the loaded window / beginning of the last message / latest).
+  const chatScrollNav = useChatScrollNav({
+    conversationId: currentConversationId,
+    messages: detailedConversation?.messages,
+  });
   // Mirror of the conversation whose run we are currently tracking, so the
   // re-attach effect can tell "already tracking" from "needs re-attach" without
   // taking loadingConversationId as a dependency (which would re-fire the effect
@@ -4547,8 +4502,7 @@ const Chat: React.FC = () => {
             visible area while the inner Box (the scroll container) scrolls. */}
         <Box sx={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column' }}>
         <Box
-          ref={messagesScrollRef}
-          onScroll={handleMessagesScroll}
+          {...chatScrollNav.containerProps}
           sx={{
             flex: 1,
             overflow: 'auto',
@@ -4836,17 +4790,18 @@ const Chat: React.FC = () => {
             </Typography>
           )}
         </Box>
-        <ScrollControlsStack
-          show={showScrollToBottom && scrollControlsVisible}
-          onTop={scrollMessagesToTop}
-          onPrevious={scrollToLastMessageStart}
-          onBottom={jumpToLatest}
+        <ScrollNavCluster
+          show={chatScrollNav.show}
+          actions={chatScrollNav.actions}
+          disabled={chatScrollNav.disabled}
+          onAction={chatScrollNav.onAction}
+          positionMode="absolute"
           labels={{
             top: t('chat.page.scrollTop'),
-            previous: t('chat.page.scrollLastMessage'),
+            up: t('chat.page.scrollLastMessage'),
             bottom: t('chat.page.scrollLatest'),
           }}
-          sx={{ position: 'absolute', bottom: 16, right: 24, zIndex: 2 }}
+          sx={{ bottom: 16, right: 24, zIndex: 2 }}
         />
         </Box>
 
