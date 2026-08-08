@@ -12,6 +12,16 @@ import {
 } from '@/backend/services/subflowTasks';
 import { flowService } from '@/backend/services/flow';
 import { buildConversationTitle } from '@/utils/shared/conversationTitle';
+import {
+  classifyStatisticsError,
+  createStatisticsEvent,
+  recordStatisticsEvent,
+} from '@/backend/services/statistics';
+import {
+  newStatisticsInvocationId,
+  startStatisticsTimer,
+} from '@/backend/services/statistics/metadata';
+import type { StatisticsSubflowOutcome } from '@/shared/types/statistics';
 import type { SubflowLanePlan, SubflowNodePrepResult, SubflowNodeProperties, ToolDefinition } from '../types';
 
 const log = createLogger('backend/flow/execution/handlers/subflowDetachedInvocation');
@@ -37,23 +47,71 @@ export function buildDetachedSubflowTool(
   };
 }
 
+/**
+ * Parent-side telemetry context for a DETACHED subflow call.
+ *
+ * The parent run id and the durable child conversation id are captured at spawn
+ * time, so the call can still be correlated after the parent run has ended and
+ * without relying on in-memory state.
+ */
+interface DetachedSubflowTelemetry {
+  parentRunId?: string;
+  invocationId: string;
+  subflow: { id: string; name?: string };
+  node?: { id: string; name?: string };
+  childRunId?: string;
+}
+
 async function runDetachedJob(
   task: SubflowTaskRecord,
   prep: SubflowNodePrepResult,
   nodeRef: NodeRef,
   input: { prompt: string },
   controller: AbortController,
+  telemetry?: DetachedSubflowTelemetry,
 ): Promise<void> {
+  const timer = startStatisticsTimer();
+  let recorded = false;
+  // Detached calls never make the parent wait, so there is no wait phase; the
+  // duration is the child's own execution time observed by the launcher.
+  const record = (outcome: StatisticsSubflowOutcome, error?: unknown): void => {
+    if (!telemetry?.parentRunId || recorded) return;
+    recorded = true;
+    try {
+      const durationMs = timer.elapsedMs();
+      recordStatisticsEvent(createStatisticsEvent({
+        type: 'subflow.invocation',
+        runId: telemetry.parentRunId,
+        node: telemetry.node,
+        subflow: telemetry.subflow,
+        mode: 'detached',
+        invocationId: telemetry.invocationId,
+        childRunId: telemetry.childRunId,
+        outcome,
+        durationMs,
+        waitMs: 0,
+        phases: { subflowExecution: durationMs },
+        errorClass: outcome === 'error' ? classifyStatisticsError(error) : undefined,
+      }));
+    } catch {
+      // Metadata instrumentation never changes detached subflow behaviour.
+    }
+  };
   try {
     const { runFlow } = await import('../runFlow');
     const { runSubflowLanes } = await import('../nodes/SubflowNode');
     const result = await runSubflowLanes(prep, runFlow, nodeRef, input);
     const current = await getTask(task.taskId);
-    if (controller.signal.aborted || current?.status === 'cancelled') return;
+    if (controller.signal.aborted || current?.status === 'cancelled') {
+      record('cancelled');
+      return;
+    }
+    record(result.success ? 'completed' : 'error', result.error);
     await patchTask(task.taskId, result.success
       ? { status: 'completed', outputText: result.outputText }
       : { status: 'failed', error: result.error ?? 'Detached subflow failed.', failureReason: 'child-error' });
   } catch (error) {
+    record(controller.signal.aborted ? 'cancelled' : 'error', error);
     if (!controller.signal.aborted) {
       await patchTask(task.taskId, {
         status: 'failed',
@@ -62,6 +120,9 @@ async function runDetachedJob(
       });
     }
   } finally {
+    // A job that ends without any terminal record (process death, unexpected
+    // early return) is reported as incomplete instead of a success or failure.
+    record('incomplete');
     detachedJobRegistry.delete(task.taskId);
   }
 }
@@ -114,7 +175,29 @@ export async function executeDetachedSubflowStart(
       concurrencyLimit: 1, joinSeparator: '\n\n', errorStrategy: 'collect-all',
     };
     const controller = new AbortController();
-    const job = runDetachedJob(task, prep, { nodeId: targetNodeId, nodeName: node?.data?.label, nodeType: 'subflow' }, { prompt }, controller);
+    let subflowName: string | undefined;
+    try {
+      subflowName = (await flowService.getFlow(props.subflowId))?.name;
+    } catch {
+      // Display names are best-effort; the stable subflow id is authoritative.
+    }
+    const job = runDetachedJob(
+      task,
+      prep,
+      { nodeId: targetNodeId, nodeName: node?.data?.label, nodeType: 'subflow' },
+      { prompt },
+      controller,
+      {
+        parentRunId: shared.logicalRunId,
+        invocationId: newStatisticsInvocationId(),
+        subflow: { id: props.subflowId, ...(subflowName ? { name: subflowName } : {}) },
+        node: {
+          id: targetNodeId,
+          ...(node?.data?.label ? { name: node.data.label } : {}),
+        },
+        childRunId: task.childConversationId,
+      },
+    );
     detachedJobRegistry.set(task.taskId, { controller, promise: job });
     void job;
     return { success: true, data: toTaskHandle(task) };

@@ -47,6 +47,20 @@ function summary(overrides: Partial<StatisticsSummary> = {}): StatisticsSummary 
     providerDuration: duration,
     stepDuration: duration,
     toolDuration: duration,
+    subflowCalls: 1,
+    subflowFailures: 0,
+    subflowIncomplete: 0,
+    runsIncomplete: 0,
+    subflowDuration: duration,
+    subflowWaitDuration: duration,
+    cache: { requests: 2, hits: 1, misses: 1, writes: 0, unknown: 1, hitRate: 0.5 },
+    toolPayload: {
+      request: { count: 1, totalBytes: 512, averageBytes: 512, p50Bytes: 512, p95Bytes: 512 },
+      response: { count: 1, totalBytes: 2_048, averageBytes: 2_048, p50Bytes: 2_048, p95Bytes: 2_048 },
+    },
+    errorClasses: { provider: 1 },
+    contentCategories: { json: 2 },
+    phases: { provider: duration },
     ...overrides,
   };
 }
@@ -75,6 +89,8 @@ function fixture(): StatisticsAggregateResponse {
       credentials: [credential],
       nodes: [],
       tools: [],
+      subflows: [],
+      revisions: [],
     },
   };
 }
@@ -138,6 +154,8 @@ describe('Statistics dashboard', () => {
       credentials: [],
       nodes: [],
       tools: [],
+      subflows: [],
+      revisions: [],
     };
     mockFetch.mockResolvedValue(successfulResponse(empty));
 

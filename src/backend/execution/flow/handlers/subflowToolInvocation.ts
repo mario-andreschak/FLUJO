@@ -9,6 +9,16 @@ import { EmitFn, NodeRef } from '@/shared/types/execution/events';
 import { isSubflowToolName, SUBFLOW_TOOL_PREFIX } from '@/shared/utils/handoffNaming';
 import { buildConversationTitle } from '@/utils/shared/conversationTitle';
 import { flowService } from '@/backend/services/flow/index';
+import {
+  classifyStatisticsError,
+  createStatisticsEvent,
+  recordStatisticsEvent,
+} from '@/backend/services/statistics';
+import {
+  newStatisticsInvocationId,
+  startStatisticsTimer,
+} from '@/backend/services/statistics/metadata';
+import type { StatisticsSubflowOutcome } from '@/shared/types/statistics';
 
 /**
  * Callable-subflow TOOL invocation (issue #385, deferred Part B of #359).
@@ -91,6 +101,22 @@ export interface SubflowToolCallOutcome {
 }
 
 /**
+ * Best-effort child run correlation. Lane results carry a durable child
+ * conversation/run id on some paths and nothing on others; a missing id stays
+ * ABSENT rather than being invented.
+ */
+function childRunIdOf(result: unknown): string | undefined {
+  const lanes = (result as { lanes?: unknown })?.lanes;
+  if (!Array.isArray(lanes) || lanes.length === 0) return undefined;
+  const lane = lanes[0] as Record<string, unknown> | undefined;
+  for (const key of ['runId', 'conversationId', 'childConversationId']) {
+    const value = lane?.[key];
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return undefined;
+}
+
+/**
  * Execute one `call_subflow_<slug>` tool call: resolve the tool NAME back to a
  * target Subflow node id via the live SharedState's `subflowToolNameMap`
  * (populated by ProcessNode.generateHandoffTools), load that node's
@@ -117,6 +143,46 @@ export async function executeSubflowToolCall(
   },
 ): Promise<SubflowToolCallOutcome> {
   const { conversationId, emit } = ctx;
+  // Parent-side subflow telemetry. The CHILD run reports its own lifecycle under
+  // its own runId, so this record never inflates logical-run counts; it measures
+  // the call itself (resolution wait plus inline execution).
+  const invocationTimer = startStatisticsTimer();
+  let telemetry: {
+    parentRunId: string;
+    node?: { id: string; name?: string };
+    subflow: { id: string; name?: string };
+    invocationId: string;
+    waitMs: number;
+  } | undefined;
+  const recordSubflowOutcome = (
+    outcome: StatisticsSubflowOutcome,
+    details?: { error?: unknown; childRunId?: string },
+  ): void => {
+    if (!telemetry) return;
+    const context = telemetry;
+    // Exactly ONE terminal record per logical invocation.
+    telemetry = undefined;
+    try {
+      const executionMs = Math.max(0, invocationTimer.elapsedMs() - context.waitMs);
+      recordStatisticsEvent(createStatisticsEvent({
+        type: 'subflow.invocation',
+        runId: context.parentRunId,
+        node: context.node,
+        subflow: context.subflow,
+        mode: 'inline',
+        invocationId: context.invocationId,
+        childRunId: details?.childRunId,
+        outcome,
+        durationMs: executionMs,
+        waitMs: context.waitMs,
+        phases: { subflowWait: context.waitMs, subflowExecution: executionMs },
+        errorClass: outcome === 'error' ? classifyStatisticsError(details?.error) : undefined,
+      }));
+    } catch {
+      // Metadata instrumentation never changes a subflow call's behaviour.
+    }
+  };
+
   try {
     if (!conversationId) {
       return { success: false, error: 'No active conversation to run the subflow tool call in.' };
@@ -190,11 +256,32 @@ export async function executeSubflowToolCall(
     const { runFlow } = await import('../runFlow');
     const { runSubflowLanes } = await import('../nodes/SubflowNode');
 
+    if (sharedState.logicalRunId) {
+      telemetry = {
+        parentRunId: sharedState.logicalRunId,
+        node: {
+          id: targetNodeId,
+          ...(flowNode?.data?.label ? { name: flowNode.data.label } : {}),
+        },
+        subflow: { id: subflowId, ...(subflowName ? { name: subflowName } : {}) },
+        invocationId: newStatisticsInvocationId(),
+        // Everything before the child starts is queue/resolution wait.
+        waitMs: invocationTimer.elapsedMs(),
+      };
+    }
+
     const result = await runSubflowLanes(
       prepResultLike,
       runFlow,
       nodeRef,
       isolatedMessage ? { prompt: isolatedMessage } : { prompt: '' },
+    );
+
+    recordSubflowOutcome(
+      sharedState.isCancelled
+        ? 'cancelled'
+        : result.success ? 'completed' : 'error',
+      { error: result.error, childRunId: childRunIdOf(result) },
     );
 
     return {
@@ -209,6 +296,7 @@ export async function executeSubflowToolCall(
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    recordSubflowOutcome('error', { error: err });
     log.warn('call_subflow tool execution failed', { toolName: name, err: message });
     return { success: false, error: message };
   }

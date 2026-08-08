@@ -803,6 +803,12 @@ export interface SharedState {
     /** Display-name snapshots captured once for this logical run. */
     statisticsFlowName?: string;
     statisticsPlannedExecutionName?: string;
+    /**
+     * Opaque, installation-local fingerprint of the saved flow configuration,
+     * resolved once per logical run so before/after revision comparisons are
+     * possible without ever persisting the configuration itself.
+     */
+    statisticsFlowRevisionId?: string;
     // Only tracking info in shared state
     trackingInfo: {
         executionId: string;
