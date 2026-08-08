@@ -2820,7 +2820,9 @@ const OUTCOME_RANK: Record<SubtreeOutcome, number> = {
   reconciled: 6,
 };
 
-function aggregateOutcomes(entries: JournalEntry[]): Record<string, SubtreeOutcome> {
+function aggregateOutcomes(
+  entries: Array<{ subtree: string; outcome: SubtreeOutcome }>,
+): Record<string, SubtreeOutcome> {
   const result: Record<string, SubtreeOutcome> = {};
   for (const subtree of WORKSPACE_SUBTREES) result[subtree] = 'created';
   for (const entry of entries) {
@@ -3445,17 +3447,7 @@ async function finishFastTransaction(journal: FastMigrationJournal): Promise<Wor
     version: WORKSPACE_LAYOUT_VERSION,
     completedAt: new Date().toISOString(),
     defaultWorkspace: DEFAULT_WORKSPACE,
-    subtrees: aggregateOutcomes(journal.entries.map(entry => ({
-      ...entry,
-      sources: [],
-      destination: '',
-      destinationBackup: '',
-      stage: '',
-      expectedDigest: entry.structuralDigest ?? createHash('sha256').update(entry.id).digest('hex'),
-      expectedEntries: [],
-      state: 'published',
-      requireDirectory: true,
-    } as JournalEntry))),
+    subtrees: aggregateOutcomes(journal.entries),
     transactionId: journal.transactionId,
     manifestDigest: fastJournalDigest(journal),
   };
