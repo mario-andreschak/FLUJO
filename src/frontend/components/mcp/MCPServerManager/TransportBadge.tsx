@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Chip, Box } from '@mui/material';
+import { Chip, Box, Tooltip } from '@mui/material';
 import TerminalIcon from '@mui/icons-material/Terminal';
 import WifiIcon from '@mui/icons-material/Wifi';
 import StreamIcon from '@mui/icons-material/Stream';
@@ -12,9 +12,16 @@ import { useI18n } from '@/frontend/contexts/I18nContext';
 interface TransportBadgeProps {
   transport: 'stdio' | 'websocket' | 'sse' | 'streamable';
   size?: 'small' | 'medium';
+  /**
+   * Icon-only presentation for space constrained surfaces such as the simple
+   * server picker (#393). The localized transport label is still exposed via a
+   * tooltip and as the accessible name, so no information is lost. Defaults to
+   * false so management cards keep the labeled chip.
+   */
+  compact?: boolean;
 }
 
-const TransportBadge: React.FC<TransportBadgeProps> = ({ transport, size = 'small' }) => {
+const TransportBadge: React.FC<TransportBadgeProps> = ({ transport, size = 'small', compact = false }) => {
   const { colors } = useThemeUtils();
   const transportColors = colors.domain.transport;
   const { t } = useI18n();
@@ -60,6 +67,38 @@ const TransportBadge: React.FC<TransportBadgeProps> = ({ transport, size = 'smal
   };
 
   const config = getTransportConfig();
+
+  if (compact) {
+    // Non-interactive wrapper on purpose: the picker card itself is the click
+    // target, so nesting a button here would break selection/keyboard behavior.
+    return (
+      <Tooltip title={config.label} arrow placement="top" disableInteractive>
+        <Box
+          component="span"
+          role="img"
+          tabIndex={0}
+          aria-label={config.label}
+          data-testid="transport-badge-compact"
+          sx={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+            width: size === 'small' ? 26 : 32,
+            height: size === 'small' ? 26 : 32,
+            borderRadius: '50%',
+            backgroundColor: config.bgColor,
+            color: config.color,
+            lineHeight: 0,
+            outlineOffset: 2,
+            '& svg': { fontSize: size === 'small' ? 17 : 20, color: 'inherit' },
+          }}
+        >
+          {config.icon}
+        </Box>
+      </Tooltip>
+    );
+  }
 
   return (
     <Chip

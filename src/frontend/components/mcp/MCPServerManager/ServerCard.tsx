@@ -632,6 +632,38 @@ const ServerCard: React.FC<ServerCardProps> = ({
     return <Spinner size="small" color="primary" />;
   };
 
+  /**
+   * Picker mode (#393) shows connection state as an icon only so long server
+   * names stay readable. The localized status text is preserved as the tooltip
+   * and as the accessible name, and the wrapper stays non-interactive because
+   * the whole card is the click target.
+   */
+  const compactStatusIndicator = (
+    <Tooltip title={statusLabel() ?? ""} arrow placement="top" disableInteractive>
+      <Box
+        component="span"
+        role="img"
+        tabIndex={0}
+        aria-label={statusLabel() ?? ""}
+        data-testid="server-status-compact"
+        sx={{
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          flexShrink: 0,
+          width: 26,
+          height: 26,
+          lineHeight: 0,
+          outlineOffset: 2,
+          color: statusColor,
+          "& svg": { fontSize: 18 },
+        }}
+      >
+        {statusIcon()}
+      </Box>
+    </Tooltip>
+  );
+
   const updateBadge = updateInfo?.updateAvailable ? (
     <Tooltip
       title={t("mcp.card.updateAvailable", {
@@ -785,7 +817,22 @@ const ServerCard: React.FC<ServerCardProps> = ({
             )}
             <ServerLogo name={name} config={serverConfig} size={50} />
             <Box sx={{ flex: 1, minWidth: 0 }}>
-              <Typography variant="h6" component="h3" noWrap title={name}>
+              <Typography
+                variant="h6"
+                component="h3"
+                noWrap
+                title={name}
+                sx={
+                  pickerMode
+                    ? {
+                        color: "text.primary",
+                        fontWeight: 700,
+                        fontSize: "1.02rem",
+                        lineHeight: 1.35,
+                      }
+                    : undefined
+                }
+              >
                 {name}
               </Typography>
               {path && path !== "." && (
@@ -800,35 +847,39 @@ const ServerCard: React.FC<ServerCardProps> = ({
                   {path}
                 </Typography>
               )}
-              <Box
-                sx={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 0.55,
-                  mt: path && path !== "." ? 0.45 : 0.3,
-                  color: statusColor,
-                }}
-              >
-                <Box sx={{ display: "flex", fontSize: 17, "& svg": { fontSize: 17 } }}>
-                  {statusIcon()}
+              {!pickerMode && (
+                <Box
+                  sx={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 0.55,
+                    mt: path && path !== "." ? 0.45 : 0.3,
+                    color: statusColor,
+                  }}
+                >
+                  <Box sx={{ display: "flex", fontSize: 17, "& svg": { fontSize: 17 } }}>
+                    {statusIcon()}
+                  </Box>
+                  <Typography variant="caption" sx={{ color: "inherit", fontWeight: 650 }}>
+                    {statusLabel()}
+                  </Typography>
                 </Box>
-                <Typography variant="caption" sx={{ color: "inherit", fontWeight: 650 }}>
-                  {statusLabel()}
-                </Typography>
-              </Box>
+              )}
             </Box>
             <Box
               sx={{
                 display: "flex",
-                flexDirection: "column",
-                alignItems: "flex-end",
-                alignSelf: "stretch",
-                justifyContent: "space-between",
-                gap: 0.5,
+                flexDirection: pickerMode ? "row" : "column",
+                alignItems: pickerMode ? "center" : "flex-end",
+                alignSelf: pickerMode ? "center" : "stretch",
+                justifyContent: pickerMode ? "flex-end" : "space-between",
+                flexShrink: 0,
+                gap: pickerMode ? 0.75 : 0.5,
               }}
             >
               {updateBadge}
-              <TransportBadge transport={transport} size="small" />
+              {pickerMode && compactStatusIndicator}
+              <TransportBadge transport={transport} size="small" compact={pickerMode} />
             </Box>
           </Box>
         ) : (
@@ -841,7 +892,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
                 mb: 1,
               }}
             >
-              <Box sx={{ display: "flex", alignItems: "center", flex: 1 }}>
+              <Box sx={{ display: "flex", alignItems: "center", flex: 1, minWidth: 0 }}>
                 {selectionMode && onSelect && (
                   <Checkbox
                     checked={selected}
@@ -851,27 +902,51 @@ const ServerCard: React.FC<ServerCardProps> = ({
                     sx={{ mr: 1, p: 0.5 }}
                   />
                 )}
-                <Typography variant="h6" component="h3" sx={{ flex: 1 }}>
+                <Typography
+                  variant="h6"
+                  component="h3"
+                  noWrap={pickerMode}
+                  title={pickerMode ? name : undefined}
+                  sx={{
+                    flex: 1,
+                    minWidth: 0,
+                    ...(pickerMode
+                      ? {
+                          color: "text.primary",
+                          fontWeight: 700,
+                          fontSize: "1.02rem",
+                          lineHeight: 1.35,
+                        }
+                      : {}),
+                  }}
+                >
                   {name}
                 </Typography>
               </Box>
               <Box
                 sx={{
                   display: "flex",
-                  flexDirection: "column",
-                  alignItems: "flex-end",
-                  gap: 0.5,
+                  flexDirection: pickerMode ? "row" : "column",
+                  alignItems: pickerMode ? "center" : "flex-end",
+                  flexShrink: 0,
+                  gap: pickerMode ? 0.75 : 0.5,
                 }}
               >
                 <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
                   {updateBadge}
-                  <TransportBadge transport={transport} size="small" />
+                  <TransportBadge transport={transport} size="small" compact={pickerMode} />
                 </Box>
                 <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-                  {statusIcon()}
-                  <Typography variant="body2" color={statusColor}>
-                    {statusLabel()}
-                  </Typography>
+                  {pickerMode ? (
+                    compactStatusIndicator
+                  ) : (
+                    <>
+                      {statusIcon()}
+                      <Typography variant="body2" color={statusColor}>
+                        {statusLabel()}
+                      </Typography>
+                    </>
+                  )}
                 </Box>
               </Box>
             </Box>
