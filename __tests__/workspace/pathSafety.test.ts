@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  WORKSPACE_SUBTREES,
   ensureWorkspaceDirs,
   isValidWorkspaceName,
   listWorkspaces,
@@ -22,6 +23,26 @@ describe('workspace path safety', () => {
     if (priorDataDir === undefined) delete process.env.FLUJO_DATA_DIR;
     else process.env.FLUJO_DATA_DIR = priorDataDir;
     await fs.rm(dataRoot, { recursive: true, force: true });
+  });
+
+  it('owns and creates every runtime data subtree', async () => {
+    const expected = [
+      'db',
+      'mcp-servers',
+      'userdata',
+      'snapshots',
+      'screenshots',
+      'recordings',
+      'browser-profile',
+      'bash-utils',
+      'artifacts',
+    ];
+    expect([...WORKSPACE_SUBTREES]).toEqual(expected);
+
+    const root = await ensureWorkspaceDirs('complete-layout');
+    for (const subtree of expected) {
+      expect((await fs.lstat(path.join(root, subtree))).isDirectory()).toBe(true);
+    }
   });
 
   it.each([

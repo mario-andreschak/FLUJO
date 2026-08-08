@@ -1,5 +1,9 @@
 import path from 'node:path';
 import { clearLine, cursorTo } from 'node:readline';
+import {
+  MigrationLandscapeSession,
+  terminalCanShowMigrationLandscape,
+} from './migrationLandscape';
 
 export type MigrationProgressDetails = Record<
   string,
@@ -12,7 +16,11 @@ interface MigrationTerminalStream {
   write(chunk: string): unknown;
   isTTY?: boolean;
   columns?: number;
+  rows?: number;
   hasColors?: (count?: number) => boolean;
+  once?(event: 'drain', listener: () => void): unknown;
+  on?(event: 'resize', listener: () => void): unknown;
+  off?(event: 'resize', listener: () => void): unknown;
 }
 
 type MigrationEnvironment = Readonly<Record<string, string | undefined>>;
@@ -33,6 +41,8 @@ export interface MigrationProgressReporterOptions {
   error?: (line: string) => void;
   colors?: boolean;
   ascii?: boolean;
+  fullscreen?: boolean;
+  trueColor?: boolean;
   animationIntervalMs?: number;
 }
 
@@ -70,7 +80,9 @@ function stringDetail(details: MigrationProgressDetails, key: string): string | 
 
 function formatPlainLine(message: string, details: MigrationProgressDetails): string {
   const fields = Object.entries(details)
-    .filter((entry): entry is [string, string | number | boolean] => entry[1] !== undefined)
+    .filter((entry): entry is [string, string | number | boolean] =>
+      entry[1] !== undefined && !entry[0].startsWith('_'),
+    )
     .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
     .join(' ');
   return `[FLUJO] Workspace migration: ${message}${fields ? ` | ${fields}` : ''}`;
@@ -93,6 +105,395 @@ class PlainMigrationProgressReporter implements MigrationProgressReporter {
   }
 
   close(): void {}
+}
+
+interface ActivitySample {
+  key: string;
+  at: number;
+  bytes: number;
+  files: number;
+  bytesPerSecond: number;
+  filesPerSecond: number;
+  complete: boolean;
+}
+
+class LandscapeMigrationProgressReporter implements MigrationProgressReporter {
+  private readonly landscape: MigrationLandscapeSession;
+  private progress = 0.02;
+  private bytesPerSecond = 0;
+  private filesPerSecond = 0;
+  private activityLabel = 'Preparing';
+  private readonly samples = new Map<string, ActivitySample>();
+  private ended = false;
+
+  constructor(
+    private readonly stream: MigrationTerminalStream,
+    private readonly colors: boolean,
+    trueColor: boolean,
+  ) {
+    this.landscape = new MigrationLandscapeSession({ stream, trueColor });
+  }
+
+  report(
+    message: string,
+    details: MigrationProgressDetails = {},
+    _level: MigrationProgressLevel = 'info',
+  ): void {
+    if (this.ended && message !== 'started') return;
+
+    if (message === 'started') {
+      this.ended = false;
+      this.progress = 0.02;
+      const version = stringDetail(details, 'version');
+      const dataRoot = stringDetail(details, 'dataRoot');
+      this.landscape.start({
+        phase: 'Starting migration checks',
+        detail: [version ? `Layout v${version}` : undefined, dataRoot].filter(Boolean).join(' · ')
+          || 'Preparing a safe workspace upgrade',
+        progress: this.progress,
+      });
+      return;
+    }
+
+    if (!message.startsWith('inventory ') && !message.startsWith('transfer ')) {
+      this.bytesPerSecond = 0;
+      this.filesPerSecond = 0;
+      this.activityLabel = 'Preparing';
+    }
+
+    switch (message) {
+      case 'exclusive lock acquired':
+        this.update('Checking existing workspace state', 'Exclusive migration lock acquired', 0.06);
+        return;
+      case 'reclaiming stale migration lock':
+        this.update('Recovering workspace state', 'Reclaiming an interrupted migration lock', 0.07);
+        return;
+      case 'recovering durable transaction':
+        this.update(
+          'Recovering an interrupted migration',
+          `Validating durable transaction${this.namedDetail(details, 'phase')}`,
+          0.09,
+        );
+        return;
+      case 'existing layout marker found':
+        this.update('Validating the existing workspace layout', 'Checking the published layout marker', 0.08);
+        return;
+      case 'reconciliation pass':
+        this.update(
+          'Checking migration state',
+          `Reconciliation${this.positionDetail(details, 'pass', 'maximum')}`,
+          0.08 + this.ratio(details, 'pass', 'maximum') * 0.02,
+        );
+        return;
+      case 'preflight started':
+        this.update(
+          'Planning a safe migration',
+          `Preflight${this.countDetail(details, 'candidates', 'locations')}`,
+          0.10,
+        );
+        return;
+      case 'preflight candidate': {
+        const ratio = this.positionRatio(details);
+        this.update(
+          `Inspecting ${stringDetail(details, 'subtree') ?? 'workspace data'}`,
+          `Preflight${this.positionFromDetails(details)}`,
+          0.12 + ratio * 0.22,
+        );
+        return;
+      }
+      case 'preflight candidate ready': {
+        const ratio = this.positionRatio(details);
+        this.update(
+          `Ready: ${stringDetail(details, 'subtree') ?? 'workspace data'}`,
+          [stringDetail(details, 'position'), stringDetail(details, 'outcome')].filter(Boolean).join(' · '),
+          0.14 + ratio * 0.22,
+        );
+        return;
+      }
+      case 'preflight complete':
+        this.update(
+          'Preparing the migration transaction',
+          `Preflight complete${this.countDetail(details, 'entries', 'locations')}`,
+          0.38,
+        );
+        return;
+      case 'inventory started':
+      case 'inventory progress':
+      case 'inventory complete':
+        this.updateActivity(message, details, 'inventory');
+        this.update(
+          this.inventoryPhase(message, details),
+          this.inventoryDetail(details),
+        );
+        return;
+      case 'transfer started':
+      case 'transfer progress':
+      case 'transfer complete':
+        this.updateActivity(message, details, 'transfer');
+        this.update(
+          message === 'transfer complete'
+            ? `Staged ${stringDetail(details, 'subtree') ?? 'workspace data'}`
+            : `Copying ${stringDetail(details, 'subtree') ?? 'workspace data'}`,
+          this.transferDetail(details),
+          message === 'transfer complete' ? 0.48 : 0.42,
+        );
+        return;
+      case 'transaction continuing':
+        this.update(
+          'Preparing the durable transaction',
+          [stringDetail(details, 'phase'), stringDetail(details, 'strategy')].filter(Boolean).join(' · '),
+          0.42,
+        );
+        return;
+      case 'commit entry started': {
+        const ratio = this.positionRatio(details);
+        this.update(
+          `Publishing ${stringDetail(details, 'subtree') ?? 'workspace data'}`,
+          [stringDetail(details, 'position'), stringDetail(details, 'strategy')].filter(Boolean).join(' · '),
+          0.48 + ratio * 0.30,
+        );
+        return;
+      }
+      case 'commit entry published': {
+        const ratio = this.positionRatio(details);
+        this.update(
+          `Published ${stringDetail(details, 'subtree') ?? 'workspace data'}`,
+          stringDetail(details, 'position') ?? 'Atomic publish complete',
+          0.50 + ratio * 0.30,
+        );
+        return;
+      }
+      case 'completion marker published':
+        this.update('Verifying published workspace data', 'Workspace layout marker published', 0.82);
+        return;
+      case 'cleanup started':
+        this.update(
+          'Cleaning up the completed transaction',
+          `Original data remains protected${this.countDetail(details, 'entries', 'locations')}`,
+          0.84,
+        );
+        return;
+      case 'cleanup entry': {
+        const ratio = this.positionRatio(details);
+        this.update(
+          `Cleaning up ${stringDetail(details, 'subtree') ?? 'workspace data'}`,
+          stringDetail(details, 'position') ?? 'Removing verified transaction artifacts',
+          0.84 + ratio * 0.13,
+        );
+        return;
+      }
+      case 'cleanup complete':
+        this.update('Finalizing workspace startup', 'Cleanup complete', 0.98);
+        return;
+      case 'layout already current; no data move required':
+        this.update('Workspace layout already current', 'No data move was required', 0.98);
+        return;
+      case 'exclusive lock released':
+        this.update('Finalizing workspace startup', 'Migration lock released', 0.99);
+        return;
+      case 'finished successfully':
+        this.finishSuccess(details);
+        return;
+      case 'FAILED - no conflicting data was overwritten':
+        this.finishFailure(details);
+        return;
+      default:
+        this.update(safeTerminalText(message), this.summaryDetails(details));
+    }
+  }
+
+  close(): void {
+    this.landscape.close();
+    this.ended = true;
+  }
+
+  private update(phase: string, detail = '', progress?: number): void {
+    if (progress !== undefined) this.progress = Math.max(this.progress, progress);
+    this.landscape.update({
+      phase: safeTerminalText(phase),
+      detail: safeTerminalText(detail) || 'Working carefully through workspace data',
+      progress: this.progress,
+      bytesPerSecond: this.bytesPerSecond,
+      filesPerSecond: this.filesPerSecond,
+      activityLabel: this.activityLabel,
+    });
+  }
+
+  private updateActivity(
+    message: string,
+    details: MigrationProgressDetails,
+    kind: 'inventory' | 'transfer',
+  ): void {
+    const key = `${kind}:${stringDetail(details, 'purpose') ?? ''}:${stringDetail(details, 'root') ?? ''}:${stringDetail(details, 'subtree') ?? ''}`;
+    const bytes = this.numericDetail(details, '_bytes');
+    const files = this.numericDetail(details, 'files');
+    const now = Date.now();
+    const starting = message.endsWith('started');
+    const previous = this.samples.get(key);
+    if (starting || !previous || bytes < previous.bytes || files < previous.files) {
+      this.samples.set(key, {
+        key,
+        at: now,
+        bytes,
+        files,
+        bytesPerSecond: 0,
+        filesPerSecond: 0,
+        complete: false,
+      });
+    } else {
+      const elapsedSeconds = (now - previous.at) / 1000;
+      if (elapsedSeconds > 0) {
+        const nextBytesPerSecond = Math.max(0, bytes - previous.bytes) / elapsedSeconds;
+        const nextFilesPerSecond = Math.max(0, files - previous.files) / elapsedSeconds;
+        const weight = previous.bytesPerSecond > 0 || previous.filesPerSecond > 0 ? 0.45 : 1;
+        this.samples.set(key, {
+          key,
+          at: now,
+          bytes,
+          files,
+          bytesPerSecond: previous.bytesPerSecond
+            + (nextBytesPerSecond - previous.bytesPerSecond) * weight,
+          filesPerSecond: previous.filesPerSecond
+            + (nextFilesPerSecond - previous.filesPerSecond) * weight,
+          complete: message.endsWith('complete'),
+        });
+      }
+    }
+    const current = this.samples.get(key);
+    const recentSamples = [...this.samples.values()].filter(sample =>
+      now - sample.at <= 15_000 && (!sample.complete || sample.key === key),
+    );
+    this.bytesPerSecond = recentSamples.reduce((total, sample) => total + sample.bytesPerSecond, 0);
+    this.filesPerSecond = recentSamples.reduce((total, sample) => total + sample.filesPerSecond, 0);
+    if (message.endsWith('complete') && current) current.complete = true;
+    for (const sample of this.samples.values()) {
+      if (now - sample.at > 15_000) this.samples.delete(sample.key);
+    }
+    this.activityLabel = kind === 'transfer'
+      ? 'Copying'
+      : stringDetail(details, 'content') === 'sha256' ? 'Reading' : 'Indexing';
+  }
+
+  private inventoryPhase(message: string, details: MigrationProgressDetails): string {
+    const purpose = stringDetail(details, 'purpose');
+    let label: string;
+    if (purpose?.startsWith('preflight source for ')) {
+      label = `Scanning legacy ${purpose.slice('preflight source for '.length)}`;
+    } else if (purpose?.startsWith('preflight destination for ')) {
+      label = `Checking workspace ${purpose.slice('preflight destination for '.length)}`;
+    } else if (purpose && purpose !== 'inventory') {
+      label = purpose;
+    } else {
+      const root = stringDetail(details, 'root');
+      label = `Verifying ${root ? path.basename(root) || 'data' : 'data'}`;
+    }
+    if (message === 'inventory complete') label = label.replace(/^(Scanning|Checking|Verifying)/, 'Verified');
+    return label;
+  }
+
+  private inventoryDetail(details: MigrationProgressDetails): string {
+    return [
+      this.metric(details, 'files', 'files'),
+      this.metric(details, 'directories', 'dirs'),
+      this.metric(details, 'links', 'links'),
+      stringDetail(details, 'bytes'),
+      stringDetail(details, 'elapsed'),
+    ].filter(Boolean).join(' · ');
+  }
+
+  private transferDetail(details: MigrationProgressDetails): string {
+    const files = this.metric(details, 'files', 'files');
+    const totalFiles = stringDetail(details, 'totalFiles');
+    const bytes = stringDetail(details, 'bytes');
+    const totalBytes = stringDetail(details, 'totalBytes');
+    return [
+      files && totalFiles ? `${files} of ${totalFiles}` : files,
+      bytes && totalBytes ? `${bytes} of ${totalBytes}` : bytes,
+      stringDetail(details, 'elapsed'),
+    ].filter(Boolean).join(' · ');
+  }
+
+  private finishSuccess(details: MigrationProgressDetails): void {
+    this.update(
+      'Workspace migration complete',
+      'Everything is right where it should be',
+      1,
+    );
+    this.landscape.close();
+    const elapsed = stringDetail(details, 'elapsed');
+    this.stream.write(`${style('✓', ANSI.green, this.colors)} ${style(
+      `Workspace migration complete${elapsed ? ` · ${elapsed}` : ''}`,
+      ANSI.bold,
+      this.colors,
+    )}\n`);
+    this.ended = true;
+  }
+
+  private finishFailure(details: MigrationProgressDetails): void {
+    this.landscape.close();
+    this.stream.write(`${style('✕', ANSI.red, this.colors)} ${style(
+      'Workspace migration failed safely; no conflicting data was overwritten',
+      ANSI.bold,
+      this.colors,
+    )}\n`);
+    const error = [stringDetail(details, 'code'), stringDetail(details, 'error')].filter(Boolean).join(' · ');
+    if (error) this.stream.write(`${style(`  ${error}`, ANSI.dim, this.colors)}\n`);
+    this.ended = true;
+  }
+
+  private metric(details: MigrationProgressDetails, key: string, label: string): string | undefined {
+    const value = stringDetail(details, key);
+    return value === undefined ? undefined : `${value} ${label}`;
+  }
+
+  private numericDetail(details: MigrationProgressDetails, key: string): number {
+    const value = details[key];
+    return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+  }
+
+  private namedDetail(details: MigrationProgressDetails, key: string): string {
+    const value = stringDetail(details, key);
+    return value ? ` · ${value}` : '';
+  }
+
+  private countDetail(details: MigrationProgressDetails, key: string, label: string): string {
+    const value = stringDetail(details, key);
+    return value ? ` · ${value} ${label}` : '';
+  }
+
+  private positionDetail(details: MigrationProgressDetails, currentKey: string, totalKey: string): string {
+    const current = stringDetail(details, currentKey);
+    const total = stringDetail(details, totalKey);
+    return current && total ? ` · ${current}/${total}` : '';
+  }
+
+  private positionFromDetails(details: MigrationProgressDetails): string {
+    const position = stringDetail(details, 'position');
+    return position ? ` · ${position}` : '';
+  }
+
+  private positionRatio(details: MigrationProgressDetails): number {
+    const position = stringDetail(details, 'position');
+    const match = position?.match(/^(\d+)\/(\d+)$/);
+    if (!match) return 0;
+    const current = Number(match[1]);
+    const total = Number(match[2]);
+    return total > 0 ? Math.min(1, current / total) : 0;
+  }
+
+  private ratio(details: MigrationProgressDetails, currentKey: string, totalKey: string): number {
+    const current = this.numericDetail(details, currentKey);
+    const total = this.numericDetail(details, totalKey);
+    return total > 0 ? Math.min(1, current / total) : 0;
+  }
+
+  private summaryDetails(details: MigrationProgressDetails): string {
+    return Object.entries(details)
+      .filter(([key, value]) => !key.startsWith('_') && value !== undefined)
+      .slice(0, 3)
+      .map(([key, value]) => `${key}: ${safeTerminalText(value)}`)
+      .join(' · ');
+  }
 }
 
 class TtyMigrationProgressReporter implements MigrationProgressReporter {
@@ -459,15 +860,25 @@ class TtyMigrationProgressReporter implements MigrationProgressReporter {
 }
 
 export function shouldUseInteractiveMigrationUI(
-  stream: MigrationTerminalStream = process.stdout,
+  _stream: MigrationTerminalStream = process.stdout,
   env: MigrationEnvironment = process.env,
 ): boolean {
   const requested = env.FLUJO_MIGRATION_UI?.trim().toLowerCase();
   if (requested === 'plain') return false;
-  if (requested === 'tty') return true;
-  const ci = env.CI?.trim().toLowerCase();
-  const isCi = Boolean(ci && ci !== '0' && ci !== 'false');
-  return Boolean(stream.isTTY) && env.TERM !== 'dumb' && !isCi;
+  if (requested === 'tty' || requested === 'compact' || requested === 'landscape') return true;
+  return false;
+}
+
+export function shouldUseFullscreenMigrationUI(
+  stream: MigrationTerminalStream = process.stdout,
+  env: MigrationEnvironment = process.env,
+): boolean {
+  const requested = env.FLUJO_MIGRATION_UI?.trim().toLowerCase();
+  if (requested !== 'landscape') return false;
+  if (!shouldUseInteractiveMigrationUI(stream, env)) return false;
+  if (!terminalSupportsColor(stream, env)) return false;
+  if (['1', 'true', 'yes'].includes(env.FLUJO_MIGRATION_ASCII?.trim().toLowerCase() ?? '')) return false;
+  return terminalCanShowMigrationLandscape(stream);
 }
 
 function terminalSupportsColor(
@@ -477,6 +888,14 @@ function terminalSupportsColor(
   if ('NO_COLOR' in env || 'NODE_DISABLE_COLORS' in env || env.FORCE_COLOR === '0') return false;
   if (env.FORCE_COLOR && env.FORCE_COLOR !== '0') return true;
   return stream.hasColors?.(16) ?? Boolean(stream.isTTY);
+}
+
+function terminalSupportsTrueColor(
+  stream: MigrationTerminalStream,
+  env: MigrationEnvironment,
+): boolean {
+  if (env.COLORTERM?.toLowerCase().includes('truecolor')) return true;
+  return stream.hasColors?.(16_777_216) ?? false;
 }
 
 export function createMigrationProgressReporter(
@@ -489,9 +908,17 @@ export function createMigrationProgressReporter(
     );
   }
   const stream = options.stream ?? process.stdout;
+  const colors = options.colors ?? terminalSupportsColor(stream, process.env);
+  if (options.fullscreen && colors && terminalCanShowMigrationLandscape(stream)) {
+    return new LandscapeMigrationProgressReporter(
+      stream,
+      colors,
+      options.trueColor ?? terminalSupportsTrueColor(stream, process.env),
+    );
+  }
   return new TtyMigrationProgressReporter(
     stream,
-    options.colors ?? terminalSupportsColor(stream, process.env),
+    colors,
     options.ascii ?? false,
     options.animationIntervalMs ?? 80,
   );
@@ -501,10 +928,13 @@ let activeReporter: MigrationProgressReporter | undefined;
 
 function createDefaultReporter(): MigrationProgressReporter {
   const stream = process.stdout;
+  const colors = terminalSupportsColor(stream, process.env);
   return createMigrationProgressReporter({
     interactive: shouldUseInteractiveMigrationUI(stream),
     stream,
-    colors: terminalSupportsColor(stream, process.env),
+    colors,
+    fullscreen: shouldUseFullscreenMigrationUI(stream),
+    trueColor: terminalSupportsTrueColor(stream, process.env),
     ascii: ['1', 'true', 'yes'].includes(
       process.env.FLUJO_MIGRATION_ASCII?.trim().toLowerCase() ?? '',
     ),

@@ -179,7 +179,7 @@ describe('evaluateNewItems', () => {
 });
 
 describe('intervalMsToCron (legacy migration)', () => {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { intervalMsToCron } = require('@/utils/shared/cron');
   it.each([
     [5_000, '*/5 * * * * *'],
@@ -230,7 +230,13 @@ describe('armMcpPoll', () => {
     }
   };
 
-  beforeEach(() => jest.useFakeTimers());
+  beforeEach(() => {
+    jest.useFakeTimers();
+    // Cron fires on whole-second boundaries. Starting at an arbitrary real
+    // millisecond means a 1.1s advance can cross either one or two boundaries,
+    // making the backoff assertions order/time dependent in the full suite.
+    jest.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+  });
   afterEach(() => jest.useRealTimers());
 
   it('primes on the immediate first poll, fires when the result changes', async () => {

@@ -217,10 +217,11 @@ describe("safelyCloseClient graceful shutdown", () => {
     child.stdin.end.mockImplementation(() => events.push("stdin.end"));
     const client = clientWithChild(child, events);
     const platform = Object.getOwnPropertyDescriptor(process, "platform");
-    const kill = jest.spyOn(process, "kill").mockImplementation(((pid, signal) => {
+    const kill = jest.spyOn(process, "kill").mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
       events.push(String(signal));
       return true;
     }) as never);
+    let killCalls: unknown[][] = [];
 
     Object.defineProperty(process, "platform", { value: "linux" });
     try {
@@ -229,6 +230,7 @@ describe("safelyCloseClient graceful shutdown", () => {
         killEscalationMs: 30,
       });
     } finally {
+      killCalls = kill.mock.calls.map(call => [...call]);
       kill.mockRestore();
       Object.defineProperty(process, "platform", platform!);
     }
@@ -237,7 +239,7 @@ describe("safelyCloseClient graceful shutdown", () => {
     // descendant process group, and client.close waits until that bounded ladder ends.
     expect(child.kill).not.toHaveBeenCalled();
     expect(events).toEqual(["stdin.end", "SIGTERM", "SIGKILL", "client.close"]);
-    expect(kill.mock.calls).toEqual([
+    expect(killCalls).toEqual([
       [-child.pid, "SIGTERM"],
       [-child.pid, "SIGKILL"],
     ]);
@@ -249,13 +251,14 @@ describe("safelyCloseClient graceful shutdown", () => {
     child.stdin.end.mockImplementation(() => events.push("stdin.end"));
     const client = clientWithChild(child, events);
     const platform = Object.getOwnPropertyDescriptor(process, "platform");
-    const kill = jest.spyOn(process, "kill").mockImplementation(((pid, signal) => {
+    const kill = jest.spyOn(process, "kill").mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
       events.push(String(signal));
       if (signal === "SIGTERM") {
         setTimeout(() => child.exitNow(1), 5);
       }
       return true;
     }) as never);
+    let killCalls: unknown[][] = [];
 
     Object.defineProperty(process, "platform", { value: "linux" });
     try {
@@ -264,13 +267,14 @@ describe("safelyCloseClient graceful shutdown", () => {
         killEscalationMs: 1000,
       });
     } finally {
+      killCalls = kill.mock.calls.map(call => [...call]);
       kill.mockRestore();
       Object.defineProperty(process, "platform", platform!);
     }
 
     expect(child.kill).not.toHaveBeenCalled();
     expect(events).toEqual(["stdin.end", "SIGTERM", "client.close"]);
-    expect(kill.mock.calls).toEqual([[-child.pid, "SIGTERM"]]);
+    expect(killCalls).toEqual([[-child.pid, "SIGTERM"]]);
   });
 
   it("accepts a successful descendant-aware tree termination", async () => {
@@ -296,7 +300,6 @@ describe("safelyCloseClient graceful shutdown", () => {
     expect(result).toMatchObject({ exited: true, forced: true });
     expect(child.kill).not.toHaveBeenCalled();
     expect(events).toContain("client.close");
-  });
   });
 
   it("lets a REAL child with slow teardown exit naturally instead of being killed", async () => {

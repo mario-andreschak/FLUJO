@@ -126,6 +126,13 @@ export class SchedulerService {
     return runWithWorkspace(this.workspace, fn);
   }
 
+  /** Bind a long-lived timer/watcher callback to this scheduler's workspace. */
+  private bindToWorkspace<Args extends unknown[], Result>(
+    fn: (...args: Args) => Result,
+  ): (...args: Args) => Result {
+    return (...args) => this.inWorkspace(() => fn(...args));
+  }
+
   // --- lifecycle -----------------------------------------------------------
 
   /** Idempotent process-startup entry point (called from backend/init.ts). */
@@ -208,7 +215,7 @@ export class SchedulerService {
         }
         this.armed.set(
           execution.id,
-          armSchedule(trigger, () => {
+          armSchedule(trigger, this.bindToWorkspace(() => {
             void (async () => {
               const current = await loadExecutionState(execution.id);
               await saveExecutionState(execution.id, {
@@ -219,7 +226,7 @@ export class SchedulerService {
             })().catch(error =>
               log.error(`Scheduled fire failed for ${execution.id}:`, error)
             );
-          })
+          }))
         );
         break;
       }
@@ -231,7 +238,7 @@ export class SchedulerService {
           execution.id,
           armFileWatch(
             trigger,
-            ({ events }) => {
+            this.bindToWorkspace(({ events }) => {
               this.lastTriggerErrors.delete(execution.id);
               void this.fire(execution, {
                 kind: 'file',
@@ -241,8 +248,8 @@ export class SchedulerService {
                     : `${events.length} file changes`,
                 context: { watchedPath: trigger.path, events },
               });
-            },
-            message => this.lastTriggerErrors.set(execution.id, message)
+            }),
+            this.bindToWorkspace(message => this.lastTriggerErrors.set(execution.id, message))
           )
         );
         break;
@@ -252,22 +259,22 @@ export class SchedulerService {
         // so surface a precise trigger error immediately instead of letting the first
         // tick fail. The trigger is still armed — once the server is re-enabled the
         // next successful tick clears the error on its own (onSuccess/onFire below).
-        void import('@/backend/services/mcp')
-          .then(async ({ mcpService }) => {
-            if (await mcpService.isServerDisabled(trigger.serverName)) {
-              this.lastTriggerErrors.set(
-                execution.id,
-                `MCP server '${trigger.serverName}' is disabled — enable it on the MCP page or change the trigger`
-              );
-            }
-          })
+        void this.inWorkspace(async () => {
+          const { mcpService } = await import('@/backend/services/mcp');
+          if (await mcpService.isServerDisabled(trigger.serverName)) {
+            this.lastTriggerErrors.set(
+              execution.id,
+              `MCP server '${trigger.serverName}' is disabled — enable it on the MCP page or change the trigger`
+            );
+          }
+        })
           .catch(error =>
             log.warn(`Arm-time disabled-server check failed for ${execution.id}:`, error)
           );
         this.armed.set(
           execution.id,
           armMcpPoll(trigger, {
-            callTool: async (serverName, toolName, args) => {
+            callTool: this.bindToWorkspace(async (serverName, toolName, args) => {
               // Lazy import: don't pull the MCP stack into scheduler tests.
               const { mcpService } = await import('@/backend/services/mcp');
               const response = await mcpService.callTool(serverName, toolName, args);
@@ -276,28 +283,28 @@ export class SchedulerService {
                 data: response.data,
                 error: typeof response.error === 'string' ? response.error : undefined,
               };
-            },
-            loadState: () => loadExecutionState(execution.id),
-            saveState: async patch => {
+            }),
+            loadState: this.bindToWorkspace(() => loadExecutionState(execution.id)),
+            saveState: this.bindToWorkspace(async patch => {
               const current = await loadExecutionState(execution.id);
               await saveExecutionState(execution.id, { ...current, ...patch });
-            },
+            }),
             // Await the run and report its outcome so the poll can advance its
             // change baseline only after a successful run (commit-after-success,
             // issue #75). Keeping the trigger busy for the run's duration also
             // naturally prevents an overlapping poll of the same trigger.
-            onFire: async ({ summary, context }) => {
+            onFire: this.bindToWorkspace(async ({ summary, context }) => {
               this.lastTriggerErrors.delete(execution.id);
               const record = await this.fire(execution, { kind: 'mcp-poll', summary, context });
               return { status: record.status };
-            },
-            onError: message => this.lastTriggerErrors.set(execution.id, message),
-            onSuccess: () => this.lastTriggerErrors.delete(execution.id),
-            evaluateAiGate: async (result, gateConfig, state) => {
+            }),
+            onError: this.bindToWorkspace(message => this.lastTriggerErrors.set(execution.id, message)),
+            onSuccess: this.bindToWorkspace(() => this.lastTriggerErrors.delete(execution.id)),
+            evaluateAiGate: this.bindToWorkspace(async (result, gateConfig, state) => {
               // Lazy import: the gate pulls in the model/flow stack.
               const { evaluateAiGate } = await import('./triggers/llmGate');
               return evaluateAiGate(result, gateConfig, state);
-            },
+            }),
           })
         );
         break;
@@ -306,20 +313,20 @@ export class SchedulerService {
         this.armed.set(
           execution.id,
           armUrlWatch(trigger, {
-            loadState: () => loadExecutionState(execution.id),
-            saveState: async patch => {
+            loadState: this.bindToWorkspace(() => loadExecutionState(execution.id)),
+            saveState: this.bindToWorkspace(async patch => {
               const current = await loadExecutionState(execution.id);
               await saveExecutionState(execution.id, { ...current, ...patch });
-            },
+            }),
             // Await + report outcome so the baseline hash advances only after a
             // successful run (commit-after-success, issue #75).
-            onFire: async ({ summary, context }) => {
+            onFire: this.bindToWorkspace(async ({ summary, context }) => {
               this.lastTriggerErrors.delete(execution.id);
               const record = await this.fire(execution, { kind: 'url-watch', summary, context });
               return { status: record.status };
-            },
-            onError: message => this.lastTriggerErrors.set(execution.id, message),
-            onSuccess: () => this.lastTriggerErrors.delete(execution.id),
+            }),
+            onError: this.bindToWorkspace(message => this.lastTriggerErrors.set(execution.id, message)),
+            onSuccess: this.bindToWorkspace(() => this.lastTriggerErrors.delete(execution.id)),
           })
         );
         break;
@@ -328,7 +335,7 @@ export class SchedulerService {
         this.armed.set(
           execution.id,
           armFlowEvent(trigger, {
-            onFire: ({ summary, context, chainDepth, sourceConversationId }) => {
+            onFire: this.bindToWorkspace(({ summary, context, chainDepth, sourceConversationId }) => {
               this.lastTriggerErrors.delete(execution.id);
               // Fire-and-forget: the bus listener is synchronous. Any run
               // outcome is recorded by fire() as a RunRecord. Thread the
@@ -343,9 +350,9 @@ export class SchedulerService {
               }).catch(
                 error => log.error(`Flow-event fire failed for ${execution.id}:`, error)
               );
-            },
+            }),
             // Loop safety: record the depth-limit skip as a run so it's auditable.
-            onSkip: reason => {
+            onSkip: this.bindToWorkspace(reason => {
               const at = new Date().toISOString();
               const runId = uuidv4();
               this.recordSchedulerSkip(execution, runId, reason);
@@ -360,8 +367,8 @@ export class SchedulerService {
               }).catch(error =>
                 log.warn(`Failed to record flow-event skip for ${execution.id}:`, error)
               );
-            },
-            onError: message => this.lastTriggerErrors.set(execution.id, message),
+            }),
+            onError: this.bindToWorkspace(message => this.lastTriggerErrors.set(execution.id, message)),
           })
         );
         break;

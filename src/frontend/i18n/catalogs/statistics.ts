@@ -85,6 +85,7 @@ export const statisticsMessageRows = {
   'statistics.source.mcp': ['MCP', 'MCP', 'MCP', 'MCP', 'MCP', 'MCP', 'MCP'],
   'statistics.source.internal': ['internal', 'interno', 'intern', 'interne', 'interno', 'interno', '内部'],
   'statistics.source.internalTool': ['internal tool', 'herramienta interna', 'internes Tool', 'outil interne', 'strumento interno', 'ferramenta interna', '内部工具'],
+  'statistics.source.meeting': ['meeting', 'reunión', 'Meeting', 'réunion', 'riunione', 'reunião', '会议'],
   'statistics.status.completed': ['completed', 'completada', 'abgeschlossen', 'terminée', 'completata', 'concluída', '已完成'],
   'statistics.status.error': ['error', 'error', 'Fehler', 'erreur', 'errore', 'erro', '错误'],
   'statistics.status.capped': ['capped', 'limitada', 'begrenzt', 'plafonnée', 'limitata', 'limitada', '已达上限'],

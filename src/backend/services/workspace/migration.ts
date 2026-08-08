@@ -1,6 +1,7 @@
 import path from 'node:path';
 import os from 'node:os';
-import { constants as fsConstants, type Stats } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { constants as fsConstants, type BigIntStats, type Stats } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import { getAppDir, getDataDir } from '@/utils/paths';
@@ -34,13 +35,27 @@ const LOCK_DIR = '.workspace-layout.lock';
 const TRANSACTIONS_DIR = '.workspace-migrations';
 const OWNER_FILE = 'owner.json';
 const HEARTBEAT_FILE = 'heartbeat';
-const JOURNAL_SCHEMA_VERSION = 3;
-const FAST_JOURNAL_SCHEMA_VERSION = 1;
+const JOURNAL_SCHEMA_VERSION = 4;
+const LEGACY_JOURNAL_SCHEMA_VERSION = 3;
+const SUPPORTED_JOURNAL_SCHEMA_VERSIONS = new Set([
+  LEGACY_JOURNAL_SCHEMA_VERSION,
+  JOURNAL_SCHEMA_VERSION,
+]);
+const FAST_JOURNAL_SCHEMA_VERSION = 3;
+const LEGACY_FAST_JOURNAL_SCHEMA_VERSION = 2;
+const SUPPORTED_FAST_JOURNAL_SCHEMA_VERSIONS = new Set([
+  LEGACY_FAST_JOURNAL_SCHEMA_VERSION,
+  FAST_JOURNAL_SCHEMA_VERSION,
+]);
 const LOCK_HEARTBEAT_MS = 30_000;
 const LOCK_LEASE_MS = 5 * 60_000;
 const METADATA_RENAME_ATTEMPTS = 8;
 const MAX_RECONCILIATION_PASSES = 8;
 const MIGRATION_PROGRESS_INTERVAL_MS = 5_000;
+const FAST_INVENTORY_LEAF_CONCURRENCY = 32;
+const WINDOWS_MOVE_HELPER_START_TIMEOUT_MS = 30_000;
+const WINDOWS_MOVE_HELPER_REQUEST_TIMEOUT_MS = 60_000;
+const WINDOWS_MOVE_HELPER_IDLE_MS = 5_000;
 const FAST_WORKSPACE_MCP_ID = '__workspace-mcp-root';
 
 function formatMigrationBytes(bytes: number): string {
@@ -70,6 +85,7 @@ const APP_OWNED_MCP_ENTRIES = new Set([
   'shared',
 ]);
 const TRANSACTION_BACKUP_NAME = /^\..+\.workspace-v2-[0-9a-f-]+(?:\.destination)?\.bak$/i;
+const FAST_LINK_ARTIFACT_NAME = /^\.flujo-workspace-[0-9a-f]{8}-[0-9a-f]{16}\.(?:new|old)$/i;
 
 const LEGACY_DB_CANDIDATES = [
   ['db'],
@@ -162,6 +178,8 @@ type PathManifest = {
   relocatedLinks: number;
   relocatedLinkPaths: string[];
   absoluteLinkPaths: string[];
+  /** Files with another hard-link name, possibly outside the managed root. */
+  hardLinkedFilePaths: string[];
 };
 
 type JournalSource = {
@@ -184,6 +202,8 @@ type JournalEntry = {
   initialDestinationDigest?: string;
   /** Existing destination links that must be republished with workspace-local targets. */
   destinationLinksToRelocate?: number;
+  /** Rebuild an already-current destination to sever hard links outside it. */
+  forceRepublish?: boolean;
   stage: string;
   expectedDigest: string;
   /** Durable merged metadata; recovery must not rediscover timestamps after a crash. */
@@ -206,16 +226,19 @@ type MigrationJournal = {
 };
 
 type FastRootIdentity = {
-  dev: number;
-  ino: number;
-  birthtimeMs: number;
+  /** Decimal strings preserve Windows file IDs beyond Number.MAX_SAFE_INTEGER. */
+  dev: string;
+  ino: string;
+  birthtimeNs: string;
 };
 
 type FastLinkPlan = {
   relativePath: string;
   oldTarget: string;
   newTarget: string;
-  linkType: 'file' | 'directory' | 'junction';
+  linkType: 'directory' | 'junction';
+  linkIdentity: FastRootIdentity;
+  parentIdentity: FastRootIdentity;
 };
 
 type FastJournalEntry = {
@@ -224,6 +247,9 @@ type FastJournalEntry = {
   action: 'current' | 'move';
   sourceIndex?: number;
   sourceIdentity?: FastRootIdentity;
+  sourceParentIdentity?: FastRootIdentity;
+  destinationIdentity?: FastRootIdentity;
+  destinationParentIdentity: FastRootIdentity;
   structuralDigest?: string;
   links: FastLinkPlan[];
   outcome: SubtreeOutcome;
@@ -294,13 +320,30 @@ export class WorkspaceMigrationUnsafePathError extends Error {
 }
 
 type FaultHook = (checkpoint: string) => void | Promise<void>;
+type MoveFaultHook = (
+  source: string,
+  destination: string,
+  kind: NoReplaceMoveKind,
+) => void | Promise<void>;
 let faultHook: FaultHook | undefined;
+let fastFaultHook: FaultHook | undefined;
+let moveFaultHook: MoveFaultHook | undefined;
 let lockHeartbeatIntervalMs = LOCK_HEARTBEAT_MS;
 let mountInfoForTests: string | undefined;
 
 /** Test-only fault injection seam. FLUJO_DATA_DIR must point at a temp fixture. */
 export function _setWorkspaceMigrationFaultForTests(hook?: FaultHook): void {
   faultHook = hook;
+}
+
+/** Test-only fault injection for the metadata-only atomic transaction. */
+export function _setWorkspaceMigrationFastFaultForTests(hook?: FaultHook): void {
+  fastFaultHook = hook;
+}
+
+/** Test-only native-move fault injection; never set this outside a temp fixture. */
+export function _setWorkspaceMigrationMoveFaultForTests(hook?: MoveFaultHook): void {
+  moveFaultHook = hook;
 }
 
 export function _setWorkspaceMigrationHeartbeatMsForTests(value?: number): void {
@@ -316,6 +359,8 @@ export function _resetWorkspaceMigrationState(): void {
   setWorkspaceLayoutPreparation(undefined);
   resetWorkspaceMigrationProgress();
   faultHook = undefined;
+  fastFaultHook = undefined;
+  moveFaultHook = undefined;
   lockHeartbeatIntervalMs = LOCK_HEARTBEAT_MS;
   mountInfoForTests = undefined;
 }
@@ -338,6 +383,10 @@ export function _workspaceMigrationPathsForTests(): {
 
 async function checkpoint(name: string): Promise<void> {
   await faultHook?.(name);
+}
+
+async function fastCheckpoint(name: string): Promise<void> {
+  await fastFaultHook?.(name);
 }
 
 export function migrateWorkspaceLayout(): Promise<WorkspaceLayoutMarker> {
@@ -422,6 +471,15 @@ async function lstatOptional(candidate: string): Promise<Stats | undefined> {
   }
 }
 
+async function lstatBigIntOptional(candidate: string): Promise<BigIntStats | undefined> {
+  try {
+    return await fs.lstat(candidate, { bigint: true }) as BigIntStats;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+}
+
 async function assertNotSymlink(candidate: string, label: string): Promise<void> {
   const stat = await lstatOptional(candidate);
   if (stat?.isSymbolicLink()) {
@@ -471,65 +529,8 @@ async function prepareRoots(): Promise<void> {
   await assertNotSymlink(fastJournalPath(), 'Fast workspace migration journal');
 }
 
-async function migrateSubtree(
-  subtree: WorkspaceSubtree,
-  source: string,
-  destination: string,
-): Promise<SubtreeOutcome> {
-  const sourceState = await inspect(source);
-  const destinationState = await inspect(destination);
-
-  // Fresh install (or a subtree this install never used): just create it.
-  if (sourceState === 'missing') {
-    await fs.mkdir(destination, { recursive: true });
-    return destinationState === 'missing' ? 'created' : 'already-migrated';
-  }
-
-  // Something that isn't a directory is not ours to move.
-  if (sourceState === 'other') {
-    log.warn(`Legacy "${subtree}" is not a directory — leaving it untouched`, { source });
-    await fs.mkdir(destination, { recursive: true });
-    return 'skipped';
-  }
-
-  if (destinationState === 'other') {
-    throw new WorkspaceMigrationConflictError(subtree, source, destination);
-  }
-
-  if (sourceState === 'empty') {
-    // Nothing to preserve. Remove the empty leftover so a half-finished run
-    // doesn't look like a legacy install forever.
-    await fs.mkdir(destination, { recursive: true });
-    await fs.rmdir(source).catch(() => {
-      /* still in use / not empty any more — harmless */
-    });
-    return destinationState === 'missing' ? 'created' : 'already-migrated';
-  }
-
-  // Source and destination both have data. This is a normal upgrade state when
-  // an operator has already created (or restored) the default workspace before
-  // upgrading. Never merge or overwrite: the workspace copy is authoritative
-  // and the legacy copy remains available for explicit recovery.
-  if (destinationState === 'populated') {
-    log.warn(
-      `Both legacy and default-workspace \"${subtree}\" contain data; leaving both copies untouched`,
-      { source, destination },
-    );
-    return 'skipped';
-  }
-
-  // Destination missing or empty: safe to move the whole subtree.
-  if (destinationState === 'empty') {
-    // rename() onto an existing directory is portable only when the target is
-    // absent, so clear the empty placeholder first.
-    await fs.rmdir(destination).catch(() => undefined);
-  }
-  await fs.mkdir(path.dirname(destination), { recursive: true });
-}
-
 async function syncDirectory(candidate: string): Promise<void> {
   let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
-
   try {
     handle = await fs.open(candidate, 'r');
     await handle.sync();
@@ -542,7 +543,8 @@ async function syncDirectory(candidate: string): Promise<void> {
   }
 }
 
-async function renameWithRetry(source: string, destination: string): Promise<void> {
+/** Atomic metadata replacement. This intentionally replaces `destination`. */
+async function renameReplacingWithRetry(source: string, destination: string): Promise<void> {
   for (let attempt = 1; ; attempt++) {
     try {
       await fs.rename(source, destination);
@@ -553,6 +555,671 @@ async function renameWithRetry(source: string, destination: string): Promise<voi
         attempt >= METADATA_RENAME_ATTEMPTS
         || !['EPERM', 'EBUSY', 'EACCES'].includes(code ?? '')
       ) throw error;
+      await new Promise(resolve => setTimeout(resolve, attempt * 25));
+    }
+  }
+}
+
+type NoReplaceMoveKind = 'file' | 'directory' | 'link';
+
+type NoReplaceMoveBindings = {
+  sourceIdentity: FastRootIdentity;
+  destinationParentIdentity: FastRootIdentity;
+};
+
+const WINDOWS_NO_REPLACE_MOVE_SCRIPT = Buffer.from(`
+$ErrorActionPreference = 'Stop'
+try {
+  Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Globalization;
+using System.Runtime.InteropServices;
+using System.Text;
+using Microsoft.Win32.SafeHandles;
+
+public static class FlujoBoundMove {
+  const uint FILE_LIST_DIRECTORY=0x1, FILE_ADD_FILE=0x2, FILE_ADD_SUBDIRECTORY=0x4;
+  const uint FILE_TRAVERSE=0x20, FILE_READ_ATTRIBUTES=0x80, DELETE=0x10000, SYNCHRONIZE=0x100000;
+  const uint SHARE_READ_WRITE=0x3, OPEN_EXISTING=3;
+  const uint OPEN_REPARSE_POINT=0x00200000, BACKUP_SEMANTICS=0x02000000;
+  const uint ATTR_DIRECTORY=0x10, ATTR_REPARSE_POINT=0x400;
+
+  [StructLayout(LayoutKind.Sequential)] struct FILETIME { public uint Low, High; }
+  [StructLayout(LayoutKind.Sequential)] struct HANDLE_INFO {
+    public uint Attributes;
+    public FILETIME Creation, Access, Write;
+    public uint Volume, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
+  }
+  [StructLayout(LayoutKind.Sequential)] struct IO_STATUS_BLOCK {
+    public IntPtr Status;
+    public UIntPtr Information;
+  }
+
+  [DllImport("kernel32.dll", EntryPoint="CreateFileW", CharSet=CharSet.Unicode, SetLastError=true)]
+  static extern SafeFileHandle CreateFile(string path, uint access, uint share, IntPtr security,
+    uint disposition, uint flags, IntPtr template);
+  [DllImport("kernel32.dll", SetLastError=true)]
+  static extern bool GetFileInformationByHandle(SafeFileHandle handle, out HANDLE_INFO info);
+  [DllImport("ntdll.dll")]
+  static extern int NtSetInformationFile(SafeFileHandle handle, out IO_STATUS_BLOCK iosb,
+    IntPtr info, uint length, int infoClass);
+  [DllImport("ntdll.dll")]
+  static extern uint RtlNtStatusToDosError(int status);
+
+  static SafeFileHandle Open(string path, uint access) {
+    SafeFileHandle handle=CreateFile(path,access,SHARE_READ_WRITE,IntPtr.Zero,OPEN_EXISTING,
+      OPEN_REPARSE_POINT|BACKUP_SEMANTICS,IntPtr.Zero);
+    if(handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error(),"CreateFileW failed: "+path);
+    return handle;
+  }
+  static HANDLE_INFO Info(SafeFileHandle handle,string path) {
+    HANDLE_INFO info;
+    if(!GetFileInformationByHandle(handle,out info))
+      throw new Win32Exception(Marshal.GetLastWin32Error(),"Identity query failed: "+path);
+    return info;
+  }
+  static decimal Join(uint high,uint low) { return (decimal)high*4294967296m+low; }
+  static string Identity(HANDLE_INFO info) {
+    decimal birthNs=(Join(info.Creation.High,info.Creation.Low)-116444736000000000m)*100m;
+    return info.Volume.ToString(CultureInfo.InvariantCulture)+"/"+
+      Join(info.IndexHigh,info.IndexLow).ToString(CultureInfo.InvariantCulture)+"/"+
+      birthNs.ToString(CultureInfo.InvariantCulture);
+  }
+  static void ExpectIdentity(HANDLE_INFO info,string expected,string label) {
+    string actual=Identity(info);
+    if(!String.Equals(actual,expected,StringComparison.Ordinal))
+      throw new InvalidOperationException(label+" identity changed; expected "+expected+", actual "+actual);
+  }
+  static void ExpectKind(HANDLE_INFO info,string kind) {
+    bool directory=(info.Attributes&ATTR_DIRECTORY)!=0;
+    bool reparse=(info.Attributes&ATTR_REPARSE_POINT)!=0;
+    bool valid=(kind=="directory" && directory && !reparse) ||
+      (kind=="file" && !directory && !reparse) ||
+      (kind=="link" && reparse);
+    if(!valid) throw new InvalidOperationException("Source type changed before its bound move.");
+  }
+
+  public static void NoReplace(string source,string destinationParent,string destinationName,
+      string sourceIdentity,string destinationParentIdentity,string kind) {
+    if(String.IsNullOrEmpty(destinationName) || destinationName=="." || destinationName==".." ||
+       destinationName.IndexOfAny(new char[]{'\\\\','/','\\0'})>=0)
+      throw new ArgumentException("Destination must be one simple name.");
+
+    using(SafeFileHandle sourceHandle=Open(source,DELETE|FILE_READ_ATTRIBUTES|SYNCHRONIZE))
+    using(SafeFileHandle parentHandle=Open(destinationParent,FILE_LIST_DIRECTORY|FILE_ADD_FILE|
+      FILE_ADD_SUBDIRECTORY|FILE_TRAVERSE|FILE_READ_ATTRIBUTES|SYNCHRONIZE)) {
+      HANDLE_INFO sourceInfo=Info(sourceHandle,source);
+      HANDLE_INFO parentInfo=Info(parentHandle,destinationParent);
+      ExpectIdentity(sourceInfo,sourceIdentity,"Source");
+      ExpectIdentity(parentInfo,destinationParentIdentity,"Destination parent");
+      ExpectKind(sourceInfo,kind);
+      if((parentInfo.Attributes&ATTR_DIRECTORY)==0 || (parentInfo.Attributes&ATTR_REPARSE_POINT)!=0)
+        throw new InvalidOperationException("Destination parent is not a real directory.");
+      if(sourceInfo.Volume!=parentInfo.Volume)
+        throw new InvalidOperationException("Source and destination use different volumes.");
+
+      byte[] name=Encoding.Unicode.GetBytes(destinationName);
+      int rootOffset=IntPtr.Size==8?8:4;
+      int lengthOffset=IntPtr.Size==8?16:8;
+      int nameOffset=IntPtr.Size==8?20:12;
+      byte[] zeroed=new byte[nameOffset+name.Length+2];
+      IntPtr buffer=Marshal.AllocHGlobal(zeroed.Length);
+      try {
+        Marshal.Copy(zeroed,0,buffer,zeroed.Length);
+        Marshal.WriteIntPtr(buffer,rootOffset,parentHandle.DangerousGetHandle());
+        Marshal.WriteInt32(buffer,lengthOffset,name.Length);
+        Marshal.Copy(name,0,IntPtr.Add(buffer,nameOffset),name.Length);
+        IO_STATUS_BLOCK iosb;
+        int status=NtSetInformationFile(sourceHandle,out iosb,buffer,(uint)zeroed.Length,10);
+        if(status<0) throw new Win32Exception((int)RtlNtStatusToDosError(status),
+          "NtSetInformationFile failed (NTSTATUS 0x"+((uint)status).ToString("X8")+")");
+      } finally { Marshal.FreeHGlobal(buffer); }
+    }
+  }
+}
+'@
+  [Console]::Out.WriteLine('{"ready":true}')
+  while(($line=[Console]::In.ReadLine()) -ne $null) {
+    $request=$null
+    try {
+      $request=$line | ConvertFrom-Json
+      [FlujoBoundMove]::NoReplace(
+        $request.source,
+        $request.destinationParent,
+        $request.destinationName,
+        $request.sourceIdentity,
+        $request.destinationParentIdentity,
+        $request.kind
+      )
+      [Console]::Out.WriteLine((@{id=$request.id;ok=$true} | ConvertTo-Json -Compress))
+    } catch {
+      [Console]::Out.WriteLine((@{
+        id=$request.id
+        ok=$false
+        error=$_.Exception.GetBaseException().ToString()
+      } | ConvertTo-Json -Compress))
+    }
+  }
+} catch {
+  [Console]::Error.WriteLine($_.Exception.GetBaseException().ToString())
+  exit 1
+}
+`, 'utf16le').toString('base64');
+
+const POSIX_NO_REPLACE_MOVE_SCRIPT = `
+import ctypes
+import errno
+import os
+import stat
+import sys
+
+def fail(value, message, candidate=None):
+    print('FLUJO_ERRNO=' + errno.errorcode.get(value, 'EIO'), file=sys.stderr)
+    raise OSError(value, message, candidate)
+
+source = os.environ['FLUJO_MOVE_SOURCE']
+destination = os.environ['FLUJO_MOVE_DESTINATION']
+source_parent = os.path.dirname(source)
+destination_parent = os.path.dirname(destination)
+source_name = os.path.basename(source)
+destination_name = os.path.basename(destination)
+kind = os.environ['FLUJO_MOVE_KIND']
+expected_source = os.environ['FLUJO_MOVE_SOURCE_ID'].split('/')
+expected_parent = os.environ['FLUJO_MOVE_DESTINATION_PARENT_ID'].split('/')
+if (not source_name or source_name in ('.', '..') or
+        source != os.path.join(source_parent, source_name)):
+    fail(errno.EINVAL, 'source must end in one simple name', source)
+if (not destination_name or destination_name in ('.', '..') or
+        destination != os.path.join(destination_parent, destination_name)):
+    fail(errno.EINVAL, 'destination must end in one simple name', destination)
+
+libc = ctypes.CDLL(None, use_errno=True)
+
+if sys.platform.startswith('linux'):
+    try:
+        move = libc.renameat2
+    except AttributeError:
+        fail(errno.ENOSYS, 'libc does not expose renameat2')
+    no_replace_flag = 1
+elif sys.platform == 'darwin':
+    try:
+        move = libc.renameatx_np
+    except AttributeError:
+        fail(errno.ENOSYS, 'libc does not expose renameatx_np')
+    no_replace_flag = 4
+else:
+    fail(errno.ENOSYS, 'unsupported platform for atomic no-clobber move')
+
+move.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+move.restype = ctypes.c_int
+
+def rename_no_replace(from_fd, from_name, to_fd, to_name):
+    ctypes.set_errno(0)
+    result = move(from_fd, os.fsencode(from_name), to_fd, os.fsencode(to_name), no_replace_flag)
+    return result, ctypes.get_errno()
+
+directory_flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0)
+directory_flags |= getattr(os, 'O_CLOEXEC', 0)
+source_parent_fd = -1
+destination_parent_fd = -1
+try:
+    # Bind both parents across validation and rename so a lexical parent swap
+    # cannot redirect the operation into another directory.
+    source_parent_fd = os.open(source_parent, directory_flags)
+    destination_parent_fd = os.open(destination_parent, directory_flags)
+    source_stat = os.stat(source_name, dir_fd=source_parent_fd, follow_symlinks=False)
+    parent_stat = os.fstat(destination_parent_fd)
+    if [str(source_stat.st_dev), str(source_stat.st_ino)] != expected_source[:2]:
+        fail(errno.ESTALE, 'source identity changed before bound move', source)
+    if [str(parent_stat.st_dev), str(parent_stat.st_ino)] != expected_parent[:2]:
+        fail(errno.ESTALE, 'destination parent identity changed before bound move', destination_parent)
+    if stat.S_ISLNK(parent_stat.st_mode) or not stat.S_ISDIR(parent_stat.st_mode):
+        fail(errno.ENOTDIR, 'destination parent is not a real directory', destination_parent)
+    valid_kind = ((kind == 'directory' and stat.S_ISDIR(source_stat.st_mode)) or
+                  (kind == 'file' and stat.S_ISREG(source_stat.st_mode)) or
+                  (kind == 'link' and stat.S_ISLNK(source_stat.st_mode)))
+    if not valid_kind:
+        fail(errno.ESTALE, 'source type changed before bound move', source)
+    if source_stat.st_dev != parent_stat.st_dev:
+        fail(errno.EXDEV, 'source and destination use different filesystems', destination)
+
+    result, value = rename_no_replace(
+        source_parent_fd,
+        source_name,
+        destination_parent_fd,
+        destination_name,
+    )
+    if result != 0:
+        fail(value, os.strerror(value), destination)
+
+    # POSIX has no rename-by-inode primitive. Detect a final-component swap in
+    # the syscall window and roll it back only with another no-replace move.
+    try:
+        moved_stat = os.stat(
+            destination_name,
+            dir_fd=destination_parent_fd,
+            follow_symlinks=False,
+        )
+    except OSError as error:
+        fail(error.errno or errno.ESTALE, 'moved entry disappeared before identity validation', destination)
+    if [str(moved_stat.st_dev), str(moved_stat.st_ino)] != expected_source[:2]:
+        rollback, rollback_errno = rename_no_replace(
+            destination_parent_fd,
+            destination_name,
+            source_parent_fd,
+            source_name,
+        )
+        if rollback == 0:
+            fail(errno.ESTALE, 'unexpected source was moved and safely rolled back', source)
+        fail(
+            errno.ESTALE,
+            'unexpected source was moved; no-replace rollback was blocked by ' +
+            errno.errorcode.get(rollback_errno, str(rollback_errno)),
+            destination,
+        )
+finally:
+    if destination_parent_fd >= 0:
+        os.close(destination_parent_fd)
+    if source_parent_fd >= 0:
+        os.close(source_parent_fd)
+`;
+
+type WindowsMoveRequest = {
+  id: string;
+  source: string;
+  destinationParent: string;
+  destinationName: string;
+  sourceIdentity: string;
+  destinationParentIdentity: string;
+  kind: NoReplaceMoveKind;
+};
+
+type WindowsMoveSession = {
+  request(command: WindowsMoveRequest): Promise<void>;
+  ref(): void;
+  unref(): void;
+  close(): void;
+};
+
+let windowsMoveSession: WindowsMoveSession | undefined;
+let windowsMoveQueue: Promise<void> = Promise.resolve();
+let windowsMoveIdleTimer: ReturnType<typeof setTimeout> | undefined;
+
+function windowsMoveTimeoutError(message: string): Error {
+  const error = new Error(message) as NodeJS.ErrnoException;
+  error.code = 'ETIMEDOUT';
+  return error;
+}
+
+function startWindowsMoveSession(executable: string): WindowsMoveSession {
+  const child = spawn(
+    executable,
+    ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', WINDOWS_NO_REPLACE_MOVE_SCRIPT],
+    {
+      env: process.env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+    },
+  );
+  let stdout = '';
+  let stderr = '';
+  let ready = false;
+  let stopping = false;
+  let readyResolve: (() => void) | undefined;
+  let readyReject: ((error: Error) => void) | undefined;
+  const readyPromise = new Promise<void>((resolve, reject) => {
+    readyResolve = resolve;
+    readyReject = reject;
+  });
+  const pending = new Map<string, {
+    resolve(): void;
+    reject(error: Error): void;
+    timeout: ReturnType<typeof setTimeout>;
+  }>();
+  const setReferenced = (referenced: boolean): void => {
+    const method = referenced ? 'ref' : 'unref';
+    for (const handle of [child, child.stdin, child.stdout, child.stderr]) {
+      (handle as unknown as { ref?(): void; unref?(): void })[method]?.();
+    }
+  };
+
+  const fail = (error: Error): void => {
+    readyReject?.(error);
+    readyReject = undefined;
+    for (const request of pending.values()) {
+      clearTimeout(request.timeout);
+      request.reject(error);
+    }
+    pending.clear();
+  };
+  const stop = (error?: Error): void => {
+    if (error) fail(error);
+    if (stopping) return;
+    stopping = true;
+    if (windowsMoveSession === session) windowsMoveSession = undefined;
+    child.kill();
+    setReferenced(false);
+  };
+  const readyTimeout = setTimeout(() => {
+    stop(windowsMoveTimeoutError(
+      `Windows no-clobber helper did not become ready within `
+      + `${WINDOWS_MOVE_HELPER_START_TIMEOUT_MS}ms.`,
+    ));
+  }, WINDOWS_MOVE_HELPER_START_TIMEOUT_MS);
+  const consumeLine = (line: string): void => {
+    if (!line.trim()) return;
+    let response: { ready?: boolean; id?: string; ok?: boolean; error?: string };
+    try {
+      response = JSON.parse(line) as typeof response;
+    } catch (error) {
+      stop(new Error(`Windows no-clobber helper returned invalid output: ${line.slice(0, 512)}`, {
+        cause: error,
+      }));
+      return;
+    }
+    if (response.ready === true && !ready) {
+      ready = true;
+      readyResolve?.();
+      readyResolve = undefined;
+      readyReject = undefined;
+      clearTimeout(readyTimeout);
+      return;
+    }
+    if (!response.id) return;
+    const request = pending.get(response.id);
+    if (!request) return;
+    pending.delete(response.id);
+    clearTimeout(request.timeout);
+    if (response.ok === true) request.resolve();
+    else request.reject(new Error(response.error || 'Windows bound move failed without an error.'));
+  };
+
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (chunk: string) => {
+    stdout += chunk;
+    for (;;) {
+      const newline = stdout.indexOf('\n');
+      if (newline < 0) break;
+      const line = stdout.slice(0, newline).replace(/\r$/, '');
+      stdout = stdout.slice(newline + 1);
+      consumeLine(line);
+    }
+  });
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (chunk: string) => {
+    if (stderr.length < 16_384) stderr += chunk.slice(0, 16_384 - stderr.length);
+  });
+  child.once('error', error => stop(error));
+  child.once('close', (code, signal) => {
+    stopping = true;
+    clearTimeout(readyTimeout);
+    const detail = stderr.trim().replace(/\s+/g, ' ').slice(0, 2_048);
+    fail(new Error(
+      `Windows no-clobber helper stopped${signal ? ` with signal ${signal}` : ` with exit code ${code}`}`
+      + `${detail ? `: ${detail}` : ''}`,
+    ));
+    if (windowsMoveSession === session) windowsMoveSession = undefined;
+  });
+
+  const session: WindowsMoveSession = {
+    async request(command) {
+      await readyPromise;
+      if (stopping) throw new Error('Windows no-clobber helper is stopping.');
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          if (!pending.delete(command.id)) return;
+          const error = windowsMoveTimeoutError(
+            `Windows no-clobber move ${command.id} did not complete within `
+            + `${WINDOWS_MOVE_HELPER_REQUEST_TIMEOUT_MS}ms.`,
+          );
+          reject(error);
+          stop(error);
+        }, WINDOWS_MOVE_HELPER_REQUEST_TIMEOUT_MS);
+        pending.set(command.id, { resolve, reject, timeout });
+        child.stdin.write(`${JSON.stringify(command)}\n`, error => {
+          if (!error) return;
+          const request = pending.get(command.id);
+          if (!request) return;
+          pending.delete(command.id);
+          clearTimeout(request.timeout);
+          reject(error);
+        });
+      });
+    },
+    ref: () => setReferenced(true),
+    unref: () => setReferenced(false),
+    close: () => {
+      if (stopping) return;
+      stopping = true;
+      clearTimeout(readyTimeout);
+      if (windowsMoveSession === session) windowsMoveSession = undefined;
+      child.stdin.end();
+      setReferenced(false);
+      const forceClose = setTimeout(() => child.kill(), 1_000);
+      forceClose.unref?.();
+      child.once('close', () => clearTimeout(forceClose));
+    },
+  };
+  return session;
+}
+
+function scheduleWindowsMoveSessionClose(session: WindowsMoveSession): void {
+  if (windowsMoveIdleTimer) clearTimeout(windowsMoveIdleTimer);
+  windowsMoveIdleTimer = setTimeout(() => {
+    windowsMoveIdleTimer = undefined;
+    if (windowsMoveSession !== session) return;
+    windowsMoveSession = undefined;
+    session.close();
+  }, WINDOWS_MOVE_HELPER_IDLE_MS);
+  session.unref();
+  windowsMoveIdleTimer.unref?.();
+}
+
+function formatRootIdentity(identity: FastRootIdentity): string {
+  return `${identity.dev}/${identity.ino}/${identity.birthtimeNs}`;
+}
+
+async function bindNoReplaceMove(
+  source: string,
+  destinationParent: string,
+): Promise<NoReplaceMoveBindings> {
+  const [sourceStat, parentStat] = await Promise.all([
+    lstatBigIntOptional(source),
+    lstatBigIntOptional(destinationParent),
+  ]);
+  const sourceIdentity = sourceStat && rootIdentity(sourceStat);
+  const destinationParentIdentity = parentStat && rootIdentity(parentStat);
+  if (!sourceIdentity) {
+    throw new WorkspaceMigrationConflictError(
+      'workspace move',
+      source,
+      destinationParent,
+      'source disappeared or has no stable filesystem identity',
+    );
+  }
+  if (!parentStat?.isDirectory() || parentStat.isSymbolicLink() || !destinationParentIdentity) {
+    throw new WorkspaceMigrationUnsafePathError(
+      `Workspace move destination parent is not a stable real directory: ${destinationParent}`,
+    );
+  }
+  return { sourceIdentity, destinationParentIdentity };
+}
+
+async function windowsMoveNoReplace(
+  source: string,
+  destination: string,
+  kind: NoReplaceMoveKind,
+  bindings?: NoReplaceMoveBindings,
+): Promise<void> {
+  const systemRoot = process.env.SystemRoot?.trim() || process.env.WINDIR?.trim();
+  if (!systemRoot || !path.win32.isAbsolute(systemRoot)) {
+    throw new WorkspaceMigrationMarkerError(
+      'Windows system root is unavailable; refusing a workspace move without no-clobber semantics.',
+    );
+  }
+  const executable = path.win32.join(
+    systemRoot,
+    'System32',
+    'WindowsPowerShell',
+    'v1.0',
+    'powershell.exe',
+  );
+  const destinationParent = path.dirname(destination);
+  const effectiveBindings = bindings ?? await bindNoReplaceMove(source, destinationParent);
+  const operation = windowsMoveQueue.then(async () => {
+    if (windowsMoveIdleTimer) {
+      clearTimeout(windowsMoveIdleTimer);
+      windowsMoveIdleTimer = undefined;
+    }
+    const session = windowsMoveSession ??= startWindowsMoveSession(executable);
+    session.ref();
+    try {
+      await session.request({
+        id: randomUUID(),
+        source,
+        destinationParent,
+        destinationName: path.basename(destination),
+        sourceIdentity: formatRootIdentity(effectiveBindings.sourceIdentity),
+        destinationParentIdentity: formatRootIdentity(
+          effectiveBindings.destinationParentIdentity,
+        ),
+        kind,
+      });
+    } finally {
+      scheduleWindowsMoveSessionClose(session);
+    }
+  });
+  windowsMoveQueue = operation.catch(() => undefined);
+  await operation;
+}
+
+async function findPython3Executable(): Promise<string> {
+  const configured = process.env.FLUJO_PYTHON3?.trim();
+  const candidates = [
+    configured,
+    '/usr/bin/python3',
+    '/usr/local/bin/python3',
+    '/opt/homebrew/bin/python3',
+    ...((process.env.PATH ?? '').split(path.delimiter)
+      .filter(directory => path.isAbsolute(directory))
+      .map(directory => path.join(directory, 'python3'))),
+  ].filter((candidate): candidate is string => Boolean(candidate && path.isAbsolute(candidate)));
+  for (const candidate of [...new Set(candidates)]) {
+    try {
+      const canonical = await fs.realpath(candidate);
+      const stat = await fs.stat(canonical);
+      if (!stat.isFile()) continue;
+      await fs.access(canonical, fsConstants.X_OK);
+      return canonical;
+    } catch (error) {
+      if (['ENOENT', 'EACCES', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) continue;
+      throw error;
+    }
+  }
+  throw new WorkspaceMigrationMarkerError(
+    'Python 3 is required for an atomic no-clobber workspace move on this platform. '
+    + 'No data was moved; install Python 3 or set FLUJO_PYTHON3 to its absolute executable path.',
+  );
+}
+
+async function posixMoveNoReplace(
+  source: string,
+  destination: string,
+  kind: NoReplaceMoveKind,
+  bindings?: NoReplaceMoveBindings,
+): Promise<void> {
+  const executable = await findPython3Executable();
+  const effectiveBindings = bindings ?? await bindNoReplaceMove(source, path.dirname(destination));
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(executable, ['-I', '-c', POSIX_NO_REPLACE_MOVE_SCRIPT], {
+      env: {
+        ...process.env,
+        FLUJO_MOVE_SOURCE: source,
+        FLUJO_MOVE_DESTINATION: destination,
+        FLUJO_MOVE_KIND: kind,
+        FLUJO_MOVE_SOURCE_ID: formatRootIdentity(effectiveBindings.sourceIdentity),
+        FLUJO_MOVE_DESTINATION_PARENT_ID: formatRootIdentity(
+          effectiveBindings.destinationParentIdentity,
+        ),
+      },
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr?.setEncoding('utf8');
+    child.stderr?.on('data', (chunk: string) => {
+      if (stderr.length < 16_384) stderr += chunk.slice(0, 16_384 - stderr.length);
+    });
+    child.once('error', reject);
+    child.once('close', (code, signal) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      const detail = stderr.trim().replace(/\s+/g, ' ').slice(0, 2_048);
+      const failure = new Error(
+        `POSIX no-clobber move failed${signal ? ` with signal ${signal}` : ` with exit code ${code}`}`
+        + `${detail ? `: ${detail}` : ''}`,
+      ) as NodeJS.ErrnoException;
+      failure.code = stderr.match(/FLUJO_ERRNO=([A-Z0-9_]+)/)?.[1];
+      reject(failure);
+    });
+  });
+}
+
+/**
+ * Move one filesystem object without replacing an existing final component.
+ * Windows' Node rename binding requests replace semantics, so use the .NET
+ * Move APIs, which call the native non-replacing move operation.
+ */
+async function moveNoReplaceOnce(
+  source: string,
+  destination: string,
+  kind: NoReplaceMoveKind,
+  bindings?: NoReplaceMoveBindings,
+): Promise<void> {
+  const effectiveBindings = bindings ?? await bindNoReplaceMove(
+    source,
+    path.dirname(destination),
+  );
+  await moveFaultHook?.(source, destination, kind);
+  if (process.platform === 'win32') {
+    await windowsMoveNoReplace(source, destination, kind, effectiveBindings);
+    return;
+  }
+  if (process.platform === 'linux' || process.platform === 'darwin') {
+    await posixMoveNoReplace(source, destination, kind, effectiveBindings);
+    return;
+  }
+  throw new WorkspaceMigrationMarkerError(
+    `Atomic no-clobber workspace moves are unsupported on ${process.platform}; no data was moved.`,
+  );
+}
+
+async function moveNoReplaceWithRetry(
+  source: string,
+  destination: string,
+  kind: NoReplaceMoveKind,
+  beforeAttempt?: () => Promise<void>,
+  bindings?: NoReplaceMoveBindings,
+): Promise<void> {
+  // Bind once before any fault hook or retry. A transient native error must
+  // never let a later attempt adopt a replacement at the same lexical path.
+  const effectiveBindings = bindings ?? await bindNoReplaceMove(
+    source,
+    path.dirname(destination),
+  );
+  for (let attempt = 1; ; attempt += 1) {
+    await beforeAttempt?.();
+    try {
+      await moveNoReplaceOnce(source, destination, kind, effectiveBindings);
+      return;
+    } catch (error) {
+      // A failed native operation must never turn into a retry that acts on a
+      // newly substituted source or an occupied destination.
+      if ((error as NodeJS.ErrnoException).code === 'ETIMEDOUT') throw error;
+      if (!(await lstatOptional(source)) || await lstatOptional(destination)) throw error;
+      if (attempt >= METADATA_RENAME_ATTEMPTS) throw error;
       await new Promise(resolve => setTimeout(resolve, attempt * 25));
     }
   }
@@ -578,7 +1245,7 @@ async function writeJsonAtomic(
     await handle.sync();
     await handle.close();
     handle = undefined;
-    await renameWithRetry(temp, file);
+    await renameReplacingWithRetry(temp, file);
     await syncDirectory(parent);
   } finally {
     await handle?.close().catch(() => undefined);
@@ -630,7 +1297,7 @@ async function pidIsAlive(pid: number): Promise<boolean> {
 }
 
 async function removeStaleLockIfSafe(dir: string): Promise<boolean> {
-  const stat = await lstatOptional(dir);
+  const stat = await lstatBigIntOptional(dir);
   if (!stat) return true;
   if (!stat.isDirectory() || stat.isSymbolicLink()) {
     throw new WorkspaceMigrationUnsafePathError(`Migration lock is not a real directory: ${dir}`);
@@ -644,7 +1311,7 @@ async function removeStaleLockIfSafe(dir: string): Promise<boolean> {
     } else if (!expired) {
       return false;
     }
-  } else if (Date.now() - stat.mtimeMs <= LOCK_LEASE_MS) {
+  } else if (Date.now() - Number(stat.mtimeMs) <= LOCK_LEASE_MS) {
     return false;
   }
   migrationConsole('reclaiming stale migration lock', {
@@ -660,9 +1327,40 @@ async function removeStaleLockIfSafe(dir: string): Promise<boolean> {
     `.${path.basename(dir)}.stale-${process.pid}-${randomUUID()}`,
   );
   try {
-    await renameWithRetry(dir, quarantine);
+    const current = await lstatBigIntOptional(dir);
+    if (!current) return true;
+    if (
+      current.dev !== stat.dev
+      || current.ino !== stat.ino
+      || current.birthtimeNs !== stat.birthtimeNs
+    ) return false;
+    if (await lstatOptional(quarantine)) {
+      throw new WorkspaceMigrationUnsafePathError(
+        `Stale-lock quarantine path unexpectedly exists: ${quarantine}`,
+      );
+    }
+    const parentStat = await lstatBigIntOptional(path.dirname(dir));
+    const sourceIdentity = rootIdentity(stat);
+    const destinationParentIdentity = parentStat && rootIdentity(parentStat);
+    if (
+      !sourceIdentity
+      || !parentStat?.isDirectory()
+      || parentStat.isSymbolicLink()
+      || !destinationParentIdentity
+    ) {
+      throw new WorkspaceMigrationUnsafePathError(
+        `Migration lock or its parent has no stable filesystem identity: ${dir}`,
+      );
+    }
+    await moveNoReplaceOnce(dir, quarantine, 'directory', {
+      sourceIdentity,
+      destinationParentIdentity,
+    });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
+    if (
+      (error as NodeJS.ErrnoException).code === 'ENOENT'
+      || !(await lstatOptional(dir))
+    ) return true;
     throw error;
   }
   await fs.rm(quarantine, { recursive: true, force: false });
@@ -806,7 +1504,7 @@ async function readJournal(): Promise<MigrationJournal | undefined> {
   }
   const journal = parsed as Partial<MigrationJournal>;
   if (
-    journal.schemaVersion !== JOURNAL_SCHEMA_VERSION
+    !SUPPORTED_JOURNAL_SCHEMA_VERSIONS.has(journal.schemaVersion ?? -1)
     || journal.targetVersion !== WORKSPACE_LAYOUT_VERSION
     || typeof journal.transactionId !== 'string'
     || !Array.isArray(journal.entries)
@@ -835,8 +1533,15 @@ async function readFastJournal(): Promise<FastMigrationJournal | undefined> {
     );
   }
   const journal = parsed as Partial<FastMigrationJournal>;
+  if (journal.schemaVersion === 1) {
+    throw new WorkspaceMigrationMarkerError(
+      `Fast workspace migration journal schema 1 cannot be resumed by the safe mover: ${file}. `
+      + 'No files were changed by this startup. Preserve the journal and both legacy/workspace data trees; '
+      + 'do not delete transaction files or retry with an older build.',
+    );
+  }
   if (
-    journal.schemaVersion !== FAST_JOURNAL_SCHEMA_VERSION
+    !SUPPORTED_FAST_JOURNAL_SCHEMA_VERSIONS.has(journal.schemaVersion ?? -1)
     || journal.targetVersion !== WORKSPACE_LAYOUT_VERSION
     || typeof journal.transactionId !== 'string'
     || !Array.isArray(journal.entries)
@@ -845,7 +1550,19 @@ async function readFastJournal(): Promise<FastMigrationJournal | undefined> {
       `Fast workspace migration journal has an unsupported schema: ${file}`,
     );
   }
-  validateFastJournal(journal as FastMigrationJournal);
+  try {
+    validateFastJournal(journal as FastMigrationJournal);
+  } catch (error) {
+    if (journal.schemaVersion === LEGACY_FAST_JOURNAL_SCHEMA_VERSION) {
+      throw new WorkspaceMigrationMarkerError(
+        `Fast workspace migration journal schema 2 contains legacy link state that cannot be `
+        + `resumed safely: ${file}. No files were changed by this startup; preserve the journal `
+        + 'and its .old/.new artifacts for conservative recovery.',
+        { cause: error },
+      );
+    }
+    throw error;
+  }
   return journal as FastMigrationJournal;
 }
 
@@ -910,6 +1627,11 @@ function validateRetainedManifest(entries: unknown, digest: string | undefined):
 
 function validateJournalPaths(journal: MigrationJournal): void {
   const transactionRoot = path.join(transactionsPath(), journal.transactionId);
+  if (!SUPPORTED_JOURNAL_SCHEMA_VERSIONS.has(journal.schemaVersion)) {
+    throw new WorkspaceMigrationMarkerError(
+      `Workspace migration journal schema ${journal.schemaVersion} is unsupported.`,
+    );
+  }
   if (!UUID_PATTERN.test(journal.transactionId)) {
     throw new WorkspaceMigrationMarkerError('Workspace migration journal has an invalid transaction id.');
   }
@@ -926,6 +1648,10 @@ function validateJournalPaths(journal: MigrationJournal): void {
       throw new WorkspaceMigrationMarkerError('Workspace migration journal contains duplicate/invalid entries.');
     }
     ids.add(entry.id);
+    const hasForceRepublish = Object.prototype.hasOwnProperty.call(entry, 'forceRepublish');
+    const forceRepublishIsValid = journal.schemaVersion === LEGACY_JOURNAL_SCHEMA_VERSION
+      ? !hasForceRepublish
+      : hasForceRepublish && typeof entry.forceRepublish === 'boolean';
     const expected = candidateForJournalId(entry.id);
     if (!expected) {
       throw new WorkspaceMigrationMarkerError(`Workspace migration journal has an unknown entry: ${entry.id}`);
@@ -955,6 +1681,8 @@ function validateJournalPaths(journal: MigrationJournal): void {
           || !entry.initialDestinationDigest
         )
       )
+      || !forceRepublishIsValid
+      || (entry.forceRepublish === true && !entry.initialDestinationDigest)
       || !JOURNAL_STATES.has(entry.state)
       || !SUBTREE_OUTCOMES.has(entry.outcome)
     ) {
@@ -1195,6 +1923,7 @@ function manifestFromEntries(entries: ManifestEntry[]): PathManifest {
     relocatedLinks: 0,
     relocatedLinkPaths: [],
     absoluteLinkPaths: [],
+    hardLinkedFilePaths: [],
   };
 }
 
@@ -1367,6 +2096,12 @@ async function assertSameManagedFilesystem(
     );
   }
 
+  // A regular file cannot redirect traversal into another tree: file symlinks
+  // were handled above, hardlinks are tracked separately, and every ancestor
+  // directory is canonicalized here. Avoiding realpath() for every ordinary
+  // payload file is a large fast-path win on Windows repositories/node_modules.
+  if (stat.isFile()) return;
+
   const canonicalCandidate = await fs.realpath(candidate);
   const expectedCanonical = nativePath(canonicalRoot, relativePath);
   if (nestedMountPoints.has(path.resolve(canonicalCandidate))) {
@@ -1385,7 +2120,10 @@ async function buildManifest(
   root: string,
   relocatedRootAliases: string[] = [],
   purpose = 'inventory',
-  options: { hashFileContents?: boolean } = {},
+  options: {
+    hashFileContents?: boolean;
+    ignoredRelativePaths?: ReadonlySet<string>;
+  } = {},
 ): Promise<PathManifest | undefined> {
   await assertManagedPathAncestors(root);
   const rootStat = await lstatOptional(root);
@@ -1411,6 +2149,7 @@ async function buildManifest(
   let relocatedLinks = 0;
   const relocatedLinkPaths: string[] = [];
   const absoluteLinkPaths: string[] = [];
+  const hardLinkedFilePaths: string[] = [];
   let bytes = 0;
   const reportProgress = (force = false): void => {
     const now = Date.now();
@@ -1425,11 +2164,26 @@ async function buildManifest(
       links,
       relocatedLinks,
       bytes: formatMigrationBytes(bytes),
+      _bytes: bytes,
       elapsed: formatMigrationDuration(startedAt),
     });
   };
-  migrationConsole('inventory started', { purpose, root });
+  migrationConsole('inventory started', {
+    purpose,
+    root,
+    content: hashFileContents ? 'sha256' : 'metadata-only',
+    _bytes: 0,
+  });
   const walk = async (candidate: string, relativePath: string): Promise<void> => {
+    if (
+      relativePath
+      && options.ignoredRelativePaths?.has(manifestPathIdentity(relativePath))
+    ) return;
+    if (relativePath && FAST_LINK_ARTIFACT_NAME.test(path.basename(candidate))) {
+      throw new WorkspaceMigrationUnsafePathError(
+        `Reserved fast-migration artifact exists without its owning transaction: ${candidate}`,
+      );
+    }
     const stat = await fs.lstat(candidate) as Stats;
     await assertSameManagedFilesystem(
       root,
@@ -1474,6 +2228,7 @@ async function buildManifest(
     if (stat.isFile()) {
       files += 1;
       if (hashFileContents) {
+        if (stat.nlink > 1) hardLinkedFilePaths.push(relativePath);
         entries.push({
           relativePath,
           type: 'file',
@@ -1492,7 +2247,9 @@ async function buildManifest(
           || after.size !== stat.size
           || after.mtimeMs !== stat.mtimeMs
           || after.ctimeMs !== stat.ctimeMs
+          || after.nlink !== stat.nlink
         ) throw new Error(`Workspace migration file changed while it was inventoried: ${candidate}`);
+        if (after.nlink > 1) hardLinkedFilePaths.push(relativePath);
         bytes += stat.size;
         entries.push({
           relativePath,
@@ -1514,9 +2271,29 @@ async function buildManifest(
     entries.push({ relativePath, type: 'directory', mode: permissionMode(stat) });
     directories += 1;
     reportProgress();
-    const before = (await fs.readdir(candidate)).sort((a, b) => a.localeCompare(b));
-    for (const name of before) {
-      await walk(path.join(candidate, name), relativePath ? `${relativePath}/${name}` : name);
+    const beforeEntries = (await fs.readdir(candidate, { withFileTypes: true }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const before = beforeEntries.map(entry => entry.name);
+    const leafEntries = beforeEntries.filter(entry => !entry.isDirectory());
+    const directoryEntries = beforeEntries.filter(entry => entry.isDirectory());
+    for (let index = 0; index < leafEntries.length; index += FAST_INVENTORY_LEAF_CONCURRENCY) {
+      await Promise.all(
+        leafEntries
+          .slice(index, index + FAST_INVENTORY_LEAF_CONCURRENCY)
+          .map(entry => walk(
+            path.join(candidate, entry.name),
+            relativePath ? `${relativePath}/${entry.name}` : entry.name,
+          )),
+      );
+    }
+    // Recurse into real directories serially so a wide repository cannot create
+    // an unbounded tree of pending promises. Leaf metadata still benefits from
+    // bounded parallel I/O, which is where node_modules spends most of its time.
+    for (const entry of directoryEntries) {
+      await walk(
+        path.join(candidate, entry.name),
+        relativePath ? `${relativePath}/${entry.name}` : entry.name,
+      );
     }
     const after = (await fs.readdir(candidate)).sort((a, b) => a.localeCompare(b));
     if (before.length !== after.length || before.some((name, index) => name !== after[index])) {
@@ -1614,6 +2391,7 @@ async function buildManifest(
     relocatedLinks,
     relocatedLinkPaths,
     absoluteLinkPaths,
+    hardLinkedFilePaths,
   };
   reportProgress(true);
   return manifest;
@@ -1850,28 +2628,77 @@ function isSafeRelativeEntryPath(value: unknown, allowRoot = false): value is st
   return !value.split('/').some(part => part === '' || part === '.' || part === '..');
 }
 
-function rootIdentity(stat: Stats): FastRootIdentity {
-  return {
-    dev: stat.dev,
-    ino: stat.ino,
-    birthtimeMs: stat.birthtimeMs,
+function rootIdentity(stat: BigIntStats): FastRootIdentity | undefined {
+  const identity = {
+    dev: stat.dev.toString(10),
+    ino: stat.ino.toString(10),
+    birthtimeNs: stat.birthtimeNs.toString(10),
   };
+  return validRootIdentity(identity) ? identity : undefined;
 }
 
 function validRootIdentity(value: unknown): value is FastRootIdentity {
   const identity = value as Partial<FastRootIdentity> | undefined;
   return Boolean(
     identity
-    && Number.isSafeInteger(identity.dev)
-    && Number.isSafeInteger(identity.ino)
-    && Number.isFinite(identity.birthtimeMs),
+    && typeof identity.dev === 'string'
+    && /^[1-9][0-9]*$/.test(identity.dev)
+    && typeof identity.ino === 'string'
+    && /^[1-9][0-9]*$/.test(identity.ino)
+    && typeof identity.birthtimeNs === 'string'
+    && /^[1-9][0-9]*$/.test(identity.birthtimeNs),
   );
 }
 
-function sameRootIdentity(stat: Stats, expected: FastRootIdentity): boolean {
-  return stat.dev === expected.dev
-    && stat.ino === expected.ino
-    && stat.birthtimeMs === expected.birthtimeMs;
+function sameRootIdentity(stat: BigIntStats, expected: FastRootIdentity): boolean {
+  return stat.dev.toString(10) === expected.dev
+    && stat.ino.toString(10) === expected.ino
+    && stat.birthtimeNs.toString(10) === expected.birthtimeNs;
+}
+
+async function assertFastDirectoryIdentity(
+  candidate: string,
+  expected: FastRootIdentity,
+  label: string,
+): Promise<BigIntStats> {
+  const dataRoot = path.resolve(getDataDir());
+  const resolved = path.resolve(candidate);
+  if (!isContainedOrEqual(dataRoot, resolved)) {
+    throw new WorkspaceMigrationUnsafePathError(`${label} escapes the FLUJO data root: ${candidate}`);
+  }
+
+  const dataRootStat = await lstatBigIntOptional(dataRoot);
+  if (!dataRootStat?.isDirectory() || dataRootStat.isSymbolicLink()) {
+    throw new WorkspaceMigrationUnsafePathError(`FLUJO data root changed during fast migration: ${dataRoot}`);
+  }
+  const canonicalDataRoot = await fs.realpath(dataRoot);
+  if (!samePath(canonicalDataRoot, dataRoot)) {
+    throw new WorkspaceMigrationUnsafePathError(`FLUJO data root resolves through a reparse point: ${dataRoot}`);
+  }
+
+  const relative = path.relative(dataRoot, resolved);
+  let cursor = dataRoot;
+  let cursorStat = dataRootStat;
+  for (const segment of relative.split(path.sep).filter(Boolean)) {
+    cursor = path.join(cursor, segment);
+    const stat = await lstatBigIntOptional(cursor);
+    if (!stat?.isDirectory() || stat.isSymbolicLink()) {
+      throw new WorkspaceMigrationUnsafePathError(`${label} has a non-directory or reparse ancestor: ${cursor}`);
+    }
+    if (stat.dev !== dataRootStat.dev || !samePath(await fs.realpath(cursor), cursor)) {
+      throw new WorkspaceMigrationUnsafePathError(`${label} crosses a mount or reparse point: ${cursor}`);
+    }
+    cursorStat = stat;
+  }
+  if (!sameRootIdentity(cursorStat, expected)) {
+    throw new WorkspaceMigrationConflictError(
+      label,
+      candidate,
+      candidate,
+      'directory identity changed after fast preflight',
+    );
+  }
+  return cursorStat;
 }
 
 function fastLinkArtifactPath(
@@ -1915,7 +2742,12 @@ function validateFastLinkPlan(
     || link.oldTarget.includes('\0')
     || typeof link.newTarget !== 'string'
     || link.newTarget.includes('\0')
-    || !['file', 'directory', 'junction'].includes(link.linkType ?? '')
+    || (
+      link.linkType !== 'directory'
+      && link.linkType !== 'junction'
+    )
+    || !validRootIdentity(link.linkIdentity)
+    || !validRootIdentity(link.parentIdentity)
   ) {
     throw new WorkspaceMigrationMarkerError('Fast workspace migration journal contains invalid link metadata.');
   }
@@ -1971,7 +2803,10 @@ function validateFastLinkPlan(
 
 function validateFastJournal(journal: FastMigrationJournal): void {
   if (
-    !UUID_PATTERN.test(journal.transactionId)
+    !SUPPORTED_FAST_JOURNAL_SCHEMA_VERSIONS.has(journal.schemaVersion)
+    || journal.targetVersion !== WORKSPACE_LAYOUT_VERSION
+    || !Array.isArray(journal.entries)
+    || !UUID_PATTERN.test(journal.transactionId)
     || typeof journal.createdAt !== 'string'
     || !Number.isFinite(Date.parse(journal.createdAt))
     || !FAST_JOURNAL_PHASES.has(journal.phase)
@@ -2001,6 +2836,7 @@ function validateFastJournal(journal: FastMigrationJournal): void {
       || !SUBTREE_OUTCOMES.has(entry.outcome)
       || !Array.isArray(entry.links)
       || !isDigest(entry.structuralDigest, true)
+      || !validRootIdentity(entry.destinationParentIdentity)
     ) {
       throw new WorkspaceMigrationMarkerError(
         `Fast workspace migration journal entry is invalid: ${entry.id}`,
@@ -2014,6 +2850,8 @@ function validateFastJournal(journal: FastMigrationJournal): void {
         || (entry.sourceIndex ?? -1) < 0
         || (entry.sourceIndex ?? candidate.sources.length) >= candidate.sources.length
         || !validRootIdentity(entry.sourceIdentity)
+        || !validRootIdentity(entry.sourceParentIdentity)
+        || entry.destinationIdentity !== undefined
         || !entry.structuralDigest
         || entry.links.length !== 0
       ) {
@@ -2024,8 +2862,16 @@ function validateFastJournal(journal: FastMigrationJournal): void {
     } else if (
       entry.sourceIndex !== undefined
       || entry.sourceIdentity !== undefined
+      || entry.sourceParentIdentity !== undefined
       || !['created', 'already-migrated'].includes(entry.outcome)
-      || (entry.outcome === 'created') !== (entry.structuralDigest === undefined)
+      || (entry.outcome === 'already-migrated' && (
+        !validRootIdentity(entry.destinationIdentity)
+        || !entry.structuralDigest
+      ))
+      || (entry.outcome === 'created' && !(
+        (entry.destinationIdentity === undefined && entry.structuralDigest === undefined)
+        || (validRootIdentity(entry.destinationIdentity) && Boolean(entry.structuralDigest))
+      ))
     ) {
       throw new WorkspaceMigrationMarkerError(
         `Fast workspace current entry is invalid: ${entry.id}`,
@@ -2045,6 +2891,13 @@ function validateFastJournal(journal: FastMigrationJournal): void {
     }
     if (entry.links.length > 0 && entry.action !== 'current') {
       throw new WorkspaceMigrationMarkerError(`Fast workspace move unexpectedly contains link repairs: ${entry.id}`);
+    }
+    if (
+      ['marker', 'cleanup', 'committed'].includes(journal.phase)
+      && entry.action === 'current'
+      && (!validRootIdentity(entry.destinationIdentity) || !entry.structuralDigest)
+    ) {
+      throw new WorkspaceMigrationMarkerError(`Fast workspace entry was not durably bound: ${entry.id}`);
     }
   }
   if (seenIds.size !== expectedIds.size || required.some(id => !seenIds.has(id))) {
@@ -2085,7 +2938,8 @@ async function planFastLinkRepairs(
   candidate: CandidateEntry,
   manifest: PathManifest,
   transactionId: string,
-): Promise<FastLinkPlan[]> {
+): Promise<FastLinkPlan[] | undefined> {
+  if (manifest.relocatedLinkPaths.length > 0 && process.platform !== 'win32') return undefined;
   const entries = new Map(
     manifest.entries.map(entry => [manifestPathIdentity(entry.relativePath), entry]),
   );
@@ -2098,8 +2952,19 @@ async function planFastLinkRepairs(
       || !entry.linkTarget
       || !entry.linkType
     ) throw new Error(`Missing relocated link metadata for ${relativePath}.`);
+    // The fast journal deliberately models only directory links/junctions.
+    // File-link repair uses the content-verified republish transaction.
+    if (entry.linkType === 'file') return undefined;
     const link = nativePath(candidate.destination, relativePath);
-    const oldTarget = await fs.readlink(link);
+    const oldTarget = await readFastLinkTarget(link, 'Fast preflight workspace link');
+    if (oldTarget === undefined) return undefined;
+    const linkStat = await lstatBigIntOptional(link);
+    const linkIdentity = linkStat && rootIdentity(linkStat);
+    if (
+      !linkStat?.isSymbolicLink()
+      || !linkIdentity
+      || await fs.readlink(link) !== oldTarget
+    ) return undefined;
     const mapped = mapSymlinkTarget(candidate.destination, link, oldTarget, candidate.sources);
     if (!mapped.relocated || mapped.linkTarget !== entry.linkTarget) {
       throw new WorkspaceMigrationConflictError(
@@ -2112,11 +2977,18 @@ async function planFastLinkRepairs(
     const newTarget = entry.linkType === 'junction'
       ? path.resolve(path.dirname(link), entry.linkTarget)
       : entry.linkTarget;
+    const parent = path.dirname(link);
+    const parentStat = await lstatBigIntOptional(parent);
+    const parentIdentity = parentStat && rootIdentity(parentStat);
+    if (!parentStat?.isDirectory() || parentStat.isSymbolicLink() || !parentIdentity) return undefined;
+    await assertFastDirectoryIdentity(parent, parentIdentity, 'Fast migration link parent');
     const plan: FastLinkPlan = {
       relativePath,
       oldTarget,
       newTarget,
       linkType: entry.linkType,
+      linkIdentity,
+      parentIdentity,
     };
     validateFastLinkPlan(candidate, transactionId, plan);
     for (const kind of ['new', 'old'] as const) {
@@ -2177,6 +3049,25 @@ async function planFastMigration(transactionId: string): Promise<FastMigrationJo
       `fast preflight destination for ${candidate.id}`,
       { hashFileContents: false },
     );
+    const destinationParent = path.dirname(candidate.destination);
+    const destinationParentStat = await lstatBigIntOptional(destinationParent);
+    const destinationParentIdentity = destinationParentStat && rootIdentity(destinationParentStat);
+    if (
+      !destinationParentStat?.isDirectory()
+      || destinationParentStat.isSymbolicLink()
+      || !destinationParentIdentity
+    ) {
+      migrationConsole('fast path unavailable; using merge-safe migration', {
+        subtree: candidate.subtree,
+        reason: 'destination parent has no stable filesystem identity',
+      });
+      return undefined;
+    }
+    await assertFastDirectoryIdentity(
+      destinationParent,
+      destinationParentIdentity,
+      `Fast migration destination parent for ${candidate.id}`,
+    );
 
     if (candidate.requireDirectory) {
       for (const source of sourceManifests) {
@@ -2200,13 +3091,51 @@ async function planFastMigration(transactionId: string): Promise<FastMigrationJo
       .map((item, sourceIndex) => ({ ...item, sourceIndex }))
       .filter((item): item is typeof item & { manifest: PathManifest } => Boolean(item.manifest));
     if (presentSources.length === 0) {
+      if (destinationManifest?.hardLinkedFilePaths.length) {
+        migrationConsole('fast path unavailable; using merge-safe migration', {
+          subtree: candidate.subtree,
+          reason: 'workspace destination contains hard links that must be isolated',
+        });
+        return undefined;
+      }
       const links = destinationManifest
         ? await planFastLinkRepairs(candidate, destinationManifest, transactionId)
         : [];
+      if (links === undefined) {
+        migrationConsole('fast path unavailable; using merge-safe migration', {
+          subtree: candidate.subtree,
+          reason: 'link parent has no stable filesystem identity',
+        });
+        return undefined;
+      }
+      const destinationStat = destinationManifest
+        ? await lstatBigIntOptional(candidate.destination)
+        : undefined;
+      const destinationIdentity = destinationStat && rootIdentity(destinationStat);
+      if (destinationManifest && (
+        !destinationStat?.isDirectory()
+        || destinationStat.isSymbolicLink()
+        || !destinationIdentity
+      )) {
+        migrationConsole('fast path unavailable; using merge-safe migration', {
+          subtree: candidate.subtree,
+          reason: 'workspace destination has no stable filesystem identity',
+        });
+        return undefined;
+      }
+      if (destinationIdentity) {
+        await assertFastDirectoryIdentity(
+          candidate.destination,
+          destinationIdentity,
+          `Fast migration destination for ${candidate.id}`,
+        );
+      }
       entries.push({
         id: candidate.id,
         subtree: candidate.subtree,
         action: 'current',
+        destinationIdentity,
+        destinationParentIdentity,
         structuralDigest: destinationManifest?.digest,
         links,
         outcome: destinationManifest ? 'already-migrated' : 'created',
@@ -2225,7 +3154,8 @@ async function planFastMigration(transactionId: string): Promise<FastMigrationJo
     const movable = presentSources.length === 1
       && !destinationManifest
       && presentSources[0].manifest.entries[0]?.type === 'directory'
-      && presentSources[0].manifest.absoluteLinkPaths.length === 0;
+      && presentSources[0].manifest.absoluteLinkPaths.length === 0
+      && presentSources[0].manifest.hardLinkedFilePaths.length === 0;
     if (!movable) {
       migrationConsole('fast path unavailable; using merge-safe migration', {
         subtree: candidate.subtree,
@@ -2233,22 +3163,30 @@ async function planFastMigration(transactionId: string): Promise<FastMigrationJo
           ? 'legacy and workspace trees must be reconciled'
           : presentSources.length > 1
             ? 'multiple legacy roots must be merged'
-            : 'root type or absolute links require republishing',
+            : 'root type, absolute links, or hard links require republishing',
       });
       return undefined;
     }
 
     const source = presentSources[0];
-    const [sourceStat, destinationParentStat] = await Promise.all([
-      fs.lstat(source.source) as Promise<Stats>,
-      fs.lstat(path.dirname(candidate.destination)) as Promise<Stats>,
+    const [sourceStat, sourceParentStat] = await Promise.all([
+      fs.lstat(source.source, { bigint: true }) as Promise<BigIntStats>,
+      fs.lstat(path.dirname(source.source), { bigint: true }) as Promise<BigIntStats>,
     ]);
+    const sourceIdentity = rootIdentity(sourceStat);
+    const sourceParentIdentity = rootIdentity(sourceParentStat);
     if (
       !sourceStat.isDirectory()
       || sourceStat.isSymbolicLink()
-      || !destinationParentStat.isDirectory()
-      || destinationParentStat.isSymbolicLink()
+      || !sourceParentStat.isDirectory()
+      || sourceParentStat.isSymbolicLink()
+      || !sourceIdentity
+      || !sourceParentIdentity
       || sourceStat.dev !== destinationParentStat.dev
+      // Windows uses a handle-bound native move and Linux uses
+      // renameat2(RENAME_NOREPLACE); other platforms stay on the conservative
+      // content-verified transaction.
+      || !['win32', 'linux'].includes(process.platform)
       || await filesystemRootIsMount(source.source)
     ) {
       migrationConsole('fast path unavailable; using merge-safe migration', {
@@ -2257,12 +3195,26 @@ async function planFastMigration(transactionId: string): Promise<FastMigrationJo
       });
       return undefined;
     }
+    await Promise.all([
+      assertFastDirectoryIdentity(
+        source.source,
+        sourceIdentity,
+        `Fast migration source for ${candidate.id}`,
+      ),
+      assertFastDirectoryIdentity(
+        path.dirname(source.source),
+        sourceParentIdentity,
+        `Fast migration source parent for ${candidate.id}`,
+      ),
+    ]);
     entries.push({
       id: candidate.id,
       subtree: candidate.subtree,
       action: 'move',
       sourceIndex: source.sourceIndex,
-      sourceIdentity: rootIdentity(sourceStat),
+      sourceIdentity,
+      sourceParentIdentity,
+      destinationParentIdentity,
       structuralDigest: source.manifest.digest,
       links: [],
       outcome: 'moved',
@@ -2346,9 +3298,10 @@ async function preflight(transactionId: string): Promise<MigrationJournal> {
     }
     const merged = mergeManifests(mergeInputs, candidate.subtree, candidate.destination);
     const populatedSources = sourceManifests.filter(item => item.manifest && !item.manifest.emptyDirectory);
+    const forceRepublish = Boolean(destinationManifest?.hardLinkedFilePaths.length);
     let outcome: SubtreeOutcome;
     if (sourceManifests.every(item => !item.manifest)) {
-      outcome = destinationManifest ? 'already-migrated' : 'created';
+      outcome = destinationManifest ? (forceRepublish ? 'copied' : 'already-migrated') : 'created';
     } else if (destinationManifest?.digest === merged.digest) {
       outcome = populatedSources.length > 0 ? 'recovered-identical' : 'already-migrated';
     } else if (destinationManifest && !destinationManifest.emptyDirectory) {
@@ -2369,6 +3322,7 @@ async function preflight(transactionId: string): Promise<MigrationJournal> {
       destinationBackup: backupPath(candidate.destination, transactionId, true),
       initialDestinationDigest: destinationManifest?.digest,
       destinationLinksToRelocate: destinationManifest?.relocatedLinks || undefined,
+      forceRepublish,
       stage: path.join(transactionRoot, 'stage', safeStageName(candidate.id)),
       expectedDigest: merged.digest,
       expectedEntries: merged.entries,
@@ -2403,11 +3357,20 @@ function nativePath(root: string, relativePath: string): string {
   return relativePath ? path.join(root, ...relativePath.split('/')) : root;
 }
 
+function rootMoveKind(manifest: PathManifest): NoReplaceMoveKind {
+  const root = manifest.entries.find(entry => entry.relativePath === '');
+  if (!root) throw new WorkspaceMigrationMarkerError('Workspace manifest has no root entry.');
+  if (root.type === 'directory') return 'directory';
+  if (root.type === 'symlink') return 'link';
+  return 'file';
+}
+
 async function materializeManifest(
   destination: string,
   merged: PathManifest,
   inputs: Array<{ root: string; manifest: PathManifest }>,
   publishedDestination: string,
+  subtree: string,
 ): Promise<void> {
   const records = inputs.map(input => ({
     root: input.root,
@@ -2415,6 +3378,37 @@ async function materializeManifest(
   }));
   const rootRecord = merged.entries.find(entry => entry.relativePath === '');
   if (!rootRecord) throw new Error('Merged workspace manifest has no root record.');
+  const totalFiles = merged.entries.filter(entry => entry.type === 'file').length;
+  const totalByteCount = merged.entries.reduce(
+    (total, entry) => total + (entry.type === 'file' ? entry.size ?? 0 : 0),
+    0,
+  );
+  const startedAt = Date.now();
+  let lastProgressAt = startedAt;
+  let files = 0;
+  let bytes = 0;
+  const reportProgress = (force = false): void => {
+    const now = Date.now();
+    if (!force && now - lastProgressAt < MIGRATION_PROGRESS_INTERVAL_MS) return;
+    lastProgressAt = now;
+    migrationConsole(force ? 'transfer complete' : 'transfer progress', {
+      subtree,
+      files,
+      totalFiles,
+      bytes: formatMigrationBytes(bytes),
+      totalBytes: formatMigrationBytes(totalByteCount),
+      _bytes: bytes,
+      elapsed: formatMigrationDuration(startedAt),
+    });
+  };
+  migrationConsole('transfer started', {
+    subtree,
+    files: 0,
+    totalFiles,
+    bytes: formatMigrationBytes(0),
+    totalBytes: formatMigrationBytes(totalByteCount),
+    _bytes: 0,
+  });
 
   const copyRecord = async (entry: ManifestEntry): Promise<void> => {
     const source = records.find(record => record.entries.has(entry.relativePath));
@@ -2428,6 +3422,9 @@ async function materializeManifest(
     } else if (entry.type === 'file') {
       await fs.copyFile(from, to, fsConstants.COPYFILE_EXCL);
       await fs.chmod(to, entry.mode!);
+      files += 1;
+      bytes += entry.size ?? 0;
+      reportProgress();
     } else {
       if (entry.linkType === 'junction') {
         const stagedTarget = path.resolve(path.dirname(to), entry.linkTarget!);
@@ -2474,6 +3471,7 @@ async function materializeManifest(
     await fs.chmod(nativePath(destination, entry.relativePath), entry.mode!);
   }
   await applyManifestFileTimes(destination, merged);
+  reportProgress(true);
 }
 
 async function applyManifestFileTimes(root: string, manifest: PathManifest): Promise<void> {
@@ -2673,9 +3671,15 @@ async function collectEntryInputs(entry: JournalEntry): Promise<{
   return { inputs, destination, destinationBackup };
 }
 
-async function ensureStage(entry: JournalEntry): Promise<void> {
+async function ensureStage(
+  entry: JournalEntry,
+  requireIndependentFiles = false,
+): Promise<void> {
   let stage = await buildManifest(entry.stage, [entry.destination]);
-  if (stage?.digest === entry.expectedDigest) return;
+  if (
+    stage?.digest === entry.expectedDigest
+    && (!requireIndependentFiles || stage.hardLinkedFilePaths.length === 0)
+  ) return;
   if (stage) await fs.rm(entry.stage, { recursive: true, force: false });
   const { inputs } = await collectEntryInputs(entry);
   const expected = manifestFromEntries(entry.expectedEntries);
@@ -2698,9 +3702,17 @@ async function ensureStage(entry: JournalEntry): Promise<void> {
   } else {
     // Use the durable preflight metadata, not a recovery-time re-inventory:
     // source reads after a crash may have advanced atime.
-    await materializeManifest(entry.stage, expected, inputs, entry.destination);
+    await materializeManifest(entry.stage, expected, inputs, entry.destination, entry.subtree);
   }
   stage = await requireDigest(entry.stage, entry.expectedDigest, entry.subtree, [entry.destination]);
+  if (requireIndependentFiles && stage.hardLinkedFilePaths.length > 0) {
+    throw new WorkspaceMigrationConflictError(
+      entry.subtree,
+      entry.stage,
+      entry.destination,
+      'recovery stage still contains hard links',
+    );
+  }
   await fsyncManifest(entry.stage, stage);
   await syncDirectory(path.dirname(entry.stage));
 }
@@ -2756,7 +3768,11 @@ async function archiveSources(entry: JournalEntry): Promise<void> {
       );
     }
     try {
-      await renameWithRetry(source.path, source.backup);
+      await moveNoReplaceWithRetry(
+        source.path,
+        source.backup,
+        rootMoveKind(original),
+      );
       await syncDirectory(path.dirname(source.path));
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
@@ -2773,11 +3789,20 @@ async function archiveSources(entry: JournalEntry): Promise<void> {
   }
 }
 
-async function archiveDestination(entry: JournalEntry): Promise<void> {
+function entryRequiresRepublish(entry: JournalEntry): boolean {
+  return entry.forceRepublish === true && entry.state !== 'published';
+}
+
+async function archiveDestination(
+  entry: JournalEntry,
+  forceRepublish = false,
+): Promise<void> {
   if (
     !entry.initialDestinationDigest
     || (
-      entry.initialDestinationDigest === entry.expectedDigest
+    entry.initialDestinationDigest === entry.expectedDigest
+      && !forceRepublish
+      && !entryRequiresRepublish(entry)
       && !entry.destinationLinksToRelocate
     )
   ) return;
@@ -2791,7 +3816,14 @@ async function archiveDestination(entry: JournalEntry): Promise<void> {
     }
     if (
       destination
-      && (destination.digest !== entry.expectedDigest || destination.relocatedLinks !== 0)
+      && (
+        destination.digest !== entry.expectedDigest
+        || destination.relocatedLinks !== 0
+        || (
+          (forceRepublish || entryRequiresRepublish(entry))
+          && destination.hardLinkedFilePaths.length > 0
+        )
+      )
     ) {
       throw new WorkspaceMigrationConflictError(entry.subtree, entry.destinationBackup, entry.destination);
     }
@@ -2807,31 +3839,67 @@ async function archiveDestination(entry: JournalEntry): Promise<void> {
     );
   }
   assertDestinationRelocationState(entry, destination, entry.destination, false);
-  await renameWithRetry(entry.destination, entry.destinationBackup);
+  await moveNoReplaceWithRetry(
+    entry.destination,
+    entry.destinationBackup,
+    rootMoveKind(destination),
+  );
   await syncDirectory(path.dirname(entry.destination));
 }
 
-async function publishEntry(entry: JournalEntry): Promise<void> {
+async function publishEntry(
+  entry: JournalEntry,
+  forceRepublish = false,
+): Promise<void> {
   const destination = await buildManifest(entry.destination, destinationRelocationAliases(entry));
-  if (destination?.digest === entry.expectedDigest && destination.relocatedLinks === 0) return;
+  if (
+    destination?.digest === entry.expectedDigest
+    && destination.relocatedLinks === 0
+    && (
+      (!forceRepublish && !entryRequiresRepublish(entry))
+      || destination.hardLinkedFilePaths.length === 0
+    )
+  ) return;
   if (destination) {
     // An empty preflight destination is still archived instead of deleted so
     // every filesystem mutation remains recoverable until marker commit.
     if (entry.initialDestinationDigest !== destination.digest) {
       throw new WorkspaceMigrationConflictError(entry.subtree, entry.destination, entry.destination);
     }
-    await archiveDestination(entry);
+    await archiveDestination(entry, forceRepublish);
   }
-  await requireDigest(entry.stage, entry.expectedDigest, entry.subtree, [entry.destination]);
+  const stage = await requireDigest(
+    entry.stage,
+    entry.expectedDigest,
+    entry.subtree,
+    [entry.destination],
+  );
   await fs.mkdir(path.dirname(entry.destination), { recursive: true });
   try {
-    await renameWithRetry(entry.stage, entry.destination);
+    await moveNoReplaceWithRetry(
+      entry.stage,
+      entry.destination,
+      rootMoveKind(stage),
+    );
   } catch (error) {
     const raced = await buildManifest(entry.destination, destinationRelocationAliases(entry));
-    if (!raced || raced.digest !== entry.expectedDigest || raced.relocatedLinks !== 0) throw error;
+    if (
+      !raced
+      || raced.digest !== entry.expectedDigest
+      || raced.relocatedLinks !== 0
+      || raced.hardLinkedFilePaths.length > 0
+    ) throw error;
   }
   await syncDirectory(path.dirname(entry.destination));
-  await requireDigest(entry.destination, entry.expectedDigest, entry.subtree);
+  const published = await requireDigest(entry.destination, entry.expectedDigest, entry.subtree);
+  if (published.hardLinkedFilePaths.length > 0) {
+    throw new WorkspaceMigrationConflictError(
+      entry.subtree,
+      entry.destination,
+      entry.destination,
+      'republished destination still contains hard links',
+    );
+  }
 }
 
 async function executeEntry(entry: JournalEntry, journal: MigrationJournal): Promise<void> {
@@ -2839,7 +3907,11 @@ async function executeEntry(entry: JournalEntry, journal: MigrationJournal): Pro
     entry.destination,
     destinationRelocationAliases(entry),
   );
-  if (currentDestination?.digest !== entry.expectedDigest || currentDestination.relocatedLinks > 0) {
+  if (
+    entryRequiresRepublish(entry)
+    || currentDestination?.digest !== entry.expectedDigest
+    || currentDestination.relocatedLinks > 0
+  ) {
     await ensureStage(entry);
     entry.state = 'staged';
     await writeJournal(journal);
@@ -2855,7 +3927,11 @@ async function executeEntry(entry: JournalEntry, journal: MigrationJournal): Pro
     entry.destination,
     destinationRelocationAliases(entry),
   );
-  if (afterSources?.digest !== entry.expectedDigest || afterSources.relocatedLinks > 0) {
+  if (
+    entryRequiresRepublish(entry)
+    || afterSources?.digest !== entry.expectedDigest
+    || afterSources.relocatedLinks > 0
+  ) {
     await archiveDestination(entry);
     entry.state = 'destination-archived';
     await writeJournal(journal);
@@ -2865,6 +3941,130 @@ async function executeEntry(entry: JournalEntry, journal: MigrationJournal): Pro
   entry.state = 'published';
   await writeJournal(journal);
   await checkpoint(`after-publish:${entry.id}`);
+}
+
+/**
+ * Schema 3 predates the durable `forceRepublish` bit. A schema-3 transaction
+ * could therefore publish its marker while an already-current destination
+ * still shared hard-link inodes with another tree. Keep the legacy journal and
+ * marker digest byte-for-byte compatible, but use its existing stage and
+ * destination-backup paths to republish independent files before cleanup.
+ *
+ * The entry state transitions make the repair restartable without adding a
+ * schema-3 field: `staged` is persisted before the destination is archived,
+ * and `destination-archived` before the independent stage is published.
+ */
+async function republishLegacyHardlinkedDestinations(
+  journal: MigrationJournal,
+): Promise<void> {
+  if (journal.schemaVersion !== LEGACY_JOURNAL_SCHEMA_VERSION) return;
+
+  for (const entry of journal.entries) {
+    // Schema 3 could retain hard links only when it left an unchanged existing
+    // destination in place. Merged outputs and link-relocation outputs were
+    // already materialized file-by-file, so avoid another content scan of
+    // large trees that are known to have been republished (notably userdata).
+    if (
+      !entry.initialDestinationDigest
+      || entry.initialDestinationDigest !== entry.expectedDigest
+      || Boolean(entry.destinationLinksToRelocate)
+    ) continue;
+
+    let [destination, destinationBackup] = await Promise.all([
+      buildManifest(entry.destination, destinationRelocationAliases(entry)),
+      buildManifest(entry.destinationBackup, destinationBackupRelocationAliases(entry)),
+    ]);
+
+    if (destination) {
+      if (
+        destination.digest !== entry.expectedDigest
+        || destination.relocatedLinks !== 0
+      ) {
+        // The ordinary transaction recovery below owns non-published states.
+        // A matching marker/cleanup path must never reinterpret changed data as
+        // a hard-link-only repair.
+        continue;
+      }
+      if (destination.hardLinkedFilePaths.length === 0) {
+        if (
+          ['staged', 'destination-archived'].includes(entry.state)
+          && destinationBackup?.digest === entry.initialDestinationDigest
+        ) {
+          entry.state = 'published';
+          await writeJournal(journal);
+        }
+        continue;
+      }
+    } else {
+      const repairWasDurablyStarted = ['staged', 'destination-archived'].includes(entry.state);
+      if (!repairWasDurablyStarted || !destinationBackup) continue;
+    }
+
+    if (destinationBackup) {
+      if (destinationBackup.digest !== entry.initialDestinationDigest) {
+        throw new WorkspaceMigrationConflictError(
+          entry.subtree,
+          entry.destinationBackup,
+          entry.destination,
+          'legacy hard-link recovery backup differs from the preflight destination',
+        );
+      }
+      if (destination) {
+        throw new WorkspaceMigrationConflictError(
+          entry.subtree,
+          entry.destinationBackup,
+          entry.destination,
+          'both the hard-linked destination and its recovery backup exist',
+        );
+      }
+    }
+
+    migrationConsole('legacy destination isolation repair started', {
+      transactionId: journal.transactionId,
+      subtree: entry.subtree,
+      hardLinkedFiles: destination?.hardLinkedFilePaths.length
+        ?? destinationBackup?.hardLinkedFilePaths.length
+        ?? 0,
+    });
+
+    // At least one complete, content-verified input exists here. A matching
+    // but hard-linked stage is rebuilt instead of being published as-is.
+    await ensureStage(entry, true);
+    entry.state = 'staged';
+    await writeJournal(journal);
+    await checkpoint(`after-stage:${entry.id}`);
+
+    await archiveDestination(entry, true);
+    entry.state = 'destination-archived';
+    await writeJournal(journal);
+    await checkpoint(`after-destination-archive:${entry.id}`);
+
+    await publishEntry(entry, true);
+    entry.state = 'published';
+    await writeJournal(journal);
+    await checkpoint(`after-publish:${entry.id}`);
+
+    destination = await buildManifest(entry.destination, destinationRelocationAliases(entry));
+    destinationBackup = await buildManifest(
+      entry.destinationBackup,
+      destinationBackupRelocationAliases(entry),
+    );
+    if (
+      !destination
+      || destination.digest !== entry.expectedDigest
+      || destination.relocatedLinks !== 0
+      || destination.hardLinkedFilePaths.length > 0
+      || !destinationBackup
+      || destinationBackup.digest !== entry.initialDestinationDigest
+    ) {
+      throw new WorkspaceMigrationConflictError(
+        entry.subtree,
+        entry.destinationBackup,
+        entry.destination,
+        'legacy hard-link isolation repair was not durably published',
+      );
+    }
+  }
 }
 
 const OUTCOME_RANK: Record<SubtreeOutcome, number> = {
@@ -2892,7 +4092,8 @@ function aggregateOutcomes(
 function journalDigest(journal: MigrationJournal): string {
   const dataRoot = getDataDir();
   const workspaceRoot = getWorkspaceDir(DEFAULT_WORKSPACE);
-  return createHash('sha256').update(JSON.stringify(journal.entries.map(entry => ({
+  const entries = journal.entries.map(entry => {
+    const legacyEntry = {
     id: entry.id,
     subtree: entry.subtree,
     sources: entry.sources.map(source => ({
@@ -2911,7 +4112,15 @@ function journalDigest(journal: MigrationJournal): string {
     expectedEntries: entry.expectedEntries,
     outcome: entry.outcome,
     requireDirectory: entry.requireDirectory,
-  })))).digest('hex');
+    };
+    return journal.schemaVersion === LEGACY_JOURNAL_SCHEMA_VERSION
+      ? legacyEntry
+      : { ...legacyEntry, forceRepublish: entry.forceRepublish };
+  });
+  const payload = journal.schemaVersion === LEGACY_JOURNAL_SCHEMA_VERSION
+    ? entries
+    : { schemaVersion: JOURNAL_SCHEMA_VERSION, entries };
+  return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
 }
 
 async function cleanupRetainedMountSource(
@@ -3067,7 +4276,15 @@ async function cleanupTransaction(journal: MigrationJournal): Promise<void> {
       subtree: entry.subtree,
       destination: entry.destination,
     });
-    await requireDigest(entry.destination, entry.expectedDigest, entry.subtree);
+    const destination = await requireDigest(entry.destination, entry.expectedDigest, entry.subtree);
+    if (destination.hardLinkedFilePaths.length > 0) {
+      throw new WorkspaceMigrationConflictError(
+        entry.subtree,
+        entry.destination,
+        entry.destination,
+        'hard links remain before transaction cleanup',
+      );
+    }
     const expected = manifestFromEntries(entry.expectedEntries);
     // requireDigest hashes file contents and can advance atime. Reapply both
     // timestamps after that final verification read, then durably flush the
@@ -3165,15 +4382,64 @@ async function readFastLinkTarget(candidate: string, label: string): Promise<str
   return target;
 }
 
-async function createFastReplacementLink(plan: FastLinkPlan, candidate: string): Promise<void> {
-  if (plan.linkType === 'junction') {
-    await fs.symlink(plan.newTarget, candidate, 'junction');
-  } else {
-    await fs.symlink(plan.newTarget, candidate, plan.linkType === 'directory' ? 'dir' : 'file');
+async function requireFastLinkIdentity(
+  candidate: string,
+  expected: FastRootIdentity,
+  label: string,
+): Promise<void> {
+  const stat = await lstatBigIntOptional(candidate);
+  if (!stat?.isSymbolicLink() || !sameRootIdentity(stat, expected)) {
+    throw new WorkspaceMigrationConflictError(
+      label,
+      candidate,
+      candidate,
+      'link identity changed after fast preflight',
+    );
   }
 }
 
+async function createFastLink(
+  target: string,
+  linkType: FastLinkPlan['linkType'],
+  candidate: string,
+): Promise<void> {
+  if (process.platform !== 'win32') {
+    throw new WorkspaceMigrationMarkerError('Fast link repair requires Windows no-replace rename semantics.');
+  }
+  if (linkType === 'junction') {
+    await fs.symlink(target, candidate, 'junction');
+  } else {
+    await fs.symlink(target, candidate, 'dir');
+  }
+}
+
+async function assertFastLinkBindings(
+  entry: FastJournalEntry,
+  candidate: CandidateEntry,
+  plan: FastLinkPlan,
+): Promise<void> {
+  if (!entry.destinationIdentity) {
+    throw new WorkspaceMigrationMarkerError(`Fast link entry has no destination identity: ${entry.id}`);
+  }
+  await assertFastDirectoryIdentity(
+    path.dirname(candidate.destination),
+    entry.destinationParentIdentity,
+    `Fast migration destination parent for ${entry.id}`,
+  );
+  await assertFastDirectoryIdentity(
+    candidate.destination,
+    entry.destinationIdentity,
+    `Fast migration destination for ${entry.id}`,
+  );
+  await assertFastDirectoryIdentity(
+    path.dirname(nativePath(candidate.destination, plan.relativePath)),
+    plan.parentIdentity,
+    `Fast migration link parent for ${entry.id}/${plan.relativePath}`,
+  );
+}
+
 async function applyFastLinkPlan(
+  entry: FastJournalEntry,
   candidate: CandidateEntry,
   journal: FastMigrationJournal,
   plan: FastLinkPlan,
@@ -3182,12 +4448,24 @@ async function applyFastLinkPlan(
   const replacement = fastLinkArtifactPath(candidate, journal.transactionId, plan.relativePath, 'new');
   const backup = fastLinkArtifactPath(candidate, journal.transactionId, plan.relativePath, 'old');
   const parent = path.dirname(link);
+  await assertFastLinkBindings(entry, candidate, plan);
 
-  let [liveTarget, replacementTarget, backupTarget] = await Promise.all([
+  const inspectedTargets = await Promise.all([
     readFastLinkTarget(link, 'Managed workspace link'),
     readFastLinkTarget(replacement, 'Fast migration replacement link'),
     readFastLinkTarget(backup, 'Fast migration backup link'),
   ]);
+  let liveTarget = inspectedTargets[0];
+  const replacementTarget = inspectedTargets[1];
+  let backupTarget = inspectedTargets[2];
+  if (replacementTarget !== undefined) {
+    throw new WorkspaceMigrationConflictError(
+      candidate.subtree,
+      replacement,
+      candidate.destination,
+      'unexpected replacement artifact exists for a no-clobber link transaction',
+    );
+  }
   const liveIsOld = liveTarget !== undefined
     && fastLinkTargetMatches(liveTarget, plan.oldTarget, plan.linkType);
   const liveIsNew = liveTarget !== undefined
@@ -3200,17 +4478,6 @@ async function applyFastLinkPlan(
       'workspace link changed after fast preflight',
     );
   }
-  if (
-    replacementTarget !== undefined
-    && !fastLinkTargetMatches(replacementTarget, plan.newTarget, plan.linkType)
-  ) {
-    throw new WorkspaceMigrationConflictError(
-      candidate.subtree,
-      replacement,
-      candidate.destination,
-      'transaction replacement link has an unexpected target',
-    );
-  }
   if (backupTarget !== undefined && !fastLinkTargetMatches(backupTarget, plan.oldTarget, plan.linkType)) {
     throw new WorkspaceMigrationConflictError(
       candidate.subtree,
@@ -3220,80 +4487,143 @@ async function applyFastLinkPlan(
     );
   }
 
-  if (liveIsNew) {
-    if (replacementTarget !== undefined) {
-      await fs.unlink(replacement);
-      await syncDirectory(parent);
-    }
-    return;
-  }
-
-  if (liveIsOld && backupTarget !== undefined) {
-    throw new WorkspaceMigrationConflictError(
-      candidate.subtree,
-      link,
-      candidate.destination,
-      'both the original link and its transaction backup exist',
-    );
-  }
-
-  if (liveTarget === undefined && backupTarget !== undefined && replacementTarget === undefined) {
-    // A filesystem may persist the old-link rename but lose the separately
-    // created replacement after a power cut. Restore the known old link first,
-    // then repeat the fully journaled swap.
-    await renameWithRetry(backup, link);
-    await syncDirectory(parent);
-    liveTarget = plan.oldTarget;
-    backupTarget = undefined;
-  }
-
-  if (liveTarget === undefined && backupTarget === undefined) {
-    throw new WorkspaceMigrationConflictError(
-      candidate.subtree,
-      link,
-      candidate.destination,
-      'workspace link disappeared during fast migration',
-    );
-  }
-
-  if (replacementTarget === undefined) {
-    await createFastReplacementLink(plan, replacement);
-    await syncDirectory(parent);
-    replacementTarget = await readFastLinkTarget(replacement, 'Fast migration replacement link');
-    if (
-      replacementTarget === undefined
-      || !fastLinkTargetMatches(replacementTarget, plan.newTarget, plan.linkType)
-    ) throw new Error(`Fast workspace replacement link was not durably created: ${replacement}`);
-  }
-
-  if (liveTarget !== undefined) {
-    const rechecked = await readFastLinkTarget(link, 'Managed workspace link');
-    if (rechecked === undefined || !fastLinkTargetMatches(rechecked, plan.oldTarget, plan.linkType)) {
+  if (liveIsOld) {
+    if (backupTarget !== undefined) {
       throw new WorkspaceMigrationConflictError(
         candidate.subtree,
         link,
         candidate.destination,
-        'workspace link changed before its atomic replacement',
+        'both the original link and its transaction backup exist',
       );
     }
-    await renameWithRetry(link, backup);
+    await fastCheckpoint(`before-fast-link-backup:${candidate.id}:${plan.relativePath}`);
+    try {
+      await moveNoReplaceWithRetry(link, backup, 'link', async () => {
+        await assertFastLinkBindings(entry, candidate, plan);
+        await requireFastLinkIdentity(link, plan.linkIdentity, `Fast migration link for ${entry.id}`);
+        const recheckedLive = await readFastLinkTarget(link, 'Managed workspace link');
+        if (
+          recheckedLive === undefined
+          || !fastLinkTargetMatches(recheckedLive, plan.oldTarget, plan.linkType)
+          || await lstatOptional(backup)
+        ) {
+          throw new WorkspaceMigrationConflictError(
+            candidate.subtree,
+            link,
+            candidate.destination,
+            'workspace link changed before its no-clobber replacement',
+          );
+        }
+        await fastCheckpoint(`after-fast-link-backup-absence-check:${candidate.id}:${plan.relativePath}`);
+      }, {
+        sourceIdentity: plan.linkIdentity,
+        destinationParentIdentity: plan.parentIdentity,
+      });
+    } catch (error) {
+      if (await lstatOptional(backup)) {
+        throw new WorkspaceMigrationConflictError(
+          candidate.subtree,
+          link,
+          candidate.destination,
+          'transaction backup appeared during atomic link archival',
+        );
+      }
+      throw error;
+    }
     await syncDirectory(parent);
-    backupTarget = plan.oldTarget;
+    await requireFastLinkIdentity(backup, plan.linkIdentity, `Fast migration backup for ${entry.id}`);
+    backupTarget = await readFastLinkTarget(backup, 'Fast migration backup link');
+    if (backupTarget === undefined || !fastLinkTargetMatches(backupTarget, plan.oldTarget, plan.linkType)) {
+      throw new Error(`Fast workspace backup link was not durably created: ${backup}`);
+    }
+    liveTarget = undefined;
+    await fastCheckpoint(`after-fast-link-backup:${candidate.id}:${plan.relativePath}`);
   }
 
-  if (backupTarget === undefined) {
-    throw new WorkspaceMigrationConflictError(
-      candidate.subtree,
-      link,
-      candidate.destination,
-      'workspace link replacement has no recoverable old link',
-    );
+  if (liveTarget === undefined && backupTarget === undefined) {
+    // Directory fsync is not guaranteed on Windows. If a power loss retains the
+    // journal but rolls back both names, reconstruct the journal-authenticated
+    // backup first; symlink creation is atomic and no-replace.
+    await assertFastLinkBindings(entry, candidate, plan);
+    await createFastLink(plan.oldTarget, plan.linkType, backup);
+    await syncDirectory(parent);
+    backupTarget = await readFastLinkTarget(backup, 'Reconstructed fast migration backup link');
+    if (backupTarget === undefined || !fastLinkTargetMatches(backupTarget, plan.oldTarget, plan.linkType)) {
+      throw new Error(`Fast workspace backup link was not reconstructed: ${backup}`);
+    }
   }
-  await renameWithRetry(replacement, link);
-  await syncDirectory(parent);
-  const published = await readFastLinkTarget(link, 'Published workspace link');
-  if (published === undefined || !fastLinkTargetMatches(published, plan.newTarget, plan.linkType)) {
-    throw new Error(`Fast workspace replacement link was not published: ${link}`);
+
+  if (liveTarget === undefined) {
+    await assertFastLinkBindings(entry, candidate, plan);
+    if (await lstatOptional(link)) {
+      throw new WorkspaceMigrationConflictError(
+        candidate.subtree,
+        link,
+        candidate.destination,
+        'a path appeared before no-clobber link publication',
+      );
+    }
+    await createFastLink(plan.newTarget, plan.linkType, link);
+    await syncDirectory(parent);
+    liveTarget = await readFastLinkTarget(link, 'Published workspace link');
+    if (liveTarget === undefined || !fastLinkTargetMatches(liveTarget, plan.newTarget, plan.linkType)) {
+      throw new Error(`Fast workspace replacement link was not published: ${link}`);
+    }
+    await fastCheckpoint(`after-fast-link-publish:${candidate.id}:${plan.relativePath}`);
+  }
+}
+
+async function renameFastDirectoryNoReplace(
+  entry: FastJournalEntry,
+  candidate: CandidateEntry,
+  source: string,
+): Promise<void> {
+  if (!entry.sourceIdentity || !entry.sourceParentIdentity) {
+    throw new WorkspaceMigrationMarkerError(`Fast workspace move entry is incomplete: ${entry.id}`);
+  }
+  await fastCheckpoint(`before-fast-move-rename:${entry.id}`);
+  try {
+    await moveNoReplaceWithRetry(source, candidate.destination, 'directory', async () => {
+      // Every retry rebinds every lexical ancestor immediately before the OS
+      // move. No retry may reuse paths checked before a transient failure.
+      await assertFastDirectoryIdentity(
+        path.dirname(source),
+        entry.sourceParentIdentity!,
+        `Fast migration source parent for ${entry.id}`,
+      );
+      await assertFastDirectoryIdentity(
+        source,
+        entry.sourceIdentity!,
+        `Fast migration source for ${entry.id}`,
+      );
+      await assertFastDirectoryIdentity(
+        path.dirname(candidate.destination),
+        entry.destinationParentIdentity,
+        `Fast migration destination parent for ${entry.id}`,
+      );
+      if (await lstatOptional(candidate.destination)) {
+        throw new WorkspaceMigrationConflictError(
+          candidate.subtree,
+          source,
+          candidate.destination,
+          'a path appeared before the no-clobber directory move',
+        );
+      }
+      await fastCheckpoint(`after-fast-move-destination-absence-check:${entry.id}`);
+    }, {
+      sourceIdentity: entry.sourceIdentity,
+      destinationParentIdentity: entry.destinationParentIdentity,
+    });
+  } catch (error) {
+    if (await lstatOptional(candidate.destination)) {
+      throw new WorkspaceMigrationConflictError(
+        candidate.subtree,
+        source,
+        candidate.destination,
+        'destination appeared during the no-clobber directory move',
+      );
+    }
+    throw error;
   }
 }
 
@@ -3302,11 +4632,22 @@ async function executeFastMove(entry: FastJournalEntry, candidate: CandidateEntr
     entry.action !== 'move'
     || entry.sourceIndex === undefined
     || !entry.sourceIdentity
+    || !entry.sourceParentIdentity
   ) throw new WorkspaceMigrationMarkerError(`Fast workspace move entry is incomplete: ${entry.id}`);
   const source = candidate.sources[entry.sourceIndex];
+  await assertFastDirectoryIdentity(
+    path.dirname(candidate.destination),
+    entry.destinationParentIdentity,
+    `Fast migration destination parent for ${entry.id}`,
+  );
+  await assertFastDirectoryIdentity(
+    path.dirname(source),
+    entry.sourceParentIdentity,
+    `Fast migration source parent for ${entry.id}`,
+  );
   const [sourceStat, destinationStat] = await Promise.all([
-    lstatOptional(source),
-    lstatOptional(candidate.destination),
+    lstatBigIntOptional(source),
+    lstatBigIntOptional(candidate.destination),
   ]);
   if (sourceStat && destinationStat) {
     throw new WorkspaceMigrationConflictError(
@@ -3317,57 +4658,123 @@ async function executeFastMove(entry: FastJournalEntry, candidate: CandidateEntr
     );
   }
   if (sourceStat) {
-    if (
-      !sourceStat.isDirectory()
-      || sourceStat.isSymbolicLink()
-      || !sameRootIdentity(sourceStat, entry.sourceIdentity)
-    ) {
-      throw new WorkspaceMigrationConflictError(
-        candidate.subtree,
-        source,
-        candidate.destination,
-        'legacy root identity changed after fast preflight',
-      );
-    }
-    await fs.mkdir(path.dirname(candidate.destination), { recursive: true });
-    await renameWithRetry(source, candidate.destination);
+    await renameFastDirectoryNoReplace(entry, candidate, source);
     await Promise.all([
       syncDirectory(path.dirname(source)),
       syncDirectory(path.dirname(candidate.destination)),
     ]);
   }
-  const published = await lstatOptional(candidate.destination);
-  if (
-    !published
-    || !published.isDirectory()
-    || published.isSymbolicLink()
-    || !sameRootIdentity(published, entry.sourceIdentity)
-  ) {
-    throw new WorkspaceMigrationConflictError(
-      candidate.subtree,
-      source,
-      candidate.destination,
-      'atomic move did not publish the inventoried directory identity',
-    );
-  }
+  await assertFastDirectoryIdentity(
+    candidate.destination,
+    entry.sourceIdentity,
+    `Published fast migration destination for ${entry.id}`,
+  );
+  await fastCheckpoint(`after-fast-move:${entry.id}`);
 }
 
-async function validateFastPublishedLayout(journal: FastMigrationJournal): Promise<void> {
+async function bindCreatedFastEntries(
+  journal: FastMigrationJournal,
+  recreatedAfterMarker: ReadonlySet<string> = new Set(),
+): Promise<void> {
+  let changed = false;
+  for (const entry of journal.entries) {
+    if (entry.action !== 'current' || entry.outcome !== 'created') continue;
+    const candidate = candidateForFastId(entry.id);
+    if (!candidate) throw new WorkspaceMigrationMarkerError(`Unknown fast workspace entry: ${entry.id}`);
+    await assertFastDirectoryIdentity(
+      path.dirname(candidate.destination),
+      entry.destinationParentIdentity,
+      `Fast migration destination parent for ${entry.id}`,
+    );
+    if (entry.destinationIdentity && entry.structuralDigest) {
+      if (recreatedAfterMarker.has(entry.id)) continue;
+      await assertFastDirectoryIdentity(
+        candidate.destination,
+        entry.destinationIdentity,
+        `Created fast migration destination for ${entry.id}`,
+      );
+      continue;
+    }
+    const manifest = await buildManifest(
+      candidate.destination,
+      candidate.sources,
+      `binding newly-created destination for ${entry.id}`,
+      { hashFileContents: false },
+    );
+    if (
+      !manifest
+      || manifest.entries.length !== 1
+      || manifest.entries[0]?.type !== 'directory'
+      || manifest.hardLinkedFilePaths.length !== 0
+      || manifest.relocatedLinks !== 0
+    ) {
+      throw new WorkspaceMigrationConflictError(
+        candidate.subtree,
+        candidate.destination,
+        candidate.destination,
+        'new workspace directory gained data before it could be bound to the transaction',
+      );
+    }
+    const stat = await lstatBigIntOptional(candidate.destination);
+    const identity = stat && rootIdentity(stat);
+    if (!stat?.isDirectory() || stat.isSymbolicLink() || !identity) {
+      throw new WorkspaceMigrationUnsafePathError(
+        `New workspace directory has no stable filesystem identity: ${candidate.destination}`,
+      );
+    }
+    await assertFastDirectoryIdentity(
+      candidate.destination,
+      identity,
+      `Created fast migration destination for ${entry.id}`,
+    );
+    entry.destinationIdentity = identity;
+    entry.structuralDigest = manifest.digest;
+    changed = true;
+  }
+  if (changed) await writeFastJournal(journal);
+}
+
+async function validateFastPublishedLayout(
+  journal: FastMigrationJournal,
+  recreatedAfterMarker: ReadonlySet<string> = new Set(),
+): Promise<void> {
   for (const entry of journal.entries) {
     const candidate = candidateForFastId(entry.id);
     if (!candidate) throw new WorkspaceMigrationMarkerError(`Unknown fast workspace entry: ${entry.id}`);
-    if (entry.action === 'move' && entry.sourceIdentity) {
-      const published = await lstatOptional(candidate.destination);
-      if (!published || !sameRootIdentity(published, entry.sourceIdentity)) {
-        throw new WorkspaceMigrationConflictError(
-          candidate.subtree,
-          candidate.sources[entry.sourceIndex!],
-          candidate.destination,
-          'published root identity changed before completion',
+    const expectedIdentity = entry.action === 'move'
+      ? entry.sourceIdentity
+      : entry.destinationIdentity;
+    if (!expectedIdentity || !entry.structuralDigest) {
+      throw new WorkspaceMigrationMarkerError(`Fast workspace entry was not bound before validation: ${entry.id}`);
+    }
+    await assertFastDirectoryIdentity(
+      path.dirname(candidate.destination),
+      entry.destinationParentIdentity,
+      `Fast migration destination parent for ${entry.id}`,
+    );
+    if (entry.outcome === 'created' && recreatedAfterMarker.has(entry.id)) {
+      const recreatedStat = await lstatBigIntOptional(candidate.destination);
+      const recreatedIdentity = recreatedStat && rootIdentity(recreatedStat);
+      if (!recreatedIdentity) {
+        throw new WorkspaceMigrationUnsafePathError(
+          `Recreated workspace directory has no stable identity: ${candidate.destination}`,
         );
       }
+      await assertFastDirectoryIdentity(
+        candidate.destination,
+        recreatedIdentity,
+        `Recreated fast migration destination for ${entry.id}`,
+      );
+    } else {
+      await assertFastDirectoryIdentity(
+        candidate.destination,
+        expectedIdentity,
+        `Published fast migration destination for ${entry.id}`,
+      );
     }
+    const ignoredRelativePaths = new Set<string>();
     for (const plan of entry.links) {
+      await assertFastLinkBindings(entry, candidate, plan);
       const link = nativePath(candidate.destination, plan.relativePath);
       const target = await readFastLinkTarget(link, 'Published workspace link');
       if (target === undefined || !fastLinkTargetMatches(target, plan.newTarget, plan.linkType)) {
@@ -3378,26 +4785,46 @@ async function validateFastPublishedLayout(journal: FastMigrationJournal): Promi
           'replacement link changed before completion',
         );
       }
+      const replacement = fastLinkArtifactPath(candidate, journal.transactionId, plan.relativePath, 'new');
+      if (await lstatOptional(replacement)) {
+        throw new WorkspaceMigrationConflictError(
+          candidate.subtree,
+          replacement,
+          candidate.destination,
+          'unexpected replacement artifact exists before completion',
+        );
+      }
+      const backup = fastLinkArtifactPath(candidate, journal.transactionId, plan.relativePath, 'old');
+      const backupTarget = await readFastLinkTarget(backup, 'Fast migration backup link');
+      if (backupTarget !== undefined && !fastLinkTargetMatches(backupTarget, plan.oldTarget, plan.linkType)) {
+        throw new WorkspaceMigrationConflictError(candidate.subtree, backup, candidate.destination);
+      }
+      ignoredRelativePaths.add(manifestPathIdentity(
+        path.relative(candidate.destination, backup).split(path.sep).join('/'),
+      ));
     }
-  }
 
-  // This is a structural safety pass only: it never opens ordinary payload
-  // bytes. It proves that no stale absolute link, nested mount, reparse escape,
-  // or unsupported object remains before the completion marker is published.
-  for (const subtree of WORKSPACE_SUBTREES) {
-    const root = path.join(getWorkspaceDir(DEFAULT_WORKSPACE), subtree);
+    // This structural pass never opens ordinary payload bytes. Ignoring only
+    // the exact, already-verified backup links lets us compare the post-repair
+    // tree to the durable preflight digest byte-for-byte at the metadata level.
     const manifest = await buildManifest(
-      root,
-      [],
-      `final structural verification for ${subtree}`,
-      { hashFileContents: false },
+      candidate.destination,
+      candidate.sources,
+      `final structural verification for ${entry.id}`,
+      { hashFileContents: false, ignoredRelativePaths },
     );
-    if (!manifest || manifest.entries[0]?.type !== 'directory' || manifest.relocatedLinks !== 0) {
+    if (
+      !manifest
+      || manifest.entries[0]?.type !== 'directory'
+      || manifest.digest !== entry.structuralDigest
+      || manifest.relocatedLinks !== 0
+      || manifest.hardLinkedFilePaths.length !== 0
+    ) {
       throw new WorkspaceMigrationConflictError(
-        subtree,
-        root,
-        root,
-        'fast migration did not publish a safe workspace directory',
+        candidate.subtree,
+        candidate.destination,
+        candidate.destination,
+        'fast migration output differs from its bound structural inventory',
       );
     }
   }
@@ -3410,6 +4837,7 @@ async function cleanupFastTransaction(journal: FastMigrationJournal): Promise<vo
     const candidate = candidateForFastId(entry.id);
     if (!candidate) throw new WorkspaceMigrationMarkerError(`Unknown fast workspace entry: ${entry.id}`);
     for (const plan of entry.links) {
+      await assertFastLinkBindings(entry, candidate, plan);
       const link = nativePath(candidate.destination, plan.relativePath);
       const replacement = fastLinkArtifactPath(candidate, journal.transactionId, plan.relativePath, 'new');
       const backup = fastLinkArtifactPath(candidate, journal.transactionId, plan.relativePath, 'old');
@@ -3424,11 +4852,12 @@ async function cleanupFastTransaction(journal: FastMigrationJournal): Promise<vo
       }
       const replacementTarget = await readFastLinkTarget(replacement, 'Fast migration replacement link');
       if (replacementTarget !== undefined) {
-        if (!fastLinkTargetMatches(replacementTarget, plan.newTarget, plan.linkType)) {
-          throw new WorkspaceMigrationConflictError(candidate.subtree, replacement, candidate.destination);
-        }
-        await fs.unlink(replacement);
-        await syncDirectory(path.dirname(link));
+        throw new WorkspaceMigrationConflictError(
+          candidate.subtree,
+          replacement,
+          candidate.destination,
+          'unexpected replacement artifact exists during cleanup',
+        );
       }
       const backupTarget = await readFastLinkTarget(backup, 'Fast migration backup link');
       if (backupTarget !== undefined) {
@@ -3437,6 +4866,14 @@ async function cleanupFastTransaction(journal: FastMigrationJournal): Promise<vo
         }
         // Link backups are removed with unlink only. Never recurse through a
         // junction or a path that changed type after the marker was committed.
+        await assertFastLinkBindings(entry, candidate, plan);
+        const recheckedBackup = await readFastLinkTarget(backup, 'Fast migration backup link');
+        if (
+          recheckedBackup === undefined
+          || !fastLinkTargetMatches(recheckedBackup, plan.oldTarget, plan.linkType)
+        ) {
+          throw new WorkspaceMigrationConflictError(candidate.subtree, backup, candidate.destination);
+        }
         await fs.unlink(backup);
         await syncDirectory(path.dirname(link));
       }
@@ -3450,6 +4887,52 @@ async function cleanupFastTransaction(journal: FastMigrationJournal): Promise<vo
     transactionId: journal.transactionId,
     strategy: 'atomic moves',
   });
+}
+
+async function applyFastEntries(journal: FastMigrationJournal): Promise<void> {
+  for (const [entryIndex, entry] of journal.entries.entries()) {
+    const candidate = candidateForFastId(entry.id);
+    if (!candidate) throw new WorkspaceMigrationMarkerError(`Unknown fast workspace entry: ${entry.id}`);
+    migrationConsole('commit entry started', {
+      transactionId: journal.transactionId,
+      position: `${entryIndex + 1}/${journal.entries.length}`,
+      subtree: entry.subtree,
+      outcome: entry.outcome,
+      strategy: entry.action === 'move' ? 'atomic directory rename' : 'in-place validation',
+    });
+    if (entry.action === 'move') await executeFastMove(entry, candidate);
+    for (const plan of entry.links) await applyFastLinkPlan(entry, candidate, journal, plan);
+    migrationConsole('commit entry published', {
+      transactionId: journal.transactionId,
+      position: `${entryIndex + 1}/${journal.entries.length}`,
+      subtree: entry.subtree,
+    });
+  }
+}
+
+async function ensureFastWorkspaceDirs(
+  journal: FastMigrationJournal,
+  markerAlreadyExists: boolean,
+): Promise<Set<string>> {
+  const recreatedAfterMarker = new Set<string>();
+  if (markerAlreadyExists) {
+    for (const entry of journal.entries) {
+      if (
+        entry.action !== 'current'
+        || entry.outcome !== 'created'
+        || !entry.destinationIdentity
+      ) continue;
+      const candidate = candidateForFastId(entry.id);
+      if (!candidate) throw new WorkspaceMigrationMarkerError(`Unknown fast workspace entry: ${entry.id}`);
+      if (!(await lstatOptional(candidate.destination))) recreatedAfterMarker.add(entry.id);
+    }
+  }
+  await ensureWorkspaceDirs(DEFAULT_WORKSPACE);
+  // Directory entry creation must reach stable storage before a durable layout
+  // marker can claim that every workspace subtree exists.
+  await syncDirectory(getWorkspaceDir(DEFAULT_WORKSPACE));
+  await bindCreatedFastEntries(journal, recreatedAfterMarker);
+  return recreatedAfterMarker;
 }
 
 async function finishFastTransaction(journal: FastMigrationJournal): Promise<WorkspaceLayoutMarker> {
@@ -3470,6 +4953,9 @@ async function finishFastTransaction(journal: FastMigrationJournal): Promise<Wor
         'Fast workspace migration journal no longer matches its durable completion marker.',
       );
     }
+    await applyFastEntries(journal);
+    const recreatedAfterMarker = await ensureFastWorkspaceDirs(journal, true);
+    await validateFastPublishedLayout(journal, recreatedAfterMarker);
     await cleanupFastTransaction(journal);
     await validateCompletedLayout();
     return existingMarker;
@@ -3477,26 +4963,10 @@ async function finishFastTransaction(journal: FastMigrationJournal): Promise<Wor
 
   journal.phase = 'applying';
   await writeFastJournal(journal);
-  for (const [entryIndex, entry] of journal.entries.entries()) {
-    const candidate = candidateForFastId(entry.id);
-    if (!candidate) throw new WorkspaceMigrationMarkerError(`Unknown fast workspace entry: ${entry.id}`);
-    migrationConsole('commit entry started', {
-      transactionId: journal.transactionId,
-      position: `${entryIndex + 1}/${journal.entries.length}`,
-      subtree: entry.subtree,
-      outcome: entry.outcome,
-      strategy: entry.action === 'move' ? 'atomic directory rename' : 'in-place validation',
-    });
-    if (entry.action === 'move') await executeFastMove(entry, candidate);
-    for (const plan of entry.links) await applyFastLinkPlan(candidate, journal, plan);
-    migrationConsole('commit entry published', {
-      transactionId: journal.transactionId,
-      position: `${entryIndex + 1}/${journal.entries.length}`,
-      subtree: entry.subtree,
-    });
-  }
-  await ensureWorkspaceDirs(DEFAULT_WORKSPACE);
+  await applyFastEntries(journal);
+  await ensureFastWorkspaceDirs(journal, false);
   await validateFastPublishedLayout(journal);
+  await fastCheckpoint('before-fast-marker');
   await checkpoint('before-marker');
   journal.phase = 'marker';
   await writeFastJournal(journal);
@@ -3514,6 +4984,7 @@ async function finishFastTransaction(journal: FastMigrationJournal): Promise<Wor
     marker: markerPath(),
     strategy: 'atomic moves',
   });
+  await fastCheckpoint('after-fast-marker');
   await checkpoint('after-marker');
   await cleanupFastTransaction(journal);
   return marker;
@@ -3535,6 +5006,23 @@ async function finishTransaction(journal: MigrationJournal): Promise<WorkspaceLa
         'Workspace migration journal no longer matches its durable completion marker.',
       );
     }
+    if (!['cleanup', 'committed'].includes(journal.phase)) {
+      migrationConsole('revalidating durable transaction before cleanup', {
+        transactionId: journal.transactionId,
+        phase: journal.phase,
+      });
+      journal.phase = 'committing';
+      await writeJournal(journal);
+      for (const entry of journal.entries) await executeEntry(entry, journal);
+      await ensureWorkspaceDirs(DEFAULT_WORKSPACE);
+      await syncDirectory(getWorkspaceDir(DEFAULT_WORKSPACE));
+      for (const entry of journal.entries) {
+        await requireDigest(entry.destination, entry.expectedDigest, entry.subtree);
+      }
+      journal.phase = 'marker';
+      await writeJournal(journal);
+    }
+    await republishLegacyHardlinkedDestinations(journal);
     await cleanupTransaction(journal);
     return existingMarker;
   }
@@ -3556,6 +5044,7 @@ async function finishTransaction(journal: MigrationJournal): Promise<WorkspaceLa
     });
   }
   await ensureWorkspaceDirs(DEFAULT_WORKSPACE);
+  await republishLegacyHardlinkedDestinations(journal);
   await checkpoint('before-marker');
   journal.phase = 'marker';
   await writeJournal(journal);
@@ -3620,11 +5109,31 @@ async function runMigration(): Promise<WorkspaceLayoutMarker> {
   });
   try {
     await prepareRoots();
-    let [existing, durableJournal] = await Promise.all([readMarker(), readJournal()]);
+    let [existing, durableJournal, durableFastJournal] = await Promise.all([
+      readMarker(),
+      readJournal(),
+      readFastJournal(),
+    ]);
+    if (durableJournal && durableFastJournal) {
+      throw new WorkspaceMigrationMarkerError(
+        'Both full and fast workspace migration journals exist; refusing to guess which transaction owns the data.',
+      );
+    }
     if (durableJournal) {
       migrationConsole('recovering durable transaction', {
         transactionId: durableJournal.transactionId,
         phase: durableJournal.phase,
+        journalSchema: durableJournal.schemaVersion,
+        strategy: 'content-verified copy/merge recovery',
+        note: durableJournal.schemaVersion === LEGACY_JOURNAL_SCHEMA_VERSION
+          ? 'an interrupted legacy transaction must finish safely before atomic moves can be used'
+          : undefined,
+      });
+    } else if (durableFastJournal) {
+      migrationConsole('recovering durable transaction', {
+        transactionId: durableFastJournal.transactionId,
+        phase: durableFastJournal.phase,
+        strategy: 'atomic moves',
       });
     } else if (existing) {
       migrationConsole('existing layout marker found', {
@@ -3640,6 +5149,9 @@ async function runMigration(): Promise<WorkspaceLayoutMarker> {
       if (durableJournal) {
         existing = await finishTransaction(durableJournal);
         durableJournal = undefined;
+      } else if (durableFastJournal) {
+        existing = await finishFastTransaction(durableFastJournal);
+        durableFastJournal = undefined;
       } else if (existing?.version === WORKSPACE_LAYOUT_VERSION && !(await hasLegacyRoots())) {
         await validateCompletedLayout();
         migrationConsole('layout already current; no data move required', {
@@ -3647,11 +5159,23 @@ async function runMigration(): Promise<WorkspaceLayoutMarker> {
         });
         return existing;
       } else {
-        const journal = await preflight(randomUUID());
-        await fs.mkdir(path.join(transactionsPath(), journal.transactionId, 'stage'), { recursive: true });
-        await writeJournal(journal);
-        await checkpoint('after-preflight');
-        existing = await finishTransaction(journal);
+        const transactionId = randomUUID();
+        const fastJournal = await planFastMigration(transactionId);
+        if (fastJournal) {
+          await writeFastJournal(fastJournal);
+          await fastCheckpoint('after-fast-preflight');
+          existing = await finishFastTransaction(fastJournal);
+        } else {
+          migrationConsole('strategy selected', {
+            strategy: 'content-verified copy/merge',
+            reason: 'atomic no-copy migration is not safe for this on-disk layout',
+          });
+          const journal = await preflight(transactionId);
+          await fs.mkdir(path.join(transactionsPath(), journal.transactionId, 'stage'), { recursive: true });
+          await writeJournal(journal);
+          await checkpoint('after-preflight');
+          existing = await finishTransaction(journal);
+        }
       }
 
       // A pre-workspace process can recreate a legacy root after we atomically

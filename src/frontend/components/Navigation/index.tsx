@@ -28,6 +28,7 @@ import {
   ChatBubbleRounded,
   CloseRounded,
   HubRounded,
+  GroupsRounded,
   BubbleChartRounded,
   InsightsRounded,
   Inventory2Rounded,
@@ -102,6 +103,13 @@ const navItems: NavItem[] = [
         tour: 'nav-waves',
         icon: WavesRounded,
         experimental: true,
+      },
+      {
+        type: 'link',
+        label: 'nav.meetings',
+        path: '/meetings',
+        tour: 'nav-meetings',
+        icon: GroupsRounded,
       },
       {
         type: 'link',

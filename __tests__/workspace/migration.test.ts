@@ -1,11 +1,13 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import {
   _resetWorkspaceMigrationState,
   _setWorkspaceMigrationFaultForTests,
   _setWorkspaceMigrationHeartbeatMsForTests,
   _setWorkspaceMigrationMountInfoForTests,
+  _setWorkspaceMigrationMoveFaultForTests,
   _workspaceMigrationPathsForTests,
   migrateWorkspaceLayout,
   WORKSPACE_LAYOUT_VERSION,
@@ -249,6 +251,14 @@ describe('transactional workspace layout migration', () => {
     const { marker, journal } = _workspaceMigrationPathsForTests();
     await expect(exists(marker)).resolves.toBe(true);
     await expect(exists(journal)).resolves.toBe(true);
+    const durable = JSON.parse(await fs.readFile(journal, 'utf8')) as {
+      entries: Array<{ id: string; destination: string; stage: string }>;
+    };
+    const db = durable.entries.find(entry => entry.id === 'db');
+    if (!db) throw new Error('missing durable db entry');
+    // Model a filesystem that persisted the marker but rolled the atomic stage
+    // publication back to its pre-rename directory entry state.
+    await fs.rename(db.destination, db.stage);
 
     _resetWorkspaceMigrationState();
     await expect(migrateWorkspaceLayout()).resolves.toMatchObject({ version: 2 });
@@ -259,6 +269,9 @@ describe('transactional workspace layout migration', () => {
   });
 
   it('resumes a recursive backup deletion that was interrupted halfway', async () => {
+    // This test targets the copy/archive recovery path specifically. A no-op
+    // checkpoint hook opts out of the atomic-rename fast path.
+    _setWorkspaceMigrationFaultForTests(() => undefined);
     await Promise.all([
       write('db/one.json', 'one'),
       write('db/two.json', 'two'),
@@ -370,6 +383,233 @@ describe('transactional workspace layout migration', () => {
     await expect(read('valuable/keep.txt')).resolves.toBe('do-not-touch');
   });
 
+  it('writes schema 4 with explicit hard-link republish intent', async () => {
+    const original = path.join(workspaceRoot(), 'db', 'models.json');
+    const linked = path.join(workspaceRoot(), 'db', 'models-copy.json');
+    await write('workspaces/default-workspace/db/models.json', 'workspace-models');
+    await fs.link(original, linked);
+    _setWorkspaceMigrationFaultForTests(checkpoint => {
+      if (checkpoint === 'after-preflight') throw new Error('stop after schema-4 journal');
+    });
+
+    await expect(migrateWorkspaceLayout()).rejects.toThrow('stop after schema-4 journal');
+
+    const { journal } = _workspaceMigrationPathsForTests();
+    const durable = JSON.parse(await fs.readFile(journal, 'utf8')) as {
+      schemaVersion: number;
+      entries: Array<Record<string, unknown> & { id: string }>;
+    };
+    expect(durable.schemaVersion).toBe(4);
+    expect(durable.entries.every(entry => typeof entry.forceRepublish === 'boolean')).toBe(true);
+    expect(durable.entries.find(entry => entry.id === 'db')?.forceRepublish).toBe(true);
+
+    _resetWorkspaceMigrationState();
+    await expect(migrateWorkspaceLayout()).resolves.toMatchObject({ version: 2 });
+    expect((await fs.lstat(original)).ino).not.toBe((await fs.lstat(linked)).ino);
+  });
+
+  it('preserves and completes a schema-3 journal through post-marker recovery', async () => {
+    const original = path.join(dataRoot, 'db', 'models.json');
+    const linked = path.join(dataRoot, 'db', 'models-copy.json');
+    await write('db/models.json', 'legacy-models');
+    await fs.link(original, linked);
+    _setWorkspaceMigrationFaultForTests(checkpoint => {
+      if (checkpoint === 'after-preflight') throw new Error('stop before schema downgrade');
+    });
+    await expect(migrateWorkspaceLayout()).rejects.toThrow('stop before schema downgrade');
+
+    const { journal, marker } = _workspaceMigrationPathsForTests();
+    const durable = JSON.parse(await fs.readFile(journal, 'utf8')) as {
+      schemaVersion: number;
+      entries: Array<Record<string, unknown>>;
+    };
+    durable.schemaVersion = 3;
+    for (const entry of durable.entries) delete entry.forceRepublish;
+    await fs.writeFile(journal, JSON.stringify(durable, null, 2), 'utf8');
+
+    _resetWorkspaceMigrationState();
+    _setWorkspaceMigrationFaultForTests(checkpoint => {
+      if (checkpoint === 'after-marker') throw new Error('stop after legacy marker');
+    });
+    await expect(migrateWorkspaceLayout()).rejects.toThrow('stop after legacy marker');
+    const afterMarker = JSON.parse(await fs.readFile(journal, 'utf8')) as {
+      schemaVersion: number;
+      entries: Array<Record<string, unknown>>;
+    };
+    expect(afterMarker.schemaVersion).toBe(3);
+    expect(afterMarker.entries.some(entry => (
+      Object.prototype.hasOwnProperty.call(entry, 'forceRepublish')
+    ))).toBe(false);
+    await expect(exists(marker)).resolves.toBe(true);
+
+    _resetWorkspaceMigrationState();
+    await expect(migrateWorkspaceLayout()).resolves.toMatchObject({ version: 2 });
+    await expect(read('workspaces/default-workspace/db/models.json')).resolves.toBe('legacy-models');
+    await expect(read('workspaces/default-workspace/db/models-copy.json')).resolves.toBe('legacy-models');
+    await expect(exists(journal)).resolves.toBe(false);
+  });
+
+  it('crash-resiliently isolates a hardlinked destination from an authentic schema-3 marker', async () => {
+    const destinationFile = path.join(workspaceRoot(), 'db', 'models.json');
+    const externalFile = path.join(fixtureRoot, 'external-models.json');
+    await write('workspaces/default-workspace/db/models.json', 'workspace-models');
+    await fs.link(destinationFile, externalFile);
+
+    _setWorkspaceMigrationFaultForTests(checkpoint => {
+      if (checkpoint === 'after-preflight') throw new Error('stop before legacy marker fixture');
+    });
+    await expect(migrateWorkspaceLayout()).rejects.toThrow('stop before legacy marker fixture');
+
+    const { journal, marker, transactions } = _workspaceMigrationPathsForTests();
+    const durable = JSON.parse(await fs.readFile(journal, 'utf8')) as {
+      schemaVersion: number;
+      transactionId: string;
+      createdAt: string;
+      phase: string;
+      entries: Array<Record<string, unknown> & {
+        id: string;
+        subtree: string;
+        sources: Array<{
+          path: string;
+          backup: string;
+          initialDigest?: string;
+          retainedMount?: boolean;
+          retainedEntries?: unknown[];
+        }>;
+        destination: string;
+        destinationBackup: string;
+        initialDestinationDigest?: string;
+        destinationLinksToRelocate?: number;
+        stage: string;
+        expectedDigest: string;
+        expectedEntries: unknown[];
+        outcome: string;
+        requireDirectory: boolean;
+      }>;
+    };
+    durable.schemaVersion = 3;
+    durable.phase = 'cleanup';
+    for (const entry of durable.entries) {
+      delete entry.forceRepublish;
+      entry.state = 'published';
+      await fs.mkdir(entry.destination, { recursive: true });
+    }
+
+    // Schema 3 authenticated only the entry plan. Reproduce its exact digest
+    // instead of letting current schema-4 planning rewrite the fixture.
+    const digestEntries = durable.entries.map(entry => ({
+      id: entry.id,
+      subtree: entry.subtree,
+      sources: entry.sources.map(source => ({
+        path: path.relative(dataRoot, source.path),
+        backup: path.relative(dataRoot, source.backup),
+        initialDigest: source.initialDigest,
+        retainedMount: source.retainedMount,
+        retainedEntries: source.retainedEntries,
+      })),
+      destination: path.relative(workspaceRoot(), entry.destination),
+      destinationBackup: path.relative(workspaceRoot(), entry.destinationBackup),
+      initialDestinationDigest: entry.initialDestinationDigest,
+      destinationLinksToRelocate: entry.destinationLinksToRelocate,
+      stage: path.relative(transactions, entry.stage),
+      expectedDigest: entry.expectedDigest,
+      expectedEntries: entry.expectedEntries,
+      outcome: entry.outcome,
+      requireDirectory: entry.requireDirectory,
+    }));
+    const manifestDigest = createHash('sha256')
+      .update(JSON.stringify(digestEntries))
+      .digest('hex');
+    const subtrees = Object.fromEntries(
+      WORKSPACE_SUBTREES.map(subtree => [subtree, 'already-migrated']),
+    );
+    await Promise.all([
+      fs.writeFile(journal, JSON.stringify(durable, null, 2), 'utf8'),
+      fs.writeFile(marker, JSON.stringify({
+        version: WORKSPACE_LAYOUT_VERSION,
+        completedAt: new Date().toISOString(),
+        defaultWorkspace: 'default-workspace',
+        subtrees,
+        transactionId: durable.transactionId,
+        manifestDigest,
+      }, null, 2), 'utf8'),
+    ]);
+
+    _resetWorkspaceMigrationState();
+    _setWorkspaceMigrationFaultForTests(checkpoint => {
+      if (checkpoint === 'after-destination-archive:db') {
+        throw new Error('simulated crash during legacy hard-link isolation');
+      }
+    });
+    await expect(migrateWorkspaceLayout()).rejects.toThrow(
+      'simulated crash during legacy hard-link isolation',
+    );
+    const interrupted = JSON.parse(await fs.readFile(journal, 'utf8')) as {
+      entries: Array<{ id: string; state: string; destinationBackup: string }>;
+    };
+    const interruptedDb = interrupted.entries.find(entry => entry.id === 'db');
+    expect(interruptedDb?.state).toBe('destination-archived');
+    await expect(exists(destinationFile)).resolves.toBe(false);
+    await expect(exists(interruptedDb!.destinationBackup)).resolves.toBe(true);
+    await expect(fs.readFile(externalFile, 'utf8')).resolves.toBe('workspace-models');
+
+    _resetWorkspaceMigrationState();
+    await expect(migrateWorkspaceLayout()).resolves.toMatchObject({ version: 2 });
+
+    await expect(fs.readFile(destinationFile, 'utf8')).resolves.toBe('workspace-models');
+    await expect(fs.readFile(externalFile, 'utf8')).resolves.toBe('workspace-models');
+    expect((await fs.lstat(destinationFile)).ino).not.toBe((await fs.lstat(externalFile)).ino);
+    await expect(exists(journal)).resolves.toBe(false);
+    await expect(exists(interruptedDb!.destinationBackup)).resolves.toBe(false);
+  });
+
+  it('rejects force-republish semantics smuggled into a schema-3 journal', async () => {
+    await Promise.all([
+      write('db/models.json', 'legacy-models'),
+      write('workspaces/default-workspace/db/existing.json', 'workspace-models'),
+    ]);
+    _setWorkspaceMigrationFaultForTests(checkpoint => {
+      if (checkpoint === 'after-preflight') throw new Error('stop before invalid schema rewrite');
+    });
+    await expect(migrateWorkspaceLayout()).rejects.toThrow('stop before invalid schema rewrite');
+
+    const { journal } = _workspaceMigrationPathsForTests();
+    const durable = JSON.parse(await fs.readFile(journal, 'utf8')) as {
+      schemaVersion: number;
+      entries: Array<Record<string, unknown>>;
+    };
+    durable.schemaVersion = 3;
+    await fs.writeFile(journal, JSON.stringify(durable, null, 2), 'utf8');
+
+    _resetWorkspaceMigrationState();
+    await expect(migrateWorkspaceLayout()).rejects.toBeInstanceOf(WorkspaceMigrationMarkerError);
+    await expect(read('db/models.json')).resolves.toBe('legacy-models');
+    await expect(read('workspaces/default-workspace/db/existing.json')).resolves.toBe('workspace-models');
+  });
+
+  it('rejects a schema-4 journal missing explicit republish intent', async () => {
+    await Promise.all([
+      write('db/models.json', 'legacy-models'),
+      write('workspaces/default-workspace/db/existing.json', 'workspace-models'),
+    ]);
+    _setWorkspaceMigrationFaultForTests(checkpoint => {
+      if (checkpoint === 'after-preflight') throw new Error('stop before incomplete schema rewrite');
+    });
+    await expect(migrateWorkspaceLayout()).rejects.toThrow('stop before incomplete schema rewrite');
+
+    const { journal } = _workspaceMigrationPathsForTests();
+    const durable = JSON.parse(await fs.readFile(journal, 'utf8')) as {
+      entries: Array<Record<string, unknown>>;
+    };
+    delete durable.entries[0].forceRepublish;
+    await fs.writeFile(journal, JSON.stringify(durable, null, 2), 'utf8');
+
+    _resetWorkspaceMigrationState();
+    await expect(migrateWorkspaceLayout()).rejects.toBeInstanceOf(WorkspaceMigrationMarkerError);
+    await expect(read('db/models.json')).resolves.toBe('legacy-models');
+    await expect(read('workspaces/default-workspace/db/existing.json')).resolves.toBe('workspace-models');
+  });
+
   it('moves nested runtime data out of the shipped browser package but preserves its code', async () => {
     process.env.FLUJO_APP_ROOT = dataRoot;
     _resetWorkspaceMigrationState();
@@ -418,22 +658,16 @@ describe('transactional workspace layout migration', () => {
     async renameError => {
       await write('db/models.json', 'mounted-models');
       const sourceRoot = path.join(dataRoot, 'db');
-      const originalRename = fs.rename.bind(fs);
-      const rename = jest.spyOn(fs, 'rename').mockImplementation(async (source, destination) => {
-        if (path.resolve(source.toString()) === path.resolve(sourceRoot)) {
+      _setWorkspaceMigrationMoveFaultForTests(source => {
+        if (path.resolve(source) === path.resolve(sourceRoot)) {
           throw Object.assign(new Error('simulated mounted filesystem'), { code: renameError });
         }
-        return originalRename(source, destination);
       });
       _setWorkspaceMigrationFaultForTests(checkpoint => {
         if (checkpoint === 'after-marker') throw new Error('crash before mount cleanup');
       });
 
-      try {
-        await expect(migrateWorkspaceLayout()).rejects.toThrow('crash before mount cleanup');
-      } finally {
-        rename.mockRestore();
-      }
+      await expect(migrateWorkspaceLayout()).rejects.toThrow('crash before mount cleanup');
       await expect(read('db/models.json')).resolves.toBe('mounted-models');
       await expect(read('workspaces/default-workspace/db/models.json'))
         .resolves.toBe('mounted-models');
@@ -1019,6 +1253,9 @@ describe('transactional workspace layout migration', () => {
   });
 
   it('fsyncs every nested staged directory before publishing the marker', async () => {
+    // Staging is intentionally absent from the atomic-rename fast path; keep
+    // this assertion focused on the general copy/merge transaction.
+    _setWorkspaceMigrationFaultForTests(() => undefined);
     await write('db/nested/deep/value.json', 'durable');
     const originalOpen = fs.open.bind(fs);
     const syncedDirectories: string[] = [];
@@ -1083,6 +1320,33 @@ describe('transactional workspace layout migration', () => {
     await expect(migrateWorkspaceLayout()).rejects.toBeInstanceOf(
       WorkspaceMigrationUnsafePathError,
     );
+  });
+
+  it('does not adopt a replacement source after a heavyweight move is bound', async () => {
+    if (!['win32', 'linux'].includes(process.platform)) return;
+    const legacyRoot = path.join(dataRoot, 'userdata');
+    const displacedRoot = path.join(fixtureRoot, 'displaced-userdata');
+    await Promise.all([
+      write('userdata/original.txt', 'original-userdata'),
+      write('workspaces/default-workspace/userdata/current.txt', 'current-userdata'),
+    ]);
+    let replaced = false;
+    _setWorkspaceMigrationMoveFaultForTests(async source => {
+      if (replaced || path.resolve(source) !== path.resolve(legacyRoot)) return;
+      replaced = true;
+      await fs.rename(legacyRoot, displacedRoot);
+      await fs.mkdir(legacyRoot, { recursive: true });
+      await fs.writeFile(path.join(legacyRoot, 'replacement.txt'), 'replacement-userdata', 'utf8');
+    });
+
+    await expect(migrateWorkspaceLayout()).rejects.toThrow(/identity changed|bound move/i);
+
+    await expect(fs.readFile(path.join(displacedRoot, 'original.txt'), 'utf8'))
+      .resolves.toBe('original-userdata');
+    await expect(fs.readFile(path.join(legacyRoot, 'replacement.txt'), 'utf8'))
+      .resolves.toBe('replacement-userdata');
+    await expect(read('workspaces/default-workspace/userdata/current.txt'))
+      .resolves.toBe('current-userdata');
   });
 
   it('does not reclaim an expired lock owned by a live process on this host', async () => {
@@ -1197,5 +1461,42 @@ describe('transactional workspace layout migration', () => {
 
     await expect(migrateWorkspaceLayout()).resolves.toMatchObject({ version: 2 });
     await expect(exists(lock)).resolves.toBe(false);
+  });
+
+  it('never quarantines a successor that replaces a stale lock during reclaim', async () => {
+    if (process.platform !== 'win32') return;
+    const { lock } = _workspaceMigrationPathsForTests();
+    const displaced = `${lock}.displaced`;
+    await fs.mkdir(lock, { recursive: true });
+    const old = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    await fs.writeFile(path.join(lock, 'owner.json'), JSON.stringify({
+      token: 'dead-owner',
+      pid: 2_147_483_000,
+      hostname: os.hostname(),
+      startedAt: old,
+      heartbeatAt: old,
+    }));
+    const successor = {
+      token: 'successor-owner',
+      pid: process.pid,
+      hostname: os.hostname(),
+      startedAt: new Date().toISOString(),
+      heartbeatAt: new Date().toISOString(),
+    };
+    _setWorkspaceMigrationMoveFaultForTests(async source => {
+      if (path.resolve(source) !== path.resolve(lock)) return;
+      await fs.rename(lock, displaced);
+      await fs.mkdir(lock);
+      await fs.writeFile(path.join(lock, 'owner.json'), JSON.stringify(successor), 'utf8');
+      await fs.writeFile(path.join(lock, 'heartbeat'), successor.token, 'utf8');
+    });
+
+    await expect(migrateWorkspaceLayout()).rejects.toThrow(/identity changed|bound move/i);
+
+    await expect(fs.readFile(path.join(lock, 'owner.json'), 'utf8'))
+      .resolves.toBe(JSON.stringify(successor));
+    await expect(fs.readFile(path.join(lock, 'heartbeat'), 'utf8'))
+      .resolves.toBe(successor.token);
+    await expect(exists(displaced)).resolves.toBe(true);
   });
 });

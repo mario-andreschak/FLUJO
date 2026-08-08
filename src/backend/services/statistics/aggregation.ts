@@ -71,7 +71,7 @@ export const STATISTICS_MAX_DETAIL_SCAN = 5_000;
 export const STATISTICS_MIN_COMPARISON_SAMPLES = 10;
 
 const RUN_SOURCES = new Set<StatisticsRunSource>([
-  'chat', 'api', 'schedule', 'trigger', 'subflow', 'mcp', 'internal', 'internal-tool',
+  'chat', 'api', 'schedule', 'trigger', 'subflow', 'mcp', 'internal', 'meeting', 'internal-tool',
 ]);
 const STATUSES = new Set<StatisticsStatusFilter>([
   'completed', 'error', 'capped', 'cancelled', 'paused', 'skipped',

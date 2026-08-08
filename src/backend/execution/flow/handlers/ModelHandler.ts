@@ -58,6 +58,7 @@ import { boundToolResult } from '@/backend/services/runResources/boundToolResult
 import { isRunResourceToolName, executeRunResourceTool, buildReadResourceTool, WRITE_RESOURCE_TOOL_NAME, READ_RESOURCE_TOOL_NAME } from './runResourceTools';
 import { isQuestionToolName, executeQuestionTool, QUESTION_TOOL_NAME } from './runQuestionTool';
 import { isTodoToolName, executeTodoTool, TODO_TOOL_NAME } from './todoTool';
+import { isMeetingToolName, executeMeetingTool } from './meetingTools';
 import { isMCPResourceToolName, executeMCPResourceTool, LIST_MCP_RESOURCES_TOOL_NAME } from './mcpResourceTools';
 import { isSubflowToolName, executeSubflowToolCall } from './subflowToolInvocation';
 import { executeDetachedSubflowStart, executeTaskCancel, executeTaskGet, SUBFLOW_DETACHED_TOOL_PREFIX } from './subflowDetachedInvocation';
@@ -1089,6 +1090,41 @@ export class ModelHandler {
     const requestToolApproval =
       requireToolApproval && emit && conversationId
         ? async (call: { id: string; name: string; args: Record<string, unknown> }): Promise<{ approved: boolean; feedback?: string }> => {
+            const safeMeetingSynthetic = input.meetingToolsEnabled && (
+              isMeetingToolName(call.name)
+              || call.name === 'handoff'
+              || call.name.startsWith('handoff_to_')
+            );
+            if (safeMeetingSynthetic) return { approved: true };
+
+            if (input.onApprovalRequired === 'fail') {
+              const decoded = decodeToolName(call.name, toolNameMap);
+              if (decoded) {
+                const effect = evaluatePermission(
+                  input.permissionRules ?? [],
+                  input.savedPermissionRules ?? [],
+                  decoded.server,
+                  decoded.tool,
+                  extractResource(call.args ?? {}),
+                );
+                if (effect === 'allow') return { approved: true };
+                if (effect === 'deny') {
+                  return {
+                    approved: false,
+                    feedback: `Tool "${decoded.tool}" is denied by this flow's permission rules.`,
+                  };
+                }
+              }
+
+              // Self-orchestrating adapters own the tool loop, so waiting on
+              // the ordinary approval registry would deadlock an unattended
+              // meeting. Throwing aborts the participant turn without running
+              // the unresolved tool, matching runFlow's request/response path.
+              throw new Error(
+                `Headless run requires approval for tool "${call.name}" but no approver is available (approvalPolicy: fail).`,
+              );
+            }
+
             const toolCall: OpenAI.ChatCompletionMessageFunctionToolCall = {
               id: call.id,
               type: 'function',
@@ -1184,6 +1220,12 @@ export class ModelHandler {
     const hasMCPResourceTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isMCPResourceToolName(t.function.name));
     const hasQuestionTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isQuestionToolName(t.function.name));
     const hasTodoTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isTodoToolName(t.function.name));
+    const meetingToolCallNames = conversationId
+      ? (tools ?? [])
+          .filter((t) => t.type === 'function' && isMeetingToolName(t.function.name))
+          .map((t) => t.function.name)
+      : [];
+    const hasMeetingTool = meetingToolCallNames.length > 0;
     // Issue #385: `call_subflow_<slug>` tool names are per-target-node and
     // dynamic (unlike the fixed-name synthetic tools above), so they can't be
     // hard-coded keys in the object literal below — collect every advertised
@@ -1195,7 +1237,7 @@ export class ModelHandler {
       : [];
     const hasSubflowTool = subflowToolCallNames.length > 0;
     const localToolExecutors: Record<string, (args: Record<string, unknown>) => Promise<unknown>> | undefined =
-      (hasRunResourceTool || hasMCPResourceTool || hasQuestionTool || hasTodoTool || hasSubflowTool)
+      (hasRunResourceTool || hasMCPResourceTool || hasQuestionTool || hasTodoTool || hasMeetingTool || hasSubflowTool)
         ? {
             [WRITE_RESOURCE_TOOL_NAME]: async (args: Record<string, unknown>): Promise<unknown> => {
               const outcome = await executeRunResourceTool(WRITE_RESOURCE_TOOL_NAME, args, {
@@ -1266,6 +1308,19 @@ export class ModelHandler {
         localToolExecutors[toolName] = async (args: Record<string, unknown>): Promise<unknown> => {
           const outcome = await executeSubflowToolCall(toolName, args, { conversationId, emit });
           if (!outcome.success) throw new Error(outcome.error ?? 'call_subflow failed');
+          return outcome.data;
+        };
+      }
+    }
+
+    // Meeting controls use the same live-state executor as the outer
+    // request/response loop. Add only names actually advertised on this call;
+    // ordinary flows therefore expose neither definitions nor local handlers.
+    if (localToolExecutors && hasMeetingTool) {
+      for (const toolName of meetingToolCallNames) {
+        localToolExecutors[toolName] = async (args: Record<string, unknown>): Promise<unknown> => {
+          const outcome = await executeMeetingTool(toolName, args, { conversationId });
+          if (!outcome.success) throw new Error(outcome.error ?? `${toolName} failed`);
           return outcome.data;
         };
       }
@@ -2545,6 +2600,7 @@ export class ModelHandler {
         if (isRunResourceToolName(toolName)) return LOCAL_GROUP;
         if (isQuestionToolName(toolName)) return LOCAL_GROUP;
         if (isTodoToolName(toolName)) return LOCAL_GROUP;
+        if (isMeetingToolName(toolName)) return LOCAL_GROUP;
         if (isSubflowToolName(toolName)) return LOCAL_GROUP;
         const decoded = decodeToolName(toolName, toolNameMap);
         return decoded ? `srv:${decoded.server}` : LOCAL_GROUP;
@@ -2749,6 +2805,34 @@ export class ModelHandler {
           if (isTodoToolName(name)) {
             emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
             const outcome = await executeTodoTool(args, { conversationId, node, emit });
+            const resultContent = outcome.success
+              ? JSON.stringify(outcome.data)
+              : `Error: ${outcome.error}`;
+            emit?.({
+              type: 'tool:result',
+              toolCallId: id,
+              name,
+              result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
+              isError: !outcome.success,
+            });
+            toolCallMessages.push({
+              id: uuidv4(),
+              role: 'tool',
+              tool_call_id: id,
+              content: resultContent,
+              timestamp: Date.now(),
+            });
+            processedToolCalls.push({ name, args, id, result: resultContent });
+            return;
+          }
+
+          // Coordinator-owned meeting controls. The executor verifies that the
+          // conversation is an active meeting participant and appends only a
+          // normalized action to this turn's live SharedState. The coordinator
+          // commits those actions after the participant turn settles.
+          if (isMeetingToolName(name)) {
+            emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
+            const outcome = await executeMeetingTool(name, args, { conversationId });
             const resultContent = outcome.success
               ? JSON.stringify(outcome.data)
               : `Error: ${outcome.error}`;
@@ -3295,7 +3379,7 @@ export class ModelHandler {
               ? 'handoff' as const
               : isRunResourceToolName(name) || isMCPResourceToolName(name)
                 ? 'resource' as const
-                : isQuestionToolName(name) || isTodoToolName(name) || isSubflowToolName(name)
+                : isQuestionToolName(name) || isTodoToolName(name) || isMeetingToolName(name) || isSubflowToolName(name)
                   ? 'synthetic' as const
                   : decodedForUi
                     ? 'mcp' as const

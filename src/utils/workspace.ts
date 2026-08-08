@@ -1,6 +1,8 @@
 import path from 'path';
 import fs from 'fs/promises';
+import { lstatSync, readdirSync } from 'fs';
 import { AsyncLocalStorage } from 'async_hooks';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { getDataDir } from './paths';
 
 /**
@@ -14,10 +16,14 @@ import { getDataDir } from './paths';
  *         db/
  *         mcp-servers/
  *         userdata/
+ *         snapshots/, screenshots/, recordings/
+ *         browser-profile/, bash-utils/, artifacts/
  *       <other-workspace>/
  *         db/
  *         mcp-servers/
  *         userdata/
+ *         snapshots/, screenshots/, recordings/
+ *         browser-profile/, bash-utils/, artifacts/
  *
  * `FLUJO_DATA_DIR` keeps its existing meaning (the parent root) so Docker/npx
  * installs are unaffected; only the *inner* layout gains one extra level.
@@ -43,8 +49,21 @@ export const DEFAULT_WORKSPACE = 'default-workspace';
  */
 export const WORKSPACE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
-/** The three subtrees a workspace owns. */
-export const WORKSPACE_SUBTREES = ['db', 'mcp-servers', 'userdata'] as const;
+/** Windows reserves these basenames even below an ordinary directory. */
+const WINDOWS_RESERVED_WORKSPACE_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
+/** Every top-level runtime subtree owned by a workspace. */
+export const WORKSPACE_SUBTREES = [
+  'db',
+  'mcp-servers',
+  'userdata',
+  'snapshots',
+  'screenshots',
+  'recordings',
+  'browser-profile',
+  'bash-utils',
+  'artifacts',
+] as const;
 export type WorkspaceSubtree = (typeof WORKSPACE_SUBTREES)[number];
 
 /**
@@ -59,7 +78,8 @@ export class InvalidWorkspaceNameError extends Error {
   constructor(value: unknown) {
     super(
       `Invalid workspace name: ${JSON.stringify(value)}. ` +
-        'Workspace names must match /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.',
+        'Workspace names must match /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/ ' +
+        'and must not be a reserved Windows device name.',
     );
     this.name = 'InvalidWorkspaceNameError';
     this.value = value;
@@ -67,7 +87,9 @@ export class InvalidWorkspaceNameError extends Error {
 }
 
 export function isValidWorkspaceName(value: unknown): value is string {
-  return typeof value === 'string' && WORKSPACE_NAME_PATTERN.test(value);
+  return typeof value === 'string'
+    && WORKSPACE_NAME_PATTERN.test(value)
+    && !WINDOWS_RESERVED_WORKSPACE_NAME.test(value);
 }
 
 /** Validate and return the name, or throw {@link InvalidWorkspaceNameError}. */
@@ -112,7 +134,7 @@ export function getWorkspaceDir(workspace?: string): string {
 /**
  * The data root *for the selected workspace*. This is the drop-in replacement for
  * `getDataDir()` at every call site that builds a path to workspace-owned data
- * (db/, mcp-servers/, userdata/, and everything derived from them). Call sites
+ * (all entries in WORKSPACE_SUBTREES and everything derived from them). Call sites
  * that mean "the FLUJO installation root" must keep using `getDataDir()`.
  */
 export function getWorkspaceDataDir(workspace?: string): string {
@@ -132,6 +154,94 @@ export function getWorkspaceUserdataDir(workspace?: string): string {
 }
 
 /**
+ * Remap an absolute path persisted before workspaces when the migration state
+ * proves that its legacy owner moved into the default workspace. Ambiguous or
+ * explicitly external paths are returned unchanged.
+ */
+export function remapLegacyDefaultWorkspacePath(
+  candidate: string,
+  subtree: WorkspaceSubtree,
+): string {
+  if (
+    typeof candidate !== 'string'
+    || !path.isAbsolute(candidate)
+    || getCurrentWorkspace() !== DEFAULT_WORKSPACE
+  ) return candidate;
+
+  const legacyRoot = path.join(getDataDir(), subtree);
+  const relative = path.relative(legacyRoot, candidate);
+  if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) return candidate;
+
+  const [owner] = relative.split(path.sep);
+  if (!owner) return candidate;
+  const legacyOwner = path.join(legacyRoot, owner);
+  const migratedOwner = path.join(getWorkspaceDataDir(DEFAULT_WORKSPACE), subtree, owner);
+  let legacyOwnerHasAuthority = false;
+  try {
+    const stat = lstatSync(legacyOwner);
+    // A retained EBUSY/EXDEV mount can remain as an empty real directory. Any
+    // other surviving object is still authoritative and therefore ambiguous.
+    legacyOwnerHasAuthority = !stat.isDirectory()
+      || stat.isSymbolicLink()
+      || readdirSync(legacyOwner).length > 0;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') legacyOwnerHasAuthority = true;
+  }
+  let migratedOwnerIsSafe = false;
+  try {
+    const stat = lstatSync(migratedOwner);
+    migratedOwnerIsSafe = !stat.isSymbolicLink() && (stat.isDirectory() || stat.isFile());
+  } catch {
+    migratedOwnerIsSafe = false;
+  }
+  if (legacyOwnerHasAuthority || !migratedOwnerIsSafe) return candidate;
+  return path.join(getWorkspaceDataDir(DEFAULT_WORKSPACE), subtree, relative);
+}
+
+/** Remap complete path-bearing config values without parsing shell commands. */
+export function remapLegacyDefaultWorkspaceReference(
+  candidate: string,
+  subtree: WorkspaceSubtree,
+): string {
+  const direct = remapLegacyDefaultWorkspacePath(candidate, subtree);
+  if (direct !== candidate) return direct;
+
+  try {
+    const url = new URL(candidate);
+    if (url.protocol === 'file:') {
+      const originalPath = fileURLToPath(url);
+      const remappedPath = remapLegacyDefaultWorkspacePath(originalPath, subtree);
+      if (remappedPath !== originalPath) {
+        const remappedUrl = pathToFileURL(remappedPath);
+        remappedUrl.search = url.search;
+        remappedUrl.hash = url.hash;
+        return remappedUrl.href;
+      }
+    }
+  } catch {
+    // Not a complete URL; it may still be a flag assignment below.
+  }
+
+  const equals = candidate.indexOf('=');
+  if (equals <= 0 || equals === candidate.length - 1) return candidate;
+  const prefix = candidate.slice(0, equals + 1);
+  let value = candidate.slice(equals + 1);
+  let quote = '';
+  if (
+    value.length >= 2
+    && (value[0] === '"' || value[0] === "'")
+    && value.at(-1) === value[0]
+  ) {
+    quote = value[0];
+    value = value.slice(1, -1);
+  }
+  const remappedValue = remapLegacyDefaultWorkspaceReference(value, subtree);
+  return remappedValue === value
+    ? candidate
+    : `${prefix}${quote}${remappedValue}${quote}`;
+}
+
+/**
  * The ambient workspace for the current async execution context.
  *
  * Stored on `globalThis` because Next.js can evaluate a module more than once
@@ -139,7 +249,6 @@ export function getWorkspaceUserdataDir(workspace?: string): string {
  * instance would silently lose the context established by the first.
  */
 declare global {
-  // eslint-disable-next-line no-var
   var __flujo_workspace_als: AsyncLocalStorage<string> | undefined;
 }
 
@@ -251,29 +360,31 @@ export async function listWorkspaces(): Promise<WorkspaceInfo[]> {
   let entries: WorkspaceDirent[] = [];
   try {
     entries = (await fs.readdir(root, { withFileTypes: true })) as unknown as WorkspaceDirent[];
-  } catch {
+  } catch (error) {
     // No workspaces directory yet (fresh install, or migration not run): the
     // default workspace is still the correct answer.
-    entries = [];
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') entries = [];
+    else throw error;
+  }
+
+  const aliases = new Map<string, string[]>();
+  for (const entry of entries) {
+    if (!isValidWorkspaceName(entry.name)) continue;
+    const folded = entry.name.toLowerCase();
+    const group = aliases.get(folded) ?? [];
+    group.push(entry.name);
+    aliases.set(folded, group);
   }
 
   for (const entry of entries) {
     if (!isValidWorkspaceName(entry.name)) continue;
+    if ((aliases.get(entry.name.toLowerCase())?.length ?? 0) > 1) continue;
     if (entry.isDirectory()) {
       names.add(entry.name);
       continue;
     }
-    if (!entry.isSymbolicLink()) continue;
-    // Follow the link once and require it to stay inside workspaces/.
-    try {
-      const target = await fs.realpath(path.join(root, entry.name));
-      const rel = path.relative(root, target);
-      if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) continue;
-      const stat = await fs.stat(target);
-      if (stat.isDirectory()) names.add(entry.name);
-    } catch {
-      /* broken link — ignore */
-    }
+    // Workspace roots must be real directories, never symlinks or junctions.
+    if (entry.isSymbolicLink()) continue;
   }
 
   return [...names]
@@ -292,21 +403,62 @@ export async function listWorkspaces(): Promise<WorkspaceInfo[]> {
 /** Whether a (syntactically valid) workspace exists on disk. */
 export async function workspaceExists(workspace: string): Promise<boolean> {
   if (!isValidWorkspaceName(workspace)) return false;
-  if (workspace === DEFAULT_WORKSPACE) return true;
   try {
-    const stat = await fs.stat(getWorkspaceDir(workspace));
-    return stat.isDirectory();
-  } catch {
-    return false;
+    const entries = await fs.readdir(getWorkspacesDir(), { withFileTypes: true });
+    const aliases = entries.filter(entry =>
+      isValidWorkspaceName(entry.name)
+      && entry.name.toLowerCase() === workspace.toLowerCase(),
+    );
+    if (aliases.length !== 1 || aliases[0].name !== workspace) return false;
+    const stat = await fs.lstat(getWorkspaceDir(workspace));
+    return stat.isDirectory() && !stat.isSymbolicLink();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
   }
 }
 
-/** Create `<workspace>/{db,mcp-servers,userdata}` if missing. Idempotent. */
+async function assertRealDirectory(candidate: string, label: string): Promise<void> {
+  const stat = await fs.lstat(candidate);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new Error(`${label} must be a real directory, not a file, symlink, or junction: ${candidate}`);
+  }
+}
+
+/** Create the complete workspace-owned directory set if missing. Idempotent. */
 export async function ensureWorkspaceDirs(workspace?: string): Promise<string> {
   const dir = getWorkspaceDir(workspace);
+  const dataRoot = getDataDir();
+  const workspacesRoot = getWorkspacesDir();
+  await fs.mkdir(dataRoot, { recursive: true });
+  await assertRealDirectory(dataRoot, 'FLUJO data root');
+  await fs.mkdir(workspacesRoot, { recursive: true });
+  await assertRealDirectory(workspacesRoot, 'Workspaces root');
+
+  const expectedName = path.basename(dir);
+  const siblings = await fs.readdir(workspacesRoot);
+  const aliases = siblings.filter(name =>
+    isValidWorkspaceName(name) && name.toLowerCase() === expectedName.toLowerCase(),
+  );
+  if (aliases.some(name => name !== expectedName) || aliases.length > 1) {
+    throw new Error(
+      `Workspace name ${JSON.stringify(expectedName)} conflicts with a case alias on disk: ` +
+      aliases.join(', '),
+    );
+  }
+
   await fs.mkdir(dir, { recursive: true });
+  await assertRealDirectory(dir, `Workspace ${expectedName}`);
+  const canonicalRoot = await fs.realpath(workspacesRoot);
+  const canonicalWorkspace = await fs.realpath(dir);
+  const rel = path.relative(canonicalRoot, canonicalWorkspace);
+  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new Error(`Workspace directory escapes the workspaces root: ${dir}`);
+  }
   for (const sub of WORKSPACE_SUBTREES) {
-    await fs.mkdir(path.join(dir, sub), { recursive: true });
+    const subtree = path.join(dir, sub);
+    await fs.mkdir(subtree, { recursive: true });
+    await assertRealDirectory(subtree, `Workspace subtree ${sub}`);
   }
   return dir;
 }

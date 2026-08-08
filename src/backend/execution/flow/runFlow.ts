@@ -1,5 +1,6 @@
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { withConversationExecutionLock } from '@/backend/execution/flow/conversationExecutionLock';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import {
   forget as forgetConversationCacheEntry,
@@ -35,6 +36,7 @@ import { FlujoChatMessage } from '@/shared/types/chat';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { requireFunctionToolCalls } from '@/shared/types/openai';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
+import { isMeetingToolName } from '@/backend/execution/flow/handlers/meetingTools';
 import { isInternalToolName } from '@/backend/execution/flow/handlers/toolNamespace';
 import { emitErrorOnce, emitNormalizedErrorOnce, deriveLastErrorFromLastResponse } from '@/backend/execution/flow/normalizeError';
 import { flowService } from '@/backend/services/flow/index';
@@ -347,7 +349,7 @@ export interface FlowRunInput {
   /** Explicit invocation context (issue #113/#339). Required at the runFlow
    *  boundary so unattended behavior can never depend on an omitted default or
    *  a persisted flow property. Chat/API are attended; schedule/trigger,
-   *  subflow, MCP, and internal-tool execution are unattended. */
+   *  subflow, MCP, meeting-participant, and internal-tool execution are unattended. */
   source: FlowInvocationSource;
   /** For scheduler-originated runs: the planned execution id that fired this
    *  run (issue #113). Only meaningful when `source === 'schedule'`. */
@@ -366,6 +368,13 @@ export interface FlowRunInput {
    *  run as awaiting_tool_approval so it can be resumed via /api/approvals.
    *  Only consulted when `requireApproval` is true. Default 'auto'. */
   onApprovalRequired?: 'auto' | 'fail' | 'pause';
+  /** External owner cancellation (for example MeetingEngine). Runtime-only. */
+  abortSignal?: AbortSignal;
+
+  /** MeetingEngine-only participant identity. Never forwarded to subflows. */
+  meetingParticipant?: SharedState['meetingParticipant'];
+  /** MeetingEngine-only fresh action buffer for this participant turn. */
+  meetingTurn?: SharedState['meetingTurn'];
 }
 
 export interface FlowRunResult {
@@ -403,10 +412,21 @@ export interface FlowRunResult {
  * scheduler) can run flows without the HTTP/OpenAI coupling.
  */
 export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
+  if (!input.conversationId) return runFlowUnlocked(input);
+  return withConversationExecutionLock(
+    input.conversationId,
+    () => runFlowUnlocked(input),
+  );
+}
+
+async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   if (!isFlowInvocationSource(input.source)) {
     throw new TypeError(
       `runFlow requires an explicit invocation source (${String(input.source)} is invalid)`,
     );
+  }
+  if (input.source === 'meeting' && (!input.meetingParticipant || !input.meetingTurn)) {
+    throw new TypeError('Meeting flow runs require participant and turn coordination context.');
   }
 
   const startTime = Date.now();
@@ -474,6 +494,25 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
       }
     } catch (error) {
       log.warn(`Error loading conversation state from storage for ${effectiveConvId}:`, error);
+    }
+  }
+
+  // Meeting participant conversations remain inspectable, but an ordinary
+  // chat/API run must not mutate their memory while their owning meeting can
+  // still schedule another turn. The shared execution lease above makes this
+  // check race-free with an in-flight participant turn.
+  if (loadedState?.meetingParticipant && input.source !== 'meeting') {
+    const { getMeeting } = await import('@/backend/services/meetings/store');
+    const owner = await getMeeting(loadedState.meetingParticipant.meetingId);
+    if (
+      owner
+      && owner.status !== 'completed'
+      && owner.status !== 'cancelled'
+      && owner.status !== 'error'
+    ) {
+      throw new Error(
+        `Conversation ${effectiveConvId} is reserved by active meeting ${owner.id}.`,
+      );
     }
   }
 
@@ -600,6 +639,29 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   // an internal resume should keep the last snapshot.
   if (input.mcpAppContexts !== undefined) {
     sharedState.mcpAppContexts = input.mcpAppContexts;
+  }
+  // A meeting round is still executed by the regular flow runtime, but its
+  // coordination state belongs to the sibling MeetingEngine. Install only the
+  // participant's identity and a fresh per-turn action buffer here; because
+  // SubflowNode does not forward these fields, child runs cannot accidentally
+  // speak or vote on behalf of their parent participant.
+  if (input.source === 'meeting' && input.meetingParticipant && input.meetingTurn) {
+    sharedState.meetingParticipant = { ...input.meetingParticipant };
+    sharedState.meetingTurn = {
+      ...input.meetingTurn,
+      actions: [...input.meetingTurn.actions],
+    };
+  } else {
+    // Participant conversations are ordinary inspectable conversations once
+    // a person re-enters them outside the coordinator. Do not leave stale
+    // meeting capabilities or provider prefixes armed on a later chat/API run.
+    // The frozen prompt and native session were created with the meeting
+    // protocol, so both must be rebuilt before normal conversation continues.
+    if (sharedState.meetingParticipant) {
+      sharedState.frozenSystemPrompts = undefined;
+      sharedState.codexSessions = undefined;
+    }
+    sharedState.meetingTurn = undefined;
   }
 
   // The conversation's approval setting (single source of truth).
@@ -1200,6 +1262,10 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   // is copied onto this state so descendants (and later checks) short-circuit.
   let cancelledByAncestor = false;
   const runCancelled = (): boolean => {
+    if (input.abortSignal?.aborted) {
+      sharedState.isCancelled = true;
+      return true;
+    }
     if (sharedState.isCancelled) return true;
     if (isCancelledByAncestry(sharedState.parentRunId, FlowExecutor.conversationStates)) {
       cancelledByAncestor = true;
@@ -1717,29 +1783,6 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                 }
               }
               // --- Flujo=true: Handle optional approval ---
-              if (requireApproval && sharedState.onApprovalRequired === 'fail') {
-                // Headless fail-fast (#115): a tool needs approval but this run
-                // has no interactive approver. Do NOT execute the tool and do
-                // NOT hang — end the run with a structured approval-required
-                // error so the scheduler can record a `needs_approval` outcome.
-                const firstCall = lastAssistantMsg.tool_calls[0];
-                const toolName =
-                  firstCall && firstCall.type === 'function' ? firstCall.function.name : 'unknown';
-                log.info(`[flujo=true, onApprovalRequired=fail] Failing fast for tool "${toolName}" (conv ${effectiveConvId})`);
-                sharedState.status = 'error';
-                sharedState.pendingToolCalls = lastAssistantMsg.tool_calls;
-                sharedState.lastResponse = {
-                  success: false,
-                  error: `Headless run requires approval for tool "${toolName}" but no approver is available (approvalPolicy: fail).`,
-                  errorDetails: {
-                    message: `Headless run requires approval for tool "${toolName}" but no approver is available (approvalPolicy: fail).`,
-                    type: 'approval_required',
-                    name: toolName,
-                  },
-                };
-                currentAction = ERROR_ACTION;
-                break;
-              }
               if (requireApproval) {
                 // Issue #246: Before pausing, filter tool calls through the permission
                 // rules. Calls with effect 'deny' or 'allow' are handled immediately;
@@ -1751,6 +1794,14 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
 
                 if (permRules.length > 0 || savedRules.length > 0) {
                   for (const tc of lastAssistantMsg.tool_calls) {
+                    // Meeting controls are local coordinator operations, not
+                    // external side effects, so they never need a human
+                    // approval prompt. All ordinary tools still follow the
+                    // flow's permission rules below.
+                    if (isMeetingToolName(tc.function.name)) {
+                      toolCallsToProcessNow.push(tc);
+                      continue;
+                    }
                     const decoded = decodeToolName(tc.function.name, sharedState.toolNameMap);
                     if (!decoded) {
                       // Undecodable (handoff, synthetic) — pass through to approval
@@ -1768,8 +1819,37 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
                     }
                   }
                 } else {
-                  // No rules — all go to approval gate
-                  toolCallsForApproval.push(...lastAssistantMsg.tool_calls);
+                  // With no explicit rules, only coordinator-owned meeting
+                  // controls bypass the approval gate.
+                  for (const tc of lastAssistantMsg.tool_calls) {
+                    if (isMeetingToolName(tc.function.name)) toolCallsToProcessNow.push(tc);
+                    else toolCallsForApproval.push(tc);
+                  }
+                }
+
+                if (
+                  sharedState.onApprovalRequired === 'fail'
+                  && toolCallsForApproval.length > 0
+                ) {
+                  // Headless fail-fast (#115): at least one call still needs a
+                  // human decision after permission evaluation. Execute
+                  // nothing from this batch and return a structured error.
+                  const firstCall = toolCallsForApproval[0];
+                  const toolName = firstCall?.function.name ?? 'unknown';
+                  log.info(`[flujo=true, onApprovalRequired=fail] Failing fast for tool "${toolName}" (conv ${effectiveConvId})`);
+                  sharedState.status = 'error';
+                  sharedState.pendingToolCalls = toolCallsForApproval;
+                  sharedState.lastResponse = {
+                    success: false,
+                    error: `Headless run requires approval for tool "${toolName}" but no approver is available (approvalPolicy: fail).`,
+                    errorDetails: {
+                      message: `Headless run requires approval for tool "${toolName}" but no approver is available (approvalPolicy: fail).`,
+                      type: 'approval_required',
+                      name: toolName,
+                    },
+                  };
+                  currentAction = ERROR_ACTION;
+                  break;
                 }
 
                 // Process immediately-resolved (allow/deny) calls
@@ -2319,6 +2399,7 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     if (
       sharedState.source !== 'schedule' &&
       sharedState.source !== 'trigger' &&
+      sharedState.source !== 'meeting' &&
       (sharedState.runDepth ?? 0) === 0
     ) {
       const lastMsg = sharedState.messages[sharedState.messages.length - 1];

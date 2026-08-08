@@ -44,6 +44,10 @@ const ORIGIN_META: Record<ConversationOriginKey, Omit<ConversationOriginMeta, 'k
     label: 'Internal',
     description: 'Started by an internal FLUJO tool',
   },
+  meeting: {
+    label: 'Meeting',
+    description: 'Participated in a multi-flow meeting',
+  },
   unknown: {
     label: 'Unknown origin',
     description: 'Origin metadata was not recorded for this older conversation',

@@ -9,13 +9,14 @@ import OpenAI from 'openai';
 import type { VisualCompactionDiagnostic } from '@/shared/types/visualArchive';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import type { NormalizedChatError } from '@/shared/types/execution/errors';
+import type { MeetingToolAction } from '@/shared/types/meeting';
 
 // --- Custom Chat Message Type is now imported from shared/types/chat.ts ---
 
 /**
  * Explicit origin for every runFlow invocation (issue #339). Chat and direct
- * API calls have an interactive caller; scheduled/triggered, subflow, MCP, and
- * internal-tool runs are headless and therefore unattended.
+ * API calls have an interactive caller; scheduled/triggered, subflow, MCP,
+ * meeting-participant, and internal-tool runs are headless and unattended.
  */
 export const FLOW_INVOCATION_SOURCES = [
   'chat',
@@ -25,6 +26,7 @@ export const FLOW_INVOCATION_SOURCES = [
   'subflow',
   'mcp',
   'internal',
+  'meeting',
 ] as const;
 
 export type FlowInvocationSource = typeof FLOW_INVOCATION_SOURCES[number];
@@ -753,6 +755,24 @@ export interface CodexSessionMetadata {
 
 // Shared state (minimized)
 export interface SharedState {
+    /**
+     * Present only for a top-level participant conversation driven by the
+     * MeetingEngine. The process-node prompt and synthetic meeting controls use
+     * this identity; nested subflows deliberately do not receive it.
+     */
+    meetingParticipant?: {
+        protocolVersion: 1;
+        meetingId: string;
+        participantId: string;
+        participantName: string;
+        role: 'participant' | 'moderator';
+    };
+    /** Fresh, coordinator-owned action buffer for the current barrier round. */
+    meetingTurn?: {
+        turnId: string;
+        roundId: string;
+        actions: MeetingToolAction[];
+    };
     /** Stable logical execution id used only for metadata-only statistics. It is
      * preserved while approval/debug is paused, then replaced for a new turn. */
     logicalRunId?: string;
@@ -1288,6 +1308,13 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     /** Whether tool calls require user approval (mirrors the run's requireApproval).
      *  Self-orchestrating adapters (Claude subscription) consult this in canUseTool. */
     requireToolApproval?: boolean;
+    /** Approval behavior and resolved permission context forwarded to adapters
+     *  which execute their own tool loop. */
+    onApprovalRequired?: 'auto' | 'fail' | 'pause';
+    permissionRules?: PermissionRule[];
+    savedPermissionRules?: SavedPermissionRule[];
+    /** True only while MeetingEngine owns this participant turn. */
+    meetingToolsEnabled?: boolean;
     /** Unattended run (issue #258): forwarded so the synthetic `question` tool
      *  degrades to a tool-error instead of blocking for an answer. */
     unattended?: boolean;

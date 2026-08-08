@@ -66,6 +66,13 @@ export interface ModelCallInput {
   onCodexSessionChange?: (session: CodexSessionMetadata | undefined) => void;
   /** Whether tool calls require user approval (mirrors the run's requireApproval). */
   requireToolApproval?: boolean;
+  /** Headless approval behavior for self-orchestrating adapters. */
+  onApprovalRequired?: 'auto' | 'fail' | 'pause';
+  /** Permission rules used to resolve allow/deny before requesting approval. */
+  permissionRules?: PermissionRule[];
+  savedPermissionRules?: SavedPermissionRule[];
+  /** True only for a coordinator-owned participant turn. */
+  meetingToolsEnabled?: boolean;
   /** Issue #239: bound MCP node references for native resource tools. Forwarded to
    *  localToolExecutors so self-orchestrating adapters can execute list_mcp_resources
    *  and native-URI read_resource in-loop. */

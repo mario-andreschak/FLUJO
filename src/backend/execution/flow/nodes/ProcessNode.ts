@@ -8,6 +8,11 @@ import { ResourceHandler } from '../handlers/ResourceHandler';
 import { buildRunResourceTools, buildReadResourceTool, READ_RESOURCE_TOOL_NAME, WRITE_RESOURCE_TOOL_NAME } from '../handlers/runResourceTools';
 import { buildQuestionTool, QUESTION_TOOL_NAME } from '../handlers/runQuestionTool';
 import { buildTodoTool, TODO_TOOL_NAME, formatTodoBlock } from '../handlers/todoTool';
+import {
+  appendMeetingParticipantProtocol,
+  buildMeetingTools,
+  isMeetingToolName,
+} from '../handlers/meetingTools';
 import { isWhollyDenied } from '../permissionEngine';
 import { buildListMCPResourcesTool, LIST_MCP_RESOURCES_TOOL_NAME } from '../handlers/mcpResourceTools';
 import { RUN_RESOURCE_SCHEME } from '@/shared/types/runResources';
@@ -444,6 +449,15 @@ export class ProcessNode extends BaseNode {
       completePrompt += resourceBlock;
     }
 
+    // Meeting participants receive a fixed protocol before the prompt is frozen
+    // below. Live roster/round data stays in user inbox messages, so this system
+    // prefix remains byte-identical between turns and across meeting rounds.
+    // Child Subflows do not inherit meetingParticipant, keeping these coordinator
+    // controls confined to the root participant flow.
+    if (sharedState.meetingParticipant && sharedState.meetingTurn) {
+      completePrompt = appendMeetingParticipantProtocol(completePrompt);
+    }
+
     log.debug('Prompt rendered successfully', {
       completePromptLength: completePrompt.length,
       completePromptPreview: completePrompt.length > 100 ?
@@ -581,6 +595,17 @@ export class ProcessNode extends BaseNode {
       availableTools = [...availableTools, buildTodoTool()];
     }
 
+    // Meeting tools are coordinator-owned capabilities. Replace any colliding
+    // advertised names with our fixed definitions, both to keep the block
+    // deterministic and to ensure a server tool can never impersonate a meeting
+    // control. Ordinary conversations retain their exact existing tool set.
+    if (sharedState.meetingParticipant && sharedState.meetingTurn) {
+      availableTools = [
+        ...availableTools.filter((tool) => !isMeetingToolName(tool.name)),
+        ...buildMeetingTools(),
+      ];
+    }
+
     // Record the model-facing-name -> (server, tool) mapping for MCP tools so the
     // model's tool calls can be decoded later, including across a tool-approval
     // resume (#16). Handoff tools have no server and are decoded by name prefix.
@@ -624,6 +649,10 @@ export class ProcessNode extends BaseNode {
       }
     },
     requireToolApproval: sharedState.requireApproval ?? false,
+    onApprovalRequired: sharedState.onApprovalRequired,
+    permissionRules: sharedState.permissionRules,
+    savedPermissionRules: sharedState.savedPermissionRules,
+    meetingToolsEnabled: Boolean(sharedState.meetingParticipant && sharedState.meetingTurn),
     // Issue #258: carry the resolved unattended flag so execCore can pass it to
     // the model call (the synthetic `question` tool degrades in unattended runs).
     unattended: sharedState.unattended,
@@ -1108,6 +1137,10 @@ export class ProcessNode extends BaseNode {
             codexSession: prepResult.codexSession,
             onCodexSessionChange: prepResult.onCodexSessionChange,
             requireToolApproval: prepResult.requireToolApproval, // Gate tool calls on user approval
+            onApprovalRequired: prepResult.onApprovalRequired,
+            permissionRules: prepResult.permissionRules,
+            savedPermissionRules: prepResult.savedPermissionRules,
+            meetingToolsEnabled: prepResult.meetingToolsEnabled,
             mcpNodes: node_params?.properties?.mcpNodes, // Issue #239: for native resource tools
             unattended: prepResult.unattended, // Issue #258: degrade the question tool in unattended runs
           });

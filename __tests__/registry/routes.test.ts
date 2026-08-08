@@ -12,11 +12,14 @@ import type { NextRequest } from 'next/server';
 jest.mock('@/app/api/_workspace', () => ({
   withWorkspaceRoute: <H extends (...args: never[]) => unknown>(handler: H): H => handler,
 }));
+const mockWorkspaceExists = jest.fn(async (_workspace?: string) => true);
+const mockEnsureWorkspaceDirs = jest.fn(async (_workspace?: string) => undefined);
 jest.mock('@/utils/workspace', () => {
   const actual = jest.requireActual('@/utils/workspace');
   return {
     ...actual,
-    workspaceExists: jest.fn(async () => true),
+    workspaceExists: (workspace?: string) => mockWorkspaceExists(workspace),
+    ensureWorkspaceDirs: (workspace?: string) => mockEnsureWorkspaceDirs(workspace),
   };
 });
 
@@ -83,6 +86,8 @@ function deleteReq(url: string, body: unknown, headers: Record<string, string> =
 beforeEach(() => {
   jest.clearAllMocks();
   pendingOAuthWorkspaceMock.mockReturnValue('default-workspace');
+  mockWorkspaceExists.mockResolvedValue(true);
+  mockEnsureWorkspaceDirs.mockResolvedValue(undefined);
 });
 
 describe('POST /api/registry/auth (#197)', () => {
@@ -258,6 +263,20 @@ describe('GET /api/registry/oauth/callback (#207)', () => {
     expect(res.status).toBe(307);
     expect(res.headers.get('location')).toContain('/packages?registry_oauth=success');
     expect(completeOAuthMock).toHaveBeenCalledWith('abc', 'xyz');
+    expect(mockEnsureWorkspaceDirs).toHaveBeenCalledWith('default-workspace');
+  });
+
+  it('refuses to persist tokens when the state-selected workspace fails subtree validation', async () => {
+    pendingOAuthWorkspaceMock.mockReturnValue('team-a');
+    mockEnsureWorkspaceDirs.mockRejectedValueOnce(new Error('workspace userdata is a junction'));
+
+    const res = await oauthCallbackGet(
+      getReq('http://localhost:4200/api/registry/oauth/callback?code=abc&state=xyz'),
+    );
+
+    expect(res.status).toBe(307);
+    expect(res.headers.get('location')).toContain('registry_oauth=error');
+    expect(completeOAuthMock).not.toHaveBeenCalled();
   });
 
   it('redirects to error (and never stores tokens) on invalid/expired state', async () => {

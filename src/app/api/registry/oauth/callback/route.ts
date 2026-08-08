@@ -18,7 +18,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { completeOAuth, pendingOAuthWorkspace } from '@/backend/services/registry';
 import { createLogger } from '@/utils/logger';
-import { runWithWorkspace, workspaceExists } from '@/utils/workspace';
+import { ensureWorkspaceDirs, runWithWorkspace, workspaceExists } from '@/utils/workspace';
 
 const log = createLogger('app/api/registry/oauth/callback/route');
 
@@ -41,6 +41,10 @@ async function GET_handler(request: NextRequest) {
     if (!workspace || !(await workspaceExists(workspace))) {
       return redirectToPackages(request, 'error');
     }
+    // The state, not the outer callback URL, selects where credentials are
+    // persisted. Revalidate every owned subtree immediately before entering
+    // that context so a replaced symlink/junction cannot cross workspaces.
+    await ensureWorkspaceDirs(workspace);
 
     return runWithWorkspace(workspace, async () => {
       const lock = await assertUnlocked();

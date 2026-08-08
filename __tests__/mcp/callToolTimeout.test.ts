@@ -142,7 +142,6 @@ describe('callTool timeout handling', () => {
       errorType: 'cancelled',
       toolName: 'demo',
       progressToken: 'task-1',
-      toolName: 'demo',
     });
   });
 

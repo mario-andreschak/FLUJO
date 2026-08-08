@@ -44,6 +44,7 @@ import WebhookRoundedIcon from '@mui/icons-material/WebhookRounded';
 import ApiRoundedIcon from '@mui/icons-material/ApiRounded';
 import ExtensionRoundedIcon from '@mui/icons-material/ExtensionRounded';
 import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
+import GroupsRoundedIcon from '@mui/icons-material/GroupsRounded';
 import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded';
 import AccessTimeRoundedIcon from '@mui/icons-material/AccessTimeRounded';
 import LinkOffRoundedIcon from '@mui/icons-material/LinkOffRounded';
@@ -147,6 +148,7 @@ const ORIGIN_ICONS: Record<ConversationOriginKey, React.ElementType> = {
   subflow: AccountTreeRoundedIcon,
   mcp: ExtensionRoundedIcon,
   internal: AutoAwesomeRoundedIcon,
+  meeting: GroupsRoundedIcon,
   unknown: HelpOutlineRoundedIcon,
 };
 

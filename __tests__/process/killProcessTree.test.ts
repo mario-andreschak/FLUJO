@@ -49,6 +49,7 @@ describe('killProcessTreeAndWait', () => {
   it('sends SIGTERM then SIGKILL to the POSIX process group when the tree does not exit', async () => {
     Object.defineProperty(process, 'platform', { value: 'linux' });
     const child = runningChild();
+    const pid = child.pid!;
     const kill = jest.spyOn(process, 'kill').mockImplementation(() => true as never);
 
     const result = await killProcessTreeAndWait(child, {
@@ -57,16 +58,17 @@ describe('killProcessTreeAndWait', () => {
     });
 
     expect(kill.mock.calls).toEqual([
-      [-child.pid, 'SIGTERM'],
-      [-child.pid, 'SIGKILL'],
+      [-pid, 'SIGTERM'],
+      [-pid, 'SIGKILL'],
     ]);
-    expect(result).toMatchObject({ exited: false, forced: true, pid: child.pid });
+    expect(result).toMatchObject({ exited: false, forced: true, pid });
   });
 
   it('does not SIGKILL when the tree exits during the SIGTERM grace period', async () => {
     Object.defineProperty(process, 'platform', { value: 'linux' });
     const child = runningChild();
-    const kill = jest.spyOn(process, 'kill').mockImplementation(((_pid, signal) => {
+    const pid = child.pid!;
+    const kill = jest.spyOn(process, 'kill').mockImplementation(((_pid: number, signal?: NodeJS.Signals | number) => {
       if (signal === 'SIGTERM') {
         setTimeout(() => {
           Object.assign(child, { exitCode: 0 });
@@ -81,7 +83,7 @@ describe('killProcessTreeAndWait', () => {
       finalWaitMs: 5,
     });
 
-    expect(kill.mock.calls).toEqual([[-child.pid, 'SIGTERM']]);
-    expect(result).toMatchObject({ exited: true, forced: true, pid: child.pid });
+    expect(kill.mock.calls).toEqual([[-pid, 'SIGTERM']]);
+    expect(result).toMatchObject({ exited: true, forced: true, pid });
   });
 });

@@ -67,18 +67,21 @@ share the readiness promise; workspace discovery returns a retryable `503` with
 request can race the old layout.
 
 Migration progress is always visible in the server console in runtime builds.
-An attached terminal gets a colored FLUJO riverside title card, an animated
-current step with a small running companion, durable phase milestones and
-aggregate file, directory, link and byte counts. Narrow terminals use a compact
-version. Redirected output, CI, services and containers without a TTY retain the
-line-oriented transcript so log collectors never receive cursor-control noise.
-Set `FLUJO_MIGRATION_UI=plain` to disable the terminal interface or
-`FLUJO_MIGRATION_UI=tty` to force it; `FLUJO_MIGRATION_ASCII=1` replaces Unicode
-status symbols, and the standard `NO_COLOR` setting disables color. The output
-identifies recovery and transaction checkpoints and ends with an explicit
-success or fail-closed line. It intentionally does not print individual
-filenames, which keeps secrets out of logs while making a long first upgrade
-observable.
+The default is a durable, line-oriented transcript—even in an interactive
+terminal—so every inventory, recovery and transaction checkpoint remains in
+scrollback after this breaking upgrade. It reports aggregate
+file/directory/link/byte counts and measured processing time without printing
+individual filenames, which keeps secrets out of logs while making a long first
+upgrade observable.
+
+An optional compact animation can be selected with
+`FLUJO_MIGRATION_UI=compact` or `FLUJO_MIGRATION_UI=tty`. A color-capable
+terminal at least 56 columns by 18 rows can opt into the full-screen,
+slow-scrolling FLUJO riverside landscape with
+`FLUJO_MIGRATION_UI=landscape`; its HUD uses the same real migration telemetry.
+`FLUJO_MIGRATION_UI=plain` explicitly selects the default transcript,
+`FLUJO_MIGRATION_ASCII=1` selects the compact ASCII presentation, and the
+standard `NO_COLOR` setting disables color and the full-screen scene.
 
 Layout v2 inventories every legacy root and destination before renaming any user
 data. It recursively overlays disjoint paths, which safely recovers installs
@@ -107,6 +110,12 @@ Absolute in-tree Windows junctions (including npm workspace links) are rebased
 onto the published workspace; broken or external links fail closed. Descendant
 mount points—including same-device Linux bind mounts discovered through
 `/proc/self/mountinfo`—also fail during preflight, before anything is renamed.
+
+Linux and macOS use Python 3 for their native, directory-handle-bound
+no-replace rename syscall. The official container includes it. Source/npm
+installations must have `python3` available, or set `FLUJO_PYTHON3` to its
+absolute executable path; if it is missing, migration fails before moving data
+and prints that requirement in the durable transcript.
 
 The durable journal makes every checkpoint retryable from filesystem truth. Old
 sources and an existing destination are retained as transaction-specific backups

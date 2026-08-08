@@ -69,6 +69,7 @@ const RUN_SOURCES: StatisticsRunSource[] = [
   'subflow',
   'mcp',
   'internal',
+  'meeting',
   'internal-tool',
 ];
 const STATUSES: StatisticsStatusFilter[] = [
@@ -724,6 +725,7 @@ export default function Statistics() {
     subflow: 'statistics.source.subflow',
     mcp: 'statistics.source.mcp',
     internal: 'statistics.source.internal',
+    meeting: 'statistics.source.meeting',
     'internal-tool': 'statistics.source.internalTool',
   };
   const statusLabels: Record<StatisticsStatusFilter, TranslationKey> = {

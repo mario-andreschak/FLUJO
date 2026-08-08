@@ -188,4 +188,71 @@ describe('subflow recovery coordinator', () => {
       canRetryDeepest: false,
     });
   });
+
+  it('never resumes a meeting-owned participant outside MeetingEngine', async () => {
+    const invocation: SubflowInvocation = {
+      version: 1,
+      id: 'inv-meeting',
+      parentConversationId: 'parent',
+      parentNodeId: 'sub-node',
+      status: 'blocked',
+      depth: 1,
+      showSteps: true,
+      concurrencyLimit: 1,
+      joinSeparator: '\n\n',
+      errorStrategy: 'fail-fast',
+      lanes: [{
+        id: 'lane-meeting',
+        index: 0,
+        count: 1,
+        subflowId: 'child-flow',
+        conversationId: 'child',
+        status: 'error',
+        attempt: 1,
+        error: 'failed',
+        updatedAt: 1,
+      }],
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const parent = parentState(invocation);
+    parent.source = 'meeting';
+    parent.meetingParticipant = {
+      protocolVersion: 1,
+      meetingId: 'meeting-1',
+      participantId: 'participant-1',
+      participantName: 'Participant',
+      role: 'participant',
+    };
+    FlowExecutor.conversationStates.set('parent', parent);
+
+    const child = {
+      conversationId: 'child',
+      parentRunId: 'parent',
+      parentConversationId: 'parent',
+      rootConversationId: 'parent',
+      subflowLane: {
+        invocationId: 'inv-meeting',
+        laneId: 'lane-meeting',
+        conversationId: 'child',
+      },
+      recovery: { classification: 'completed' },
+      messages: [],
+    } as unknown as SharedState;
+
+    await reportSubflowRunOutcome({
+      status: 'completed',
+      conversationId: 'child',
+      outputText: 'child output',
+      sharedState: child,
+    });
+
+    expect(runFlowMock).not.toHaveBeenCalled();
+    await expect(getSubflowRecoveryOptions('parent')).resolves.toMatchObject({
+      hasRecoverableFamily: false,
+      canRetryBranch: false,
+      canRetrySiblings: false,
+      canRetryDeepest: false,
+    });
+  });
 });

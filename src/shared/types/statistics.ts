@@ -15,6 +15,7 @@ export type StatisticsRunSource =
   | 'subflow'
   | 'mcp'
   | 'internal'
+  | 'meeting'
   | 'internal-tool';
 
 export type StatisticsRunOutcome = 'completed' | 'error' | 'capped' | 'cancelled';
@@ -278,7 +279,7 @@ export type StatisticsEvent =
   | SchedulerSkipStatisticsEvent;
 
 const RUN_SOURCES = new Set<StatisticsRunSource>([
-  'chat', 'api', 'schedule', 'trigger', 'subflow', 'mcp', 'internal', 'internal-tool',
+  'chat', 'api', 'schedule', 'trigger', 'subflow', 'mcp', 'internal', 'meeting', 'internal-tool',
 ]);
 const RUN_OUTCOMES = new Set<StatisticsRunOutcome>(['completed', 'error', 'capped', 'cancelled']);
 const OPERATION_OUTCOMES = new Set<StatisticsOperationOutcome>(['completed', 'error', 'cancelled']);

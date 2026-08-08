@@ -1,12 +1,18 @@
 import {
   createMigrationProgressReporter,
+  shouldUseFullscreenMigrationUI,
   shouldUseInteractiveMigrationUI,
 } from '@/backend/services/workspace/migrationProgress';
+import {
+  migrationLandscapeMotion,
+  migrationLandscapeThemeForLocalHour,
+} from '@/backend/services/workspace/migrationLandscape';
 
 class MemoryTerminal {
   readonly chunks: string[] = [];
   isTTY = true;
   columns = 120;
+  rows = 30;
   hasColors = () => false;
 
   write(chunk: string): boolean {
@@ -37,6 +43,7 @@ describe('workspace migration progress renderer', () => {
       purpose: 'preflight source for db',
       files: 12,
       bytes: '4.00 KiB',
+      _bytes: 4096,
     });
     reporter.report(
       'FAILED - no conflicting data was overwritten',
@@ -145,14 +152,93 @@ describe('workspace migration progress renderer', () => {
     expect(terminal.output()).toContain('\u001B[32m✓\u001B[0m');
   });
 
-  it('uses animation only for capable terminals unless explicitly forced', () => {
+  it('keeps a durable transcript by default and enables animation only when requested', () => {
     const tty = { isTTY: true, write: () => true };
     const pipe = { isTTY: false, write: () => true };
 
-    expect(shouldUseInteractiveMigrationUI(tty, {})).toBe(true);
+    expect(shouldUseInteractiveMigrationUI(tty, {})).toBe(false);
     expect(shouldUseInteractiveMigrationUI(tty, { CI: 'true' })).toBe(false);
     expect(shouldUseInteractiveMigrationUI(tty, { TERM: 'dumb' })).toBe(false);
     expect(shouldUseInteractiveMigrationUI(tty, { FLUJO_MIGRATION_UI: 'plain' })).toBe(false);
     expect(shouldUseInteractiveMigrationUI(pipe, { FLUJO_MIGRATION_UI: 'tty' })).toBe(true);
+  });
+
+  it('selects the landscape from local time and bounds telemetry-driven motion', () => {
+    expect(migrationLandscapeThemeForLocalHour(6)).toBe('daybreak');
+    expect(migrationLandscapeThemeForLocalHour(18)).toBe('twilight');
+    expect(migrationLandscapeThemeForLocalHour(23)).toBe('moonlight');
+    expect(migrationLandscapeThemeForLocalHour(-1)).toBe('moonlight');
+
+    const idle = migrationLandscapeMotion({
+      bytesPerSecond: 0,
+      filesPerSecond: 0,
+      progress: 0,
+    });
+    const busy = migrationLandscapeMotion({
+      bytesPerSecond: 250 * 1024 * 1024,
+      filesPerSecond: 20_000,
+      progress: 1,
+    });
+
+    expect(busy.riverSpeed).toBeGreaterThan(idle.riverSpeed);
+    expect(busy.actorSpeed).toBeGreaterThan(idle.actorSpeed);
+    expect(busy.panningSpeed).toBeGreaterThan(idle.panningSpeed);
+    expect(busy.mountainHeightScale).toBeGreaterThan(idle.mountainHeightScale);
+    expect(busy.riverSpeed).toBeLessThanOrEqual(3);
+    expect(busy.mountainHeightScale).toBeLessThanOrEqual(1.08);
+  });
+
+  it('uses the fullscreen landscape only when color and dimensions support it', () => {
+    const terminal = new MemoryTerminal();
+    terminal.hasColors = () => true;
+
+    expect(shouldUseFullscreenMigrationUI(terminal, {})).toBe(false);
+    expect(shouldUseFullscreenMigrationUI(terminal, { FLUJO_MIGRATION_UI: 'landscape' })).toBe(true);
+    expect(shouldUseFullscreenMigrationUI(terminal, { NO_COLOR: '1' })).toBe(false);
+    expect(shouldUseFullscreenMigrationUI(terminal, { FLUJO_MIGRATION_UI: 'compact' })).toBe(false);
+    terminal.rows = 17;
+    expect(shouldUseFullscreenMigrationUI(terminal, { FLUJO_MIGRATION_UI: 'landscape' })).toBe(false);
+  });
+
+  it('renders actual migration telemetry in the fullscreen landscape and restores the terminal', () => {
+    const terminal = new MemoryTerminal();
+    terminal.columns = 90;
+    terminal.rows = 24;
+    terminal.hasColors = () => true;
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1_000);
+    const reporter = createMigrationProgressReporter({
+      interactive: true,
+      fullscreen: true,
+      stream: terminal,
+      colors: true,
+      trueColor: false,
+    });
+
+    reporter.report('started', { version: 2, dataRoot: 'C:\\data' });
+    reporter.report('inventory started', {
+      purpose: 'preflight source for db',
+      content: 'sha256',
+      _bytes: 0,
+    });
+    now.mockReturnValue(6_000);
+    reporter.report('inventory progress', {
+      purpose: 'preflight source for db',
+      content: 'sha256',
+      files: 500,
+      directories: 20,
+      bytes: '40.0 MiB',
+      _bytes: 40 * 1024 * 1024,
+      elapsed: '5.0s',
+    });
+    reporter.report('finished successfully', { elapsed: '5.2s' });
+
+    expect(terminal.output()).toContain('\u001B[?1049h');
+    expect(terminal.output()).toContain("We're making things better for you.");
+    expect(terminal.output()).toContain('Scanning legacy db');
+    expect(terminal.output()).toContain('500 files · 20 dirs · 40.0 MiB · 5.0s');
+    expect(terminal.output()).toContain('Reading  8.00 MiB/s  ·  100 files/s');
+    expect(terminal.output()).toContain('\u001B[?1049l');
+    expect(terminal.output()).toContain('Workspace migration complete · 5.2s');
+    now.mockRestore();
   });
 });
