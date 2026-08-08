@@ -1,7 +1,7 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import EnvEditor from '@/frontend/components/mcp/MCPEnvManager/EnvEditor';
-import HeadersEditor from '@/frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/LocalServerTab/HeadersEditor';
+import HeadersEditor from '@/frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/ConfigureTab/HeadersEditor';
 
 jest.mock('@/frontend/contexts/StorageContext', () => ({
   useStorage: () => ({

@@ -7,16 +7,17 @@ import {
   RegistryServerResult,
   RegistryServer,
   InstallOption,
+  ManualLaunchOption,
   getInstallOptions,
-  buildConfigFromOption,
+  isAutoInstallable,
   displayName,
-  missingRequiredInputs,
   registryTypeLabel,
   verificationStatusOf,
   isVerifiedStatus,
   serverIconUrl
 } from '@/utils/mcp/registry';
-import { MCPServerConfig } from '@/shared/types/mcp/mcp';
+import { InstallOptionList } from '../../components/InstallOptionPicker';
+import useRegistryInstall from '../../hooks/useRegistryInstall';
 import { useTheme } from '@mui/material/styles';
 import {
   Alert,
@@ -38,10 +39,6 @@ import {
   IconButton,
   InputAdornment,
   Link,
-  List,
-  ListItemButton,
-  ListItemIcon,
-  ListItemText,
   Stack,
   TextField,
   Typography
@@ -62,9 +59,7 @@ const PAGE_SIZE = 30;
 
 const MarketplaceTab: React.FC<TabProps> = ({
   onClose,
-  setActiveTab,
-  onUpdate,
-  onOpenInGitHubTab
+  onHandoff
 }) => {
   const theme = useTheme();
   const { t, formatNumber, formatList } = useI18n();
@@ -77,22 +72,22 @@ const MarketplaceTab: React.FC<TabProps> = ({
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
   const [message, setMessage] = useState<MessageState | null>(null);
-  const [selectedServer, setSelectedServer] = useState<RegistryServer | null>(null);
-  // The trust gate: Install actions stay disabled until the user explicitly
-  // confirms they trust the server. Reset every time the details dialog opens.
-  const [trustConfirmed, setTrustConfirmed] = useState<boolean>(false);
+  // The trust gate lives in the shared install pipeline: install actions stay
+  // disabled until the user explicitly confirms they trust the server, and the
+  // confirmation is reset every time the details dialog opens (#392).
+  const registryInstall = useRegistryInstall({ requireTrust: true, onHandoff });
+  const selectedServer = registryInstall.selection?.server ?? null;
+  const trustConfirmed = registryInstall.trustConfirmed;
   // Monotonic id so stale fetch responses (rapid re-searches) can't clobber newer ones
   const fetchIdRef = useRef(0);
 
   const openServerDetails = useCallback((server: RegistryServer) => {
-    setTrustConfirmed(false);
-    setSelectedServer(server);
-  }, []);
+    registryInstall.open(server);
+  }, [registryInstall]);
 
   const closeServerDetails = useCallback(() => {
-    setSelectedServer(null);
-    setTrustConfirmed(false);
-  }, []);
+    registryInstall.close();
+  }, [registryInstall]);
 
   const fetchServers = useCallback(async (search: string, cursor?: string) => {
     const fetchId = ++fetchIdRef.current;
@@ -160,18 +155,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
   };
 
   const handleInstall = (server: RegistryServer, option: InstallOption) => {
-    const config = buildConfigFromOption(server, option);
-    const missing = missingRequiredInputs(option);
-
-    if (onUpdate) {
-      // autoTestRun: registry configs need no manual install/build step, so the
-      // local tab can start the test run (which performs the install) right away
-      onUpdate(config as MCPServerConfig, { autoTestRun: true });
-    }
-    closeServerDetails();
-    if (setActiveTab) {
-      setActiveTab('local');
-    }
+    const missing = registryInstall.install(server, option);
     setMessage({
       type: missing.length > 0 ? 'warning' : 'success',
       text:
@@ -179,6 +163,13 @@ const MarketplaceTab: React.FC<TabProps> = ({
           ? t('mcp.marketplace.preparedMissing', { values: formatList(missing) })
           : t('mcp.marketplace.prepared')
     });
+  };
+
+  // Launch-and-connect (#392): save it as an HTTP server carrying its launch
+  // spec. No test run — nothing answers until the user starts the process.
+  const handleConfigureAsRemote = (server: RegistryServer, option: ManualLaunchOption) => {
+    registryInstall.configureAsRemote(server, option);
+    setMessage({ type: 'success', text: t('mcp.marketplace.prepared') });
   };
 
   // Repository URL if it points at github.com — the GitHub tab supports nothing else
@@ -197,9 +188,9 @@ const MarketplaceTab: React.FC<TabProps> = ({
   // user can clone the repo and configure the server from there
   const handleManualInstall = (server: RegistryServer) => {
     const repoUrl = githubRepoUrl(server);
-    if (!repoUrl || !onOpenInGitHubTab) return;
+    if (!repoUrl || !onHandoff) return;
     closeServerDetails();
-    onOpenInGitHubTab(repoUrl);
+    onHandoff({ to: 'github', repoUrl });
   };
 
   // Every card click routes through the details/trust dialog — nothing installs
@@ -224,7 +215,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
     return chips;
   };
 
-  const selectedOptions = selectedServer ? getInstallOptions(selectedServer) : [];
+  const selectedOptions = registryInstall.options;
 
   return (
     <Box sx={{ width: '100%' }}>
@@ -309,7 +300,9 @@ const MarketplaceTab: React.FC<TabProps> = ({
             <Grid container spacing={2}>
               {results.map(result => {
                 const server = result.server;
-                const installable = getInstallOptions(server).length > 0;
+                // Launch-and-connect entries are visible but not one-click
+                // installable, so they still read as "manual setup".
+                const installable = getInstallOptions(server).some(isAutoInstallable);
                 const verified = isVerifiedStatus(verificationStatusOf(result));
                 return (
                   <Grid item xs={12} sm={6} md={4} key={server.name}>
@@ -508,7 +501,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
                 control={
                   <Checkbox
                     checked={trustConfirmed}
-                    onChange={e => setTrustConfirmed(e.target.checked)}
+                    onChange={e => registryInstall.setTrustConfirmed(e.target.checked)}
                   />
                 }
                 label={t('mcp.marketplace.trust')}
@@ -519,43 +512,22 @@ const MarketplaceTab: React.FC<TabProps> = ({
                   <Typography variant="subtitle2" gutterBottom>
                     {t('mcp.marketplace.chooseInstall')}
                   </Typography>
-                  <List>
-                    {selectedOptions.map((option, index) => {
-                      const missing = missingRequiredInputs(option);
-                      return (
-                        <ListItemButton
-                          key={index}
-                          disabled={!trustConfirmed}
-                          onClick={() => handleInstall(selectedServer, option)}
-                        >
-                          <ListItemIcon>
-                            {option.kind === 'package' ? <TerminalIcon /> : <CloudIcon />}
-                          </ListItemIcon>
-                          <ListItemText
-                            primary={option.label}
-                            secondary={
-                              missing.length > 0
-                                ? t('mcp.marketplace.requires', { values: formatList(missing) })
-                                : option.kind === 'package'
-                                  ? t('mcp.marketplace.runsLocal')
-                                  : t('mcp.marketplace.hostedRemote')
-                            }
-                            primaryTypographyProps={{ sx: { wordBreak: 'break-all' } }}
-                          />
-                        </ListItemButton>
-                      );
-                    })}
-                  </List>
+                  <InstallOptionList
+                    options={selectedOptions}
+                    disabled={registryInstall.installBlocked}
+                    onSelect={option => handleInstall(selectedServer, option)}
+                    onConfigureAsRemote={option => handleConfigureAsRemote(selectedServer, option)}
+                  />
                 </>
               ) : (
                 <>
                   <Alert severity="info">
                     {t('mcp.marketplace.noAutomatic')}
-                    {githubRepoUrl(selectedServer) && onOpenInGitHubTab && (
+                    {githubRepoUrl(selectedServer) && onHandoff && (
                       <> {t('mcp.marketplace.githubFallback')}</>
                     )}
                   </Alert>
-                  {githubRepoUrl(selectedServer) && onOpenInGitHubTab && (
+                  {githubRepoUrl(selectedServer) && onHandoff && (
                     <Button
                       variant="contained"
                       startIcon={<GitHubIcon />}

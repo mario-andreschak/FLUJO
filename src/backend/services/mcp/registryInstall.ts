@@ -25,6 +25,7 @@ import {
   RegistryServerResult,
   RegistryServer,
   InstallOption,
+  isAutoInstallable,
   ResolvedInstallPlan,
   getInstallOptions,
   buildConfigFromOption,
@@ -119,7 +120,9 @@ async function fetchRegistryResults(query: string, limit: number): Promise<Regis
 }
 
 function toSearchHit(server: RegistryServer, scored?: ScoredCandidate): RegistrySearchHit {
-  const options = getInstallOptions(server);
+  // Launch-and-connect entries (#392) are describable but not headlessly
+  // installable, so they must not make a hit look installable.
+  const options = getInstallOptions(server).filter(isAutoInstallable);
   const best = options[0];
   return {
     name: server.name,
@@ -237,6 +240,7 @@ export interface InstallOptions {
 
 function optionTransport(option: InstallOption): 'stdio' | 'sse' | 'streamable' {
   if (option.kind === 'package') return 'stdio';
+  if (option.kind === 'manual-launch') return option.transport;
   return option.remote.type === 'sse' ? 'sse' : 'streamable';
 }
 
@@ -345,10 +349,19 @@ export async function installRegistryServer(
     return { installed: false, error: `No registry entry found for "${registryName}"` };
   }
 
-  const installOptions = getInstallOptions(server);
+  const allOptions = getInstallOptions(server);
+  // #392: a launch-and-connect package is a process the USER starts; FLUJO does
+  // not own that lifecycle yet, so the headless installer never picks one.
+  const installOptions = allOptions.filter(isAutoInstallable);
   const option = chooseInstallOption(installOptions, options?.preferredTransport);
   if (!option) {
-    return { installed: false, error: `"${server.name}" has no install method FLUJO supports (stdio package or HTTP remote)` };
+    const manualOnly = installOptions.length === 0 && allOptions.length > 0;
+    return {
+      installed: false,
+      error: manualOnly
+        ? `"${server.name}" must be started manually (it runs locally but speaks HTTP); add it from the MCP server dialog instead`
+        : `"${server.name}" has no install method FLUJO supports (stdio package or HTTP remote)`,
+    };
   }
 
   // Resolve-only / consent preview: exact command + args + required env NAMES,
@@ -406,6 +419,16 @@ export async function installRegistryServer(
   }
 
   const builtConfig = buildConfigFromOption(server, option);
+  // #392 guard: a `launch` spec means "a local process must be running behind
+  // this URL". Headless install cannot start it (Phase 2), so fail loudly here
+  // instead of persisting a config that would never connect.
+  if ('launch' in builtConfig && builtConfig.launch) {
+    return {
+      installed: false,
+      plan,
+      error: `"${server.name}" needs a locally launched process behind its HTTP endpoint, which FLUJO does not start yet. Add it from the MCP server dialog and start the process yourself.`,
+    };
+  }
   const builtHeaders = 'headers' in builtConfig
     ? (builtConfig.headers as Record<string, MCPHeaderValue> | undefined)
     : undefined;
@@ -605,7 +628,7 @@ export async function installBestForCapability(
       break;
     }
     // Don't spend an attempt on entries FLUJO can't run at all.
-    if (getInstallOptions(sc.candidate.server).length === 0) {
+    if (getInstallOptions(sc.candidate.server).filter(isAutoInstallable).length === 0) {
       attempts.push({ name, score: sc.score, reason: 'no supported install method' });
       continue;
     }

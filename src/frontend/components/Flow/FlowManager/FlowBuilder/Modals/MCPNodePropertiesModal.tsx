@@ -35,7 +35,7 @@ import Tooltip from '@mui/material/Tooltip';
 import { FlowNode } from '@/frontend/types/flow/flow';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS, TOOL_CALL_TIMEOUT_INFINITE } from '@/shared/types/mcp';
 import { resolveAutoNodeLabel } from '@/shared/utils/nodeLabel';
-import RootsManager from '@/frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/LocalServerTab/RootsManager';
+import RootsManager from '@/frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/ConfigureTab/RootsManager';
 import { createLogger } from '@/utils/logger/index';
 
 const logger = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/MCPNodePropertiesModal');

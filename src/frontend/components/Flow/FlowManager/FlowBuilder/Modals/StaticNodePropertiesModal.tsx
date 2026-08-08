@@ -14,6 +14,7 @@ import {
   Paper,
   Typography,
   FormControlLabel,
+  FormHelperText,
   Switch,
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -91,6 +92,11 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
     if (entry.kind !== 'toolCall') return acc;
     const raw = (entry.argumentsJson ?? '').trim();
     if (!raw) return acc;
+    // `${var:…}` / `${res:…}` are substituted at injection time and may sit in a
+    // non-string position (e.g. {"n": ${var:COUNT}}), so the authored text is not
+    // valid JSON yet. Blocking Save here would reject a valid entry (issue #381);
+    // the resolved value is still parsed at run time.
+    if (/\$\{(?:var|res):[^}]*\}/.test(raw)) return acc;
     try {
       JSON.parse(raw);
     } catch {
@@ -111,7 +117,12 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
       <DialogHeaderActions title={t('flows.static.title')} onClose={onClose} />
       <DialogContent>
         <Box display="flex" flexDirection="column" gap={2} mt={1}>
-          <Alert severity="info">{t('flows.static.info')}</Alert>
+          <Alert severity="info">
+            {t('flows.static.info')} {t('flows.static.substitutionNote')}{' '}
+            <a href="https://github.com/mario-andreschak/FLUJO/blob/main/docs/features/flows/static-node.md" target="_blank" rel="noreferrer">
+              {t('flows.static.docsLink')}
+            </a>
+          </Alert>
 
           <TextField
             label={t('flows.static.name')}
@@ -139,6 +150,7 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
             }
             label={t('flows.static.injectOnce')}
           />
+          <FormHelperText sx={{ mt: -2 }}>{t('flows.static.injectOnce.help')}</FormHelperText>
 
           {entries.length === 0 && (
             <Typography variant="body2" color="text.secondary">

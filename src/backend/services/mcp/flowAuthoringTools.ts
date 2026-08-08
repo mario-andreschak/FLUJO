@@ -74,6 +74,18 @@ export function isAuthoringTool(name: string): boolean {
   return (AUTHORING_TOOL_NAMES as readonly string[]).includes(name);
 }
 
+/**
+ * Hard budget for an authoring tool's `description` (#338).
+ *
+ * The whole authoring tool block is re-sent on every turn of an agentic loop and
+ * a 30B-class model has to read all twelve of them before it can pick one. One
+ * sentence of purpose plus one of "when to use it" is the contract; every rule,
+ * caveat and example belongs in `get_flow_authoring_guide` (fetched on demand)
+ * or in the per-argument `inputSchema` descriptions, which the model only pays
+ * attention to once it has already chosen the tool.
+ */
+export const MAX_AUTHORING_TOOL_DESCRIPTION_CHARS = 160;
+
 /** JSON Schema for guided authoring, with the legacy advanced shape retained. */
 function specInputSchema(): Tool['inputSchema'] {
   return {
@@ -155,14 +167,15 @@ export function authoringToolDefinitions(): Tool[] {
     {
       name: 'draft_generated_flow',
       description:
-        'Run the production Flow Generator post-processing pipeline on a complete advanced FlowSpec: scratchpad safety guard, structural auto-repair, bounded nested compilation, generated-flow defaults, and whole-bundle validation. Returns the complete UNSAVED draft and hardened spec.',
+        'Harden a complete advanced FlowSpec through the production Flow Generator pipeline and return the UNSAVED draft plus the hardened spec.',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
         properties: {
           spec: {
             type: 'object',
-            description: 'A complete advanced FlowSpec authored using get_flow_authoring_guide(profile="advanced").',
+            description:
+              'A complete advanced FlowSpec authored using get_flow_authoring_guide(profile="advanced"). The pipeline applies the scratchpad safety guard, structural auto-repair, bounded nested compilation, generated-flow defaults, and whole-bundle validation.',
           },
         },
         required: ['spec'],
@@ -177,14 +190,18 @@ export function authoringToolDefinitions(): Tool[] {
     {
       name: 'suggest_tools_for_flow_step',
       description:
-        'Use a selected AI model to suggest useful tools for ONE Process step from MCP servers that are already connected. Read-only: returns exact server/tool selections plus a proposed prompt containing canonical tool pills; it never changes or saves the flow.',
+        'Suggest tools for ONE Process step from already-connected MCP servers using a selected model. Read-only: it never changes or saves the flow.',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
         properties: {
           flow: { type: 'object', description: 'Complete current Flow draft (ReactFlow shape).' },
           nodeId: { type: 'string', description: 'Exact id of the Process node to assist.' },
-          modelId: { type: 'string', description: 'Configured model id used for the suggestion.' },
+          modelId: {
+            type: 'string',
+            description:
+              'Configured model id used for the suggestion. Returns exact server/tool selections plus a proposed prompt containing canonical tool pills.',
+          },
           goal: { type: 'string', description: 'Optional workflow goal; defaults to the flow description.' },
         },
         required: ['flow', 'nodeId', 'modelId'],
@@ -193,7 +210,7 @@ export function authoringToolDefinitions(): Tool[] {
     {
       name: 'apply_tools_to_flow_step',
       description:
-        'Apply an EXPLICITLY APPROVED list of connected MCP tools to one Process step in an UNSAVED Flow draft. Revalidates every tool against the live server, creates/reuses MCP attachments, enables only the approved tools, and rewrites the prompt with canonical tool pills. Idempotent and does not save.',
+        'Apply an EXPLICITLY APPROVED list of connected MCP tools to one Process step of an UNSAVED Flow draft. Idempotent and does not save.',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
@@ -212,6 +229,8 @@ export function authoringToolDefinitions(): Tool[] {
               },
               required: ['server', 'tool', 'reason'],
             },
+            description:
+              'Approved tools only. Each is revalidated against the live server; MCP attachments are created/reused, only these tools are enabled, and the prompt is rewritten with canonical tool pills.',
           },
           proposedPrompt: { type: 'string', description: 'Optional complete prompt from the suggestion review.' },
         },
@@ -221,15 +240,19 @@ export function authoringToolDefinitions(): Tool[] {
     {
       name: 'check_flow_plausibility',
       description:
-        'Analyze an entire Flow and its recursively referenced subflows plus invocation context (chat, parent subflow/sub-agent, planned execution, Trigger Wave), every prompt, graph shape, and input/output mode. Returns issues, typed deterministic repair patches, and unsaved repaired previews. Read-only; the caller must obtain consent before using repairedFlow or repairedFlows.',
+        'Analyze a Flow and its subflows; returns issues, deterministic repair patches, and unsaved repaired previews. Read-only; consent is required to apply them.',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
         properties: {
-          flow: { type: 'object', description: 'Complete current Flow draft.' },
+          flow: {
+            type: 'object',
+            description:
+              'Complete current Flow draft. Analysis covers every recursively referenced subflow, prompt, graph shape, and input/output mode; the caller must obtain consent before using repairedFlow or repairedFlows.',
+          },
           relatedFlows: { type: 'array', items: { type: 'object' }, description: 'Unsaved related parent/child flow drafts.' },
           modelId: { type: 'string', description: 'Optional model for semantic prompt review.' },
-          intendedContext: { type: 'string', enum: ['chat', 'headless'], description: 'Intended use for a new unsaved flow.' },
+          intendedContext: { type: 'string', enum: ['chat', 'headless'], description: 'Intended invocation context: chat, or headless (parent subflow/sub-agent, planned execution, Trigger Wave).' },
         },
         required: ['flow'],
       },
@@ -237,11 +260,15 @@ export function authoringToolDefinitions(): Tool[] {
     {
       name: 'search_mcp_marketplace',
       description:
-        'Search the public MCP server registry for new capabilities (voice, browsing, files, email, vision, …). The registry matches the query against server NAMES only (substring) — use short single terms and try several. Returns name, description, whether FLUJO can install it, and which env vars/keys it would require.',
+        'Search the public MCP server registry for a new capability (voice, browsing, files, email, vision, …) and see whether FLUJO can install it.',
       inputSchema: {
         type: 'object',
         properties: {
-          query: { type: 'string', description: 'Short search term matched against server names.' },
+          query: {
+            type: 'string',
+            description:
+              'Short search term. The registry matches server NAMES only (substring), so use single terms and try several. Results give the name, description, installability, and the env vars/keys the server would require.',
+          },
         },
         required: ['query'],
       },
@@ -249,14 +276,18 @@ export function authoringToolDefinitions(): Tool[] {
     {
       name: 'install_mcp_server',
       description:
-        'Install an MCP server from the public registry (by the exact name returned by search_mcp_marketplace) and connect it — this DOWNLOADS AND RUNS a third-party package on the FLUJO host. Installs are gated by consent (SEP-1024): unless this trusted authoring tool is allowed via the mcpAutoInstall settings (trustBrainStem / requireConsent / namespaceAllowlist), the tool returns the exact resolved command + arguments with consentRequired=true INSTEAD of installing, and the caller must obtain explicit approval. Every attempt is written to an audit log (command, args, env NAMES, verification status — never secret values) before any spawn. Returns the FLUJO server name (reference it in FlowSpec "servers") and the tools it provides, or needsEnv when required keys are missing (supply values via the optional "env" argument), or the resolved plan when consent is required. First install can take minutes (package download).',
+        'Install an MCP server by exact registry name and connect it. DOWNLOADS AND RUNS third-party code on this host; consent-gated and audited (SEP-1024).',
       inputSchema: {
         type: 'object',
         properties: {
-          name: { type: 'string', description: 'Exact registry name from search results, e.g. "ai.keenable/web-search".' },
+          name: {
+            type: 'string',
+            description:
+              'Exact registry name from search_mcp_marketplace, e.g. "ai.keenable/web-search". Unless this trusted authoring tool is allowed by the mcpAutoInstall settings (trustBrainStem / requireConsent / namespaceAllowlist), the exact resolved command + arguments are returned with consentRequired=true INSTEAD of installing and the caller must obtain explicit approval. Every attempt is audited (command, args, env NAMES, verification status — never secret values) before any spawn. On success returns the FLUJO server name to reference in FlowSpec "servers" plus the tools it provides. A first install can take minutes (package download).',
+          },
           env: {
             type: 'object',
-            description: 'Optional env var values for the server (e.g. required API keys).',
+            description: 'Optional env var values for the server (e.g. required API keys). Omit them to get needsEnv listing exactly which keys are required.',
             additionalProperties: { type: 'string' },
           },
         },
@@ -266,14 +297,15 @@ export function authoringToolDefinitions(): Tool[] {
     {
       name: 'install_best_mcp_server',
       description:
-        'AI-assisted install for a natural-language connection request — the recommended way to acquire an MCP capability when you do not already have a specific server name. Researches the official MCP Registry, GitHub, npm, and Awesome MCP community lists; probes hosted endpoints for OAuth 2.1 dynamic client registration; and ranks candidates using relevance, Registry status, GitHub stars/activity, npm installs, local installability, auth friction, and required credentials. It then tries the strongest candidates until one passes the works-gate. OAuth servers can be configured but may return needsAuthentication with researched auth help for the interactive handoff. This DOWNLOADS AND MAY RUN third-party code on the FLUJO host. Same exact-plan consent and secrets-safe audit rules as install_mcp_server: supplied credential VALUES are never sent to the research model or audit log. Falls back to deterministic Registry ranking if AI research is unavailable.',
+        'AI-assisted install from a natural-language capability request; preferred when no specific server name is known. DOWNLOADS AND MAY RUN third-party code.',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
         properties: {
           capability: {
             type: 'string',
-            description: 'What the user wants to connect, in natural language, e.g. "connect my PayPal account" or "search YouTube transcripts".',
+            description:
+              'What the user wants to connect, in natural language, e.g. "connect my PayPal account" or "search YouTube transcripts". Researches the official MCP Registry, GitHub, npm, and Awesome MCP community lists, probes hosted endpoints for OAuth 2.1 dynamic client registration, ranks candidates (relevance, Registry status, GitHub stars/activity, npm installs, local installability, auth friction, required credentials) and tries the strongest until one passes the works-gate. OAuth servers may return needsAuthentication with researched auth help for the interactive handoff. Same exact-plan consent and secrets-safe audit rules as install_mcp_server: supplied credential VALUES never reach the research model or the audit log. Falls back to deterministic Registry ranking when AI research is unavailable.',
           },
           modelId: {
             type: 'string',
@@ -363,6 +395,7 @@ export async function authoringCallTool(
           'Set flow on a step to run an existing flow instead of a model.',
           'Omit routes for a linear flow. Routes are only for branches; omit when for the fallback.',
           'Start, Finish, layout, data handoff, and ordinary defaults are inferred.',
+          'Use ${var:NAME} only for values passed within this run. Generated flows must not use captureKv or ${kv:...}; persistent state needs an explicit Advanced authoring decision.',
         ],
       });
     }
@@ -749,13 +782,19 @@ export async function authoringCallTool(
       const record = spec && typeof spec === 'object' && !Array.isArray(spec)
         ? spec as Record<string, unknown>
         : {};
+      const explicitSimpleProfile = args.profile === 'simple';
       const profile = args.profile === 'advanced'
         ? 'advanced'
-        : args.profile === 'simple'
+        : explicitSimpleProfile
           ? 'simple'
           : Array.isArray(record.nodes) && Array.isArray(record.edges)
             ? 'advanced'
             : 'simple';
+      if (explicitSimpleProfile && ('nodes' in record || 'edges' in record)) {
+        return textResult({
+          error: 'Simple profile accepts name, goal, steps, and routes only. Use get_flow_authoring_guide(profile="advanced") and profile="advanced" for a nodes/edges FlowSpec.',
+        }, true);
+      }
       const keepPills = args.keepPills === true;
       const result = await compileSpec(spec, {
         save: toolName === 'create_flow',

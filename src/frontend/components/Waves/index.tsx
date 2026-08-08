@@ -16,9 +16,9 @@ import ScheduleIcon from '@mui/icons-material/Schedule';
 import type { Wave, WavesResponse } from '@/shared/types/waves/waves';
 import { wavesService } from '@/frontend/services/waves';
 import { createLogger } from '@/utils/logger';
-import { useScrollRestoration } from '@/frontend/hooks/useScrollRestoration';
+import { useListScrollNav } from '@/frontend/hooks/useListScrollNav';
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
-import BackToTopButton from '@/frontend/components/shared/BackToTopButton';
+import ScrollNavCluster from '@/frontend/components/shared/ScrollNavCluster';
 import WaveCanvas from './WaveCanvas';
 import { formatIn } from './waveTimeline';
 import { useI18n } from '@/frontend/contexts/I18nContext';
@@ -137,9 +137,9 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
   const [selectedId, setSelectedId] = useUiPreference<string | null>(SELECTED_PREF_KEY, null);
 
   // Persist the LIST scroll position + back-to-top (#185); re-restore on new data.
-  const { ref: scrollRef, showBackToTop, scrollToTop } = useScrollRestoration<HTMLDivElement>(
+  const { ref: scrollRef, clusterProps: scrollNavProps } = useListScrollNav<HTMLDivElement>(
     'flujo-ui:scroll:waves',
-    { deps: [data] },
+    { deps: [data], groupsEnabled: false },
   );
 
   const refresh = useCallback(async () => {
@@ -239,7 +239,7 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
               </>
             )}
 
-            <BackToTopButton show={showBackToTop} onClick={scrollToTop} />
+            <ScrollNavCluster {...scrollNavProps} actions={['top', 'bottom']} />
           </Box>
 
           {/* Detail: the selected wave on a large canvas. */}

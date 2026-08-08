@@ -73,6 +73,82 @@ export interface ModelConfigurationCapabilities {
   maxOutputTokens: boolean;
 }
 
+/**
+ * Validate optional generation settings before they are persisted. This keeps
+ * direct API callers and hand-authored payloads within the same capability
+ * contract as the configuration modal.
+ */
+export function validateModelConfiguration(
+  model: {
+    provider?: ModelProvider;
+    adapter?: ModelAdapter;
+    name?: string;
+    temperature?: unknown;
+    reasoningEffort?: unknown;
+    thinkingLevel?: unknown;
+    thinkingBudget?: unknown;
+    serviceTier?: unknown;
+  }
+): string | undefined {
+  const capabilities = getModelConfigurationCapabilities(model.provider, model.adapter, model.name ?? '');
+
+  if (model.temperature !== undefined && model.temperature !== '') {
+    const temperature = typeof model.temperature === 'number'
+      ? model.temperature
+      : typeof model.temperature === 'string' ? Number(model.temperature) : NaN;
+    if (!capabilities.creativity || !Number.isFinite(temperature) ||
+      temperature < capabilities.creativity.min || temperature > capabilities.creativity.max) {
+      return capabilities.creativity
+        ? `Creativity must be between ${capabilities.creativity.min} and ${capabilities.creativity.max}`
+        : 'Creativity is not supported by this model';
+    }
+  }
+
+  if (model.reasoningEffort !== undefined && model.reasoningEffort !== '') {
+    if (!capabilities.effortLevels?.includes(model.reasoningEffort as ModelReasoningEffort)) {
+      return 'The selected reasoning effort is not supported by this model';
+    }
+  }
+  if (model.thinkingLevel !== undefined && model.thinkingLevel !== '') {
+    if (!capabilities.thinkingLevels?.includes(model.thinkingLevel as GeminiThinkingLevel)) {
+      return 'The selected thinking level is not supported by this model';
+    }
+  }
+  if (model.thinkingBudget !== undefined && model.thinkingBudget !== '') {
+    if (!capabilities.thinkingBudget || typeof model.thinkingBudget !== 'number' ||
+      !Number.isInteger(model.thinkingBudget) || model.thinkingBudget < -1) {
+      return 'Thinking budget must be an integer greater than or equal to -1 for this model';
+    }
+  }
+  if (model.serviceTier !== undefined && model.serviceTier !== '') {
+    if (!capabilities.priority ||
+      (model.serviceTier !== 'default' && model.serviceTier !== 'priority')) {
+      return 'The selected service tier is not supported by this model';
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Parse a persisted creativity value for the execution path. Invalid values
+ * are omitted rather than allowing NaN or an out-of-range value into a SDK.
+ */
+export function normalizeModelTemperature(
+  value: unknown,
+  provider?: ModelProvider,
+  adapter?: ModelAdapter,
+  modelName = ''
+): number | undefined {
+  const capabilities = getModelConfigurationCapabilities(provider, adapter, modelName);
+  if (!capabilities.creativity || value === undefined || value === '') return undefined;
+  const temperature = typeof value === 'number'
+    ? value
+    : typeof value === 'string' ? Number(value) : NaN;
+  if (!Number.isFinite(temperature)) return undefined;
+  return Math.min(capabilities.creativity.max, Math.max(capabilities.creativity.min, temperature));
+}
+
 const OPENAI_REASONING_MODEL = /(^|[/_-])(o[1-9]|gpt-5)(?:[./_-]|$)/i;
 const ANTHROPIC_ADAPTIVE_MODEL =
   /claude-(?:fable|mythos)-5|claude-opus-4-(?:[7-9]|\d{2,})|claude-sonnet-5/i;

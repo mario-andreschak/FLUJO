@@ -65,9 +65,11 @@ import {
 } from '@/utils/shared/plannedExecutionGrouping';
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
+import { useListScrollNav } from '@/frontend/hooks/useListScrollNav';
 import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCardSection';
 import PageHeader from '@/frontend/components/shared/PageHeader';
 import StickySearchBar from '@/frontend/components/shared/StickySearchBar';
+import ScrollNavCluster from '@/frontend/components/shared/ScrollNavCluster';
 import { useThemeUtils } from '@/frontend/utils/theme';
 import ExecutionCard from './ExecutionCard';
 import ExecutionModal from './ExecutionModal';
@@ -258,6 +260,11 @@ const PlannedExecutionsManager = () => {
   const hasActiveFilters =
     searchTerm.trim() !== '' || statusFilter !== 'all' || triggerFilter !== 'all';
 
+  const { ref: scrollRef, clusterProps: scrollNavProps } = useListScrollNav<HTMLDivElement>(
+    'flujo-ui:scroll:automations',
+    { deps: [loaded, filteredEntries.length], groupsEnabled: groupMode !== 'none' },
+  );
+
   const renderEntries = (items: PlannedExecutionListEntry[]) => (
     <Box
       sx={modern
@@ -289,7 +296,7 @@ const PlannedExecutionsManager = () => {
   );
 
   return (
-    <Box sx={{ width: '100%' }}>
+    <Box ref={scrollRef} sx={{ width: '100%' }}>
       <PageHeader
         eyebrowKey="automations.list.eyebrow"
         titleKey="automations.list.title"
@@ -537,6 +544,7 @@ const PlannedExecutionsManager = () => {
           : groups.map(group => (
               <CollapsibleCardSection
                 key={group.key}
+                groupKey={group.key}
                 label={group.label}
                 count={group.items.length}
                 expanded={!collapsedKeys.has(group.key)}
@@ -632,6 +640,8 @@ const PlannedExecutionsManager = () => {
           <ListItemText primary={sortLabel('last-run')} />
         </MenuItem>
       </Menu>
+
+      <ScrollNavCluster {...scrollNavProps} />
 
       <ExecutionModal
         open={modalOpen}

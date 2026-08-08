@@ -226,6 +226,7 @@ export const ModelList = ({ models, isLoading, onAdd, onUpdate, onDelete, folder
                 groups.map((group) => (
                     <CollapsibleCardSection
                         key={group.key}
+                        groupKey={group.key}
                         label={group.label}
                         count={group.items.length}
                         expanded={!collapsedKeys.has(group.key)}

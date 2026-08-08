@@ -277,7 +277,7 @@ export default function McpConnectionWizard({
             icon={LaptopRoundedIcon}
             title={t('mcp.wizard.localApp')}
             description={t('mcp.wizard.localAppDescription')}
-            onClick={() => onChooseSetup('local')}
+            onClick={() => onChooseSetup('configure')}
           />
         </ChoiceGrid>
       </>

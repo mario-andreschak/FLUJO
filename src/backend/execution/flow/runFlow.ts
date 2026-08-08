@@ -564,6 +564,13 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
     };
   }
 
+  // `injectOnce` applies to this top-level user turn. Keep the map across
+  // approval/debug continuations, but clear it before a new turn re-enters the
+  // flow so persisted conversation state cannot suppress a later traversal.
+  if (userTurn && !resumingPausedLogicalRun && !input.parentRunId && (input.depth ?? 0) === 0) {
+    sharedState.staticInjected = undefined;
+  }
+
   // Tier 2c (named variables): wire the dormant FlowRunInput.variables field onto
   // the state so `${var:NAME}` can inject caller-provided inputs from the first
   // node. Values are coerced to string (the scratchpad is string-only). A fresh

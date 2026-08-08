@@ -18,9 +18,8 @@ import { useI18n } from '@/frontend/contexts/I18nContext';
 const GitHubTab: React.FC<TabProps> = ({
   initialConfig,
   onAdd,
-  onUpdate,
+  onHandoff,
   onClose,
-  setActiveTab,
   initialGitHubUrl
 }) => {
   const { t } = useI18n();
@@ -272,7 +271,7 @@ const GitHubTab: React.FC<TabProps> = ({
       }
       
       // Install-origin (#193): stamp the cloned repo's URL so package export can
-      // serialize this server by reference. Survives the LocalServerTab handoff
+      // serialize this server by reference. Survives the ConfigureTab handoff
       // (handleSubmit spreads localConfig, and defaults to `local` only when absent).
       finalConfig = {
         ...finalConfig,
@@ -283,14 +282,9 @@ const GitHubTab: React.FC<TabProps> = ({
       setParsedConfig(finalConfig);
       setMessage(finalMessage); // Set the final message state
 
-      // Pass the config to the parent component before switching tabs
-      if (onUpdate && finalConfig.name) { // Ensure name is present before updating
-        onUpdate(finalConfig as MCPServerConfig);
-      }
-      
-      // Always switch to the local tab
-      if (setActiveTab) {
-        setActiveTab('local');
+      // Hand the config to the configure-and-verify sink; the modal switches tabs
+      if (onHandoff && finalConfig.name) { // Ensure name is present before handing off
+        onHandoff({ to: 'configure', config: finalConfig as MCPServerConfig });
       }
       
       setCloneCompleted(true);

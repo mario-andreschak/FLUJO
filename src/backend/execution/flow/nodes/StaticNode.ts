@@ -32,8 +32,12 @@ const log = createLogger('backend/flow/execution/nodes/StaticNode');
  * Text fields support `${var:NAME}` (run scratchpad, Tier 2c) and `${res:NAME}`
  * (run resources, Tier 3), resolved in the same order as ProcessNode.
  *
- * Re-entry: by default the node appends on every traversal; with
- * `injectOnce: true` it injects only once per run (tracked on sharedState).
+ * Re-entry (issue #381): by default the node appends on every traversal; with
+ * `injectOnce: true` it injects only once per **logical run**. The dedupe key is
+ * `(sharedState.logicalRunId, nodeId)`, stored in `sharedState.staticInjected`, so
+ * an approval/debug resume of the same run does not re-inject while a new user turn
+ * (new logical run) does. Subflow runs carry their own SharedState and therefore
+ * their own markers. See docs/features/flows/static-node.md#re-entry-semantics.
  */
 export class StaticNode extends BaseNode {
   async prep(
@@ -71,8 +75,11 @@ export class StaticNode extends BaseNode {
       });
     }
 
-    const state = sharedState as SharedState & { staticInjected?: Record<string, boolean> };
-    const alreadyInjected = state.staticInjected?.[nodeId] === true;
+    // "Once" means once per logical run (one user turn), not once per conversation:
+    // the marker stores the run that injected, so a persisted map from an earlier turn
+    // can never suppress this run's injection.
+    const runId = sharedState.logicalRunId ?? 'no-run';
+    const alreadyInjected = sharedState.staticInjected?.[nodeId] === runId;
 
     if (prepResult.injectOnce && alreadyInjected) {
       log.info('injectOnce: skipping repeat injection', { nodeId });
@@ -143,7 +150,14 @@ export class StaticNode extends BaseNode {
       }
 
       sharedState.messages.push(...messages);
-      state.staticInjected = { ...(state.staticInjected ?? {}), [nodeId]: true };
+      // Drop markers left by earlier logical runs while writing this one, so the map
+      // cannot grow unbounded over a long conversation.
+      const markers: Record<string, string> = {};
+      for (const [id, marker] of Object.entries(sharedState.staticInjected ?? {})) {
+        if (marker === runId) markers[id] = marker;
+      }
+      markers[nodeId] = runId;
+      sharedState.staticInjected = markers;
       log.info('Injected static messages', { nodeId, messageCount: messages.length });
     }
 

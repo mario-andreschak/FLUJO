@@ -8,7 +8,8 @@ The documentation is organized into the following sections:
 
 - **[Getting Started](./getting-started/README.md)**: Quick start guides and installation instructions
 - **[Features](./features/README.md)**: Detailed documentation for Flujo's features
-- **[Architecture](./architecture/README.md)**: Technical architecture and design documentation
+- **[Static node guide](./features/flows/static-node.md)**: Authoring deterministic conversation injection and synthetic tool exchanges
+- **[Architecture](./architecture/README.md)**: Technical architecture and design documentation, including [Static node re-entry semantics](./architecture/static-node-reentry-semantics.md)
 - **[Contributing](./contributing/README.md)**: Guidelines for contributing to Flujo
 - **[API Reference](./api-reference/README.md)**: API documentation for developers
 

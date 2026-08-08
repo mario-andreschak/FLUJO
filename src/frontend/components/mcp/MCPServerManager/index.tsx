@@ -66,8 +66,9 @@ import {
 import { ServerSortOption, deriveServerSortGroup, sortServersFavoritesFirst } from '@/utils/shared/serverGrouping';
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
-import { useScrollRestoration } from '@/frontend/hooks/useScrollRestoration';
-import BackToTopButton from '@/frontend/components/shared/BackToTopButton';
+import ScrollNavCluster from '@/frontend/components/shared/ScrollNavCluster';
+import StickySearchBar from '@/frontend/components/shared/StickySearchBar';
+import { useListScrollNav } from '@/frontend/hooks/useListScrollNav';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useTheme as useAppTheme } from '@/frontend/contexts/ThemeContext';
 
@@ -255,9 +256,11 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   // Toolbar state. The view preferences (#93) persist across navigation via
   // localStorage; search + the transient menu anchors stay session-scoped.
   const [searchTerm, setSearchTerm] = useState('');
-  // #372: place the caret in the search field automatically. This toolbar Paper
-  // sits outside the inner scroll container below, so it stays visible without
-  // a sticky wrapper — only auto-focus is needed here.
+  // #372: place the caret in the search field automatically and keep the field
+  // visible while the server list scrolls. Unlike the Flows dashboard, this page
+  // has no height-constrained ancestor, so the list Box below never becomes its
+  // own scrollport — the document scrolls instead. The toolbar therefore needs
+  // the same `StickySearchBar mode="page"` wrapper as Models/Automations.
   const searchInputRef = useAutoFocusSearch();
   const [sortOption, setSortOption] = useUiPreference<ServerSortOption>('flujo-ui:mcp:sort', 'name-asc');
   const [filterOption, setFilterOption] = useUiPreference<FilterOption>('flujo-ui:mcp:filter', 'all');
@@ -547,9 +550,9 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   }, [servers, searchTerm, sortOption, filterOption]);
 
   // Persist scroll position + back-to-top (#185); re-restore once the list loads.
-  const { ref: scrollRef, showBackToTop, scrollToTop } = useScrollRestoration<HTMLDivElement>(
+  const { ref: scrollRef, clusterProps: scrollNavProps } = useListScrollNav<HTMLDivElement>(
     'flujo-ui:scroll:mcp',
-    { deps: [isLoading, filteredAndSortedServers.length] },
+    { deps: [isLoading, filteredAndSortedServers.length], groupsEnabled: groupMode !== 'none' },
   );
 
   // Distinct folders currently in use, for the "Move to folder" picker (#71).
@@ -786,10 +789,14 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
       />
 
       {/* Toolbar with search, sort, and bulk actions */}
+      {/* #372: the outer spacing lives on the sticky wrapper (as padding rather
+          than the Paper's margin) so the pinned strip stays fully opaque and
+          scrolled cards cannot bleed through above/below the toolbar. */}
+      <StickySearchBar mode="page" sx={{ pt: 3, pb: 1.5 }}>
       <Paper
         elevation={0}
         variant="outlined"
-        sx={{ mx: { xs: 2, md: 3, lg: 4 }, mt: 3, mb: 1.5, p: 1.2, borderRadius: 3 }}
+        sx={{ mx: { xs: 2, md: 3, lg: 4 }, p: 1.2, borderRadius: 3 }}
       >
         <Box sx={{ 
           display: 'flex', 
@@ -913,6 +920,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
           </Box>
         </Box>
       </Paper>
+      </StickySearchBar>
       
       {/* Statistics bar */}
       <Box sx={{ 
@@ -942,6 +950,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
           serverGroups.map((group) => (
             <CollapsibleCardSection
               key={group.key}
+              groupKey={group.key}
               label={group.label}
               count={group.items.length}
               expanded={!collapsedKeys.has(group.key)}
@@ -1160,7 +1169,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
         }}
       />
 
-      <BackToTopButton show={showBackToTop} onClick={scrollToTop} />
+      <ScrollNavCluster {...scrollNavProps} />
     </Box>
   );
 };

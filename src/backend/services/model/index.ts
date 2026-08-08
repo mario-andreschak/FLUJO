@@ -10,7 +10,13 @@ import {
   CompletionResponse,
   NormalizedModel
 } from '@/shared/types/model/response';
-import { ModelProvider, ModelAdapter, isSelfOrchestratingAdapter } from '@/shared/types/model/provider';
+import {
+  ModelProvider,
+  ModelAdapter,
+  isSelfOrchestratingAdapter,
+  normalizeModelTemperature,
+  validateModelConfiguration,
+} from '@/shared/types/model/provider';
 import { MASKED_API_KEY } from '@/shared/types/constants';
 import {
   encryptApiKey,
@@ -98,6 +104,11 @@ class ModelService {
   async addModel(model: Model): Promise<ModelOperationResponse> {
     log.debug('addModel: Entering method');
     try {
+      const configurationError = validateModelConfiguration(model);
+      if (configurationError) {
+        return { success: false, error: configurationError };
+      }
+
       // Load current models
       const models = await this.loadModels();
 
@@ -205,6 +216,11 @@ class ModelService {
       if (!model.provider) {
         log.warn('updateModel: Missing provider', { modelId: model.id });
         return { success: false, error: 'Provider is required' };
+      }
+
+      const configurationError = validateModelConfiguration(model);
+      if (configurationError) {
+        return { success: false, error: configurationError };
       }
 
       // Check for duplicate display name (excluding the current model)
@@ -663,11 +679,10 @@ class ModelService {
       }
 
       const temperature =
-        typeof params.temperature === 'number'
+        typeof params.temperature === 'number' && Number.isFinite(params.temperature)
           ? params.temperature
-          : model.temperature
-            ? parseFloat(model.temperature)
-            : 0.0;
+          : normalizeModelTemperature(model.temperature, model.provider, model.adapter, model.name) ??
+            (model.temperature === undefined || model.temperature === '' ? 0.0 : undefined);
 
       // --- Single provider call through the completion-adapter seam ---
       // Resolve the output-token cap once, here at the seam boundary, so the

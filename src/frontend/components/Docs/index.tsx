@@ -17,6 +17,8 @@ import MenuBookRoundedIcon from '@mui/icons-material/MenuBookRounded';
 import { API_GROUPS, ApiEndpoint, HttpMethod } from './apiReference';
 import PageHeader from '@/frontend/components/shared/PageHeader';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import StickySearchBar from '@/frontend/components/shared/StickySearchBar';
+import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
 
 const GROUP_MESSAGE_KEYS = {
   openai: { name: 'docs.group.openai.name', description: 'docs.group.openai.description' },
@@ -155,6 +157,7 @@ function EndpointCard({ endpoint }: { endpoint: ApiEndpoint }) {
 export default function Docs() {
   const { t } = useI18n();
   const [query, setQuery] = useState('');
+  const searchInputRef = useAutoFocusSearch();
   const [origin, setOrigin] = useState('');
 
   React.useEffect(() => {
@@ -201,21 +204,23 @@ export default function Docs() {
         </Typography>
       </Paper>
 
-      <TextField
-        fullWidth
-        size="small"
-        placeholder={t('docs.search')}
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        sx={{ mb: 3 }}
-        InputProps={{
-          startAdornment: (
-            <InputAdornment position="start">
-              <SearchIcon fontSize="small" />
-            </InputAdornment>
-          ),
-        }}
-      />
+      <StickySearchBar mode="page" sx={{ mb: 3 }}>
+        <TextField
+          fullWidth
+          size="small"
+          inputRef={searchInputRef}
+          placeholder={t('docs.search')}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          InputProps={{
+            startAdornment: (
+              <InputAdornment position="start">
+                <SearchIcon fontSize="small" />
+              </InputAdornment>
+            ),
+          }}
+        />
+      </StickySearchBar>
 
       {filteredGroups.length === 0 && (
         <Typography color="text.secondary">{t('docs.noMatches', { query })}</Typography>

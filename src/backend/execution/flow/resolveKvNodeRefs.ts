@@ -46,6 +46,8 @@ export function kvScopeId(scope: KvRefScope, ctx: KvFlowContext): string {
   if (scope === 'flow') return flowBoard();
 
   // folder (default): a package of flows sharing one folder shares a board.
+  // This hash intentionally changes when the folder is renamed; use an explicit
+  // flow/ or global/ token when a value must survive a folder rename.
   const folder = ctx.folder?.trim();
   if (folder) {
     const hash = createHash('sha256').update(folder).digest('hex').slice(0, 32);

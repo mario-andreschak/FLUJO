@@ -62,6 +62,8 @@ import {
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { kvGet, kvSet } from '@/backend/services/kvStore';
+import { ticketService } from '@/backend/services/ticket';
+import { CreateTicketInputSchema } from '@/backend/services/ticket/schema';
 import {
   listConversationSummaries,
   type ConversationSummary,
@@ -193,6 +195,23 @@ export function internalToolDefinitions(): Tool[] {
     // external /mcp-flows endpoint (list_flow_building_blocks, validate_flow_spec,
     // create_flow, search_mcp_marketplace, install_mcp_server).
     ...authoringToolDefinitions(),
+    {
+      name: 'create_ticket_for_human',
+      description: 'Create a dashboard ticket for the human operator. Use a concise plain-text message and optional comma-separated labels. Pass conversation_id or flow_id when known so the human can navigate back to the related work.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          message: { type: 'string', description: 'Plain-text message for the human, maximum 4000 characters.' },
+          labels: { type: 'string', description: 'Optional comma-separated label pills, maximum 12 labels.' },
+          title: { type: 'string', description: 'Optional short headline, maximum 120 characters.' },
+          conversation_id: { type: 'string', description: 'Optional related conversation id.' },
+          message_id: { type: 'string', description: 'Optional related assistant message id.' },
+          flow_id: { type: 'string', description: 'Optional related flow id.' },
+        },
+        required: ['message'],
+      },
+    },
     {
       name: 'propose_ui_action',
       description:
@@ -1690,6 +1709,25 @@ async function kvSetTool(args: Record<string, unknown>): Promise<CallToolResult>
   return textResult({ scope, name, saved: true, size: res.size });
 }
 
+async function createTicketForHumanTool(args: Record<string, unknown>, source: ToolCallSource): Promise<CallToolResult> {
+  const input = {
+    message: args.message,
+    labels: args.labels,
+    title: args.title,
+    conversationId: args.conversation_id,
+    messageId: args.message_id,
+    flowId: args.flow_id,
+    nodeId: args.node_id,
+    source: source === 'host' ? 'host' : 'agent',
+  };
+  const parsed = CreateTicketInputSchema.safeParse(input);
+  if (!parsed.success) return textResult({ error: 'A non-empty ticket message and valid optional context are required.' }, true);
+  const result = await ticketService.createTicket(parsed.data);
+  return result.success && result.ticket
+    ? textResult({ created: true, id: result.ticket.id, labels: result.ticket.labels })
+    : textResult({ error: result.error ?? 'Unable to create ticket.' }, true);
+}
+
 function proposeUiAction(args: Record<string, unknown>): CallToolResult {
   const type = args.type === 'highlight' || args.type === 'set_value' ? args.type : null;
   const rawTarget = args.target && typeof args.target === 'object'
@@ -1740,6 +1778,8 @@ export async function internalCallTool(
     switch (toolName) {
       case 'propose_ui_action':
         return proposeUiAction(args);
+      case 'create_ticket_for_human':
+        return await createTicketForHumanTool(args, source);
       case 'list_flows':
         return await listFlows(args);
       case 'discover_capabilities':

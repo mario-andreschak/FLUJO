@@ -47,8 +47,8 @@ import {
 import { FlowSortOption, deriveFlowSortGroup, sortFlowsFavoritesFirst } from '@/utils/shared/flowGrouping';
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
 import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
-import { useScrollRestoration } from '@/frontend/hooks/useScrollRestoration';
-import BackToTopButton from '@/frontend/components/shared/BackToTopButton';
+import ScrollNavCluster from '@/frontend/components/shared/ScrollNavCluster';
+import { useListScrollNav } from '@/frontend/hooks/useListScrollNav';
 import { Flow } from '@/frontend/types/flow/flow';
 import type { Model } from '@/shared/types/model';
 import type { FlowModelReplacementMap } from '@/utils/shared/flowModelReplacement';
@@ -259,9 +259,9 @@ const FlowDashboard = ({
   }, [flows, searchTerm, sortOption]);
 
   // Persist scroll position + back-to-top (#185); re-restore once the cards load.
-  const { ref: scrollRef, showBackToTop, scrollToTop } = useScrollRestoration<HTMLDivElement>(
+  const { ref: scrollRef, clusterProps: scrollNavProps } = useListScrollNav<HTMLDivElement>(
     'flujo-ui:scroll:flows',
-    { deps: [isLoading, filteredFlows.length] },
+    { deps: [isLoading, filteredFlows.length], groupsEnabled: groupMode !== 'none' },
   );
 
   // Distinct folders currently in use, for the "Move to folder" picker.
@@ -531,6 +531,7 @@ const FlowDashboard = ({
             groups.map((group) => (
               <CollapsibleCardSection
                 key={group.key}
+                groupKey={group.key}
                 label={group.label}
                 count={group.items.length}
                 expanded={!collapsedKeys.has(group.key)}
@@ -670,7 +671,7 @@ const FlowDashboard = ({
         </MenuItem>
       </Menu>
 
-      <BackToTopButton show={showBackToTop} onClick={scrollToTop} />
+      <ScrollNavCluster {...scrollNavProps} />
 
       {onReplaceModels && (
         <QuickChangeModelsDialog

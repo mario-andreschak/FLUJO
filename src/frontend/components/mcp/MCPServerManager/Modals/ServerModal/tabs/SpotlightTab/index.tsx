@@ -6,12 +6,13 @@ import {
   SpotlightCache,
   RegistryServer,
   InstallOption,
+  ManualLaunchOption,
   getInstallOptions,
-  buildConfigFromOption,
-  applySpotlightEnvDefaults,
+  isAutoInstallable,
   displayName
 } from '@/utils/mcp/registry';
-import { MCPServerConfig } from '@/shared/types/mcp/mcp';
+import InstallOptionPicker from '../../components/InstallOptionPicker';
+import useRegistryInstall from '../../hooks/useRegistryInstall';
 import { useTheme } from '@mui/material/styles';
 import {
   Alert,
@@ -23,15 +24,7 @@ import {
   CardContent,
   Chip,
   CircularProgress,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
   Grid,
-  List,
-  ListItemButton,
-  ListItemIcon,
-  ListItemText,
   Stack,
   Typography
 } from '@mui/material';
@@ -51,23 +44,24 @@ interface SpotlightCard {
  * Spotlight: FLUJO's curated MCP servers. The list ships with FLUJO
  * (src/shared/config/spotlightServers.ts); the registry records are cached on
  * the backend (refreshed at startup or via the Refresh button — never on tab
- * open). Clicking a server hands the generated config to the Local Server tab
- * — the same flow as the Marketplace: the define/build sections arrive
- * completed and a test run starts automatically, so the user can review env
- * vars and console output before saving. Only when a server offers both a
- * local package and a remote endpoint is the user asked which to use.
- * Curated env defaults from the spotlight list are merged into the generated
- * config at handoff time.
+ * open). Clicking a server hands the generated config to the Configure & Test
+ * tab — the same flow as the Marketplace (they share `useRegistryInstall` and
+ * `InstallOptionPicker`, #392): the define/build sections arrive completed and
+ * a test run starts automatically, so the user can review env vars and console
+ * output before saving. The picker only appears when there is an actual choice
+ * to make. Curated env defaults from the spotlight list are merged into the
+ * generated config at handoff time, and count as provided values when warning
+ * about missing required inputs.
  */
-const SpotlightTab: React.FC<TabProps> = ({ onClose, setActiveTab, onUpdate }) => {
+const SpotlightTab: React.FC<TabProps> = ({ onClose, onHandoff }) => {
   const theme = useTheme();
-  const { t, tp, formatDate } = useI18n();
+  const { t, tp, formatDate, formatList } = useI18n();
   const [cache, setCache] = useState<SpotlightCache | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [message, setMessage] = useState<MessageState | null>(null);
-  // Card whose Local/Remote choice is pending
-  const [choiceCard, setChoiceCard] = useState<SpotlightCard | null>(null);
+  // Spotlight entries are curated and ship with FLUJO, so no trust gate.
+  const registryInstall = useRegistryInstall({ requireTrust: false, onHandoff });
 
   useEffect(() => {
     let cancelled = false;
@@ -116,40 +110,38 @@ const SpotlightTab: React.FC<TabProps> = ({ onClose, setActiveTab, onUpdate }) =
     }
   };
 
+  // Curated env defaults from the spotlight list are merged on top of the
+  // registry record (adding vars the record didn't declare, filling the default
+  // of ones it did) — editable in the Configure tab's Env editor before saving.
   const install = (card: SpotlightCard, option: InstallOption) => {
-    // Curated env defaults from the spotlight list are merged on top of the
-    // registry record (adding vars the record didn't declare, filling the
-    // default of ones it did) — editable in the Local Server tab's Env editor
-    // before saving.
-    const config = applySpotlightEnvDefaults(buildConfigFromOption(card.server, option), card.env);
-    setChoiceCard(null);
-    if (onUpdate) {
-      // autoTestRun: registry configs need no manual install/build step, so the
-      // local tab can start the test run (which performs the install) right away
-      onUpdate(config as MCPServerConfig, { autoTestRun: true });
-    }
-    if (setActiveTab) {
-      setActiveTab('local');
+    const missing = registryInstall.install(card.server, option, card.env);
+    if (missing.length > 0) {
+      setMessage({
+        type: 'warning',
+        text: t('mcp.marketplace.preparedMissing', { values: formatList(missing) })
+      });
     }
   };
 
+  const configureAsRemote = (card: SpotlightCard, option: ManualLaunchOption) => {
+    registryInstall.configureAsRemote(card.server, option, card.env);
+  };
+
   const handleServerClick = (card: SpotlightCard) => {
-    const options = getInstallOptions(card.server);
+    const options = registryInstall.open(card.server, card.env);
     if (options.length === 0) {
+      registryInstall.close();
       setMessage({
         type: 'warning',
         text: t('mcp.spotlight.noInstall', { server: displayName(card.server) })
       });
       return;
     }
-    const packageOptions = options.filter(o => o.kind === 'package');
-    const remoteOptions = options.filter(o => o.kind === 'remote');
-    if (packageOptions.length > 0 && remoteOptions.length > 0) {
-      // The only decision Spotlight asks the user to make: local vs remote
-      setChoiceCard(card);
-      return;
+    // Only ask when there is an actual decision to make (local vs remote, or a
+    // launch-and-connect entry the user has to start themselves).
+    if (options.length === 1 && isAutoInstallable(options[0])) {
+      install(card, options[0]);
     }
-    install(card, options[0]);
   };
 
   const cards: SpotlightCard[] = (cache?.entries ?? [])
@@ -157,9 +149,12 @@ const SpotlightTab: React.FC<TabProps> = ({ onClose, setActiveTab, onUpdate }) =
     .map(entry => ({ server: entry.result!.server, env: entry.env }));
   const failures = (cache?.entries ?? []).filter(entry => !entry.result);
 
-  const choiceOptions = choiceCard ? getInstallOptions(choiceCard.server) : [];
-  const choicePackage = choiceOptions.find(o => o.kind === 'package');
-  const choiceRemote = choiceOptions.find(o => o.kind === 'remote');
+  const choiceCard: SpotlightCard | null = registryInstall.selection
+    ? {
+        server: registryInstall.selection.server,
+        ...(registryInstall.selection.envDefaults ? { env: registryInstall.selection.envDefaults } : {})
+      }
+    : null;
 
   return (
     <Box sx={{ width: '100%' }}>
@@ -300,40 +295,19 @@ const SpotlightTab: React.FC<TabProps> = ({ onClose, setActiveTab, onUpdate }) =
         </Box>
       </Stack>
 
-      {/* Local-vs-remote chooser — the single decision Spotlight leaves to the user */}
-      <Dialog open={choiceCard !== null} onClose={() => setChoiceCard(null)} maxWidth="xs" fullWidth>
-        {choiceCard && (
-          <>
-            <DialogTitle>{displayName(choiceCard.server)}</DialogTitle>
-            <DialogContent>
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                {t('mcp.spotlight.chooseHelp')}
-              </Typography>
-              <List>
-                {choicePackage && (
-                  <ListItemButton onClick={() => install(choiceCard, choicePackage)}>
-                    <ListItemIcon>
-                      <TerminalIcon />
-                    </ListItemIcon>
-                    <ListItemText primary={t('mcp.spotlight.local')} secondary={t('mcp.spotlight.localHelp')} />
-                  </ListItemButton>
-                )}
-                {choiceRemote && (
-                  <ListItemButton onClick={() => install(choiceCard, choiceRemote)}>
-                    <ListItemIcon>
-                      <CloudIcon />
-                    </ListItemIcon>
-                    <ListItemText primary={t('mcp.spotlight.remote')} secondary={t('mcp.spotlight.remoteHelp')} />
-                  </ListItemButton>
-                )}
-              </List>
-            </DialogContent>
-            <DialogActions>
-              <Button onClick={() => setChoiceCard(null)}>{t('mcp.local.cancel')}</Button>
-            </DialogActions>
-          </>
-        )}
-      </Dialog>
+      {/* Shared option picker — local vs remote, plus any launch-and-connect entry */}
+      {choiceCard && (
+        <InstallOptionPicker
+          open
+          title={displayName(choiceCard.server)}
+          helpText={t('mcp.spotlight.chooseHelp')}
+          options={registryInstall.options}
+          {...(choiceCard.env ? { envDefaults: choiceCard.env } : {})}
+          onClose={registryInstall.close}
+          onSelect={option => install(choiceCard, option)}
+          onConfigureAsRemote={option => configureAsRemote(choiceCard, option)}
+        />
+      )}
     </Box>
   );
 };

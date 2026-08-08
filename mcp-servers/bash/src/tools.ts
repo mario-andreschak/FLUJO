@@ -178,8 +178,13 @@ function windowsGitBashCandidates(): string[] {
 function isWindowsWslBashLauncher(candidate: string): boolean {
   if (process.platform !== 'win32') return false;
   const systemRoot = getEnvCaseInsensitive('SystemRoot') ?? getEnvCaseInsensitive('windir');
-  if (!systemRoot) return false;
-  return path.resolve(candidate).toLowerCase() === path.resolve(systemRoot, 'System32', 'bash.exe').toLowerCase();
+  const resolved = path.resolve(candidate).toLowerCase();
+  // The legacy WSL relay may be reached through System32, SysWOW64, or a
+  // SystemRoot-relative shim. It is not a usable POSIX interpreter without a
+  // provisioned distro, so never select it as the Bash MCP's `bash` shell.
+  if (systemRoot && resolved.startsWith(`${path.resolve(systemRoot).toLowerCase()}${path.sep}`)
+    && path.basename(resolved) === 'bash.exe') return true;
+  return /[\\/]WindowsApps[\\/].*wsl.*[\\/]bash\.exe$/i.test(resolved);
 }
 
 let cachedBashPath: string | null | undefined;
@@ -340,6 +345,14 @@ function availableShellNames(): string[] {
   return collectShellInfo().shells.filter((entry) => entry.available).map((entry) => entry.shell);
 }
 
+function unavailableShellHint(shell: Exclude<ShellKind, 'default'>): string {
+  if (shell === 'bash' && process.platform === 'win32'
+    && findExecutablesOnPath('bash').some(isWindowsWslBashLauncher)) {
+    return 'Only the WSL bash launcher was found and no Linux distribution provides /bin/bash. Install Git for Windows (Git Bash) or a WSL distro.';
+  }
+  return 'Call "shell_info" to see which shells and interpreters exist on this machine.';
+}
+
 function shellInfoTool(): CallToolResult {
   return textResult(collectShellInfo());
 }
@@ -369,6 +382,8 @@ interface BashSession {
   endedAt?: number;
   cancelEscalation?: () => void;
   reapTimer?: NodeJS.Timeout;
+  /** Preflight found a command head that cannot be resolved on PATH. */
+  missingExecutableWarning?: boolean;
 }
 
 interface TerminalSession {
@@ -566,6 +581,49 @@ function maskGlobOptionValues(command: string): string {
   return chars.join('');
 }
 
+/**
+ * Windows utilities that take `/x`-style switches (issue #314, item D). A slash
+ * token is only demoted from "absolute path" to "switch" when one of these
+ * appears EARLIER IN THE SAME command segment, so `cd … && dir /b && rg …` and
+ * `echo dir /b` stay quiet while `echo /.git/config` keeps its advisory.
+ * Deliberately excludes names that are also common POSIX utilities (`find`,
+ * `sort`, `type`, `more`, `mkdir`, `rmdir`) — suppressing their arguments would
+ * silence genuine path advisories such as `find /etc -name passwd`.
+ */
+const WINDOWS_SWITCH_UTILITIES = new Set([
+  'dir', 'xcopy', 'robocopy', 'copy', 'move', 'del', 'erase', 'attrib', 'icacls', 'takeown',
+  'findstr', 'tasklist', 'taskkill', 'sc', 'reg', 'net', 'subst', 'where', 'ren', 'rename',
+  'md', 'rd', 'tree', 'fc', 'comp', 'cacls', 'schtasks', 'chkdsk', 'sfc', 'shutdown',
+  'wmic', 'diskpart', 'label', 'vol', 'mklink', 'assoc', 'ftype', 'gpupdate', 'powercfg',
+]);
+
+/**
+ * A cmd-style switch: `/b`, `/ad`, `/mir`, `/e:on`. Never matches a nested path
+ * (no interior separator), so `/etc/passwd` is untouched.
+ */
+const WINDOWS_SWITCH_RE = /^\/[A-Za-z][A-Za-z0-9?*-]{0,15}(?::[^\s"']*)?$/;
+
+/** Text of the command segment (split on shell separators) preceding `index`. */
+function segmentTextBefore(command: string, index: number): string {
+  const separators = /&&|\|\||[|;&\n]/g;
+  let start = 0;
+  let match: RegExpExecArray | null;
+  while ((match = separators.exec(command)) !== null) {
+    if (match.index >= index) break;
+    start = match.index + match[0].length;
+  }
+  return command.slice(start, index);
+}
+
+/** True when a slash-switch utility heads the segment containing `index`. */
+function windowsSwitchUtilityPrecedes(command: string, index: number): boolean {
+  for (const word of segmentTextBefore(command, index).match(/[^\s"'<>()]+/g) ?? []) {
+    const name = word.replace(/^.*[\\/]/, '').toLowerCase().replace(/\.(?:exe|com|bat|cmd)$/, '');
+    if (WINDOWS_SWITCH_UTILITIES.has(name)) return true;
+  }
+  return false;
+}
+
 async function scanCommandForExternalPaths(command: string, cwd: string, roots: string[]): Promise<string[]> {
   const warnings: string[] = [];
   const protectedPathsEnabled = await isProtectedPathsEnabled();
@@ -576,11 +634,17 @@ async function scanCommandForExternalPaths(command: string, cwd: string, roots: 
   // Absolute-looking tokens: Windows drive (X:\ or X:/), UNC (\\host\share),
   // POSIX (/foo), and ~-prefixed home paths.
   const tokenRe = /(?:[A-Za-z]:[\\/][^\s"']*|\\\\[^\s"']+|~\/[^\s"']*|(?<![\w.])\/[^\s"']+)/g;
-  const matches = (commandForPathScan.match(tokenRe) ?? []).filter(
-    // A single-letter slash token is a Windows command switch, not a POSIX path.
-    // Keep longer tokens so genuine POSIX absolute paths remain advisory notices.
-    (token) => !(process.platform === 'win32' && /^\/[A-Za-z]$/.test(token))
-  );
+  const matches = [...commandForPathScan.matchAll(tokenRe)]
+    .filter((match) => {
+      if (process.platform !== 'win32') return true;
+      // Two independent conditions must hold before a token is dropped: it must
+      // LOOK like a cmd switch, and a slash-switch utility must appear earlier
+      // in the SAME segment (`… && dir /b && …`). This keeps `/etc/passwd` and
+      // other genuine POSIX paths advisory.
+      if (!WINDOWS_SWITCH_RE.test(match[0])) return true;
+      return !windowsSwitchUtilityPrecedes(commandForPathScan, match.index ?? 0);
+    })
+    .map((match) => match[0]);
   const home = (() => {
     try {
       return getHomeDir();
@@ -790,6 +854,7 @@ interface SpawnPlan {
   windowsVerbatimArguments?: boolean;
   /** Explicit shell lookup failed before any user command was executed. */
   unavailableShell?: Exclude<ShellKind, 'default'>;
+  shellSubstitution?: { requested: 'pwsh'; used: 'powershell'; reason: string };
   startError?: string;
 }
 
@@ -805,6 +870,19 @@ function buildSpawn(command: string, shell: ShellKind): SpawnPlan {
     const resolved = resolvePwshExecutable();
     if (resolved) {
       return { file: resolved, args: powerShellArgs(command), useShell: false, effectiveShell: 'pwsh' };
+    }
+    const windowsPowerShell = resolveWindowsPowerShellExecutable();
+    if (windowsPowerShell) {
+      return {
+        file: windowsPowerShell,
+        args: powerShellArgs(command),
+        useShell: false,
+        effectiveShell: 'powershell',
+        shellSubstitution: {
+          requested: 'pwsh', used: 'powershell',
+          reason: 'PowerShell 7 (pwsh) is not installed on this machine.',
+        },
+      };
     }
     return { file: '', args: [], useShell: false, effectiveShell: 'pwsh', unavailableShell: 'pwsh' };
   }
@@ -904,6 +982,7 @@ interface SpawnOutcome {
   startError?: string;
   effectiveShell: EffectiveShell;
   unavailableShell?: Exclude<ShellKind, 'default'>;
+  shellSubstitution?: SpawnPlan['shellSubstitution'];
 }
 
 function startChild(command: string, cwd: string, shell: ShellKind, env: Record<string, string>): SpawnOutcome {
@@ -915,6 +994,7 @@ function startChild(command: string, cwd: string, shell: ShellKind, env: Record<
     unavailableShell,
     startError,
     windowsVerbatimArguments,
+    shellSubstitution,
   } = buildSpawn(command, shell);
   if (unavailableShell) return { effectiveShell, unavailableShell };
   if (startError) return { effectiveShell, startError };
@@ -928,7 +1008,7 @@ function startChild(command: string, cwd: string, shell: ShellKind, env: Record<
       detached,
       ...(windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
     });
-    return { child, effectiveShell };
+    return { child, effectiveShell, shellSubstitution };
   } catch (err) {
     return {
       startError: err instanceof Error ? err.message : String(err),
@@ -1000,7 +1080,21 @@ function makeAppender(
  */
 const POSIX_ONLY_BINARIES = new Set([
   'head', 'tail', 'grep', 'sed', 'awk', 'wc', 'cat', 'cut', 'tr', 'uniq', 'sort', 'xargs', 'touch', 'which',
+  'rg', 'jq', 'find', 'ls', 'pwd', 'less', 'du', 'df',
 ]);
+
+const SHELL_BUILTINS = new Set([
+  'cd', 'echo', 'exit', 'export', 'set', 'unset', 'if', 'then', 'else', 'fi', 'for', 'while', 'do', 'done',
+  'true', 'false', 'test', 'type', 'alias', 'function', 'return', 'shift', 'source', '.', 'dir', 'cls',
+  'copy', 'del', 'erase', 'md', 'mkdir', 'rd', 'rmdir', 'move', 'ren', 'rename', 'pushd', 'popd',
+]);
+
+function isMissingCommandCandidate(head: string, shell: EffectiveShell): boolean {
+  const name = path.basename(head).toLowerCase().replace(/\.exe$/, '');
+  if (!name || SHELL_BUILTINS.has(name) || /^[-/$]/.test(head) || /^[A-Za-z_][\w-]*=/.test(head)) return false;
+  if (/^[A-Za-z]+-[A-Za-z][A-Za-z-]*$/.test(head) && (shell === 'pwsh' || shell === 'powershell')) return false;
+  return !/[\\/]/.test(head) && !/^\.?\.?$/.test(head);
+}
 
 /** Blank out quoted spans so operators inside string literals never trip us. */
 function stripQuotedSegments(command: string): string {
@@ -1033,12 +1127,18 @@ export function detectDialectMismatch(
   if (!posixShell) {
     for (const head of new Set(heads)) {
       const name = path.basename(head).toLowerCase().replace(/\.exe$/, '');
-      if (!POSIX_ONLY_BINARIES.has(name)) continue;
-      if (isAvailable(name)) continue;
-      warnings.push(
-        `"${name}" is a POSIX utility and is not available as an executable on this machine; `
-        + `under ${shell} it resolves to nothing (or to an unrelated alias). Pass shell:"bash" or use the native equivalent.`
-      );
+      if (!isMissingCommandCandidate(head, shell) || isAvailable(name)) continue;
+      if (POSIX_ONLY_BINARIES.has(name)) {
+        warnings.push(
+          `"${name}" is a POSIX utility and is not available as an executable on this machine; `
+          + `under ${shell} it resolves to nothing (or to an unrelated alias). Pass shell:"bash" or use the native equivalent.`
+        );
+      } else {
+        warnings.push(
+          `"${name}" was not found on PATH; under ${shell} this will fail with a "command not found" error. `
+          + 'Install it, use the native equivalent, or call "shell_info".'
+        );
+      }
     }
   }
 
@@ -1087,6 +1187,14 @@ export function detectDialectMismatch(
   }
 
   return warnings;
+}
+
+function missingExecutableHint(exitCode: number | null, warnings: string[]): Record<string, string> {
+  if ((exitCode === 9009 || exitCode === 255 || exitCode === 1)
+    && warnings.some((warning) => /not found on PATH|not available as an executable/.test(warning))) {
+    return { hint: 'A referenced executable was not found — see dialectWarnings.' };
+  }
+  return {};
 }
 
 /** Commands that typically hang forever waiting on a pager or interactive prompt. */
@@ -1599,7 +1707,7 @@ async function runTool(
     const decodeStderr = createStreamDecoder(encodingMode);
     const progress = createCommandProgressReporter(context);
 
-    const { child, startError, effectiveShell, unavailableShell } = startChild(
+    const { child, startError, effectiveShell, unavailableShell, shellSubstitution } = startChild(
       command,
       cwd,
       selection.shell,
@@ -1608,6 +1716,7 @@ async function runTool(
     const dialectWarnings = detectDialectMismatch(command, effectiveShell);
     const dialect = dialectWarnings.length ? { dialectWarnings } : {};
     const auto = selection.autoSelected ? { shellAutoSelected: true } : {};
+    const substitution = shellSubstitution ? { shellSubstitution } : {};
     const spoolInfo = () => (outputFilePath
       ? { outputFile: outputFilePath, outputBytes: spool.bytes(), ...(spool.error() ? { outputFileError: spool.error() } : {}) }
       : {});
@@ -1623,9 +1732,10 @@ async function runTool(
         resolve(textResult({
           error: `Requested shell "${unavailableShell}" is unavailable or could not be resolved.`,
           cwd,
+          requestedShell,
           shell: unavailableShell,
           availableShells: availableShellNames(),
-          hint: 'Call "shell_info" to see which shells and interpreters exist on this machine.',
+          hint: unavailableShellHint(unavailableShell),
         }, true));
       });
       return;
@@ -1655,6 +1765,7 @@ async function runTool(
         ...outputStats(),
         ...spoolInfo(),
         ...dialect,
+        ...substitution,
         ...auto,
         ...warn,
       }, true), true);
@@ -1690,6 +1801,7 @@ async function runTool(
         ...spoolInfo(),
         ...(hangHints.length ? { hangHints } : {}),
         ...dialect,
+        ...substitution,
         ...auto,
         ...warn,
       }, true), true);
@@ -1729,6 +1841,8 @@ async function runTool(
         ...outputStats(),
         ...spoolInfo(),
         ...dialect,
+        ...missingExecutableHint(code, dialectWarnings),
+        ...substitution,
         ...auto,
         ...warn,
       }, code !== 0));
@@ -1796,7 +1910,7 @@ async function startTool(
     }
   }
   const selection = selectShell(command, requestedShell);
-  const { child, startError, effectiveShell, unavailableShell } = startChild(
+  const { child, startError, effectiveShell, unavailableShell, shellSubstitution } = startChild(
     command,
     cwd,
     selection.shell,
@@ -1806,9 +1920,10 @@ async function startTool(
     return textResult({
       error: `Requested shell "${unavailableShell}" is unavailable or could not be resolved.`,
       cwd,
+      requestedShell,
       shell: unavailableShell,
       availableShells: availableShellNames(),
-      hint: 'Call "shell_info" to see which shells and interpreters exist on this machine.',
+      hint: unavailableShellHint(unavailableShell),
     }, true);
   }
   if (startError || !child) {
@@ -1864,11 +1979,13 @@ async function startTool(
   });
 
   const dialectWarnings = detectDialectMismatch(command, effectiveShell);
+  session.missingExecutableWarning = dialectWarnings.some((warning) => /not found on PATH|not available as an executable/.test(warning));
   return textResult({
     sessionId: id,
     cwd,
     requestedShell,
     shell: effectiveShell,
+    ...(shellSubstitution ? { shellSubstitution } : {}),
     ...(selection.autoSelected ? { shellAutoSelected: true } : {}),
     ...(dialectWarnings.length ? { dialectWarnings } : {}),
     ...(outputFilePath ? { outputFile: outputFilePath } : {}),
@@ -1884,6 +2001,8 @@ function snapshot(session: BashSession, extra: Record<string, unknown> = {}): Re
     output: session.output,
     truncated: session.truncated,
     stderrChars: session.stderrChars ?? 0,
+    ...(session.missingExecutableWarning && (session.exitCode === 9009 || session.exitCode === 255 || session.exitCode === 1)
+      ? { hint: 'A referenced executable was not found — see dialectWarnings.' } : {}),
     ...extra,
   };
 }

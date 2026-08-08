@@ -602,6 +602,47 @@ describe('CodexAdapter — tool bridging', () => {
     }
   });
 
+  it('paces the assembled tool arguments as deltas under the pending card id (#337)', async () => {
+    const payload = 'x'.repeat(2_000);
+    callToolMock.mockResolvedValueOnce({ success: true, data: { content: [{ type: 'text', text: 'ok' }] } });
+    runStreamedMock.mockImplementationOnce(async () => ({
+      events: (async function* () {
+        await capturedBridgeTools[0].handler({ payload });
+        yield agentMessage('done');
+        yield turnCompleted({ input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 });
+      })(),
+    }));
+    const streamed: FlujoChatMessage[] = [];
+    const deltas: Array<{ messageId: string; toolCallDelta?: { id?: string; nameDelta?: string; argumentsDelta?: string } }> = [];
+
+    await new CodexAdapter().createCompletion(
+      baseInput({
+        tools: [mcpTool],
+        toolNameMap: { mcp_hashed_name: { server: 'my-server', tool: 'list_things' } },
+        onTranscriptMessage: message => streamed.push(message),
+        onModelDelta: delta => deltas.push(delta),
+      }),
+    );
+
+    const pendingCall = streamed.find(message =>
+      Array.isArray((message as { tool_calls?: unknown[] }).tool_calls)) as FlujoChatMessage & {
+        tool_calls: OpenAI.ChatCompletionMessageFunctionToolCall[];
+      };
+    const toolDeltas = deltas.filter(delta => delta.toolCallDelta);
+
+    // The name arrives first, then the arguments in several visible fragments.
+    expect(toolDeltas[0].toolCallDelta).toMatchObject({
+      id: pendingCall.tool_calls[0].id,
+      nameDelta: pendingCall.tool_calls[0].function.name,
+    });
+    expect(toolDeltas.length).toBeGreaterThan(2);
+    expect(toolDeltas.map(delta => delta.toolCallDelta?.argumentsDelta ?? '').join(''))
+      .toBe(pendingCall.tool_calls[0].function.arguments);
+    // Same message id as the durable pending card, so the draft reconciles
+    // instead of leaving a duplicate tool call in the transcript.
+    expect(new Set(toolDeltas.map(delta => delta.messageId))).toEqual(new Set([pendingCall.id]));
+  });
+
   it('records the definition-advertised MCP App UI and ignores a result redirect', async () => {
     callToolMock.mockResolvedValueOnce({
       success: true,

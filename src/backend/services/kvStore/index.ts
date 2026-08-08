@@ -67,8 +67,8 @@ const chainKey = (scope: KvScopeId) => `kv-store/${scope}`;
 let settingsCache: { value: KvStoreSettings; at: number } | null = null;
 const SETTINGS_TTL_MS = 30_000;
 
-export async function getKvStoreSettings(): Promise<KvStoreSettings> {
-  if (settingsCache && Date.now() - settingsCache.at < SETTINGS_TTL_MS) {
+export async function getKvStoreSettings(options?: { fresh?: boolean }): Promise<KvStoreSettings> {
+  if (!options?.fresh && settingsCache && Date.now() - settingsCache.at < SETTINGS_TTL_MS) {
     return settingsCache.value;
   }
   let value: KvStoreSettings;
@@ -169,7 +169,9 @@ export async function kvSet(
 ): Promise<KvSetResult> {
   assertSafeScope(scope);
   assertSafeName(name);
-  const settings = await getKvStoreSettings();
+  // Writes must reflect a freshly changed admin policy immediately; cached
+  // settings remain appropriate for read-only callers.
+  const settings = await getKvStoreSettings({ fresh: true });
   if (!settings.enabled) return { skipped: 'disabled' };
 
   const str = typeof value === 'string' ? value : String(value ?? '');

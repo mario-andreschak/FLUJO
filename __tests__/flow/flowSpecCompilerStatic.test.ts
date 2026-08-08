@@ -119,6 +119,21 @@ describe('compile: static nodes', () => {
     expect(recompiledStatic.data!.properties!.injectOnce).toBe(true);
   });
 
+  it('warns when injectOnce is not a boolean and drops the value', () => {
+    const result = compileFlowSpec(staticSpec({
+      entries: [{ kind: 'message', role: 'user', content: 'kept' }],
+      injectOnce: 'yes',
+    }), context);
+    expect(result.issues.some((issue) => issue.code === 'static-invalid-injectonce')).toBe(true);
+    expect(result.flow!.nodes.find((node) => node.type === 'static')!.data!.properties!.injectOnce).toBeUndefined();
+  });
+
+  it('does not emit injectOnce when it is false or omitted', () => {
+    const flow = compileFlowSpec(staticSpec({ entries: [{ kind: 'message', role: 'user', content: 'kept' }], injectOnce: false }), context).flow!;
+    const staticNode = flowToSpec(flow).nodes.find((node) => node.type === 'static')!;
+    expect(staticNode.injectOnce).toBeUndefined();
+  });
+
   it('does not round-trip entries when the array is empty', () => {
     const flow = compileFlowSpec(staticSpec({ entries: [] }), context).flow!;
     const back = flowToSpec(flow);

@@ -3,6 +3,8 @@
 Decision record for issue #380 ("Formalize Static Node FlowSpec Decision"), and the
 reusable rule for classifying every future `NodeType` addition.
 
+User guide: [Static node](../features/flows/static-node.md).
+
 ## Context
 
 FLUJO has two authoring surfaces for the same runtime:
@@ -94,6 +96,10 @@ through AI-Improve (`flowToSpec` silently drops unknown node types).
   `src/utils/shared/simpleFlowSpec.ts`'s `SimpleFlowStep` — a flow containing a `static` node is
   correctly flagged as using advanced features, and Guided/simple authoring cannot emit one
   directly. This matches how `resource` and `signal` are already handled.
+- Runtime **re-entry semantics** for `injectOnce` — append on every traversal by default, and
+  "once" meaning once per *logical run* keyed by `(logicalRunId, nodeId)` — are specified in
+  [Static node → Re-entry semantics](../features/flows/static-node.md#re-entry-semantics)
+  (issue #381).
 
 ## Implications for future node types
 

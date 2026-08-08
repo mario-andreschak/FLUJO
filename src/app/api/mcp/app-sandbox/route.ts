@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { isValidMcpAppDomain } from '@/shared/utils/mcpAppOrigin';
+import { mcpService } from '@/backend/services/mcp';
+import { getMcpAppConsent } from '@/backend/mcpApps/appConsent';
 import {
   getSandboxAuthToken,
   deriveSandboxPublicUrl,
@@ -48,6 +50,25 @@ function externalOrigin(request: NextRequest): string {
 export async function GET(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
+
+  const serverName = request.nextUrl.searchParams.get('serverName')?.trim();
+  const uri = request.nextUrl.searchParams.get('uri')?.trim();
+  const conversationId = request.nextUrl.searchParams.get('conversationId')?.trim();
+  if (!serverName || !uri) {
+    return NextResponse.json(
+      { error: 'mcp_app_consent_required' },
+      { status: 403, headers: { 'Cache-Control': 'no-store' } },
+    );
+  }
+  const configs = await mcpService.loadServerConfigs();
+  const config = Array.isArray(configs) ? configs.find((candidate) => candidate.name === serverName) : undefined;
+  const consent = await getMcpAppConsent(config, serverName, uri, conversationId);
+  if (consent !== 'internal' && consent !== 'granted') {
+    return NextResponse.json(
+      { error: 'mcp_app_consent_required' },
+      { status: 403, headers: { 'Cache-Control': 'no-store' } },
+    );
+  }
 
   // The sandbox listener only ever sees its OWN origin in the request headers,
   // so it cannot derive a correct `frame-ancestors` on its own. This request is

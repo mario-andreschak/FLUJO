@@ -1,6 +1,17 @@
 import { MCPServerConfig } from '@/utils/mcp';
 
-export type ServerSetupTab = 'spotlight' | 'marketplace' | 'github' | 'local' | 'reference' | 'remote';
+export type ServerSetupTab = 'spotlight' | 'marketplace' | 'github' | 'configure' | 'reference' | 'remote';
+
+/**
+ * The one message an acquisition tab (Spotlight / Marketplace / GitHub /
+ * Reference / Remote) can send (#392). Before this existed, every new
+ * source→sink message was paid for with another prop on `TabProps`, which all
+ * six tabs implement. `ServerModal` owns the handoff, derives the inbound
+ * props from it, and performs the tab switch itself.
+ */
+export type TabHandoff =
+  | { to: 'configure'; config: MCPServerConfig; autoTestRun?: boolean }
+  | { to: 'github'; repoUrl: string };
 
 /** Outcome of persisting a server and kicking off its OAuth flow from the modal. */
 export type SaveAndAuthenticateResult =
@@ -44,11 +55,20 @@ export interface TabProps {
   onRestartAfterUpdate?: (serverName: string) => void;
   /** Persist the (streamable) server and start its OAuth flow. See ServerModalProps. */
   onSaveAndAuthenticate?: (config: MCPServerConfig) => Promise<SaveAndAuthenticateResult>;
-  setActiveTab?: (tab: ServerSetupTab) => void;
-  /** When true (marketplace handoff), collapse define/build as done and auto-start a test run */
+  /**
+   * Hand this tab's result to another tab. The modal switches tabs; a tab never
+   * does that itself. Replaces the former `setActiveTab` + `onOpenInGitHubTab`
+   * prop pair (#392).
+   */
+  onHandoff?: (handoff: TabHandoff) => void;
+  /** When true (registry handoff), collapse define/build as done and auto-start a test run */
   autoTestRun?: boolean;
+  /**
+   * Identity of the inbound handoff. Bumped on every handoff so the configure
+   * tab can re-arm its auto-run guard — installing the same server twice in a
+   * row must start a test run both times (#392).
+   */
+  handoffId?: number;
   /** GitHub tab: prefill for the repository URL field (marketplace → manual install handoff) */
   initialGitHubUrl?: string;
-  /** Marketplace tab: open the GitHub tab prefilled with this repository URL */
-  onOpenInGitHubTab?: (repoUrl: string) => void;
 }

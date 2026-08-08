@@ -3,6 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DependencyList, RefObject } from 'react';
 import { readUiPreference, writeUiPreference } from '@/frontend/hooks/useUiPreference';
+import {
+  applyScrollTop as applyScrollTopTo,
+  getScrollMetrics,
+  resolveScrollElement,
+  resolveScrollBehavior,
+} from '@/frontend/hooks/scrollTarget';
 
 // Scroll-position persistence + "back to top" state for the main list pages
 // (#185: /models, /mcp, /flows, /waves). This wraps the already-battle-tested
@@ -51,27 +57,15 @@ export function useScrollRestoration<T extends HTMLElement = HTMLDivElement>(
 
   // Resolve the element that actually scrolls: the attached container when it
   // is itself scrollable, otherwise `null` meaning "use the window/document".
-  const resolveEl = useCallback((): HTMLElement | null => {
-    const el = ref.current;
-    if (el && el.scrollHeight > el.clientHeight + 1) return el;
-    return null;
-  }, []);
+  // Shared with `useScrollNav` (see `scrollTarget.ts`) so persistence and the
+  // navigation controls can never disagree about which surface scrolls.
+  const resolveEl = useCallback((): HTMLElement | null => resolveScrollElement(ref), []);
 
-  const getScrollTop = useCallback((): number => {
-    const el = resolveEl();
-    if (el) return el.scrollTop;
-    if (typeof window === 'undefined') return 0;
-    return window.scrollY || document.documentElement.scrollTop || 0;
-  }, [resolveEl]);
+  const getScrollTop = useCallback((): number => getScrollMetrics(resolveEl()).scrollTop, [resolveEl]);
 
   const applyScrollTop = useCallback(
     (top: number) => {
-      const el = resolveEl();
-      if (el) {
-        el.scrollTop = top;
-      } else if (typeof window !== 'undefined') {
-        window.scrollTo(0, top);
-      }
+      applyScrollTopTo(resolveEl(), top);
     },
     [resolveEl],
   );
@@ -130,12 +124,7 @@ export function useScrollRestoration<T extends HTMLElement = HTMLDivElement>(
   }, deps);
 
   const scrollToTop = useCallback(() => {
-    const el = resolveEl();
-    if (el) {
-      el.scrollTo({ top: 0, behavior: 'smooth' });
-    } else if (typeof window !== 'undefined') {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    }
+    applyScrollTopTo(resolveEl(), 0, resolveScrollBehavior('smooth'));
     setShowBackToTop(false);
   }, [resolveEl]);
 

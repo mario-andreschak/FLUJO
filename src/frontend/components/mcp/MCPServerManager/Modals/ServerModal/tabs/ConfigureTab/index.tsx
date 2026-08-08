@@ -42,12 +42,28 @@ import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { McpTroubleshootPatch } from '@/shared/types/mcp/assistant';
 import McpInstallTroubleshooter from './McpInstallTroubleshooter';
 
-const LocalServerTab: React.FC<TabProps> = ({
+/**
+ * The single configure-and-verify sink for every transport and every
+ * acquisition source (#392) — and the edit form for existing servers.
+ *
+ * Spotlight, Marketplace, GitHub, Reference and Remote are all thin producers
+ * of a `Partial<MCPServerConfig>`; this is the only place a server config is
+ * finalised, test-run and saved. It owns the env/args editors, `serverUrl`,
+ * `HeadersEditor`, `OAuthCredentialsEditor`, and the Roots/Sampling/Elicitation
+ * policies. `ServerModal` renders it directly (tab bar hidden) whenever
+ * `initialConfig` is set, which is why it was renamed away from "LocalServerTab":
+ * it was never the local tab.
+ *
+ * NOTE: `MCPServerSource = { type: 'local' }` is deliberately NOT renamed — that
+ * is persisted install-origin metadata, not a tab identity.
+ */
+const ConfigureTab: React.FC<TabProps> = ({
   initialConfig,
   onAdd,
   onUpdate,
   onClose,
   autoTestRun,
+  handoffId,
   onSaveAndAuthenticate
 }) => {
   const { t } = useI18n();
@@ -299,14 +315,18 @@ const LocalServerTab: React.FC<TabProps> = ({
   // (npx/uvx/docker fetch the package on first run). Collapse the first two
   // sections as done and start the test run immediately, so the installation
   // begins without another click.
-  const autoRunStartedRef = useRef(false);
+  // Keyed by handoff identity, not a bare boolean: installing the same server
+  // twice in a row is two handoffs and must auto-run twice (#392).
+  const autoRunStartedForRef = useRef<number | null>(null);
   useEffect(() => {
-    if (!autoTestRun || autoRunStartedRef.current) return;
+    if (!autoTestRun) return;
+    const handoffKey = handoffId ?? 0;
+    if (autoRunStartedForRef.current === handoffKey) return;
     if (!initialConfig?.name) return;
     // Wait until useLocalServerState has hydrated the form from initialConfig,
     // otherwise the run would see the empty default config
     if (localConfig.name !== initialConfig.name) return;
-    autoRunStartedRef.current = true;
+    autoRunStartedForRef.current = handoffKey;
     setExpandedSections({
       define: false,
       build: false,
@@ -315,7 +335,7 @@ const LocalServerTab: React.FC<TabProps> = ({
     setInstallCompleted(true);
     setBuildCompleted(true);
     onRun();
-  }, [autoTestRun, initialConfig, localConfig.name]);
+  }, [autoTestRun, handoffId, initialConfig, localConfig.name]);
 
   // Handle accordion expansion
   const handleAccordionChange = (panel: string) => (event: React.SyntheticEvent, isExpanded: boolean) => {
@@ -377,6 +397,10 @@ const LocalServerTab: React.FC<TabProps> = ({
     return 'default';
   };
 
+  // Launch-and-connect servers (#392) carry the process that has to be running
+  // behind their URL. Shown read-only: Phase 2 owns actually spawning it.
+  const launchSpec = (localConfig as { launch?: { command: string; args?: string[] } }).launch;
+
   const applyTroubleshootPatch = (patch: McpTroubleshootPatch) => {
     setLocalConfig((current) => {
       const env = { ...(current.env || {}) };
@@ -411,6 +435,21 @@ const LocalServerTab: React.FC<TabProps> = ({
       <Grid container spacing={2}>
         <Grid item xs={isConsoleVisible ? 8 : 12}>
           <Stack spacing={3}>
+            {/* Launch-and-connect (#392): read-only. FLUJO does not start this
+                process yet — the user does, then FLUJO connects to serverUrl. */}
+            {launchSpec && (
+              <Alert severity="info">
+                <Typography variant="body2">{t('mcp.registry.manualLaunch.description')}</Typography>
+                <Typography
+                  variant="caption"
+                  component="code"
+                  sx={{ display: 'block', mt: 1, fontFamily: 'monospace', wordBreak: 'break-all' }}
+                >
+                  {[launchSpec.command, ...(launchSpec.args ?? [])].join(' ')}
+                </Typography>
+              </Alert>
+            )}
+
             {/* Define Server Section */}
             <Accordion 
               expanded={expandedSections.define} 
@@ -751,4 +790,4 @@ const LocalServerTab: React.FC<TabProps> = ({
   );
 };
 
-export default LocalServerTab;
+export default ConfigureTab;

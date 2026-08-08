@@ -500,7 +500,10 @@ export interface SubflowNodeProperties {
      *  change an existing flow's behaviour by itself. Tool-mode invocations are
      *  NOT resumable in v1 (no graph transition means no persist point); a
      *  mid-call crash re-runs the lanes from scratch. */
-    invocationMode?: 'handoff' | 'tool';
+    invocationMode?: 'handoff' | 'tool' | 'detached';
+    /** Optional per-node detached-task polling hint and runtime cap (issue #386). */
+    detachedPollIntervalMs?: number;
+    detachedMaxRuntimeMs?: number;
 }
 
 /** One resolved job in a SubflowNode queue. Legacy code and event payloads still
@@ -662,9 +665,17 @@ export type StaticEntry =
 
 export interface StaticNodeProperties {
     name?: string;
-    /** Entries injected, in order, onto sharedState.messages. */
+    /** Entries injected, in order, onto sharedState.messages. Defaults to []. */
     entries?: StaticEntry[];
-    /** When true, inject only the first time the node is traversed in a run. */
+    /**
+     * Re-entry semantics. Default (`false`/omitted): append entries on every traversal,
+     * so a looping node re-injects each iteration with freshly resolved `${var:…}` values.
+     * `true`: inject only on the first traversal of this node **within one logical run**
+     * (one user turn). An approval/debug resume of the same run does NOT re-inject; a new
+     * user turn on the same conversation DOES, and subflow runs are scoped separately.
+     * Tracked in `SharedState.staticInjected`, keyed by `(logicalRunId, nodeId)`.
+     * See docs/features/flows/static-node.md#re-entry-semantics.
+     */
     injectOnce?: boolean;
 }
 
@@ -771,6 +782,18 @@ export interface SharedState {
     /** On a persisted child conversation, identifies the exact parent lane that
      *  this conversation must satisfy after a retry or continued turn. */
     subflowLane?: RecoveryLaneIdentity;
+    /**
+     * Static-node injection bookkeeping, keyed by node id; the value is the
+     * `logicalRunId` of the run that last injected that node (`'no-run'` when a run
+     * has no logical id, e.g. in isolated tests). `injectOnce: true` suppresses a
+     * repeat injection only while the stored id equals the current `logicalRunId`,
+     * which makes "once" mean *once per logical run* (issue #381): it is persisted
+     * with the run state so it survives pause/resume of the same run, while a new
+     * user turn gets a fresh id and therefore injects again. Subflow runs have their
+     * own SharedState and therefore their own markers.
+     * See docs/features/flows/static-node.md#re-entry-semantics.
+     */
+    staticInjected?: Record<string, string>;
     /** UTC epoch used to measure the logical run across pause/resume boundaries. */
     statisticsRunStartedAt?: number;
     /** Prevents a resumed approval/debug request from emitting a second start. */
@@ -1067,6 +1090,10 @@ export interface SharedState {
      * only ever matches `handoff_to_*` and transitions the graph).
      */
     subflowToolNameMap?: Record<string, string>;
+    /** Model-facing start_subflow_* tool name -> detached target node id. */
+    subflowDetachedToolNameMap?: Record<string, string>;
+    /** Durable task handles launched while this conversation was active. */
+    launchedTaskIds?: string[];
 
     // --- Token / cost accounting (aggregated from per-message usage) ---
     /** Running totals of token usage and estimated cost for this conversation. */

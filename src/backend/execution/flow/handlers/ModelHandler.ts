@@ -26,7 +26,7 @@ import { resolveEffectiveCompaction, resolveEffectiveVisualCompaction } from './
 import { compactMessagesVisually, type EffectiveVisualCompaction } from './visualCompaction';
 import { compactHistory, estimateTokens } from './summarizingCompaction';
 import { normalizeMaxTokens } from '@/shared/types/model';
-import { isSelfOrchestratingAdapter } from '@/shared/types/model/provider';
+import { isSelfOrchestratingAdapter, normalizeModelTemperature } from '@/shared/types/model/provider';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
 import { mapOpenAiUsage, OpenAiUsageLike } from '@/backend/services/model/adapters/openaiUsage';
 import { prepareOpenAiPromptCacheWire } from '@/backend/services/model/adapters/openaiPromptCaching';
@@ -53,6 +53,7 @@ import { isQuestionToolName, executeQuestionTool, QUESTION_TOOL_NAME } from './r
 import { isTodoToolName, executeTodoTool, TODO_TOOL_NAME } from './todoTool';
 import { isMCPResourceToolName, executeMCPResourceTool, LIST_MCP_RESOURCES_TOOL_NAME } from './mcpResourceTools';
 import { isSubflowToolName, executeSubflowToolCall } from './subflowToolInvocation';
+import { executeDetachedSubflowStart, executeTaskCancel, executeTaskGet, SUBFLOW_DETACHED_TOOL_PREFIX } from './subflowDetachedInvocation';
 import type { RunResourceSettings } from '@/shared/types/runResources';
 import type { ModelStreamDelta, ToolResourceMarker } from '@/backend/services/model/adapters/types';
 import type { ModelMediaPart } from '@/shared/types/model/media';
@@ -370,6 +371,16 @@ export class ModelHandler {
       return Boolean(settings?.experimental?.subflowToolInvocation);
     } catch (err) {
       log.warn('Failed to read subflowToolInvocation setting; defaulting to disabled', { err });
+      return false;
+    }
+  }
+
+  static async isSubflowDetachedInvocationEnabled(): Promise<boolean> {
+    try {
+      const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
+      return Boolean(settings?.experimental?.subflowDetachedInvocation);
+    } catch (err) {
+      log.warn('Failed to read subflowDetachedInvocation setting; defaulting to disabled', { err });
       return false;
     }
   }
@@ -1586,8 +1597,14 @@ export class ModelHandler {
         };
       }
 
-      // Extract model settings
-      const temperature = model.temperature ? parseFloat(model.temperature) : 0.0;
+      // Extract model settings. Malformed persisted values are omitted so NaN
+      // never reaches an adapter; truly unset legacy values retain the old 0.0 default.
+      const temperature = normalizeModelTemperature(
+        model.temperature,
+        model.provider,
+        model.adapter,
+        model.name,
+      ) ?? (model.temperature === undefined || model.temperature === '' ? 0.0 : undefined);
 
       // Resolve and decrypt the API key. Codex may run keyless: an empty key
       // means "use the machine's ChatGPT plan login from `codex login`" (the
@@ -1679,6 +1696,8 @@ export class ModelHandler {
         apiMessages = compactForWire(apiMessages, {
           keepRecentMessages,
           resourceMarkers: opts?.runResourceMarkers,
+          // Without an offered tool there is no usable read_resource path.
+          canUseTools: (effectiveTools?.length ?? 0) > 0,
         });
         // Truncation embeds a `flujo://run/...` URI when the full result was
         // captured (issue #168). ProcessNode.prep arms `read_resource` by
@@ -1752,6 +1771,12 @@ export class ModelHandler {
           }
           const refittedMessages = compactForWire(apiMessages, {
             resourceMarkers: budgetMarkers,
+            // The refit ARMS read_resource itself (ensureReadResourceArmed just
+            // below), so a `flujo://run/...` marker minted here is always
+            // dereferenceable — even for a step that was offered no tools at
+            // all. Deriving this from the pre-arming tool list would suppress
+            // the URI and make the refit silently unrecoverable (#338).
+            canUseTools: true,
             compactRecentToolResults: true,
             toolResultHeadChars: ModelHandler.OVERFLOW_TOOL_RESULT_HEAD_CHARS,
           });
@@ -2244,6 +2269,10 @@ export class ModelHandler {
         }
         const refitMessages = compactForWire(apiMessages, {
           resourceMarkers: refitMarkers,
+          // Same as the proactive refit above: read_resource is armed on the
+          // retry, so the URI marker must be emitted regardless of how many
+          // tools the original request carried (#338).
+          canUseTools: true,
           compactRecentToolResults: true,
           allowLossyTruncation: true,
           toolResultHeadChars: ModelHandler.OVERFLOW_TOOL_RESULT_HEAD_CHARS,
@@ -2587,6 +2616,20 @@ export class ModelHandler {
               content: resultContent,
               timestamp: Date.now(),
             });
+            processedToolCalls.push({ name, args, id, result: resultContent });
+            return;
+          }
+
+          if (name.startsWith(SUBFLOW_DETACHED_TOOL_PREFIX) || name === 'subflow_task_get' || name === 'subflow_task_cancel') {
+            emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
+            const outcome = name === 'subflow_task_get'
+              ? await executeTaskGet(String(args.taskId ?? ''))
+              : name === 'subflow_task_cancel'
+                ? await executeTaskCancel(String(args.taskId ?? ''))
+                : await executeDetachedSubflowStart(name, args, { conversationId, emit });
+            const resultContent = outcome.success ? JSON.stringify(outcome.data) : `Error: ${outcome.error}`;
+            emit?.({ type: 'tool:result', toolCallId: id, name, result: resultContent.slice(0, 500), isError: !outcome.success });
+            toolCallMessages.push({ id: uuidv4(), role: 'tool', tool_call_id: id, content: resultContent, timestamp: Date.now() });
             processedToolCalls.push({ name, args, id, result: resultContent });
             return;
           }

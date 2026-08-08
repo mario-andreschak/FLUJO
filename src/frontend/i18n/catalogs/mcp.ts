@@ -2549,14 +2549,56 @@ export const mcpMessageRows = {
     "GitHub",
     "GitHub",
   ],
+  // #392: the tab is the single configure-and-verify sink for EVERY transport,
+  // not the "local" tab, so the label was corrected. The `mcp.local.*` key
+  // prefix is deliberately kept: renaming ~60 keys across 7 locales is pure
+  // churn with no user-visible benefit and a real risk of a missed translation.
   "mcp.modal.local": [
-    "Local server",
-    "Servidor local",
-    "Lokaler Server",
-    "Serveur local",
-    "Server locale",
-    "Servidor local",
-    "本地服务器",
+    "Configure & Test",
+    "Configurar y probar",
+    "Konfigurieren & testen",
+    "Configurer et tester",
+    "Configura e verifica",
+    "Configurar e testar",
+    "配置并测试",
+  ],
+  // Launch-and-connect registry entries (#392): started by the user, connected
+  // to over HTTP by FLUJO. FLUJO never executes the command itself.
+  "mcp.registry.manualLaunch.title": [
+    "Needs a manual start",
+    "Requiere inicio manual",
+    "Muss manuell gestartet werden",
+    "Démarrage manuel requis",
+    "Richiede un avvio manuale",
+    "Precisa de início manual",
+    "需要手动启动",
+  ],
+  "mcp.registry.manualLaunch.description": [
+    "FLUJO does not start this server yet. Run the command below yourself, then FLUJO connects to it over HTTP.",
+    "FLUJO todavía no inicia este servidor. Ejecuta el comando siguiente tú mismo y FLUJO se conectará por HTTP.",
+    "FLUJO startet diesen Server noch nicht. Führe den folgenden Befehl selbst aus, dann verbindet sich FLUJO über HTTP.",
+    "FLUJO ne démarre pas encore ce serveur. Exécutez vous-même la commande ci-dessous, puis FLUJO s’y connectera en HTTP.",
+    "FLUJO non avvia ancora questo server. Esegui tu il comando qui sotto, poi FLUJO si collegherà via HTTP.",
+    "O FLUJO ainda não inicia este servidor. Execute o comando abaixo você mesmo e o FLUJO se conectará por HTTP.",
+    "FLUJO 尚不会启动此服务器。请自行运行下面的命令，然后 FLUJO 将通过 HTTP 连接。",
+  ],
+  "mcp.registry.manualLaunch.copyCommand": [
+    "Copy command",
+    "Copiar comando",
+    "Befehl kopieren",
+    "Copier la commande",
+    "Copia comando",
+    "Copiar comando",
+    "复制命令",
+  ],
+  "mcp.registry.manualLaunch.configureAsRemote": [
+    "Configure as remote",
+    "Configurar como remoto",
+    "Als Remote konfigurieren",
+    "Configurer comme distant",
+    "Configura come remoto",
+    "Configurar como remoto",
+    "配置为远程服务器",
   ],
   "mcp.modal.remote": [
     "Remote",

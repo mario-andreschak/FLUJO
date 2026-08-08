@@ -209,6 +209,26 @@ function buildControlAdjacency(edges: VEdge[]): Map<string, string[]> {
   return adj;
 }
 
+/** `${var:NAME}` / `${res:NAME}` references inside authored static-node text. Their
+ *  values are only known at run time, so text containing them cannot be JSON-parsed
+ *  at authoring time (issue #381). No /g flag: this is used with `.test()`. */
+const STATIC_PLACEHOLDER_PATTERN = /\$\{(?:var|res):[^}]*\}/;
+
+/** True when a node lies on a control-flow cycle, i.e. it can reach itself again.
+ *  Used to tell whether a node can ever be re-entered within one run. */
+function isOnControlCycle(nodeId: string, adj: Map<string, string[]>): boolean {
+  const seen = new Set<string>();
+  const queue = [...(adj.get(nodeId) ?? [])];
+  while (queue.length) {
+    const id = queue.shift()!;
+    if (id === nodeId) return true;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    queue.push(...(adj.get(id) ?? []));
+  }
+  return false;
+}
+
 /** Node ids reachable from the given start ids over flow-control edges. */
 function reachableFrom(startIds: string[], adj: Map<string, string[]>): Set<string> {
   const seen = new Set<string>(startIds);
@@ -550,9 +570,27 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
   // must be well-formed or provider adapters reject the resulting history, so
   // missing tool names / invalid JSON arguments are hard errors at authoring time.
   const staticNodes = nodes.filter((n) => getNodeType(n) === 'static');
+  // Built lazily: only `injectOnce` nodes need the graph shape (issue #381).
+  let staticAdjacency: Map<string, string[]> | null = null;
   for (const node of staticNodes) {
     const props = node.data?.properties ?? {};
     const entries = Array.isArray(props.entries) ? props.entries : [];
+
+    // `injectOnce` only ever changes behaviour on a *repeat* traversal, which can only
+    // happen when the node sits on a loop. On an acyclic path the toggle is a no-op and
+    // usually signals a misunderstanding of "once per run" — advisory only, never blocking.
+    if (props.injectOnce === true) {
+      staticAdjacency = staticAdjacency ?? buildControlAdjacency(edges);
+      if (!isOnControlCycle(node.id, staticAdjacency)) {
+        add(
+          'warning',
+          'static-injectonce-without-loop',
+          `Static node "${getNodeLabel(node)}" has "inject once" enabled but is never re-entered (it is not on a loop), so the setting has no effect.`,
+          node
+        );
+      }
+    }
+
     if (entries.length === 0) {
       add(
         'warning',
@@ -574,7 +612,17 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
         );
       }
       const args = typeof entry.argumentsJson === 'string' ? entry.argumentsJson.trim() : '';
-      if (args) {
+      if (args && STATIC_PLACEHOLDER_PATTERN.test(args)) {
+        // `${var:…}` / `${res:…}` are substituted at injection time and may legitimately
+        // sit in a non-string position (e.g. {"n": ${var:COUNT}}), so the authored text
+        // is not valid JSON yet. Parsing it here would block a valid flow: advise instead.
+        add(
+          'warning',
+          'static-toolcall-unverifiable-json',
+          `Static node "${getNodeLabel(node)}": tool-call entry #${index + 1} contains runtime placeholders, so its JSON arguments can only be validated when the flow runs.`,
+          node
+        );
+      } else if (args) {
         try {
           JSON.parse(args);
         } catch {

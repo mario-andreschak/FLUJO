@@ -6,7 +6,7 @@ jest.mock('@/frontend/components/Flow/FlowDashboard/FlowCard', () => ({
   FlowCardSkeleton: () => <div data-testid="flow-card-skeleton" />,
 }));
 
-jest.mock('@/frontend/components/shared/BackToTopButton', () => ({
+jest.mock('@/frontend/components/shared/ScrollNavCluster', () => ({
   __esModule: true,
   default: () => null,
 }));

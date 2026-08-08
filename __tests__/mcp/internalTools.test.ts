@@ -19,6 +19,13 @@ jest.mock('@/backend/services/model', () => ({
     loadModels: jest.fn(),
   },
 }));
+// create_ticket_for_human writes through the ticket service (#379); stub it so
+// the dispatch contract is pinned without touching the tickets collection.
+jest.mock('@/backend/services/ticket', () => ({
+  ticketService: {
+    createTicket: jest.fn(),
+  },
+}));
 jest.mock('@/backend/services/scheduler', () => {
   const list = jest.fn();
   const runNow = jest.fn();
@@ -1311,5 +1318,112 @@ describe('unknown tools and thrown errors', () => {
     const r = await internalCallTool(makeService(), 'list_models', {});
     expect(r.isError).toBe(true);
     expect(text(r)).toContain('storage exploded');
+  });
+});
+
+describe('create_ticket_for_human (#379)', () => {
+  const tickets = (
+    jest.requireMock('@/backend/services/ticket') as { ticketService: { createTicket: jest.Mock } }
+  ).ticketService;
+
+  const created = (overrides: Record<string, unknown> = {}) => ({
+    success: true,
+    ticket: {
+      id: 'ticket-1',
+      message: 'Please review the deploy',
+      labels: ['ops', 'review'],
+      status: 'open',
+      createdAt: 1,
+      updatedAt: 1,
+      ...overrides,
+    },
+  });
+
+  it('is advertised with a required message and bounded optional context', () => {
+    const def = internalToolDefinitions().find((t) => t.name === 'create_ticket_for_human');
+
+    expect(def).toBeDefined();
+    expect(def!.inputSchema).toEqual(expect.objectContaining({
+      type: 'object',
+      additionalProperties: false,
+      required: ['message'],
+    }));
+    expect(Object.keys((def!.inputSchema as { properties: Record<string, unknown> }).properties)).toEqual(
+      expect.arrayContaining(['message', 'labels', 'title', 'conversation_id', 'flow_id']),
+    );
+  });
+
+  it('dispatches to the ticket service and reports the created id and labels', async () => {
+    tickets.createTicket.mockResolvedValue(created());
+
+    const result = await internalCallTool(makeService(), 'create_ticket_for_human', {
+      message: 'Please review the deploy',
+      labels: 'ops, review',
+      title: 'Deploy',
+    }, 'model');
+
+    expect(tickets.createTicket).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'Please review the deploy',
+      labels: 'ops, review',
+      title: 'Deploy',
+      source: 'agent',
+    }));
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(text(result))).toEqual({ created: true, id: 'ticket-1', labels: ['ops', 'review'] });
+  });
+
+  it('carries snake_case provenance arguments over to the service', async () => {
+    tickets.createTicket.mockResolvedValue(created());
+
+    await internalCallTool(makeService(), 'create_ticket_for_human', {
+      message: 'context',
+      conversation_id: 'conv-1',
+      message_id: 'msg-1',
+      flow_id: 'flow-1',
+    }, 'model');
+
+    expect(tickets.createTicket).toHaveBeenCalledWith(expect.objectContaining({
+      conversationId: 'conv-1',
+      messageId: 'msg-1',
+      flowId: 'flow-1',
+    }));
+  });
+
+  it('marks host-originated tickets as host', async () => {
+    tickets.createTicket.mockResolvedValue(created());
+
+    await internalCallTool(makeService(), 'create_ticket_for_human', { message: 'from the host' });
+
+    expect(tickets.createTicket).toHaveBeenCalledWith(expect.objectContaining({ source: 'host' }));
+  });
+
+  it('rejects an empty message without calling the service', async () => {
+    tickets.createTicket.mockResolvedValue(created());
+
+    const result = await internalCallTool(makeService(), 'create_ticket_for_human', { message: '   ' });
+
+    expect(result.isError).toBe(true);
+    expect(tickets.createTicket).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsafe provenance ids without calling the service', async () => {
+    tickets.createTicket.mockResolvedValue(created());
+
+    const result = await internalCallTool(makeService(), 'create_ticket_for_human', {
+      message: 'hi',
+      conversation_id: '../../etc/passwd',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(tickets.createTicket).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a service failure as an error result', async () => {
+    tickets.createTicket.mockResolvedValue({ success: false, error: 'Open ticket limit reached.' });
+
+    const result = await internalCallTool(makeService(), 'create_ticket_for_human', { message: 'hi' });
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('Open ticket limit reached.');
   });
 });

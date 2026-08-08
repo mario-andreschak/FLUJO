@@ -329,9 +329,17 @@ describe('bash shell selection (issues #225, #327)', () => {
     const executable = path.join(tempDir, 'Microsoft', 'WindowsApps', 'pwsh.exe');
     const originalPath = process.env.PATH;
     const originalLocalAppData = process.env.LocalAppData;
+    const originalProgramFiles = process.env.ProgramFiles;
+    const originalSystemRoot = process.env.SystemRoot;
+    const originalWindir = process.env.windir;
     await fsp.mkdir(path.dirname(executable), { recursive: true });
     process.env.PATH = '';
     process.env.LocalAppData = tempDir;
+    // Windows PowerShell 5.1 would otherwise be substituted for the missing
+    // pwsh (issue #314); hide it so "no PowerShell at all" is really tested.
+    process.env.ProgramFiles = tempDir;
+    delete process.env.SystemRoot;
+    delete process.env.windir;
     try {
       _resetBashShellCacheForTests();
       const unavailable = await bashCallTool('run', {
@@ -352,6 +360,9 @@ describe('bash shell selection (issues #225, #327)', () => {
     } finally {
       restoreEnv('PATH', originalPath);
       restoreEnv('LocalAppData', originalLocalAppData);
+      restoreEnv('ProgramFiles', originalProgramFiles);
+      restoreEnv('SystemRoot', originalSystemRoot);
+      restoreEnv('windir', originalWindir);
       _resetBashShellCacheForTests();
       await fsp.rm(tempDir, { recursive: true, force: true });
     }
@@ -548,8 +559,18 @@ describe('bash shell selection (issues #225, #327)', () => {
   it('rejects an unavailable explicit shell for background execution', async () => {
     const originalPath = process.env.PATH;
     const originalWinPath = process.env.Path;
+    const originalProgramFiles = process.env.ProgramFiles;
+    const originalLocalAppData = process.env.LocalAppData;
+    const originalSystemRoot = process.env.SystemRoot;
+    const originalWindir = process.env.windir;
     process.env.PATH = '';
     process.env.Path = '';
+    process.env.ProgramFiles = '';
+    process.env.LocalAppData = '';
+    // No pwsh AND no Windows PowerShell 5.1: the request must fail rather than
+    // be substituted (issue #314).
+    delete process.env.SystemRoot;
+    delete process.env.windir;
     try {
       _resetBashShellCacheForTests();
       const r = await bashCallTool('start', { command: 'echo must-not-run', shell: 'pwsh' });
@@ -558,15 +579,36 @@ describe('bash shell selection (issues #225, #327)', () => {
       expect(out.shell).toBe('pwsh');
       expect(out.sessionId).toBeUndefined();
     } finally {
-      process.env.PATH = originalPath;
-      process.env.Path = originalWinPath;
+      restoreEnv('PATH', originalPath);
+      restoreEnv('Path', originalWinPath);
+      restoreEnv('ProgramFiles', originalProgramFiles);
+      restoreEnv('LocalAppData', originalLocalAppData);
+      restoreEnv('SystemRoot', originalSystemRoot);
+      restoreEnv('windir', originalWindir);
     }
   });
 
-  it('does not report a Windows dir /b switch as an external path', async () => {
+  it.each([
+    'echo dir /b',
+    'cd . && dir /b',
+    'dir /ad',
+    'xcopy /s /e src dst',
+    'robocopy src dst /mir',
+  ])('does not report a Windows switch as an external path: %s', async (command) => {
     if (!isWin) return;
-    const r = await bashCallTool('run', { command: 'echo dir /b' });
+    // The child is mocked: only the advisory scan is under test here.
+    mockCompletedChild('ok');
+    const r = await bashCallTool('run', { command });
     expect(parse(r).warnings).toBeUndefined();
+  });
+
+  it('still warns about a genuine path in a segment without a Windows utility', async () => {
+    if (!isWin) return;
+    mockCompletedChild('ok');
+    const r = await bashCallTool('run', { command: 'dir /b && echo /etc/passwd' });
+    expect(parse(r).warnings).toEqual([
+      expect.stringContaining('/etc/passwd'),
+    ]);
   });
 });
 

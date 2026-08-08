@@ -31,3 +31,5 @@ This section provides technical architecture and design documentation for Flujo.
 - [FlowSpec node-type inclusion policy](./flowspec-node-inclusion-policy.md): which
   ReactFlow node types belong in the FlowSpec authoring contract, why, and the
   checklist for classifying future node types (issue #380).
+- [Static node re-entry semantics](./static-node-reentry-semantics.md): the
+  append-by-default and per-run `injectOnce` contract (issue #381).

@@ -18,6 +18,7 @@ import { FlujoChatMessage } from '@/shared/types/chat';
 import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
 import { normalizeMessageInput } from './messageNormalization';
 import { startCodexToolBridge, BridgeTool } from './codexToolBridge';
+import { paceToolCallArguments } from './toolArgumentPacing';
 import { resolveCodexModelCatalogPath } from './codexModelCatalog';
 import { prepareCodexRuntimeEnvironment } from './codexRuntimeHome';
 import { mapCodexUsage, type CodexUsageLike } from './codexUsage';
@@ -216,12 +217,33 @@ export class CodexAdapter implements CompletionAdapter {
       transcript.push(message);
       onTranscriptMessage?.(message);
     };
-    const recordToolCall = (ti: Pick<ToolInteraction, 'id' | 'name' | 'argsJson'>): void => {
+    const recordToolCall = (
+      ti: Pick<ToolInteraction, 'id' | 'name' | 'argsJson'>,
+      messageId?: string,
+    ): void => {
       recordMessage({
         role: 'assistant',
         content: '',
         tool_calls: [{ id: ti.id, type: 'function', function: { name: ti.name, arguments: ti.argsJson } }],
+      }, messageId);
+    };
+    // Issue #337: the Codex SDK only surfaces a tool call once its arguments are
+    // complete, so replay them as paced name-first deltas under the SAME message
+    // id the durable transcript message will use. The streamed draft therefore
+    // fills in visibly and is then reconciled (not duplicated) by the durable
+    // message. Presentation only — approval and execution keep using `argsJson`.
+    const streamToolCall = async (
+      ti: Pick<ToolInteraction, 'id' | 'name' | 'argsJson'>,
+    ): Promise<void> => {
+      const messageId = getStreamMessageId(`toolcall_${ti.id}`);
+      await paceToolCallArguments({
+        messageId,
+        callId: ti.id,
+        name: ti.name,
+        argsJson: ti.argsJson,
+        onModelDelta,
       });
+      recordToolCall(ti, messageId);
     };
     const recordToolResult = (ti: Pick<ToolInteraction, 'id' | 'resultContent' | 'ui'>): void => {
       recordMessage({
@@ -327,8 +349,9 @@ export class CodexAdapter implements CompletionAdapter {
               const argsJson = JSON.stringify(args ?? {});
               // The bridge receives a call only after Codex has assembled its
               // arguments. Surface it immediately, before approval or execution,
-              // so the existing UI renders a live pending tool card.
-              recordToolCall({ id: callId, name: fnName, argsJson });
+              // so the existing UI renders a live pending tool card whose
+              // arguments stream in (#337) instead of appearing all at once.
+              await streamToolCall({ id: callId, name: fnName, argsJson });
               const denied = await gate(callId, fnName, args ?? {});
               if (denied) return denied;
               log.debug('Codex local tool call', { tool: fnName });
@@ -379,8 +402,9 @@ export class CodexAdapter implements CompletionAdapter {
             const argsJson = JSON.stringify(args ?? {});
             // Emit before the approval gate and mcpService call. Large/slow tools
             // therefore appear in chat as pending as soon as the MCP request
-            // reaches FLUJO instead of after their result is available.
-            recordToolCall({ id: callId, name: readableName, argsJson });
+            // reaches FLUJO instead of after their result is available, with the
+            // arguments paced into the card while they are still being read (#337).
+            await streamToolCall({ id: callId, name: readableName, argsJson });
             const denied = await gate(
               callId,
               readableName,

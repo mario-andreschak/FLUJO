@@ -30,6 +30,7 @@ import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 
 import FeedbackBanner from '@/frontend/components/FeedbackBanner';
+import { TicketsSection } from '@/frontend/components/Tickets/TicketsSection';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import { useTour } from '@/frontend/contexts/TourContext';
@@ -481,6 +482,8 @@ export default function HomePage() {
             );
           })}
         </Box>
+
+        <TicketsSection />
 
         <Paper
           component="section"
