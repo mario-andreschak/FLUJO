@@ -670,8 +670,11 @@ export interface StaticNodeProperties {
     /**
      * Re-entry semantics. Default (`false`/omitted): append entries on every traversal,
      * so a looping node re-injects each iteration with freshly resolved `${var:…}` values.
-     * `true`: inject only on the first traversal of this node within a run (tracked in
-     * `SharedState.staticInjected`). See docs/architecture/static-node-reentry-semantics.md.
+     * `true`: inject only on the first traversal of this node **within one logical run**
+     * (one user turn). An approval/debug resume of the same run does NOT re-inject; a new
+     * user turn on the same conversation DOES, and subflow runs are scoped separately.
+     * Tracked in `SharedState.staticInjected`, keyed by `(logicalRunId, nodeId)`.
+     * See docs/features/flows/static-node.md#re-entry-semantics.
      */
     injectOnce?: boolean;
 }
@@ -780,11 +783,17 @@ export interface SharedState {
      *  this conversation must satisfy after a retry or continued turn. */
     subflowLane?: RecoveryLaneIdentity;
     /**
-     * Per-run bookkeeping for static nodes with `injectOnce: true`, keyed by node id.
-     * It is persisted with the run state, so it survives pause/resume. Subflow runs
-     * have their own SharedState and therefore begin with a fresh map.
+     * Static-node injection bookkeeping, keyed by node id; the value is the
+     * `logicalRunId` of the run that last injected that node (`'no-run'` when a run
+     * has no logical id, e.g. in isolated tests). `injectOnce: true` suppresses a
+     * repeat injection only while the stored id equals the current `logicalRunId`,
+     * which makes "once" mean *once per logical run* (issue #381): it is persisted
+     * with the run state so it survives pause/resume of the same run, while a new
+     * user turn gets a fresh id and therefore injects again. Subflow runs have their
+     * own SharedState and therefore their own markers.
+     * See docs/features/flows/static-node.md#re-entry-semantics.
      */
-    staticInjected?: Record<string, boolean>;
+    staticInjected?: Record<string, string>;
     /** UTC epoch used to measure the logical run across pause/resume boundaries. */
     statisticsRunStartedAt?: number;
     /** Prevents a resumed approval/debug request from emitting a second start. */

@@ -149,7 +149,8 @@ describe('StaticNode', () => {
     const state = makeState();
 
     await run(node, state, p);
-    expect(state.staticInjected).toEqual({ stat: true });
+    // No logicalRunId on this bare state, so the marker falls back to 'no-run'.
+    expect(state.staticInjected).toEqual({ stat: 'no-run' });
 
     const restored = JSON.parse(JSON.stringify(state)) as SharedState;
     await run(node, restored, p);
@@ -192,4 +193,60 @@ describe('StaticNode', () => {
     expect((state.messages[3] as any).tool_call_id).toBe(second);
   });
 
+  it('injectOnce dedupes within one logical run but injects again on the next one (#381)', async () => {
+    const node = nodeWithSuccessor();
+    const p = params({ entries: [{ kind: 'message', role: 'user', content: 'primer' }], injectOnce: true });
+    const state = makeState({ logicalRunId: 'run-1' });
+
+    await run(node, state, p);
+    await run(node, state, p);
+    expect(state.messages).toHaveLength(1);
+    expect(state.staticInjected).toEqual({ stat: 'run-1' });
+
+    // A new user turn keeps the persisted state but assigns a fresh logical run id.
+    state.logicalRunId = 'run-2';
+    await run(node, state, p);
+    expect(state.messages).toHaveLength(2);
+    expect(state.staticInjected).toEqual({ stat: 'run-2' });
+  });
+
+  it('appends on every traversal by default, regardless of the logical run', async () => {
+    const node = nodeWithSuccessor();
+    const p = params({ entries: [{ kind: 'message', role: 'user', content: 'again' }] });
+    const state = makeState({ logicalRunId: 'run-1' });
+
+    await run(node, state, p);
+    await run(node, state, p);
+    state.logicalRunId = 'run-2';
+    await run(node, state, p);
+
+    expect(state.messages).toHaveLength(3);
+  });
+
+  it('keys the marker per node, so two once-only nodes each inject in the same run', async () => {
+    const first = nodeWithSuccessor();
+    const second = nodeWithSuccessor();
+    const state = makeState({ logicalRunId: 'run-1' });
+    const entries = [{ kind: 'message', role: 'user', content: 'x' }];
+    const a = { ...params({ entries, injectOnce: true }), id: 'a' } as StaticNodeParams;
+    const b = { ...params({ entries, injectOnce: true }), id: 'b' } as StaticNodeParams;
+
+    await run(first, state, a);
+    await run(second, state, b);
+    await run(first, state, a);
+    await run(second, state, b);
+
+    expect(state.messages).toHaveLength(2);
+    expect(state.staticInjected).toEqual({ a: 'run-1', b: 'run-1' });
+  });
+
+  it('prunes markers left behind by an earlier logical run', async () => {
+    const node = nodeWithSuccessor();
+    const p = params({ entries: [{ kind: 'message', role: 'user', content: 'x' }], injectOnce: true });
+    const state = makeState({ logicalRunId: 'run-2', staticInjected: { stale: 'run-1' } });
+
+    await run(node, state, p);
+
+    expect(state.staticInjected).toEqual({ stat: 'run-2' });
+  });
 });

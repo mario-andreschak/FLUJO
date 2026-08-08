@@ -1009,3 +1009,76 @@ describe('mcpServersConnectedToProcess', () => {
 // survive edge/node deletion at design time so re-connecting restores them,
 // and the 'tool-pill-disconnected' error above still blocks running a flow
 // with genuinely orphaned pills.
+
+describe('validateFlow — static node re-entry & placeholders (#381)', () => {
+  const staticNode = (id: string, properties: Record<string, any>, label = id): VNode => ({
+    id,
+    type: 'static',
+    data: { label, type: 'static', properties },
+  });
+  const messageEntry = { kind: 'message', role: 'user', content: 'hi' };
+
+  it('does not error on tool-call arguments containing ${var:…} placeholders', () => {
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        staticNode('st', {
+          entries: [{ kind: 'toolCall', toolName: 'count', argumentsJson: '{"n": ${var:COUNT}}', result: 'ok' }],
+        }),
+        finishNode(),
+      ],
+      edges: [edge('start', 'st'), edge('st', 'finish')],
+    };
+    const r = validateFlow(flow);
+    expect(codes(r)).not.toContain('static-toolcall-invalid-json');
+    expect(codes(r)).toContain('static-toolcall-unverifiable-json');
+    expect(r.isRunnable).toBe(true);
+  });
+
+  it('still errors on genuinely malformed JSON arguments', () => {
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        staticNode('st', { entries: [{ kind: 'toolCall', toolName: 'count', argumentsJson: '{oops', result: '' }] }),
+        finishNode(),
+      ],
+      edges: [edge('start', 'st'), edge('st', 'finish')],
+    };
+    const r = validateFlow(flow);
+    expect(codes(r)).toContain('static-toolcall-invalid-json');
+    expect(r.isRunnable).toBe(false);
+  });
+
+  it('flags injectOnce on a node that can never be re-entered', () => {
+    const flow: VFlow = {
+      nodes: [startNode(), staticNode('st', { entries: [messageEntry], injectOnce: true }), finishNode()],
+      edges: [edge('start', 'st'), edge('st', 'finish')],
+    };
+    const r = validateFlow(flow);
+    expect(codes(r)).toContain('static-injectonce-without-loop');
+    expect(r.isRunnable).toBe(true);
+  });
+
+  it('does not flag injectOnce when the node sits on a loop', () => {
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        staticNode('st', { entries: [messageEntry], injectOnce: true }),
+        staticNode('back', { entries: [messageEntry] }),
+        finishNode(),
+      ],
+      edges: [edge('start', 'st'), edge('st', 'back'), edge('back', 'st'), edge('st', 'finish')],
+    };
+    const r = validateFlow(flow);
+    expect(codes(r)).not.toContain('static-injectonce-without-loop');
+  });
+
+  it('does not flag a static node that only appends (no injectOnce)', () => {
+    const flow: VFlow = {
+      nodes: [startNode(), staticNode('st', { entries: [messageEntry] }), finishNode()],
+      edges: [edge('start', 'st'), edge('st', 'finish')],
+    };
+    const r = validateFlow(flow);
+    expect(codes(r)).not.toContain('static-injectonce-without-loop');
+  });
+});

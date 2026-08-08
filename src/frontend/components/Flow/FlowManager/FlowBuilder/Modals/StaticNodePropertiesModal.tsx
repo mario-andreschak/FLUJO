@@ -92,6 +92,11 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
     if (entry.kind !== 'toolCall') return acc;
     const raw = (entry.argumentsJson ?? '').trim();
     if (!raw) return acc;
+    // `${var:…}` / `${res:…}` are substituted at injection time and may sit in a
+    // non-string position (e.g. {"n": ${var:COUNT}}), so the authored text is not
+    // valid JSON yet. Blocking Save here would reject a valid entry (issue #381);
+    // the resolved value is still parsed at run time.
+    if (/\$\{(?:var|res):[^}]*\}/.test(raw)) return acc;
     try {
       JSON.parse(raw);
     } catch {
