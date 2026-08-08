@@ -1,5 +1,10 @@
 import type { Model } from '@/shared/types/model';
-import { getCompletionAdapter, OpenRouterMediaAdapter } from '@/backend/services/model/adapters';
+import {
+  describeCompletionAdapter,
+  getCompletionAdapter,
+  OpenAiAdapter,
+  OpenRouterMediaAdapter,
+} from '@/backend/services/model/adapters';
 
 const model = (output: 'image' | 'video'): Model => ({
   id: `model-${output}`,
@@ -12,6 +17,15 @@ const model = (output: 'image' | 'video'): Model => ({
   baseUrl: 'https://openrouter.ai/api/v1',
   inputModalities: ['text', 'image'],
   outputModalities: [output],
+});
+
+const multimodalModel = (
+  outputModalities: readonly Model['outputModalities'][number][],
+): Model => ({
+  ...model('image'),
+  id: `model-${outputModalities.join('-')}`,
+  name: 'openrouter/multimodal-chat',
+  outputModalities: [...outputModalities],
 });
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -45,6 +59,19 @@ describe('OpenRouter dedicated media adapter', () => {
   it('is selected for OpenRouter image and video output models', () => {
     expect(getCompletionAdapter(model('image'))).toBeInstanceOf(OpenRouterMediaAdapter);
     expect(getCompletionAdapter(model('video'))).toBeInstanceOf(OpenRouterMediaAdapter);
+  });
+
+  it.each([
+    [['text', 'image']],
+    [['text', 'video']],
+  ] as const)('keeps mixed OpenRouter output %j on chat completions', (outputModalities) => {
+    const candidate = multimodalModel(outputModalities);
+
+    expect(getCompletionAdapter(candidate)).toBeInstanceOf(OpenAiAdapter);
+    expect(describeCompletionAdapter(candidate)).toMatchObject({
+      adapterId: 'openai',
+      endpoint: '/chat/completions',
+    });
   });
 
   it('uses POST /images and normalizes base64 image output', async () => {
@@ -90,6 +117,22 @@ describe('OpenRouter dedicated media adapter', () => {
       data: 'PNGDATA',
       mimeType: 'image/png',
     }]);
+  });
+
+  it('maps a dedicated image endpoint 404 to an actionable route diagnostic', async () => {
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue(
+      jsonResponse({ error: 'Not found' }, 404),
+    );
+
+    await expect(new OpenRouterMediaAdapter().createCompletion({
+      model: model('image'),
+      apiKey: 'sk-or',
+      temperature: 0,
+      messages: [{ role: 'user', content: 'Generate an image.' }],
+    })).rejects.toThrow(
+      'OpenRouter has no dedicated /images route for "x-ai/grok-imagine-image-quality"',
+    );
+    expect(String(fetchSpy.mock.calls[0][0])).toBe('https://openrouter.ai/api/v1/images');
   });
 
   it('submits, polls, and downloads an image-to-video job without leaking the API key', async () => {
