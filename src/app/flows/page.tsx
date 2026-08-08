@@ -35,8 +35,13 @@ import { useHistoryGuard } from '@/frontend/hooks/useHistoryGuard';
 import { magicLinkPath } from '@/frontend/utils/magicLink';
 import CopyLinkButton from '@/frontend/components/shared/CopyLinkButton';
 import FlowDashboard from '@/frontend/components/Flow/FlowDashboard';
+import type { QuickModelChangeResult } from '@/frontend/components/Flow/FlowDashboard/QuickChangeModelsDialog';
 import { Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
+import {
+  remapFlowModelBindings,
+  type FlowModelReplacementMap,
+} from '@/utils/shared/flowModelReplacement';
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
 import { writeUiPreference } from '@/frontend/hooks/useUiPreference';
@@ -450,6 +455,65 @@ const FlowsPage = () => {
     }
   }, [flows, showSnackbar, t]);
 
+  const handleReplaceFlowModels = useCallback(async (
+    flowIds: string[],
+    replacements: FlowModelReplacementMap,
+  ): Promise<QuickModelChangeResult> => {
+    const selectedIds = new Set(flowIds);
+    const updates = flows
+      .filter((flow) => selectedIds.has(flow.id))
+      .map((flow) => remapFlowModelBindings(flow, replacements))
+      .filter((result) => result.replacedNodeCount > 0);
+
+    if (updates.length === 0) {
+      return { updatedFlowCount: 0, replacedNodeCount: 0, failedFlowCount: 0 };
+    }
+
+    const results = await Promise.all(
+      updates.map(async (update) => ({
+        update,
+        result: await flowService.updateFlow(update.flow),
+      })),
+    );
+    const successful = results.filter(({ result }) => result.success);
+    const failed = results.filter(({ result }) => !result.success);
+    const successfulById = new Map(successful.map(({ update }) => [update.flow.id, update.flow]));
+    const replacedNodeCount = successful.reduce(
+      (total, { update }) => total + update.replacedNodeCount,
+      0,
+    );
+
+    if (successfulById.size > 0) {
+      setFlows((current) => current.map((flow) => successfulById.get(flow.id) ?? flow));
+    }
+
+    if (failed.length === 0) {
+      showSnackbar(
+        t('flows.page.modelsChanged', {
+          agents: tp('flows.quickModels.agentCount', successful.length),
+          steps: tp('flows.quickModels.stepCount', replacedNodeCount),
+        }),
+        'success',
+      );
+    } else if (successful.length > 0) {
+      showSnackbar(
+        t('flows.page.modelsChangedPartial', {
+          updated: tp('flows.quickModels.agentCount', successful.length),
+          failed: tp('flows.quickModels.agentCount', failed.length),
+        }),
+        'warning',
+      );
+    } else {
+      showSnackbar(t('flows.page.modelsChangeFailed'), 'error');
+    }
+
+    return {
+      updatedFlowCount: successful.length,
+      replacedNodeCount,
+      failedFlowCount: failed.length,
+    };
+  }, [flows, showSnackbar, t, tp]);
+
   const handleCopyFlow = (flowId: string) => {
     log.info('Copying flow', { flowId });
     const flowToCopy = flows.find(f => f.id === flowId);
@@ -674,6 +738,7 @@ const FlowsPage = () => {
             onCreateFlow={() => createNewFlow('guided')}
             onSetFolder={handleSetFlowFolder}
             onToggleFavorite={handleToggleFavorite}
+            onReplaceModels={handleReplaceFlowModels}
             onOpenInChat={handleOpenInChat}
             isLoading={isLoading}
           />

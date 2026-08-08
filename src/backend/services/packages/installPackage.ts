@@ -56,6 +56,7 @@ import type { Model } from '@/shared/types/model';
 import type { ModelAdapter, ModelProvider } from '@/shared/types/model/provider';
 import type { Flow } from '@/shared/types/flow';
 import type { MCPServerConfig, EnvVarValue, MCPHeaderValue } from '@/shared/types/mcp';
+import { remapFlowModelBindings } from '@/utils/shared/flowModelReplacement';
 
 const log = createLogger('backend/services/packages/installPackage');
 
@@ -1270,7 +1271,7 @@ function remapFlow(
   idMap: Record<string, string>,
   modelIdMap: Record<string, { id: string; name: string }>,
 ): Flow {
-  const clone = JSON.parse(JSON.stringify(packagedFlow.flow)) as Flow & { nodes: Array<{ data?: { properties?: Record<string, unknown> } }> };
+  let clone = JSON.parse(JSON.stringify(packagedFlow.flow)) as Flow & { nodes: Array<{ data?: { properties?: Record<string, unknown> } }> };
   clone.id = newId;
   // Do not carry manifest-authored timestamps; saveFlow re-stamps them.
   delete (clone as { createdAt?: number }).createdAt;
@@ -1287,12 +1288,8 @@ function remapFlow(
         typeof id === 'string' && idMap[id] ? idMap[id] : id,
       );
     }
-    if (typeof props.boundModel === 'string' && modelIdMap[props.boundModel]) {
-      const installed = modelIdMap[props.boundModel];
-      props.boundModel = installed.id;
-      props.modelName = installed.name;
-    }
   }
+  clone = remapFlowModelBindings(clone, modelIdMap).flow;
   return clone as Flow;
 }
 

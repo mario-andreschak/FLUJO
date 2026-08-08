@@ -12,6 +12,7 @@ import {
   IconButton, 
   Tooltip, 
   Chip,
+  Checkbox,
   alpha,
   Skeleton,
   styled,
@@ -61,6 +62,8 @@ interface FlowCardProps {
    * the dashboard share the exact same card body without drifting.
    */
   pickerMode?: boolean;
+  /** Dashboard bulk-selection mode used by quick model replacement (#401). */
+  selectionMode?: boolean;
 }
 
 // Styled card with hover effects
@@ -139,7 +142,8 @@ const FlowCard = ({
   onToggleFavorite,
   folders = [],
   validation,
-  pickerMode = false
+  pickerMode = false,
+  selectionMode = false,
 }: FlowCardProps) => {
   log.debug('Rendering FlowCard', { flowId: flow.id, flowName: flow.name });
   const theme = useTheme();
@@ -309,7 +313,23 @@ const FlowCard = ({
 
   return (
     <StyledCard selected={selected}>
-      {onToggleFavorite && (
+      {selectionMode && (
+        <Checkbox
+          checked={selected}
+          onChange={() => onSelect(flow.id)}
+          onClick={(event) => event.stopPropagation()}
+          inputProps={{ 'aria-label': t('flows.card.select', { name: flow.name }) }}
+          sx={{
+            position: 'absolute',
+            top: 2,
+            left: 2,
+            zIndex: 3,
+            bgcolor: alpha(theme.palette.background.paper, 0.78),
+            borderRadius: 1.5,
+          }}
+        />
+      )}
+      {onToggleFavorite && !selectionMode && (
         <Tooltip title={flow.favorite ? t('flows.card.favoriteRemove') : t('flows.card.favoriteAdd')} arrow placement="top">
           <IconButton
             size="small"
@@ -368,7 +388,7 @@ const FlowCard = ({
           minWidth: 0,
           px: 1.5,
           py: 1.25,
-          pl: onToggleFavorite ? 5.5 : 1.5,
+          pl: onToggleFavorite || selectionMode ? 5.5 : 1.5,
           pr: badgeSeverity ? 7 : 1.5,
           borderBottom: `1px solid ${theme.palette.divider}`,
         }}
@@ -398,7 +418,7 @@ const FlowCard = ({
         onClick={() => onSelect(flow.id)}
         sx={{
           gridArea: 'details',
-          gridRow: pickerMode ? '2 / 5' : undefined,
+          gridRow: pickerMode || selectionMode ? '2 / 5' : undefined,
           minWidth: 0,
           display: 'flex',
           alignItems: 'stretch',
@@ -453,7 +473,7 @@ const FlowCard = ({
         </CardContent>
       </CardActionArea>
       
-      {!pickerMode && (
+      {!pickerMode && !selectionMode && (
         <>
           <CardActions sx={{ gridArea: 'primary', gap: 0.75, px: 1.25, pb: 1, pt: 0 }}>
             {onOpenInChat && (
