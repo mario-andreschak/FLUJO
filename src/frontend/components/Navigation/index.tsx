@@ -35,6 +35,7 @@ import {
   MenuBookRounded,
   MenuRounded,
   SettingsRounded,
+  WavesRounded,
 } from '@mui/icons-material';
 import { alpha } from '@mui/material/styles';
 import { ElementType, Fragment, Suspense, useEffect, useState } from 'react';
@@ -89,9 +90,18 @@ const navItems: NavItem[] = [
         type: 'link',
         label: 'nav.automations',
         path: '/automation/triggers',
-        aliases: ['/executions', '/automation/waves', '/waves'],
+        aliases: ['/executions'],
         tour: 'nav-executions',
         icon: BoltRounded,
+      },
+      {
+        type: 'link',
+        label: 'waves.title',
+        path: '/automation/waves',
+        aliases: ['/waves'],
+        tour: 'nav-waves',
+        icon: WavesRounded,
+        experimental: true,
       },
       {
         type: 'link',

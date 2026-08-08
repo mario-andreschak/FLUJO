@@ -8,6 +8,7 @@ import path from 'path';
 import os from 'os';
 import { promises as fsp } from 'fs';
 import type { Flow } from '@/shared/types/flow';
+import { getWorkspaceDataDir } from '@/utils/workspace';
 
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({
   FlowExecutor: { clearFlowCache: jest.fn() },
@@ -34,20 +35,23 @@ jest.mock('@/utils/storage/backend', () => ({
   migrateArrayFileToCollection: jest.fn(async () => 0),
 }));
 
-// wipeFlowVersions removes the history directory on the real filesystem —
-// point the data dir at a temp location so tests never touch the repo's db/.
-jest.mock('@/utils/paths', () => {
-  const actual = jest.requireActual('@/utils/paths');
-  return {
-    ...actual,
-    getDataDir: () =>
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      require('path').join(require('os').tmpdir(), 'flujo-flowversions-test'),
-  };
-});
-
 import { FlowService } from '@/backend/services/flow';
 import { MAX_VERSIONS_PER_FLOW } from '@/backend/services/flow/flowVersions';
+
+let testDataDir: string;
+let priorDataDir: string | undefined;
+
+beforeAll(async () => {
+  priorDataDir = process.env.FLUJO_DATA_DIR;
+  testDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-flowversions-test-'));
+  process.env.FLUJO_DATA_DIR = testDataDir;
+});
+
+afterAll(async () => {
+  if (priorDataDir === undefined) delete process.env.FLUJO_DATA_DIR;
+  else process.env.FLUJO_DATA_DIR = priorDataDir;
+  await fsp.rm(testDataDir, { recursive: true, force: true });
+});
 
 const flowFixture = (id: string, name: string, label = 'Start Node'): Flow =>
   ({
@@ -147,7 +151,7 @@ describe('flow version history', () => {
 
   it('deleteFlow removes the version-history directory', async () => {
     const svc = new FlowService();
-    const dir = path.join(os.tmpdir(), 'flujo-flowversions-test', 'db', 'flow-versions', 'f1');
+    const dir = path.join(getWorkspaceDataDir(), 'db', 'flow-versions', 'f1');
     await fsp.mkdir(dir, { recursive: true });
     await fsp.writeFile(path.join(dir, 'marker.json'), '{}');
 

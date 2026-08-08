@@ -22,7 +22,7 @@ jest.mock('@/utils/logger', () => ({
 }));
 
 import { TicketCard } from '@/frontend/components/Tickets/TicketCard';
-import { TICKET_DRAFT_STORAGE_KEY } from '@/shared/types/ticket';
+import { ticketDraftStorageKey } from '@/frontend/utils/workspaceContentKeys';
 import type { Ticket } from '@/shared/types/ticket';
 
 const ticket = (overrides: Partial<Ticket> = {}): Ticket => ({
@@ -80,7 +80,7 @@ describe('TicketCard', () => {
 
     fireEvent.click(screen.getByText('tickets.action.askFlujo'));
 
-    const draft = sessionStorage.getItem(TICKET_DRAFT_STORAGE_KEY) ?? '';
+    const draft = sessionStorage.getItem(ticketDraftStorageKey()) ?? '';
     expect(draft).toContain('--- BEGIN TICKET ---');
     expect(draft).toContain('Please review the deploy');
     expect(draft).toContain('Labels: ops, review');
@@ -127,6 +127,6 @@ describe('TicketCard', () => {
     expect(screen.getByText('no labels')).toBeInTheDocument();
 
     fireEvent.click(screen.getByText('tickets.action.askFlujo'));
-    expect(sessionStorage.getItem(TICKET_DRAFT_STORAGE_KEY)).not.toContain('Labels:');
+    expect(sessionStorage.getItem(ticketDraftStorageKey())).not.toContain('Labels:');
   });
 });

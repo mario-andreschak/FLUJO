@@ -109,12 +109,12 @@ describe('Chain Chat page container (#405)', () => {
     expect(mockPush).toHaveBeenCalledWith('/chat?conversation=root+1');
   });
 
-  it('shows a neutral empty state when nothing is active', async () => {
+  it('shows a neutral empty state before any conversation chain exists', async () => {
     mockGetConversationChains.mockResolvedValue(chainResponse({ chains: [], totalChains: 0 }));
 
     render(<ConversationChainGraph />);
 
-    expect(await screen.findByText('No active conversations')).toBeInTheDocument();
+    expect(await screen.findByText('No conversation chains yet')).toBeInTheDocument();
     expect(screen.queryByTestId('chain-canvas')).toBeNull();
   });
 

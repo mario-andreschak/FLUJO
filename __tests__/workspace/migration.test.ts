@@ -137,6 +137,67 @@ describe('transactional workspace layout migration', () => {
     await expect(exists(paths.lock)).resolves.toBe(false);
   });
 
+  it('moves a same-volume source into a missing workspace destination without reading or copying payload bytes', async () => {
+    const payloadName = 'ordinary-payload-fast-path.bin';
+    const legacyPayload = path.join(dataRoot, 'userdata', 'cache', payloadName);
+    const workspacePayload = path.join(workspaceRoot(), 'userdata', 'cache', payloadName);
+    await write('userdata/cache/ordinary-payload-fast-path.bin', 'payload-must-only-be-renamed');
+    await expect(exists(path.join(workspaceRoot(), 'userdata'))).resolves.toBe(false);
+
+    // A source-only tree on the same filesystem needs no byte-level comparison:
+    // the directory entry itself can be moved atomically and journaled. Keep
+    // these spies call-through so a regression reports every forbidden access
+    // instead of changing migration behavior.
+    const open = jest.spyOn(fs, 'open');
+    const readFile = jest.spyOn(fs, 'readFile');
+    const copyFile = jest.spyOn(fs, 'copyFile');
+    let payloadContentIo: string[] = [];
+    try {
+      await expect(migrateWorkspaceLayout()).resolves.toMatchObject({ version: 2 });
+      payloadContentIo = [
+        ...open.mock.calls.map(([candidate]) => `open:${candidate.toString()}`),
+        ...readFile.mock.calls.map(([candidate]) => `readFile:${candidate.toString()}`),
+        ...copyFile.mock.calls.flatMap(([source, destination]) => [
+          `copyFile-source:${source.toString()}`,
+          `copyFile-destination:${destination.toString()}`,
+        ]),
+      ].filter(operation => operation.includes(payloadName));
+    } finally {
+      open.mockRestore();
+      readFile.mockRestore();
+      copyFile.mockRestore();
+    }
+
+    expect(payloadContentIo).toEqual([]);
+    await expect(fs.readFile(workspacePayload, 'utf8')).resolves.toBe('payload-must-only-be-renamed');
+    await expect(exists(legacyPayload)).resolves.toBe(false);
+    await expect(exists(_workspaceMigrationPathsForTests().journal)).resolves.toBe(false);
+  });
+
+  it('prints observable phase and aggregate inventory progress during a runtime migration', async () => {
+    const priorVerbose = process.env.FLUJO_MIGRATION_VERBOSE;
+    process.env.FLUJO_MIGRATION_VERBOSE = '1';
+    const consoleInfo = jest.spyOn(console, 'info').mockImplementation(() => undefined);
+    try {
+      await write('db/models.json', 'models');
+
+      await migrateWorkspaceLayout();
+
+      const transcript = consoleInfo.mock.calls.map(call => call.join(' ')).join('\n');
+      expect(transcript).toContain('Workspace migration: started');
+      expect(transcript).toContain('Workspace migration: preflight candidate');
+      expect(transcript).toContain('Workspace migration: inventory complete');
+      expect(transcript).toContain('Workspace migration: completion marker published');
+      expect(transcript).toContain('Workspace migration: finished successfully');
+      expect(transcript).toContain('files=');
+      expect(transcript).toContain('bytes=');
+    } finally {
+      consoleInfo.mockRestore();
+      if (priorVerbose === undefined) delete process.env.FLUJO_MIGRATION_VERBOSE;
+      else process.env.FLUJO_MIGRATION_VERBOSE = priorVerbose;
+    }
+  });
+
   it('detects a conflict in a later subtree before mutating an earlier one', async () => {
     await Promise.all([
       write('db/models.json', 'legacy-db'),
@@ -334,6 +395,22 @@ describe('transactional workspace layout migration', () => {
       .resolves.toBe('runtime-config');
     await expect(exists(path.join(dataRoot, 'mcp-servers', 'custom-runtime')))
       .resolves.toBe(false);
+  });
+
+  it('fails closed when an older migration misplaced trusted shipped MCP code into workspace data', async () => {
+    process.env.FLUJO_APP_ROOT = dataRoot;
+    _resetWorkspaceMigrationState();
+    await write(
+      'workspaces/default-workspace/mcp-servers/browser/package.json',
+      '{"name":"misplaced-shipped-browser"}',
+    );
+
+    await expect(migrateWorkspaceLayout()).rejects.toThrow(
+      /older migration moved shipped application code/i,
+    );
+    await expect(read('workspaces/default-workspace/mcp-servers/browser/package.json'))
+      .resolves.toContain('misplaced-shipped-browser');
+    await expect(exists(path.join(dataRoot, 'mcp-servers'))).resolves.toBe(false);
   });
 
   it.each(['EXDEV', 'EBUSY'])(
@@ -598,6 +675,325 @@ describe('transactional workspace layout migration', () => {
       .toBe(process.platform === 'win32' ? expectedTarget.toLowerCase() : expectedTarget);
     await expect(read('workspaces/default-workspace/userdata/packages/mcp-shared/value.json'))
       .resolves.toBe('shared-package');
+  });
+
+  it('preserves an internal symlink-to-symlink target instead of flattening the chain', async () => {
+    await write('userdata/packages/real-package/value.json', 'linked-package');
+    const legacyRealTarget = path.join(dataRoot, 'userdata', 'packages', 'real-package');
+    const legacyIntermediate = path.join(dataRoot, 'userdata', 'aliases', 'package-alias');
+    const legacyOuter = path.join(dataRoot, 'userdata', 'node_modules', 'linked-package');
+    await Promise.all([
+      fs.mkdir(path.dirname(legacyIntermediate), { recursive: true }),
+      fs.mkdir(path.dirname(legacyOuter), { recursive: true }),
+    ]);
+    try {
+      await fs.symlink(
+        process.platform === 'win32'
+          ? legacyRealTarget
+          : path.relative(path.dirname(legacyIntermediate), legacyRealTarget),
+        legacyIntermediate,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+      await fs.symlink(
+        process.platform === 'win32'
+          ? legacyIntermediate
+          : path.relative(path.dirname(legacyOuter), legacyIntermediate),
+        legacyOuter,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EPERM') return;
+      throw error;
+    }
+
+    await migrateWorkspaceLayout();
+
+    const migratedRealTarget = path.join(
+      workspaceRoot(),
+      'userdata',
+      'packages',
+      'real-package',
+    );
+    const migratedIntermediate = path.join(
+      workspaceRoot(),
+      'userdata',
+      'aliases',
+      'package-alias',
+    );
+    const migratedOuter = path.join(
+      workspaceRoot(),
+      'userdata',
+      'node_modules',
+      'linked-package',
+    );
+    const outerTarget = await fs.readlink(migratedOuter);
+    const resolvedOuterTarget = path.resolve(path.dirname(migratedOuter), outerTarget);
+    expect(process.platform === 'win32' ? resolvedOuterTarget.toLowerCase() : resolvedOuterTarget)
+      .toBe(process.platform === 'win32'
+        ? migratedIntermediate.toLowerCase()
+        : migratedIntermediate);
+    expect(process.platform === 'win32' ? resolvedOuterTarget.toLowerCase() : resolvedOuterTarget)
+      .not.toBe(process.platform === 'win32'
+        ? migratedRealTarget.toLowerCase()
+        : migratedRealTarget);
+    const [actualFinalTarget, expectedFinalTarget] = await Promise.all([
+      fs.realpath(migratedOuter),
+      fs.realpath(migratedRealTarget),
+    ]);
+    expect(process.platform === 'win32' ? actualFinalTarget.toLowerCase() : actualFinalTarget)
+      .toBe(process.platform === 'win32' ? expectedFinalTarget.toLowerCase() : expectedFinalTarget);
+  });
+
+  it('canonicalizes a partially migrated destination relative link after its legacy source is gone', async () => {
+    await write(
+      'workspaces/default-workspace/userdata/packages/mcp-shared/value.json',
+      'shared-package',
+    );
+    const legacyTarget = path.join(dataRoot, 'userdata', 'packages', 'mcp-shared');
+    const destinationTarget = path.join(
+      workspaceRoot(),
+      'userdata',
+      'packages',
+      'mcp-shared',
+    );
+    const destinationLink = path.join(
+      workspaceRoot(),
+      'userdata',
+      'node_modules',
+      '@flujo-ai',
+      'mcp-shared',
+    );
+    await fs.mkdir(path.dirname(destinationLink), { recursive: true });
+    const staleRelativeTarget = path.relative(path.dirname(destinationLink), legacyTarget);
+    try {
+      await fs.symlink(staleRelativeTarget, destinationLink, 'dir');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EPERM') return;
+      throw error;
+    }
+    await expect(exists(path.join(dataRoot, 'userdata'))).resolves.toBe(false);
+
+    await expect(migrateWorkspaceLayout()).resolves.toMatchObject({ version: 2 });
+
+    expect((await fs.lstat(destinationLink)).isSymbolicLink()).toBe(true);
+    expect(path.isAbsolute(await fs.readlink(destinationLink))).toBe(false);
+    const [actualTarget, expectedTarget] = await Promise.all([
+      fs.realpath(destinationLink),
+      fs.realpath(destinationTarget),
+    ]);
+    expect(process.platform === 'win32' ? actualTarget.toLowerCase() : actualTarget)
+      .toBe(process.platform === 'win32' ? expectedTarget.toLowerCase() : expectedTarget);
+    await expect(exists(path.join(dataRoot, 'userdata'))).resolves.toBe(false);
+  });
+
+  it('repairs a destination-only stale link without reading or copying ordinary payload bytes', async () => {
+    const payloadName = 'ordinary-payload-fast-repair.bin';
+    await write(
+      `workspaces/default-workspace/userdata/packages/mcp-shared/${payloadName}`,
+      'workspace-payload-must-stay-in-place',
+    );
+    const legacyTarget = path.join(dataRoot, 'userdata', 'packages', 'mcp-shared');
+    const destinationTarget = path.join(
+      workspaceRoot(),
+      'userdata',
+      'packages',
+      'mcp-shared',
+    );
+    const destinationLink = path.join(
+      workspaceRoot(),
+      'userdata',
+      'node_modules',
+      '@flujo-ai',
+      'mcp-shared',
+    );
+    await fs.mkdir(path.dirname(destinationLink), { recursive: true });
+    try {
+      await fs.symlink(
+        path.relative(path.dirname(destinationLink), legacyTarget),
+        destinationLink,
+        'dir',
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EPERM') return;
+      throw error;
+    }
+    await expect(exists(path.join(dataRoot, 'userdata'))).resolves.toBe(false);
+
+    const open = jest.spyOn(fs, 'open');
+    const readFile = jest.spyOn(fs, 'readFile');
+    const copyFile = jest.spyOn(fs, 'copyFile');
+    let payloadContentIo: string[] = [];
+    try {
+      await expect(migrateWorkspaceLayout()).resolves.toMatchObject({ version: 2 });
+      payloadContentIo = [
+        ...open.mock.calls.map(([candidate]) => `open:${candidate.toString()}`),
+        ...readFile.mock.calls.map(([candidate]) => `readFile:${candidate.toString()}`),
+        ...copyFile.mock.calls.flatMap(([source, destination]) => [
+          `copyFile-source:${source.toString()}`,
+          `copyFile-destination:${destination.toString()}`,
+        ]),
+      ].filter(operation => operation.includes(payloadName));
+    } finally {
+      open.mockRestore();
+      readFile.mockRestore();
+      copyFile.mockRestore();
+    }
+
+    expect(payloadContentIo).toEqual([]);
+    const [actualTarget, expectedTarget] = await Promise.all([
+      fs.realpath(destinationLink),
+      fs.realpath(destinationTarget),
+    ]);
+    expect(process.platform === 'win32' ? actualTarget.toLowerCase() : actualTarget)
+      .toBe(process.platform === 'win32' ? expectedTarget.toLowerCase() : expectedTarget);
+    await expect(fs.readFile(path.join(destinationTarget, payloadName), 'utf8'))
+      .resolves.toBe('workspace-payload-must-stay-in-place');
+    await expect(exists(_workspaceMigrationPathsForTests().journal)).resolves.toBe(false);
+  });
+
+  it('retargets a stale Windows junction after its legacy source is gone', async () => {
+    if (process.platform !== 'win32') return;
+    await write(
+      'workspaces/default-workspace/userdata/packages/mcp-shared/value.json',
+      'shared-package',
+    );
+    const legacyTarget = path.join(dataRoot, 'userdata', 'packages', 'mcp-shared');
+    const destinationTarget = path.join(
+      workspaceRoot(),
+      'userdata',
+      'packages',
+      'mcp-shared',
+    );
+    const destinationLink = path.join(
+      workspaceRoot(),
+      'userdata',
+      'node_modules',
+      '@flujo-ai',
+      'mcp-shared',
+    );
+    await fs.mkdir(path.dirname(destinationLink), { recursive: true });
+    try {
+      await fs.symlink(legacyTarget.toUpperCase(), destinationLink, 'junction');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EPERM') return;
+      throw error;
+    }
+    await expect(exists(path.join(dataRoot, 'userdata'))).resolves.toBe(false);
+
+    await expect(migrateWorkspaceLayout()).resolves.toMatchObject({ version: 2 });
+
+    const rewrittenTarget = await fs.readlink(destinationLink);
+    expect(path.isAbsolute(rewrittenTarget)).toBe(true);
+    expect(path.resolve(rewrittenTarget).toLowerCase())
+      .toBe(path.resolve(destinationTarget).toLowerCase());
+    expect(path.resolve(rewrittenTarget).toLowerCase())
+      .not.toBe(path.resolve(legacyTarget).toLowerCase());
+    const [actualTarget, expectedTarget] = await Promise.all([
+      fs.realpath(destinationLink),
+      fs.realpath(destinationTarget),
+    ]);
+    expect(actualTarget.toLowerCase()).toBe(expectedTarget.toLowerCase());
+    await expect(exists(path.join(dataRoot, 'userdata'))).resolves.toBe(false);
+  });
+
+  it.each([
+    'after-stage:userdata',
+    'after-destination-archive:userdata',
+    'after-publish:userdata',
+  ])('recovers a stale destination link after interruption at %s', async checkpoint => {
+    await write(
+      'workspaces/default-workspace/userdata/packages/mcp-shared/value.json',
+      'shared-package',
+    );
+    const legacyTarget = path.join(dataRoot, 'userdata', 'packages', 'mcp-shared');
+    const destinationTarget = path.join(
+      workspaceRoot(),
+      'userdata',
+      'packages',
+      'mcp-shared',
+    );
+    const destinationLink = path.join(
+      workspaceRoot(),
+      'userdata',
+      'node_modules',
+      '@flujo-ai',
+      'mcp-shared',
+    );
+    await fs.mkdir(path.dirname(destinationLink), { recursive: true });
+    try {
+      await fs.symlink(
+        process.platform === 'win32'
+          ? legacyTarget
+          : path.relative(path.dirname(destinationLink), legacyTarget),
+        destinationLink,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EPERM') return;
+      throw error;
+    }
+
+    _setWorkspaceMigrationFaultForTests(name => {
+      if (name === checkpoint) throw new Error(`simulated interruption at ${checkpoint}`);
+    });
+    await expect(migrateWorkspaceLayout()).rejects.toThrow(`simulated interruption at ${checkpoint}`);
+
+    _resetWorkspaceMigrationState();
+    await expect(migrateWorkspaceLayout()).resolves.toMatchObject({ version: 2 });
+    const [actualTarget, expectedTarget] = await Promise.all([
+      fs.realpath(destinationLink),
+      fs.realpath(destinationTarget),
+    ]);
+    expect(process.platform === 'win32' ? actualTarget.toLowerCase() : actualTarget)
+      .toBe(process.platform === 'win32' ? expectedTarget.toLowerCase() : expectedTarget);
+    await expect(exists(_workspaceMigrationPathsForTests().journal)).resolves.toBe(false);
+  });
+
+  it('still rejects a partially migrated destination link to an unrelated external target', async () => {
+    const external = path.join(fixtureRoot, 'external-destination-link-target');
+    const destinationLink = path.join(
+      workspaceRoot(),
+      'userdata',
+      'node_modules',
+      'external-package',
+    );
+    await Promise.all([
+      write('userdata/preferences.json', 'must-stay-at-legacy-path'),
+      fs.mkdir(external, { recursive: true }),
+      fs.mkdir(path.dirname(destinationLink), { recursive: true }),
+    ]);
+    try {
+      await fs.symlink(
+        external,
+        destinationLink,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EPERM') return;
+      throw error;
+    }
+
+    await expect(migrateWorkspaceLayout()).rejects.toBeInstanceOf(
+      WorkspaceMigrationUnsafePathError,
+    );
+    await expect(read('userdata/preferences.json')).resolves.toBe('must-stay-at-legacy-path');
+    await expect(exists(_workspaceMigrationPathsForTests().journal)).resolves.toBe(false);
+  });
+
+  it('rejects case-folded merge path collisions during Windows preflight', async () => {
+    if (process.platform !== 'win32') return;
+    await Promise.all([
+      write('db/CaseAlias.json', 'first-version'),
+      write('storage/casealias.json', 'second-version'),
+    ]);
+
+    await expect(migrateWorkspaceLayout()).rejects.toBeInstanceOf(
+      WorkspaceMigrationConflictError,
+    );
+
+    await expect(read('db/CaseAlias.json')).resolves.toBe('first-version');
+    await expect(read('storage/casealias.json')).resolves.toBe('second-version');
+    await expect(exists(_workspaceMigrationPathsForTests().journal)).resolves.toBe(false);
   });
 
   it('rejects an absolute link whose target is outside its managed source tree', async () => {

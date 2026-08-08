@@ -15,26 +15,30 @@ const log = createLogger('instrumentation');
 export async function initializeNodeRuntime(): Promise<void> {
   log.info('Server startup: preparing workspace layout');
 
-  // This is the startup barrier: no sandbox or backend service may open a
-  // runtime path until the transactional migration has completed or recovered.
-  await ensureWorkspaceLayoutReady();
+  // Start the barrier immediately, but do not make Next's instrumentation hook
+  // await a potentially long first-run inventory. In Next 16 the hook can be
+  // evaluated lazily by the first request; awaiting here makes the TCP listener
+  // accept connections while returning no bytes until every legacy file has
+  // been hashed. The shell and the installation-wide readiness endpoint may be
+  // served during migration; every data-bearing route still awaits this exact
+  // promise through withWorkspaceContext().
+  const layoutPreparation = ensureWorkspaceLayoutReady();
 
-  // MCP Apps (#97): bring up the separate-origin sandbox proxy listener so
-  // interactive apps can render in a foreign-origin iframe. Never blocks startup
-  // and never throws — if the port is taken or binding fails, apps just won't
-  // render and the rest of FLUJO is unaffected.
-  try {
-    const { startSandboxServer } = await import('@/backend/mcpApps/sandboxServer');
-    startSandboxServer();
-  } catch (error) {
-    log.error('Failed to start MCP Apps sandbox proxy', error);
-  }
+  void layoutPreparation.then(async () => {
+    // MCP Apps (#97): bring up the separate-origin sandbox proxy listener only
+    // after the storage barrier. If its port is unavailable, the main app stays
+    // usable and reports the sandbox error normally.
+    try {
+      const { startSandboxServer } = await import('@/backend/mcpApps/sandboxServer');
+      startSandboxServer();
+    } catch (error) {
+      log.error('Failed to start MCP Apps sandbox proxy', error);
+    }
 
-  // Fire-and-forget after the layout barrier. Enumerating all workspaces ensures
-  // inactive workspaces still arm automations; slow MCP connections do not hold
-  // Next's readiness gate open.
-  const { ensureAllWorkspacesInitialized } = await import('@/backend/init');
-  void ensureAllWorkspacesInitialized()
-    .then(() => log.info('Server startup: all workspace initialization complete'))
-    .catch(error => log.error('Server startup: workspace initialization failed', error));
+    // Enumerating all workspaces ensures inactive workspaces still arm
+    // automations; slow MCP connections do not hold Next's readiness gate open.
+    const { ensureAllWorkspacesInitialized } = await import('@/backend/init');
+    await ensureAllWorkspacesInitialized();
+    log.info('Server startup: all workspace initialization complete');
+  }).catch(error => log.error('Server startup: workspace initialization failed', error));
 }

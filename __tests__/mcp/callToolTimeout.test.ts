@@ -137,6 +137,7 @@ describe('callTool timeout handling', () => {
       success: false,
       error: "Tool 'demo' task task-1 was cancelled by the server.",
       errorType: 'cancelled',
+      toolName: 'demo',
       progressToken: 'task-1',
     });
   });

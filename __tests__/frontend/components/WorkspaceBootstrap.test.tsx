@@ -91,4 +91,36 @@ describe('WorkspaceBootstrap deep links', () => {
     expect(getSelectedWorkspace()).toBe('team-b');
     expect(window.location.search).toContain('workspace=team-b');
   });
+
+  it('shows migration progress and keeps polling without mounting data providers early', async () => {
+    const fetchMock = jest.fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        headers: { get: () => '0' },
+        json: async () => ({ code: 'WORKSPACE_LAYOUT_PREPARING' }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({ workspaces: [{ name: 'default-workspace' }] }),
+      });
+    Object.defineProperty(window, 'fetch', {
+      configurable: true,
+      writable: true,
+      value: fetchMock,
+    });
+
+    render(
+      <WorkspaceBootstrap>
+        <div>workspace provider mounted after migration</div>
+      </WorkspaceBootstrap>,
+    );
+
+    expect(await screen.findByText(/Verifying and migrating workspace data/)).toBeInTheDocument();
+    expect(screen.queryByText('workspace provider mounted after migration')).not.toBeInTheDocument();
+    expect(await screen.findByText('workspace provider mounted after migration')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });

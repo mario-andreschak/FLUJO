@@ -4,6 +4,7 @@ const mockListWorkspaces = jest.fn(async () => [
 ]);
 
 jest.mock('@/backend/services/workspace/layoutReadiness', () => ({
+  getWorkspaceLayoutStatus: jest.fn(() => 'ready'),
   waitForWorkspaceLayoutReady: () => mockEnsureWorkspaceLayoutReady(),
 }));
 
@@ -13,10 +14,16 @@ jest.mock('@/utils/workspace', () => ({
 }));
 
 import { GET } from '@/app/api/workspaces/route';
+import { getWorkspaceLayoutStatus } from '@/backend/services/workspace/layoutReadiness';
+
+const mockGetWorkspaceLayoutStatus = getWorkspaceLayoutStatus as jest.MockedFunction<
+  typeof getWorkspaceLayoutStatus
+>;
 
 describe('installation-wide workspace discovery route', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockGetWorkspaceLayoutStatus.mockReturnValue('ready');
     mockEnsureWorkspaceLayoutReady.mockResolvedValue(undefined);
   });
 
@@ -38,6 +45,21 @@ describe('installation-wide workspace discovery route', () => {
     expect(mockListWorkspaces).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toEqual({
       error: 'Workspace storage is temporarily unavailable.',
+    });
+  });
+
+  it('reports an active migration immediately instead of holding the shell request open', async () => {
+    mockGetWorkspaceLayoutStatus.mockReturnValueOnce('preparing');
+
+    const response = await GET();
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get('Retry-After')).toBe('2');
+    expect(mockEnsureWorkspaceLayoutReady).not.toHaveBeenCalled();
+    expect(mockListWorkspaces).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toEqual({
+      error: 'Workspace data is being verified and migrated.',
+      code: 'WORKSPACE_LAYOUT_PREPARING',
     });
   });
 });

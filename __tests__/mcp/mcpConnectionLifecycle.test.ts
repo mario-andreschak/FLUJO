@@ -14,6 +14,15 @@
 import { EventEmitter } from "events";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+
+jest.mock("@/utils/process/killProcessTree", () => {
+  const actual = jest.requireActual("@/utils/process/killProcessTree");
+  return {
+    ...actual,
+    killProcessTreeAndWait: jest.fn(actual.killProcessTreeAndWait),
+  };
+});
+
 import {
   createStdioTransport,
   shouldRecreateClient,
@@ -21,6 +30,9 @@ import {
   capabilityKey,
 } from "@/backend/services/mcp/connection";
 import { MCPServerConfig } from "@/shared/types/mcp";
+import { killProcessTreeAndWait } from "@/utils/process/killProcessTree";
+
+const killProcessTreeAndWaitMock = jest.mocked(killProcessTreeAndWait);
 
 function stdioConfig(overrides: Record<string, unknown> = {}): MCPServerConfig {
   return {
@@ -188,42 +200,52 @@ describe("safelyCloseClient graceful shutdown", () => {
     expect(child.kill).not.toHaveBeenCalled();
   });
 
-  it("escalates SIGTERM then SIGKILL when the child never exits, then still closes the client", async () => {
+  it("escalates to descendant-aware tree termination when the child never exits", async () => {
     const events: string[] = [];
     const child = new FakeChild();
     child.stdin.end.mockImplementation(() => {});
     const client = clientWithChild(child, events);
+    killProcessTreeAndWaitMock.mockResolvedValueOnce({
+      exited: false,
+      forced: true,
+      durationMs: 60,
+    });
 
     await safelyCloseClient(client, "wa-test", undefined, {
       gracePeriodMs: 30,
       killEscalationMs: 30,
     });
 
-    expect(child.kill.mock.calls.map((c) => c[0])).toEqual([
-      "SIGTERM",
-      "SIGKILL",
-    ]);
+    expect(killProcessTreeAndWaitMock).toHaveBeenCalledWith(child, {
+      graceMs: 30,
+      finalWaitMs: 30,
+    });
+    expect(child.kill).not.toHaveBeenCalled();
     expect(events).toContain("client.close");
   });
 
-  it("does not SIGKILL when SIGTERM makes the child exit", async () => {
+  it("accepts a successful descendant-aware tree termination", async () => {
     const events: string[] = [];
     const child = new FakeChild();
     child.stdin.end.mockImplementation(() => {});
-    child.kill.mockImplementation((signal: NodeJS.Signals) => {
-      if (signal === "SIGTERM") {
-        setTimeout(() => child.exitNow(1), 5);
-      }
-      return true;
-    });
     const client = clientWithChild(child, events);
+    killProcessTreeAndWaitMock.mockResolvedValueOnce({
+      exited: true,
+      forced: true,
+      durationMs: 5,
+    });
 
-    await safelyCloseClient(client, "wa-test", undefined, {
+    const result = await safelyCloseClient(client, "wa-test", undefined, {
       gracePeriodMs: 30,
       killEscalationMs: 1000,
     });
 
-    expect(child.kill.mock.calls.map((c) => c[0])).toEqual(["SIGTERM"]);
+    expect(killProcessTreeAndWaitMock).toHaveBeenCalledWith(child, {
+      graceMs: 1000,
+      finalWaitMs: 1000,
+    });
+    expect(result).toMatchObject({ exited: true, forced: true });
+    expect(child.kill).not.toHaveBeenCalled();
     expect(events).toContain("client.close");
   });
 

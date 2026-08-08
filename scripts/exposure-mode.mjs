@@ -199,6 +199,14 @@ function hasHostnameArg(args) {
 
 export function withExposureHostname(args, env) {
   if (hasHostnameArg(args) || env.FLUJO_CONTAINER) return [...args];
-  const hostname = env[EXPOSURE_MODE_ENV] === 'localhost' ? '127.0.0.1' : '0.0.0.0';
+  const hostname = env[EXPOSURE_MODE_ENV] === 'localhost'
+    ? '127.0.0.1'
+    // Windows resolves localhost to ::1 before 127.0.0.1. Binding only the
+    // IPv4 wildcard makes a healthy network-exposure server appear as
+    // ERR_CONNECTION_REFUSED in Chromium. Node's Windows IPv6 wildcard is
+    // dual-stack, so it accepts both ::1 and 127.0.0.1/LAN clients.
+    : process.platform === 'win32'
+      ? '::'
+      : '0.0.0.0';
   return [...args, '-H', hostname];
 }

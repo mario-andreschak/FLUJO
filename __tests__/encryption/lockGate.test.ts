@@ -154,6 +154,9 @@ describe('deny-by-default coverage guard', () => {
     [
       'src/app/api/encryption/secure/route.ts',
       'src/app/api/init/route.ts',
+      // Installation-wide namespace discovery contains no workspace content and
+      // must remain reachable so the locked shell can validate its active tab.
+      'src/app/api/workspaces/route.ts',
       // Local-models (Ollama) onboarding: capability probe, model pull, and model
       // suggestion are secret-free and must work on FIRST LAUNCH, before encryption
       // is even configured. Registering the pulled model (POST /api/model) is what

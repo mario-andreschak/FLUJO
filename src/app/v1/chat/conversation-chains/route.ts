@@ -2,17 +2,16 @@ import { withWorkspaceRoute } from '@/app/api/_workspace';
 /**
  * GET /v1/chat/conversation-chains — read-only chain projection (issue #405).
  *
- * The experimental "chain chat" page needs, for every ACTIVE conversation, its
- * place in the parent/child chain plus one short preview of its latest
- * displayable message. Doing that from the browser would mean one
- * full-conversation GET per node (N+1 requests, each carrying the complete
+ * The experimental "chain chat" page needs recent persisted conversations,
+ * grouped by their parent/child chain, plus one short preview of each
+ * conversation's latest displayable message. Doing that from the browser would
+ * mean one full-conversation GET per node (N+1 requests, each carrying the complete
  * message history). This route is the minimal server-side projection instead:
  *
  *  - durable `ConversationSummary` records supply topology and metadata,
  *    exactly like the conversation list route, with live state overlaid;
- *  - the active-status allowlist lives in one shared module;
- *  - inactive ANCESTORS of an active node are included (inactive) so the graph
- *    shows a real chain instead of a bag of orphans;
+ *  - active state remains explicit metadata, but completed/error chains stay
+ *    visible instead of making the page empty whenever no run is in flight;
  *  - only ONE bounded, plain-text message preview per node ever leaves the
  *    server — never a history, tool payload, model context or provider error.
  *
@@ -85,7 +84,7 @@ function conversationsDir(): string {
 function resolveConversation(summary: ConversationSummary): ResolvedConversation {
   const live = FlowExecutor.conversationStates.get(summary.id);
   let status = (live?.status ?? summary.status) as ConversationChainNodeStatus | undefined;
-  if (status === 'running' && executionEventBus.currentSeq(summary.id) === 0) {
+  if (!live && status === 'running' && executionEventBus.currentSeq(summary.id) === 0) {
     status = 'error';
   }
   return {
@@ -98,27 +97,6 @@ function resolveConversation(summary: ConversationSummary): ResolvedConversation
     parentConversationId: live?.parentConversationId ?? summary.parentConversationId ?? null,
     rootConversationId: live?.rootConversationId ?? summary.rootConversationId ?? null,
   };
-}
-
-/**
- * Walk up the parent links, collecting ancestors that exist in this set. Cycle-
- * and depth-guarded: a corrupt chain contributes what it can and stops.
- */
-function collectAncestors(
-  start: ResolvedConversation,
-  byId: Map<string, ResolvedConversation>,
-  into: Set<string>
-): void {
-  let current = start;
-  for (let depth = 0; depth < MAX_ANCESTOR_DEPTH; depth++) {
-    const parentId = current.parentConversationId;
-    if (!parentId || parentId === current.id) return;
-    const parent = byId.get(parentId);
-    if (!parent) return;
-    if (into.has(parent.id)) return; // already collected (or a cycle)
-    into.add(parent.id);
-    current = parent;
-  }
 }
 
 /**
@@ -211,13 +189,9 @@ async function GET_handler(request: NextRequest) {
     const resolved = summaries.map(resolveConversation);
     const byId = new Map(resolved.map((item) => [item.id, item]));
 
-    // 1. Active nodes + their ancestors, so each chain renders as a real tree.
-    const included = new Set<string>();
-    for (const item of resolved) {
-      if (!item.active) continue;
-      included.add(item.id);
-      collectAncestors(item, byId, included);
-    }
+    // 1. Keep recent history available even when no execution is currently in
+    // flight. `active` is display metadata, not an inclusion gate.
+    const included = new Set(resolved.map((item) => item.id));
 
     // 2. Group by chain root.
     const groups = new Map<string, ResolvedConversation[]>();

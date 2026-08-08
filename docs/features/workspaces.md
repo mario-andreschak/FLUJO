@@ -57,11 +57,28 @@ configuration change.
 
 ## Migration from a pre-workspace install
 
-On the first start after upgrading, `migrateWorkspaceLayout()` is an awaited
-startup barrier before storage verification, the sandbox, MCP startup and the
-scheduler. Workspace-sensitive requests share that readiness promise and return
-a retryable `503` if migration cannot complete, so no request can race the old
-layout.
+On the first start after upgrading, `migrateWorkspaceLayout()` starts immediately
+and remains an awaited storage barrier before providers, storage verification,
+the sandbox, MCP startup and the scheduler. The static application shell is
+allowed to render while that barrier runs, so the browser shows migration status
+instead of hanging on an accepted TCP connection. Workspace-sensitive requests
+share the readiness promise; workspace discovery returns a retryable `503` with
+`WORKSPACE_LAYOUT_PREPARING` and the shell polls it until completion, so no data
+request can race the old layout.
+
+Migration progress is always visible in the server console in runtime builds.
+An attached terminal gets a colored FLUJO riverside title card, an animated
+current step with a small running companion, durable phase milestones and
+aggregate file, directory, link and byte counts. Narrow terminals use a compact
+version. Redirected output, CI, services and containers without a TTY retain the
+line-oriented transcript so log collectors never receive cursor-control noise.
+Set `FLUJO_MIGRATION_UI=plain` to disable the terminal interface or
+`FLUJO_MIGRATION_UI=tty` to force it; `FLUJO_MIGRATION_ASCII=1` replaces Unicode
+status symbols, and the standard `NO_COLOR` setting disables color. The output
+identifies recovery and transaction checkpoints and ends with an explicit
+success or fail-closed line. It intentionally does not print individual
+filenames, which keeps secrets out of logs while making a long first upgrade
+observable.
 
 Layout v2 inventories every legacy root and destination before renaming any user
 data. It recursively overlays disjoint paths, which safely recovers installs

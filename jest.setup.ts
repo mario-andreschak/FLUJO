@@ -26,8 +26,10 @@ fs.mkdirSync(path.join(jestDataRoot, 'workspaces', 'default-workspace'), { recur
 // Model normal completed startup for ordinary tests; migration suites call
 // _resetWorkspaceMigrationState() in their own beforeEach and therefore still
 // exercise the actual transaction and every failure/recovery checkpoint.
-beforeEach(() => {
-  setWorkspaceLayoutPreparation(Promise.resolve());
+beforeEach(async () => {
+  const ready = Promise.resolve();
+  setWorkspaceLayoutPreparation(ready);
+  await ready;
 });
 
 afterAll(() => {

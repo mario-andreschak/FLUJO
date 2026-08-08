@@ -7,13 +7,13 @@
  * process restarts. Inferring activity from "is it currently in memory" would
  * therefore change after every restart, so activity is defined ONLY as an
  * allowlist of durable statuses. Live state may still *overlay* the status
- * (a `running` record with no live event channel projects as `error`), but the
- * allowlist below is what the chain-chat projection filters on.
+ * (a persisted `running` record with no live event channel projects as
+ * `error`), while the allowlist below drives each chain node's active metadata.
  *
  * Pure and dependency-free so both the API route and the UI can share it.
  */
 
-/** Statuses that count as an active conversation node in a chain. */
+/** Statuses that count as an active conversation node in a visible chain. */
 export const ACTIVE_CONVERSATION_STATUSES = [
   'running',
   'awaiting_tool_approval',

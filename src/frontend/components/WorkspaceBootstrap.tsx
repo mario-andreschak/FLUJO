@@ -29,18 +29,32 @@ export default function WorkspaceBootstrap({ children, fallback = null }: Worksp
   initializeWorkspaceSelection();
   migrateLegacyBrowserWorkspaceContent();
   const pageRequestOnMount = useRef(readWorkspacePageRequest());
-  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [status, setStatus] = useState<'loading' | 'migrating' | 'ready' | 'error'>('loading');
   const [errorMessage, setErrorMessage] = useState('Workspace discovery is not ready.');
 
   useEffect(() => {
     let cancelled = false;
 
     void (async () => {
-      for (let attempt = 0; attempt < 4 && !cancelled; attempt += 1) {
+      let transientFailures = 0;
+      while (!cancelled) {
         try {
           const response = await fetch('/api/workspaces', { cache: 'no-store' });
+          const payload = (await response.json()) as {
+            workspaces?: Array<{ name?: unknown }>;
+            code?: unknown;
+          };
+          if (response.status === 503 && payload.code === 'WORKSPACE_LAYOUT_PREPARING') {
+            transientFailures = 0;
+            if (!cancelled) setStatus('migrating');
+            const retrySeconds = Number(response.headers?.get?.('Retry-After'));
+            await new Promise(resolve => window.setTimeout(
+              resolve,
+              Number.isFinite(retrySeconds) ? Math.max(500, retrySeconds * 1000) : 2000,
+            ));
+            continue;
+          }
           if (!response.ok) throw new Error(`Workspace discovery failed (${response.status})`);
-          const payload = (await response.json()) as { workspaces?: Array<{ name?: unknown }> };
           const names = new Set(
             (Array.isArray(payload.workspaces) ? payload.workspaces : [])
               .map(item => item?.name)
@@ -81,9 +95,9 @@ export default function WorkspaceBootstrap({ children, fallback = null }: Worksp
           if (!cancelled) setStatus('ready');
           return;
         } catch {
-          if (attempt < 3) {
-            await new Promise(resolve => window.setTimeout(resolve, 250 * (attempt + 1)));
-          }
+          transientFailures += 1;
+          if (transientFailures >= 4) break;
+          await new Promise(resolve => window.setTimeout(resolve, 250 * transientFailures));
         }
       }
       // Fail closed: mounting data providers here would let them fall back or
@@ -97,6 +111,16 @@ export default function WorkspaceBootstrap({ children, fallback = null }: Worksp
   }, []);
 
   if (status === 'ready') return <>{children}</>;
+  if (status === 'migrating') {
+    return (
+      <div className="app-loading" role="status" aria-live="polite">
+        <div className="app-loading__content">
+          <div className="app-loading__mark" aria-hidden="true"><span>F</span></div>
+          <span>Verifying and migrating workspace data. Your files are safe; the first upgrade can take a while.</span>
+        </div>
+      </div>
+    );
+  }
   if (status === 'error') {
     return (
       <div className="app-loading" role="alert">

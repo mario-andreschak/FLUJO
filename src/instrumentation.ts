@@ -18,6 +18,9 @@
  */
 export async function register() {
   if (process.env.NEXT_RUNTIME === 'nodejs') {
+    if (process.env.NODE_ENV !== 'test') {
+      console.info('[FLUJO] Workspace startup hook: loading migration and recovery checks...');
+    }
     const { initializeNodeRuntime } = await import('./instrumentation-node');
     await initializeNodeRuntime();
   }

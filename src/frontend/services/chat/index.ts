@@ -172,8 +172,9 @@ class ChatService {
 
   /**
    * GET /v1/chat/conversation-chains — read-only chain projection (#405).
-   * Returns active conversations grouped by chain root with ONE bounded
-   * message preview per node; never a full history. Accepts an AbortSignal so
+   * Returns recent conversations grouped by chain root with ONE bounded
+   * message preview per node; never a full history. Active state is included
+   * as metadata. Accepts an AbortSignal so
    * the page can drop a stale request on refresh/unmount.
    */
   async getConversationChains(

@@ -22,7 +22,9 @@ jest.mock('@/utils/storage', () => {
   return {
     StorageKey,
     useLocalStorage: (key: string, initialValue: unknown) => React.useState(
-      key === StorageKey.CURRENT_CONVERSATION_ID ? 'conversation-current' : initialValue,
+      key.startsWith(`${StorageKey.CURRENT_CONVERSATION_ID}:`)
+        ? 'conversation-current'
+        : initialValue,
     ),
   };
 });

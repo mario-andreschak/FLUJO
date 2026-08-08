@@ -1,8 +1,8 @@
 /**
  * Tests for the read-only chain projection (issue #405).
  *
- * GET /v1/chat/conversation-chains returns, for every ACTIVE conversation, its
- * chain topology plus ONE bounded plain-text preview of the latest displayable
+ * GET /v1/chat/conversation-chains returns recent persisted conversation-chain
+ * topology plus ONE bounded plain-text preview of the latest displayable
  * message. It must never return histories, tool payloads or model context, and
  * it must terminate on corrupt (self-linked / cyclic) parent data.
  *
@@ -26,6 +26,7 @@ type Route = typeof import('@/app/v1/chat/conversation-chains/route');
 let tmpDir: string;
 let convDir: string;
 let GET: Route['GET'];
+let FlowExecutor: typeof import('@/backend/execution/flow/FlowExecutor').FlowExecutor;
 
 const writeConv = async (id: string, obj: Record<string, unknown>) => {
   await fs.writeFile(
@@ -52,14 +53,16 @@ const getJson = async (query = '') => {
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-chain-chat-'));
-  convDir = path.join(tmpDir, 'db', 'conversations');
+  convDir = path.join(tmpDir, 'workspaces', 'default-workspace', 'db', 'conversations');
   await fs.mkdir(convDir, { recursive: true });
   process.env.FLUJO_DATA_DIR = tmpDir;
   jest.resetModules();
   ({ GET } = await import('@/app/v1/chat/conversation-chains/route'));
+  ({ FlowExecutor } = await import('@/backend/execution/flow/FlowExecutor'));
 });
 
 afterEach(async () => {
+  FlowExecutor.conversationStates.clear();
   delete process.env.FLUJO_DATA_DIR;
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
@@ -76,7 +79,7 @@ describe('GET /v1/chat/conversation-chains (issue #405)', () => {
     expect(body.activeStatuses).toEqual(['running', 'awaiting_tool_approval', 'paused_debug']);
   });
 
-  it('projects active nodes grouped by root, including their inactive ancestors', async () => {
+  it('projects persisted chains while retaining active-node metadata', async () => {
     await writeConv('root', { title: 'Root', status: 'completed', updatedAt: 5 });
     await writeConv('child', {
       title: 'Child',
@@ -90,33 +93,62 @@ describe('GET /v1/chat/conversation-chains (issue #405)', () => {
 
     const { status, body } = await getJson();
     expect(status).toBe(200);
-    expect(body.chains).toHaveLength(1);
+    expect(body.chains).toHaveLength(2);
 
-    const chain = body.chains[0];
+    const chain = body.chains.find((candidate: any) => candidate.rootId === 'root');
+    expect(chain).toBeDefined();
     expect(chain.rootId).toBe('root');
     expect(chain.activeNodeCount).toBe(1);
     expect(chain.nodes.map((n: any) => n.id)).toEqual(['root', 'child']);
     expect(chain.nodes.map((n: any) => n.active)).toEqual([false, true]);
     expect(chain.truncated).toBe(false);
+    expect(body.chains.find((candidate: any) => candidate.rootId === 'unrelated')?.activeNodeCount).toBe(0);
   });
 
-  it('excludes terminal statuses from the active allowlist', async () => {
+  it('keeps terminal chains visible instead of returning an empty history', async () => {
     await writeConv('done', { status: 'completed' });
     await writeConv('failed', { status: 'error' });
     await writeConv('capped', { status: 'capped' });
 
     const { body } = await getJson();
-    expect(body.chains).toEqual([]);
+    const nodes = body.chains.flatMap((chain: any) => chain.nodes);
+    expect(nodes.map((node: any) => node.id).sort()).toEqual(['capped', 'done', 'failed']);
+    expect(nodes.every((node: any) => node.active === false)).toBe(true);
   });
 
-  it('treats a persisted running conversation with no live event channel as interrupted', async () => {
+  it('keeps an interrupted persisted run visible with its corrected status', async () => {
     // Same projection the conversation list applies after a restart: a
     // `running` record with no live event stream is really an error, so it is
     // NOT active.
     await writeConv('ghost', { status: 'running' });
 
     const { body } = await getJson();
-    expect(body.chains).toEqual([]);
+    expect(body.chains).toHaveLength(1);
+    expect(body.chains[0].nodes[0]).toMatchObject({
+      id: 'ghost',
+      status: 'error',
+      active: false,
+    });
+  });
+
+  it('does not downgrade a live run before its first event is emitted', async () => {
+    await writeConv('live', { status: 'completed', updatedAt: 2 });
+    FlowExecutor.conversationStates.set('live', {
+      conversationId: 'live',
+      title: 'Live conversation',
+      status: 'running',
+      createdAt: 1,
+      updatedAt: 3,
+      messages: [],
+    } as any);
+
+    const { body } = await getJson();
+    expect(body.chains[0].activeNodeCount).toBe(1);
+    expect(body.chains[0].nodes[0]).toMatchObject({
+      id: 'live',
+      status: 'running',
+      active: true,
+    });
   });
 
   it('previews only the latest user/assistant message and never the history', async () => {

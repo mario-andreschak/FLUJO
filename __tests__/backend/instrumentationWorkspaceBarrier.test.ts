@@ -29,7 +29,7 @@ describe('Node instrumentation workspace barrier', () => {
   });
 
   it('does not evaluate/start sandbox or backend services before layout readiness', async () => {
-    const initialization = initializeNodeRuntime();
+    await initializeNodeRuntime();
     await Promise.resolve();
 
     expect(events).toEqual(['layout:start']);
@@ -37,8 +37,9 @@ describe('Node instrumentation workspace barrier', () => {
     expect(mockEnsureAllWorkspacesInitialized).not.toHaveBeenCalled();
 
     releaseLayout();
-    await initialization;
-    await Promise.resolve();
+    for (let attempt = 0; attempt < 10 && !mockEnsureAllWorkspacesInitialized.mock.calls.length; attempt += 1) {
+      await new Promise(resolve => setImmediate(resolve));
+    }
 
     expect(events).toEqual(['layout:start', 'layout:ready', 'sandbox', 'backend']);
   });

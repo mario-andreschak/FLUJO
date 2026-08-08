@@ -84,7 +84,13 @@ describe('exposure-aware launcher', () => {
     expect(evaluate({ FLUJO_DATA_DIR: dataDir })).toMatchObject({
       mode: 'network',
       source: 'settings',
-      args: ['start', '-p', '4200', '-H', '0.0.0.0'],
+      args: [
+        'start',
+        '-p',
+        '4200',
+        '-H',
+        process.platform === 'win32' ? '::' : '0.0.0.0',
+      ],
     });
   });
 

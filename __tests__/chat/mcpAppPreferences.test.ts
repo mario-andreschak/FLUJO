@@ -26,8 +26,9 @@ beforeEach(() => {
 });
 
 describe('dismissedMcpAppPreferenceKey / readDismissedMcpAppKeys', () => {
-  it('namespaces the key per conversation', () => {
-    expect(dismissedMcpAppPreferenceKey('c1')).toBe('flujo-ui:mcp-canvas:dismissed:c1');
+  it('namespaces the key per workspace and conversation', () => {
+    expect(dismissedMcpAppPreferenceKey('c1'))
+      .toBe('flujo-workspace:default-workspace:flujo-ui:mcp-canvas:dismissed:c1');
   });
 
   it('returns an empty array when nothing is stored', () => {
@@ -77,8 +78,9 @@ describe('writeMcpAppsDismissed (batch)', () => {
 });
 
 describe('autoOpenSuppressedPreferenceKey / read/writeAutoOpenSuppressed', () => {
-  it('namespaces the key per conversation', () => {
-    expect(autoOpenSuppressedPreferenceKey('c1')).toBe('flujo-ui:mcp-canvas:auto-open-suppressed:c1');
+  it('namespaces the key per workspace and conversation', () => {
+    expect(autoOpenSuppressedPreferenceKey('c1'))
+      .toBe('flujo-workspace:default-workspace:flujo-ui:mcp-canvas:auto-open-suppressed:c1');
   });
 
   it('defaults to not suppressed', () => {

@@ -43,7 +43,8 @@ const makeReq = (body: unknown) => makeLocalRequest({ body });
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-conv-'));
-  dbDir = path.join(tmpDir, 'db');
+  dbDir = path.join(tmpDir, 'workspaces', 'default-workspace', 'db');
+  await fs.mkdir(dbDir, { recursive: true });
   process.env.FLUJO_DATA_DIR = tmpDir;
   // STORAGE_DIR / data dir are resolved at module load, so re-import fresh.
   jest.resetModules();
@@ -70,7 +71,7 @@ describe('POST /v1/chat/conversations path-traversal guard (issue #126)', () => 
       expect(await exists(path.join(dbDir, 'mcp_servers.json'))).toBe(false);
     });
 
-  it('creates exactly db/conversations/<id>.json for a valid uuid id (201)', async () => {
+  it('creates exactly the default workspace db/conversations/<id>.json for a valid uuid id (201)', async () => {
     const id = '123e4567-e89b-12d3-a456-426614174000';
     const res = await POST(makeReq({
       id, title: 'Hello', flowId: 'flow-1', createdAt: 1, updatedAt: 1,

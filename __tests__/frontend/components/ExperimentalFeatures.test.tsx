@@ -13,6 +13,24 @@ import { render, screen, fireEvent, within } from '@testing-library/react';
 const mockUpdateSettings = jest.fn();
 let mockStorageValue: any = { settings: {}, settingsHydrated: true, updateSettings: mockUpdateSettings };
 let mockPathname = '/';
+const originalMatchMedia = window.matchMedia;
+
+function setCompactNavigation(compact: boolean) {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    writable: true,
+    value: jest.fn().mockImplementation((query: string) => ({
+      matches: query === '(max-width:1279px)' ? compact : false,
+      media: query,
+      onchange: null,
+      addListener: jest.fn(),
+      removeListener: jest.fn(),
+      addEventListener: jest.fn(),
+      removeEventListener: jest.fn(),
+      dispatchEvent: jest.fn(),
+    })),
+  });
+}
 
 jest.mock('@/frontend/contexts/StorageContext', () => ({
   useStorage: () => mockStorageValue,
@@ -56,6 +74,15 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
   beforeEach(() => {
     mockUpdateSettings.mockClear();
     mockPathname = '/';
+    setCompactNavigation(false);
+  });
+
+  afterAll(() => {
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: originalMatchMedia,
+    });
   });
 
   it('orders the primary navigation around the required setup journey', () => {
@@ -82,7 +109,7 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
     expect(within(primaryNavigation).getByRole('link', { name: 'Agents' })).toHaveAttribute('href', '/flows');
   });
 
-  it('keeps every requested More destination available before settings hydrate', () => {
+  it('keeps stable More destinations visible and hides experimental ones before settings hydrate', () => {
     mockPathname = '/automation/triggers';
     mockStorageValue = {
       settings: { experimental: { enabled: true } },
@@ -100,9 +127,11 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
     expect(within(moreSections).getByRole('tab', { name: 'Settings' })).toHaveAttribute('href', '/settings');
     expect(within(moreSections).getByRole('tab', { name: 'Extensions' })).toHaveAttribute('href', '/packages');
     expect(within(moreSections).getByRole('tab', { name: 'Activity' })).toHaveAttribute('href', '/statistics');
+    expect(within(moreSections).queryByRole('tab', { name: 'Waves' })).toBeNull();
+    expect(within(moreSections).queryByRole('tab', { name: 'Chain Chat' })).toBeNull();
   });
 
-  it('hides the experimental Chain Chat destination while experiments are off', () => {
+  it('hides the experimental Waves and Chain Chat destinations while experiments are off', () => {
     mockPathname = '/automation/triggers';
     mockStorageValue = { settings: {}, settingsHydrated: true, updateSettings: mockUpdateSettings };
     render(<Navigation />);
@@ -116,8 +145,31 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
       '/docs',
       '/settings',
     ]);
+    expect(within(moreSections).queryByRole('tab', { name: 'Waves' })).toBeNull();
     expect(within(moreSections).queryByRole('tab', { name: 'Chain Chat' })).toBeNull();
   });
+
+  it.each(['/automation/waves', '/waves'])(
+    'selects Waves in More when %s is open',
+    (pathname) => {
+      mockPathname = pathname;
+      mockStorageValue = {
+        settings: { experimental: { enabled: true } },
+        settingsHydrated: true,
+        updateSettings: mockUpdateSettings,
+      };
+      render(<Navigation />);
+
+      const moreSections = screen.getByRole('tablist', { name: 'More sections' });
+      const waves = within(moreSections).getByRole('tab', { name: 'Waves' });
+      expect(waves).toHaveAttribute('href', '/automation/waves');
+      expect(waves).toHaveAttribute('aria-selected', 'true');
+      expect(within(moreSections).getByRole('tab', { name: 'Automations' })).toHaveAttribute(
+        'aria-selected',
+        'false',
+      );
+    },
+  );
 
   it('selects Chain Chat in More when its experimental route is open', () => {
     mockPathname = '/chain-chat';
@@ -134,7 +186,7 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
     expect(chainChat).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('puts Automations, Extensions, Activity, Chain Chat, Help, and Settings in More when experiments are enabled', () => {
+  it('puts Automations, Waves, Extensions, Activity, Chain Chat, Help, and Settings in More when experiments are enabled', () => {
     mockPathname = '/automation/triggers';
     mockStorageValue = {
       settings: { experimental: { enabled: true } },
@@ -147,6 +199,7 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
     const tabs = within(moreSections).getAllByRole('tab');
     expect(tabs.map((tab) => tab.textContent?.trim())).toEqual([
       'Automations',
+      'Waves',
       'Extensions',
       'Activity',
       'Chain Chat',
@@ -155,6 +208,7 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
     ]);
     expect(tabs.map((tab) => tab.getAttribute('href'))).toEqual([
       '/automation/triggers',
+      '/automation/waves',
       '/packages',
       '/statistics',
       '/chain-chat',
@@ -164,6 +218,25 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
     expect(within(moreSections).getByRole('tab', { name: 'Automations' })).toHaveAttribute(
       'aria-selected',
       'true',
+    );
+  });
+
+  it('shows the enabled Waves destination in the compact navigation drawer', () => {
+    setCompactNavigation(true);
+    mockPathname = '/automation/triggers';
+    mockStorageValue = {
+      settings: { experimental: { enabled: true } },
+      settingsHydrated: true,
+      updateSettings: mockUpdateSettings,
+    };
+    render(<Navigation />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open navigation menu' }));
+    const drawer = screen.getByRole('button', { name: 'Close navigation menu' }).closest('.MuiDrawer-paper');
+    expect(drawer).not.toBeNull();
+    expect(within(drawer as HTMLElement).getByRole('link', { name: 'Waves' })).toHaveAttribute(
+      'href',
+      '/automation/waves',
     );
   });
 });

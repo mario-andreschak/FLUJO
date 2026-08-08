@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { DEFAULT_WORKSPACE, listWorkspaces } from '@/utils/workspace';
-import { waitForWorkspaceLayoutReady } from '@/backend/services/workspace/layoutReadiness';
+import {
+  getWorkspaceLayoutStatus,
+  waitForWorkspaceLayoutReady,
+} from '@/backend/services/workspace/layoutReadiness';
 
 // FLUJO_INSTALLATION_WIDE_ROUTE: discovers and manages workspace namespaces.
 
@@ -24,6 +27,20 @@ const log = createLogger('app/api/workspaces');
  * a workspace keeps the same tab color on every machine and across restarts.
  */
 export async function GET() {
+  const layoutStatus = getWorkspaceLayoutStatus();
+  if (layoutStatus !== 'ready') {
+    const preparing = layoutStatus === 'preparing';
+    return NextResponse.json(
+      {
+        error: preparing
+          ? 'Workspace data is being verified and migrated.'
+          : 'Workspace storage is temporarily unavailable.',
+        code: preparing ? 'WORKSPACE_LAYOUT_PREPARING' : 'WORKSPACE_LAYOUT_UNAVAILABLE',
+      },
+      { status: 503, headers: { 'Retry-After': preparing ? '2' : '5' } },
+    );
+  }
+
   try {
     await waitForWorkspaceLayoutReady();
     const workspaces = await listWorkspaces();

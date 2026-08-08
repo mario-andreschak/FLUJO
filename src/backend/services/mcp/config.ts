@@ -131,17 +131,21 @@ export async function loadServerConfigs(): Promise<MCPServerConfig[] | MCPServic
           ? serverConfig.roots.map(remapMcpPath)
           : serverConfig.roots,
         env: remapMcpEnv(serverConfig.env),
-        launch: serverConfig.launch && typeof serverConfig.launch === 'object'
+        ...(Object.prototype.hasOwnProperty.call(serverConfig, 'launch')
           ? {
-              ...serverConfig.launch,
-              command: remapMcpPath(serverConfig.launch.command),
-              cwd: remapMcpPath(serverConfig.launch.cwd),
-              args: Array.isArray(serverConfig.launch.args)
-                ? serverConfig.launch.args.map(remapMcpPath)
-                : serverConfig.launch.args,
-              env: remapMcpEnv(serverConfig.launch.env),
+              launch: serverConfig.launch && typeof serverConfig.launch === 'object'
+                ? {
+                    ...serverConfig.launch,
+                    command: remapMcpPath(serverConfig.launch.command),
+                    cwd: remapMcpPath(serverConfig.launch.cwd),
+                    args: Array.isArray(serverConfig.launch.args)
+                      ? serverConfig.launch.args.map(remapMcpPath)
+                      : serverConfig.launch.args,
+                    env: remapMcpEnv(serverConfig.launch.env),
+                  }
+                : serverConfig.launch,
             }
-          : serverConfig.launch,
+          : {}),
       };
 
       // Read-time normalization (issue 52): remote servers saved with a too-wide

@@ -2,8 +2,8 @@
  * Read-only "chain chat" projection contract (issue #405).
  *
  * These types describe the ONLY conversation data the experimental chain-chat
- * page receives: chain topology plus one bounded, plain-text preview of the
- * latest displayable message per node. Full histories, tool payloads, model
+ * page receives: recent chain topology plus one bounded, plain-text preview of
+ * the latest displayable message per node. Full histories, tool payloads, model
  * context and provider errors are deliberately absent — the page is view-only
  * and must never become a second, weaker conversation-read path.
  */

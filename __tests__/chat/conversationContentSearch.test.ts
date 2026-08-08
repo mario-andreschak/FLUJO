@@ -44,7 +44,7 @@ const getJson = async (query = '') => {
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-conv-search-'));
-  convDir = path.join(tmpDir, 'db', 'conversations');
+  convDir = path.join(tmpDir, 'workspaces', 'default-workspace', 'db', 'conversations');
   await fs.mkdir(convDir, { recursive: true });
   process.env.FLUJO_DATA_DIR = tmpDir;
   jest.resetModules();

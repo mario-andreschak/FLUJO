@@ -13,12 +13,14 @@
 
 import path from 'path';
 
-// config.ts computes REPOS_BASE_DIR from getDataDir() at module load, so getDataDir
-// must be mocked before it is imported. Pin it to a deterministic absolute dir.
+// Pin the selected workspace root directly. Other suites can load workspace.ts
+// first in the same Jest process, so mocking only its getDataDir() dependency
+// would leave this fixture dependent on module-cache order.
 const DATA_DIR = path.join(process.cwd(), '__source_test_data');
-jest.mock('@/utils/paths', () => ({
-  getDataDir: () => path.join(process.cwd(), '__source_test_data'),
-  getAppDir: () => process.cwd(),
+const mockWorkspaceDataDir = path.join(DATA_DIR, 'workspaces', 'default-workspace');
+jest.mock('@/utils/workspace', () => ({
+  getWorkspaceDataDir: () => mockWorkspaceDataDir,
+  remapLegacyDefaultWorkspaceReference: (value: string) => value,
 }));
 
 // A shared fake git object whose `remote` behaviour each test controls.
@@ -39,7 +41,7 @@ import { MCPServerConfig, MCPServerSource } from '@/shared/types/mcp';
 const { loadItem } = jest.requireMock('@/utils/storage/backend') as { loadItem: jest.Mock };
 const { __git: mockGit } = jest.requireMock('simple-git') as { __git: { remote: jest.Mock } };
 
-const REPOS_BASE = path.join(DATA_DIR, 'mcp-servers');
+const REPOS_BASE = path.join(mockWorkspaceDataDir, 'mcp-servers');
 
 beforeEach(() => {
   jest.clearAllMocks();

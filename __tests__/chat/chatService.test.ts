@@ -147,7 +147,9 @@ describe('chatService REST methods', () => {
       }),
     } as MessageEvent);
 
-    expect(eventSourceMock).toHaveBeenCalledWith('/v1/chat/events?scope=sidebar');
+    expect(eventSourceMock).toHaveBeenCalledWith(
+      '/v1/chat/events?scope=sidebar&workspace=default-workspace',
+    );
     expect(result).toBe(source);
     expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({
       type: 'run:done',

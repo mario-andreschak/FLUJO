@@ -65,14 +65,25 @@ jest.mock('@/backend/execution/flow/conversationLog', () => ({
 jest.mock('@/backend/execution/flow/engine/ExecutionEventBus', () => ({
   executionEventBus: { currentSeq: jest.fn(() => 0) },
 }));
-// list_conversations reads db/conversations under the data dir; point it at a
-// per-test temp dir when set (terminal tests keep the real data dir).
+// list_conversations reads db/conversations under the selected workspace; point
+// its parent data root at a per-test temp dir (terminal tests keep the real root).
 jest.mock('@/utils/paths', () => {
   const actual = jest.requireActual('@/utils/paths');
   return {
     ...actual,
     getDataDir: () =>
       (global as { __flujo_test_data_dir?: string }).__flujo_test_data_dir ?? actual.getDataDir(),
+  };
+});
+// Mock the workspace resolver directly as well: setup modules can import it
+// before this suite replaces paths, so relying only on getDataDir is order-sensitive.
+jest.mock('@/utils/workspace', () => {
+  const actual = jest.requireActual('@/utils/workspace');
+  return {
+    ...actual,
+    getWorkspaceDataDir: () =>
+      (global as { __flujo_test_workspace_dir?: string }).__flujo_test_workspace_dir
+      ?? actual.getWorkspaceDataDir(),
   };
 });
 
@@ -1148,10 +1159,13 @@ describe('delete_planned_execution', () => {
 
 describe('list_conversations', () => {
   let dataDir: string;
+  let workspaceDbDir: string;
 
   beforeAll(async () => {
     dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-conv-test-'));
-    const convDir = path.join(dataDir, 'db', 'conversations');
+    const workspaceDir = path.join(dataDir, 'workspaces', 'default-workspace');
+    workspaceDbDir = path.join(workspaceDir, 'db');
+    const convDir = path.join(workspaceDbDir, 'conversations');
     await fsp.mkdir(convDir, { recursive: true });
     await fsp.writeFile(
       path.join(convDir, 'c1.json'),
@@ -1170,10 +1184,12 @@ describe('list_conversations', () => {
       JSON.stringify({ conversationId: 'c2', title: 'Newer', flowId: 'f2', status: 'running', createdAt: 2, updatedAt: 200 })
     );
     (global as { __flujo_test_data_dir?: string }).__flujo_test_data_dir = dataDir;
+    (global as { __flujo_test_workspace_dir?: string }).__flujo_test_workspace_dir = workspaceDir;
   });
 
   afterAll(async () => {
     delete (global as { __flujo_test_data_dir?: string }).__flujo_test_data_dir;
+    delete (global as { __flujo_test_workspace_dir?: string }).__flujo_test_workspace_dir;
     await fsp.rm(dataDir, { recursive: true, force: true });
   });
 
@@ -1212,7 +1228,7 @@ describe('list_conversations', () => {
 
   it('builds reusable summary sidecars without copying transcript bodies', async () => {
     await internalCallTool(makeService(), 'list_conversations', {});
-    const summaryPath = path.join(dataDir, 'db', 'conversation-summaries', 'c1.json');
+    const summaryPath = path.join(workspaceDbDir, 'conversation-summaries', 'c1.json');
     const summary = await fsp.readFile(summaryPath, 'utf8');
     expect(summary).toContain('"id": "c1"');
     expect(summary).not.toContain('transcript-body-must-not-leak');
