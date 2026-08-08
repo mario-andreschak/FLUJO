@@ -1,6 +1,7 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { FlowBuilder } from '@/frontend/components/Flow/FlowManager/FlowBuilder';
+import { workspaceLocalStorageKey } from '@/frontend/utils/workspaceSelection';
 
 jest.mock('@xyflow/react', () => ({
   ReactFlowProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -64,7 +65,10 @@ const initialFlow: any = {
 describe('FlowBuilder permission rules', () => {
   beforeEach(() => {
     window.localStorage.clear();
-    window.localStorage.setItem('flujo-ui:flow-builder:mode', JSON.stringify('advanced'));
+    window.localStorage.setItem(
+      workspaceLocalStorageKey('flujo-ui:flow-builder:mode'),
+      JSON.stringify('advanced'),
+    );
   });
 
   it('omits the unattended control and strips historical values from saves', async () => {

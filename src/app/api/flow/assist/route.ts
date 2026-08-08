@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { NextRequest } from 'next/server';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import type { Flow } from '@/shared/types/flow';
@@ -45,7 +46,7 @@ function isStepAgentSuggestion(value: unknown): value is StepAgentSuggestion {
     && typeof (value as StepAgentSuggestion).reason === 'string';
 }
 
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const lock = await assertUnlocked({ openai: true });
   if (lock) return lock;
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
@@ -141,3 +142,5 @@ export async function POST(request: NextRequest) {
     return json({ error: error instanceof Error ? error.message : String(error) }, 422);
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

@@ -66,6 +66,13 @@ export interface ToClaudeFormatOptions {
    * an empty string, yielding a relative `/mcp-proxy/<name>` URL.
    */
   proxyBaseUrl?: string;
+  /** Workspace made explicit on exported FLUJO proxy endpoints. */
+  workspace?: string;
+}
+
+export function exposedProxyUrl(base: string, name: string, workspace?: string): string {
+  const url = `${base.replace(/\/$/, '')}/mcp-proxy/${encodeURIComponent(name)}`;
+  return workspace ? `${url}?workspace=${encodeURIComponent(workspace)}` : url;
 }
 
 /**
@@ -87,7 +94,7 @@ export function toClaudeFormat(
     if ((server as MCPServerConfig).exposeAsMcpServer) {
       mcpServers[server.name] = {
         type: 'http',
-        url: `${proxyBaseUrl}/mcp-proxy/${server.name}`,
+        url: exposedProxyUrl(proxyBaseUrl, server.name, options.workspace),
       };
       continue;
     }

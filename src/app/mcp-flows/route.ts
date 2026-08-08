@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 /**
  * FLUJO as an MCP server — Flows-as-tools endpoint (#38, Item D / #17).
  *
@@ -98,14 +99,18 @@ async function handle(request: Request): Promise<Response> {
   }
 }
 
-export async function POST(request: Request): Promise<Response> {
+async function POST_handler(request: Request): Promise<Response> {
   return handle(request);
 }
 
-export async function GET(request: Request): Promise<Response> {
+async function GET_handler(request: Request): Promise<Response> {
   return handle(request);
 }
 
-export async function DELETE(request: Request): Promise<Response> {
+async function DELETE_handler(request: Request): Promise<Response> {
   return handle(request);
 }
+
+export const GET = withWorkspaceRoute(GET_handler);
+export const POST = withWorkspaceRoute(POST_handler);
+export const DELETE = withWorkspaceRoute(DELETE_handler);

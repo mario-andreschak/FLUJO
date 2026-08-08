@@ -45,6 +45,28 @@ export interface ApiGroup {
   endpoints: ApiEndpoint[];
 }
 
+/**
+ * Render an endpoint for the selected workspace without URL-normalizing path
+ * placeholders such as `{conversationId}`. Default-workspace keeps the legacy
+ * compact spelling; sibling workspaces are always explicit so a copied example
+ * cannot silently fall back to default-workspace.
+ */
+export function workspaceAwareEndpointPath(path: string, workspace: string): string {
+  if (!workspace || workspace === 'default-workspace') return path;
+  const hashAt = path.indexOf('#');
+  const beforeHash = hashAt >= 0 ? path.slice(0, hashAt) : path;
+  const hash = hashAt >= 0 ? path.slice(hashAt) : '';
+  const separator = beforeHash.includes('?') ? '&' : '?';
+  return `${beforeHash}${separator}workspace=${encodeURIComponent(workspace)}${hash}`;
+}
+
+/** Header form for SDKs whose base URL cannot safely carry a query string. */
+export function workspaceHeaderForReference(workspace: string): string | null {
+  return !workspace || workspace === 'default-workspace'
+    ? null
+    : `x-flujo-workspace: ${workspace}`;
+}
+
 export const API_GROUPS: ApiGroup[] = [
   {
     id: 'openai',

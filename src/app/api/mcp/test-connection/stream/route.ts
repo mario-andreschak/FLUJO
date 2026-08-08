@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest } from 'next/server';
@@ -27,7 +28,7 @@ export const runtime = 'nodejs';
  * {@link import('@/shared/types/streaming').TestConnectionEvent} objects, one per line,
  * terminated by a single `{ type: 'result', ... }` event.
  */
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   // Local-only: testConnection spawns child processes from a caller-supplied
   // command, so reject cross-origin / DNS-rebinding callers before any stream
   // setup or spawn (#141).
@@ -63,3 +64,5 @@ export async function POST(request: NextRequest) {
     await mcpService.testConnection(config, emit, { storedName });
   }, { signal: request.signal });
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

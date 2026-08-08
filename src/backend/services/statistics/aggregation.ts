@@ -48,6 +48,7 @@ import {
   type SubflowInvocationStatisticsEvent,
   type ToolInvocationStatisticsEvent,
 } from '@/shared/types/statistics';
+import { workspaceCacheKey } from '@/utils/workspace';
 
 const UTC_DAY = /^\d{4}-\d{2}-\d{2}$/;
 const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,255}$/;
@@ -1232,7 +1233,7 @@ export async function aggregateStatistics(
   validateAggregateRequest(input);
   const request = canonicalRequest(input);
   const days = daysInRange(request.range);
-  const cacheKey = JSON.stringify(request);
+  const cacheKey = workspaceCacheKey(JSON.stringify(request));
   const now = Date.now();
   pruneCache(now);
   const freshness = await partitionFreshness(days);

@@ -7,6 +7,7 @@ import {
   readRunResource,
 } from '@/backend/services/runResources';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
+import { getCurrentWorkspace } from '@/utils/workspace';
 
 const INLINE_PREVIEW_CHARS = 1200;
 
@@ -17,7 +18,8 @@ function previewPayload(value: string, label: string, fullSize: number): string 
 
 function payloadHref(entry: RunResourceEntry): string {
   return `/v1/chat/conversations/${encodeURIComponent(entry.conversationId)}`
-    + `/resources/${encodeURIComponent(entry.id)}/content`;
+    + `/resources/${encodeURIComponent(entry.id)}/content`
+    + `?workspace=${encodeURIComponent(getCurrentWorkspace())}`;
 }
 
 function payloadRef(entry: RunResourceEntry): LazyToolPayloadRef {

@@ -57,7 +57,8 @@ describe('magicLinkPath', () => {
 });
 
 describe('magicLinkUrl', () => {
-  it('falls back to the bare path when window is unavailable (node/SSR)', () => {
-    expect(magicLinkUrl({ kind: 'flow', id: 'abc' })).toBe('/flows?flow=abc');
+  it('keeps an explicit default workspace when window is unavailable (node/SSR)', () => {
+    expect(magicLinkUrl({ kind: 'flow', id: 'abc' }))
+      .toBe('/flows?flow=abc&workspace=default-workspace');
   });
 });

@@ -16,6 +16,7 @@ import {
 import { StorageKey } from '@/shared/types/storage';
 import { Edge } from '@xyflow/react';
 import { createLogger } from '@/utils/logger';
+import { DEFAULT_WORKSPACE, getCurrentWorkspace } from '@/utils/workspace';
 import {
   archiveFlowVersion,
   listFlowVersions,
@@ -64,9 +65,21 @@ function stripNonPersistedProperties(flow: Flow): void {
 // MCP service's global recovery maps.
 declare global {
   var __flujo_flowsCache: Flow[] | null | undefined;
+  var __flujo_flowsCacheByWorkspace: Map<string, Flow[] | null> | undefined;
   // One-shot promise guarding the legacy-file -> per-flow-file migration so it
   // runs at most once per process (idempotent even if it somehow ran twice).
   var __flujo_flowsMigration: Promise<void> | undefined;
+  var __flujo_flowsMigrationByWorkspace: Map<string, Promise<void>> | undefined;
+}
+
+function flowsCacheByWorkspace(): Map<string, Flow[] | null> {
+  return global.__flujo_flowsCacheByWorkspace ??
+    (global.__flujo_flowsCacheByWorkspace = new Map());
+}
+
+function flowsMigrationByWorkspace(): Map<string, Promise<void>> {
+  return global.__flujo_flowsMigrationByWorkspace ??
+    (global.__flujo_flowsMigrationByWorkspace = new Map());
 }
 
 // Flows are stored one file per flow under db/flows/<id>.json (the legacy layout
@@ -87,17 +100,28 @@ function stripTimestamps(flow: Flow): string {
 // failure the guard is cleared so a later call can retry (the migration is
 // idempotent, so retrying is safe).
 async function ensureFlowsMigrated(): Promise<void> {
-  if (!global.__flujo_flowsMigration) {
-    global.__flujo_flowsMigration = (async () => {
+  const workspace = getCurrentWorkspace();
+  const migrations = flowsMigrationByWorkspace();
+  const existing = workspace === DEFAULT_WORKSPACE
+    ? global.__flujo_flowsMigration
+    : migrations.get(workspace);
+  if (existing) return existing;
+
+  const migration = (async () => {
       try {
         await migrateArrayFileToCollection<Flow>(StorageKey.FLOWS, FLOWS_COLLECTION, (f) => f.id);
       } catch (error) {
         log.error('Flow storage migration failed', error);
-        global.__flujo_flowsMigration = undefined;
+        if (workspace === DEFAULT_WORKSPACE) global.__flujo_flowsMigration = undefined;
+        else migrations.delete(workspace);
       }
     })();
-  }
-  return global.__flujo_flowsMigration;
+
+  // Keep the legacy globals authoritative for the default workspace because
+  // existing HMR/test reset hooks intentionally poke them directly.
+  if (workspace === DEFAULT_WORKSPACE) global.__flujo_flowsMigration = migration;
+  else migrations.set(workspace, migration);
+  return migration;
 }
 
 /**
@@ -106,10 +130,15 @@ async function ensureFlowsMigrated(): Promise<void> {
  */
 export class FlowService { // Add export keyword here
   private get flowsCache(): Flow[] | null {
-    return global.__flujo_flowsCache ?? null;
+    const workspace = getCurrentWorkspace();
+    return workspace === DEFAULT_WORKSPACE
+      ? global.__flujo_flowsCache ?? null
+      : flowsCacheByWorkspace().get(workspace) ?? null;
   }
   private set flowsCache(value: Flow[] | null) {
-    global.__flujo_flowsCache = value;
+    const workspace = getCurrentWorkspace();
+    if (workspace === DEFAULT_WORKSPACE) global.__flujo_flowsCache = value;
+    else flowsCacheByWorkspace().set(workspace, value);
   }
 
   /**

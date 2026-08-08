@@ -51,13 +51,18 @@ jest.mock('@/backend/services/flow/systemFlows', () => ({
   ensureVendoredFlowGenerator: (...a: unknown[]) => ensureVendoredFlowGeneratorMock(...a),
 }));
 
-import { ensureBackendInitialized, onUnlocked } from '@/backend/init';
+import {
+  ensureAllWorkspacesInitialized,
+  ensureBackendInitialized,
+  onUnlocked,
+} from '@/backend/init';
+import { ensureWorkspaceDirs } from '@/utils/workspace';
 
 function clearGlobals(): void {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (global as any).__flujo_init_promise = undefined;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (global as any).__flujo_secret_services_promise = undefined;
+  (global as any).__flujo_workspace_init_promises = undefined;
+  (global as any).__flujo_workspace_secret_promises = undefined;
 }
 
 describe('backend init startup gating (#78)', () => {
@@ -184,5 +189,15 @@ describe('backend init startup gating (#78)', () => {
     await ensureBackendInitialized();
     expect(startEnabledServersMock).toHaveBeenCalledTimes(1);
     expect(schedulerStartMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('initializes every discovered workspace so inactive automations are armed', async () => {
+    await ensureWorkspaceDirs('research');
+
+    await ensureAllWorkspacesInitialized();
+
+    expect(verifyStorageMock).toHaveBeenCalledTimes(2);
+    expect(startEnabledServersMock).toHaveBeenCalledTimes(2);
+    expect(schedulerStartMock).toHaveBeenCalledTimes(2);
   });
 });

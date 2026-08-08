@@ -12,6 +12,7 @@ import {
   deriveSandboxPublicUrl,
   getConfiguredSandboxHostOrigins,
   getSandboxPublicUrl,
+  hasValidSandboxAppUrlTemplate,
   SANDBOX_HOST_ORIGINS_ENV,
   SANDBOX_PUBLIC_URL_ENV,
 } from '@/backend/mcpApps/sandboxServer';
@@ -303,6 +304,7 @@ describe('buildSandboxProxyCsp', () => {
 });
 
 describe('hosted sandbox endpoint configuration', () => {
+  const originKey = `app${'c'.repeat(60)}`;
   const originalPublicUrl = process.env[SANDBOX_PUBLIC_URL_ENV];
   const originalHostOrigins = process.env[SANDBOX_HOST_ORIGINS_ENV];
   const originalExposure = process.env.FLUJO_EXPOSURE_MODE;
@@ -320,20 +322,32 @@ describe('hosted sandbox endpoint configuration', () => {
   });
 
   it('normalizes a separately hosted public URL and rejects credentialed URLs', () => {
+    delete process.env.FLUJO_EXPOSURE_MODE_SOURCE;
     process.env[SANDBOX_PUBLIC_URL_ENV] = 'https://apps.example.test';
     expect(getSandboxPublicUrl()).toBe('https://apps.example.test/sandbox.html');
+    expect(hasValidSandboxAppUrlTemplate()).toBe(false);
 
     process.env[SANDBOX_PUBLIC_URL_ENV] = 'https://user:secret@apps.example.test/';
     expect(getSandboxPublicUrl()).toBeUndefined();
   });
 
-  it('derives the HTTPS sandbox origin from the one Public setting', () => {
+  it('derives only keyed localhost or wildcard-hosted origins', () => {
+    delete process.env.FLUJO_EXPOSURE_MODE_SOURCE;
     process.env.FLUJO_EXPOSURE_MODE = 'public';
-    expect(deriveSandboxPublicUrl('https://flujo.example.test', 4201)).toBe(
-      'https://flujo.example.test:4201/sandbox.html',
+    process.env[SANDBOX_PUBLIC_URL_ENV] = 'https://apps.example.test';
+    expect(deriveSandboxPublicUrl('https://flujo.example.test', 4201, originKey))
+      .toBeUndefined();
+
+    process.env[SANDBOX_PUBLIC_URL_ENV] = 'https://{app}.sandbox.example.test';
+    expect(hasValidSandboxAppUrlTemplate()).toBe(true);
+    expect(deriveSandboxPublicUrl('https://flujo.example.test', 4201, originKey)).toBe(
+      `https://${originKey}.sandbox.example.test/sandbox.html`,
     );
 
     process.env.FLUJO_EXPOSURE_MODE = 'localhost';
+    expect(deriveSandboxPublicUrl('https://flujo.example.test', 4201, originKey)).toBe(
+      `http://${originKey}.localhost:4201/sandbox.html`,
+    );
     expect(deriveSandboxPublicUrl('https://flujo.example.test', 4201)).toBeUndefined();
   });
 
@@ -356,5 +370,16 @@ describe('hosted sandbox endpoint configuration', () => {
 
     expect(getSandboxPublicUrl()).toBeUndefined();
     expect(getConfiguredSandboxHostOrigins()).toEqual([]);
+  });
+
+  it('honors a wildcard template when Settings enables Local Network access', () => {
+    process.env.FLUJO_EXPOSURE_MODE = 'network';
+    process.env.FLUJO_EXPOSURE_MODE_SOURCE = 'settings';
+    process.env[SANDBOX_PUBLIC_URL_ENV] = 'https://{app}.lan-sandbox.example.test';
+
+    expect(hasValidSandboxAppUrlTemplate()).toBe(true);
+    expect(deriveSandboxPublicUrl('http://192.168.1.20:4200', 4201, originKey)).toBe(
+      `https://${originKey}.lan-sandbox.example.test/sandbox.html`,
+    );
   });
 });

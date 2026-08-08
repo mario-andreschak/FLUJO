@@ -7,7 +7,7 @@ import { createLogger } from '@/utils/logger';
 import { SharedState } from '@/backend/execution/flow/types';
 import { Flow } from '@/shared/types/flow';
 import { saveCollectionItem, assertSafeCollectionId, deleteCollectionItem } from '@/utils/storage/backend';
-import { getWorkspaceDataDir } from '@/utils/workspace';
+import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { markConversationDeleted, unmarkConversationDeleted } from '@/backend/execution/flow/cancellation';
@@ -36,13 +36,18 @@ const log = createLogger('app/v1/chat/conversations/route');
 // Keep it as an alias so it stays exactly aligned with the frontend contract.
 type ConversationListItem = FrontendConversationListItem;
 
-// Parsed-summary cache for the list GET, keyed by file name. The sidebar now
+// Parsed-summary cache for the list GET, keyed by workspace + file name. The sidebar now
 // polls this endpoint every few seconds, and conversation files carry the FULL
 // message history — re-reading and JSON.parsing every file on every poll is
 // O(total bytes on disk). The summary only needs six small fields, so cache it
 // per file and invalidate on mtime/size change (every write is an atomic
-// replace, so a content change always moves the mtime).
+// replace, so a content change always moves the mtime). Conversation ids/file
+// names are only unique within a workspace; a process-wide filename-only cache
+// can otherwise return one workspace's title/status/flow metadata in another.
 const listSummaryCache = new Map<string, { mtimeMs: number; size: number; item: ConversationListItem }>();
+
+const listSummaryCachePrefix = () => workspaceCacheKey('conversation-list-summary');
+const listSummaryCacheKey = (file: string) => workspaceCacheKey('conversation-list-summary', file);
 
 // Content search (issue #182). Message bodies are not all resident on the
 // client, so a `?search=<term>&dimension=content` request scans the on-disk
@@ -199,7 +204,8 @@ async function GET_handler(request: NextRequest) {
       try {
         // Summary from disk, via the mtime/size cache (see listSummaryCache).
         const stats = await fs.stat(filePath);
-        const cached = listSummaryCache.get(file);
+        const summaryCacheKey = listSummaryCacheKey(file);
+        const cached = listSummaryCache.get(summaryCacheKey);
         let base: ConversationListItem;
         // Content search always needs the parsed body, so it bypasses the
         // summary-only cache-hit fast path (it still repopulates the cache).
@@ -253,7 +259,7 @@ async function GET_handler(request: NextRequest) {
             parentConversationId: state.parentConversationId ?? null,
             rootConversationId: state.rootConversationId ?? null,
           };
-          listSummaryCache.set(file, { mtimeMs: stats.mtimeMs, size: stats.size, item: base });
+          listSummaryCache.set(summaryCacheKey, { mtimeMs: stats.mtimeMs, size: stats.size, item: base });
         }
 
         // Content search (issue #182): exclude conversations whose message
@@ -318,11 +324,12 @@ async function GET_handler(request: NextRequest) {
 
     const results = await Promise.all(conversationPromises);
     // Drop cache entries for files that no longer exist (deleted conversations).
-    if (listSummaryCache.size > jsonFiles.length) {
-      const present = new Set(jsonFiles);
-      for (const key of listSummaryCache.keys()) {
-        if (!present.has(key)) listSummaryCache.delete(key);
-      }
+    const workspacePrefix = `${listSummaryCachePrefix()}\0`;
+    const workspaceCacheEntries = Array.from(listSummaryCache.keys())
+      .filter(key => key.startsWith(workspacePrefix));
+    const present = new Set(jsonFiles.map(listSummaryCacheKey));
+    for (const key of workspaceCacheEntries) {
+      if (!present.has(key)) listSummaryCache.delete(key);
     }
     const validConversations = results.filter((conv): conv is ConversationListItem => conv !== null);
     log.debug(`Successfully processed ${validConversations.length} conversation files`, { requestId });

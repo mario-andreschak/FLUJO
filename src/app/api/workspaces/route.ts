@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { DEFAULT_WORKSPACE, listWorkspaces } from '@/utils/workspace';
+import { waitForWorkspaceLayoutReady } from '@/backend/services/workspace/layoutReadiness';
+
+// FLUJO_INSTALLATION_WIDE_ROUTE: discovers and manages workspace namespaces.
 
 const log = createLogger('app/api/workspaces');
 
@@ -22,6 +25,7 @@ const log = createLogger('app/api/workspaces');
  */
 export async function GET() {
   try {
+    await waitForWorkspaceLayoutReady();
     const workspaces = await listWorkspaces();
     return NextResponse.json({
       workspaces,
@@ -29,12 +33,11 @@ export async function GET() {
     });
   } catch (error) {
     log.error('Failed to list workspaces', error);
-    // Degrade to the always-present default rather than breaking navigation.
-    return NextResponse.json({
-      workspaces: [
-        { name: DEFAULT_WORKSPACE, color: '#6656E8', isDefault: true },
-      ],
-      defaultWorkspace: DEFAULT_WORKSPACE,
-    });
+    // Returning a fabricated default list would invite the client to open a
+    // layout whose migration failed. Fail closed and let it retry instead.
+    return NextResponse.json(
+      { error: 'Workspace storage is temporarily unavailable.' },
+      { status: 503, headers: { 'Retry-After': '5' } },
+    );
   }
 }

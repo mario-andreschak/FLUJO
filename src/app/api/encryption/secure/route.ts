@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { NextRequest, NextResponse } from 'next/server';
 import { 
   initializeEncryption,
@@ -19,12 +20,7 @@ import { v4 as uuidv4 } from 'uuid';
 
 const log = createLogger('app/api/encryption/secure/route');
 
-// Initialize default encryption when the module is loaded
-initializeDefaultEncryption().catch(error => {
-  log.error('Failed to initialize default encryption', error);
-});
-
-export async function POST(req: NextRequest) {
+async function POST_handler(req: NextRequest) {
   const requestId = uuidv4();
   // log.info(`Handling secure encryption request`, { requestId });
 
@@ -36,6 +32,10 @@ export async function POST(req: NextRequest) {
   if (notLocal) return notLocal;
 
   try {
+    // Module-load initialization has no request context and therefore always
+    // targets default-workspace. Await it only after the route wrapper has
+    // selected the request's workspace.
+    await initializeDefaultEncryption();
     const { action, password, oldPassword, newPassword, data, token } = await req.json();
 
     if (!action) {
@@ -201,3 +201,5 @@ export async function POST(req: NextRequest) {
     }, { status: 500 });
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

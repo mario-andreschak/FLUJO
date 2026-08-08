@@ -1,5 +1,6 @@
 import { ElicitResult } from '@modelcontextprotocol/sdk/types.js';
 import { createLogger } from '@/utils/logger';
+import { getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
 
 const log = createLogger('backend/services/mcp/elicitationRegistry');
 
@@ -17,6 +18,7 @@ const log = createLogger('backend/services/mcp/elicitationRegistry');
 const ELICITATION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 interface PendingElicitation {
+  workspace: string;
   resolve: (result: ElicitResult) => void;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -37,16 +39,18 @@ export function registerPendingElicitation(
   elicitationId: string,
   timeoutMs: number = ELICITATION_TIMEOUT_MS
 ): Promise<ElicitResult> {
+  const workspace = getCurrentWorkspace();
+  const key = workspaceCacheKey(elicitationId);
   return new Promise<ElicitResult>((resolve) => {
     const timer = setTimeout(() => {
-      if (registry.has(elicitationId)) {
+      if (registry.has(key)) {
         log.warn(`Elicitation ${elicitationId} timed out after ${timeoutMs}ms; auto-cancelling`);
-        registry.delete(elicitationId);
+        registry.delete(key);
         resolve({ action: 'cancel' });
       }
     }, timeoutMs);
 
-    registry.set(elicitationId, { resolve, timer });
+    registry.set(key, { workspace, resolve, timer });
   });
 }
 
@@ -59,10 +63,11 @@ export function resolveElicitation(
   elicitationId: string,
   result: ElicitResult
 ): boolean {
-  const pending = registry.get(elicitationId);
+  const key = workspaceCacheKey(elicitationId);
+  const pending = registry.get(key);
   if (!pending) return false;
   clearTimeout(pending.timer);
-  registry.delete(elicitationId);
+  registry.delete(key);
   pending.resolve(result);
   return true;
 }
@@ -74,9 +79,11 @@ export function cancelElicitation(elicitationId: string): boolean {
 
 /** Cancel all pending elicitations for clean shutdown (e.g. server disconnect). */
 export function clearAllElicitations(): void {
+  const workspace = getCurrentWorkspace();
   for (const [id, pending] of registry.entries()) {
+    if (pending.workspace !== workspace) continue;
     clearTimeout(pending.timer);
     pending.resolve({ action: 'cancel' });
+    registry.delete(id);
   }
-  registry.clear();
 }

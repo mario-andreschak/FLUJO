@@ -37,7 +37,17 @@
   ],
   "exclude": [
     "node_modules",
+    ".next/storage/**/*",
+    "artifacts/**/*",
+    "bash-utils/**/*",
+    "browser-profile/**/*",
+    "db/**/*",
     "mcp-servers/**/*",
+    "recordings/**/*",
+    "screenshots/**/*",
+    "snapshots/**/*",
+    "storage/**/*",
+    "workspaces/**/*",
     "userdata/**/*"
   ]
 }

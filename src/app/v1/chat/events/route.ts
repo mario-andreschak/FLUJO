@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
@@ -38,7 +39,7 @@ export const dynamic = 'force-dynamic';
  * spans every conversation, so a single run finishing must not tear it down.
  * It ends only when the client disconnects.
  */
-export async function GET(request: NextRequest) {
+async function GET_handler(request: NextRequest) {
   const _lock = await assertUnlocked({ openai: true });
   if (_lock) return _lock;
 
@@ -142,3 +143,5 @@ export async function GET(request: NextRequest) {
     },
   });
 }
+
+export const GET = withWorkspaceRoute(GET_handler);

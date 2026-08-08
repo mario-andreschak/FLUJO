@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
@@ -12,7 +13,7 @@ const log = createLogger('app/api/planned-executions/route');
  * List all planned executions with live trigger status and last run.
  * Response: { paused, executions: [{ execution, status, lastRun }] }
  */
-export async function GET() {
+async function GET_handler(_request: Request) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -37,7 +38,7 @@ export async function GET() {
  * Create a planned execution. Body: PlannedExecution minus id/createdAt/updatedAt.
  * The bound flow is validated advisorily — the result is returned, not enforced.
  */
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -63,7 +64,7 @@ export async function POST(request: NextRequest) {
  * PATCH /api/planned-executions
  * Global scheduler controls. Body: { paused: boolean }.
  */
-export async function PATCH(request: NextRequest) {
+async function PATCH_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -95,3 +96,12 @@ async function validateFlowAdvisory(flowId: string) {
     return undefined;
   }
 }
+
+const GET_workspaceRoute = withWorkspaceRoute(GET_handler);
+export function GET(): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request = new Request('http://localhost/')) {
+  return GET_workspaceRoute(request);
+}
+export const POST = withWorkspaceRoute(POST_handler);
+export const PATCH = withWorkspaceRoute(PATCH_handler);

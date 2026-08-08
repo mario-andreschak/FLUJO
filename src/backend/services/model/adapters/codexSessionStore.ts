@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import type { CodexSessionMetadata } from '@/backend/execution/flow/types';
+import { getCurrentWorkspace } from '@/utils/workspace';
 
 interface ToolFingerprint {
   name: string;
@@ -14,7 +15,17 @@ export type StoredCodexSession = CodexSessionMetadata;
 type CodexSessionObservation = Omit<CodexSessionMetadata, 'updatedAt'>;
 
 const MAX_TRACKED_SESSIONS = 200;
-const sessions = new Map<string, StoredCodexSession>();
+const sessionsByWorkspace = new Map<string, Map<string, StoredCodexSession>>();
+
+function sessions(): Map<string, StoredCodexSession> {
+  const workspace = getCurrentWorkspace();
+  let value = sessionsByWorkspace.get(workspace);
+  if (!value) {
+    value = new Map();
+    sessionsByWorkspace.set(workspace, value);
+  }
+  return value;
+}
 
 export function codexSessionKey(conversationId: string, nodeId: string): string {
   return `${conversationId}::${nodeId}`;
@@ -61,7 +72,7 @@ export function findReusableCodexSession(
   currentMessages: readonly unknown[],
   persisted?: StoredCodexSession,
 ): StoredCodexSession | undefined {
-  const existing = persisted ?? sessions.get(key);
+  const existing = persisted ?? sessions().get(key);
   if (!existing) return undefined;
   if (existing.prefixHash !== prefixHash) return undefined;
   if (currentMessages.length < existing.seenMessageCount) return undefined;
@@ -100,21 +111,22 @@ export function computeCodexHistoryHash(messages: readonly unknown[]): string {
 }
 
 export function recordCodexSession(key: string, observation: CodexSessionObservation): StoredCodexSession {
-  sessions.delete(key);
-  if (sessions.size >= MAX_TRACKED_SESSIONS) {
-    const oldest = sessions.keys().next();
-    if (!oldest.done) sessions.delete(oldest.value);
+  const store = sessions();
+  store.delete(key);
+  if (store.size >= MAX_TRACKED_SESSIONS) {
+    const oldest = store.keys().next();
+    if (!oldest.done) store.delete(oldest.value);
   }
   const stored = { ...observation, updatedAt: Date.now() };
-  sessions.set(key, stored);
+  store.set(key, stored);
   return stored;
 }
 
 export function invalidateCodexSession(key: string): void {
-  sessions.delete(key);
+  sessions().delete(key);
 }
 
 /** Test seam. */
 export function _clearCodexSessionsForTests(): void {
-  sessions.clear();
+  sessions().clear();
 }

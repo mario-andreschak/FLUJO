@@ -4,7 +4,10 @@ import { ThemeProvider, createTheme } from '@mui/material/styles';
 
 import QuickActionsMenu from '@/frontend/components/Navigation/QuickActionsMenu';
 import { mcpService } from '@/frontend/services/mcp';
-import { subscribeNewChatRequests, subscribeOpenMcpApp } from '@/frontend/utils/quickActions';
+import {
+  subscribeLaunchGlobalMcpApp,
+  subscribeNewChatRequests,
+} from '@/frontend/utils/quickActions';
 
 jest.mock('@/frontend/services/mcp', () => ({
   mcpService: {
@@ -117,7 +120,7 @@ describe('Navigation quick actions (#396)', () => {
     expect(service.listServerResources).not.toHaveBeenCalledWith('not-favorite');
   });
 
-  it('opens an app in the existing dashboard and its linked tool in the Tool Tester', async () => {
+  it('starts apps directly and keeps linked tools inside the app submenu', async () => {
     service.loadServerConfigs.mockResolvedValue([
       { name: 'weather', disabled: false, enableMcpApps: true, favorite: true },
     ] as never);
@@ -129,24 +132,34 @@ describe('Navigation quick actions (#396)', () => {
       tools: [{ name: 'get_forecast', _meta: { ui: { resourceUri: 'ui://forecast' } } }],
     });
 
+    const requests: string[] = [];
+    const unsubscribe = subscribeLaunchGlobalMcpApp((request) => {
+      requests.push(`${request.serverName}|${request.uri}|${request.toolName ?? ''}`);
+    });
     const { onNavigate } = renderMenu('/flows');
     await openMcpBranch();
 
+    // Linked tools no longer flood the app list; the trailing > owns them.
+    expect(screen.queryByRole('menuitem', { name: 'Start app for get_forecast' })).not.toBeInTheDocument();
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Open Forecast' }));
-    expect(onNavigate).toHaveBeenCalledTimes(1);
-    expect(onNavigate.mock.calls[0][0]).toContain('/mcp?app=weather');
-    expect(onNavigate.mock.calls[0][0]).toContain(`appUri=${encodeURIComponent('ui://forecast')}`);
+    expect(requests).toEqual(['weather|ui://forecast|']);
+    expect(onNavigate).not.toHaveBeenCalled();
 
-    onNavigate.mockClear();
     await openMcpBranch();
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Open Tool Tester for get_forecast' }));
-    expect(onNavigate).toHaveBeenCalledWith('/mcp?server=weather&tool=get_forecast');
+    fireEvent.click(await screen.findByTitle('Linked tools for Forecast'));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Start app for get_forecast' }));
+    unsubscribe();
 
-    // The menu never invokes a tool itself.
+    expect(requests).toEqual([
+      'weather|ui://forecast|',
+      'weather|ui://forecast|get_forecast',
+    ]);
+    expect(onNavigate).not.toHaveBeenCalled();
+    // Starting the app supplies context only; Quick Actions never invokes a tool.
     expect(service.callTool).not.toHaveBeenCalled();
   });
 
-  it('hands MCP targets to the open /mcp page instead of re-navigating', async () => {
+  it('uses the global app host even while the MCP page is already open', async () => {
     service.loadServerConfigs.mockResolvedValue([
       { name: 'weather', disabled: false, enableMcpApps: true, favorite: true },
     ] as never);
@@ -156,7 +169,7 @@ describe('Navigation quick actions (#396)', () => {
     });
 
     const requests: string[] = [];
-    const unsubscribe = subscribeOpenMcpApp((request) => requests.push(`${request.serverName}|${request.uri}`));
+    const unsubscribe = subscribeLaunchGlobalMcpApp((request) => requests.push(`${request.serverName}|${request.uri}`));
     const { onNavigate } = renderMenu('/mcp');
     await openMcpBranch();
 
@@ -165,6 +178,35 @@ describe('Navigation quick actions (#396)', () => {
 
     expect(onNavigate).not.toHaveBeenCalled();
     expect(requests).toEqual(['weather|ui://forecast']);
+  });
+
+  it('opens and leaves the linked-tools submenu with arrow keys', async () => {
+    service.loadServerConfigs.mockResolvedValue([
+      { name: 'weather', disabled: false, enableMcpApps: true, favorite: true },
+    ] as never);
+    service.listServerResources.mockResolvedValue({
+      resources: [{ uri: 'ui://forecast', name: 'Forecast', mimeType: APP_MIME }],
+      resourceTemplates: [],
+    });
+    service.listServerTools.mockResolvedValue({
+      tools: [{ name: 'get_forecast', _meta: { ui: { resourceUri: 'ui://forecast' } } }],
+    });
+
+    renderMenu('/flows');
+    await openMcpBranch();
+    const backItem = screen.getByRole('menuitem', { name: 'Back to quick actions' });
+    const appItem = await screen.findByRole('menuitem', { name: 'Open Forecast' });
+    await waitFor(() => expect(backItem).toHaveFocus());
+    fireEvent.keyDown(backItem, { key: 'ArrowDown' });
+    await waitFor(() => expect(appItem).toHaveFocus());
+    fireEvent.keyDown(appItem, { key: 'ArrowRight' });
+
+    const toolItem = await screen.findByRole('menuitem', { name: 'Start app for get_forecast' });
+    await waitFor(() => expect(toolItem).toHaveFocus());
+    expect(appItem).toHaveAttribute('aria-controls', 'quick-actions-tools-menu-floating');
+    fireEvent.keyDown(toolItem, { key: 'ArrowLeft' });
+    await waitFor(() => expect(appItem).toHaveFocus());
+    expect(screen.queryByRole('menuitem', { name: 'Start app for get_forecast' })).not.toBeInTheDocument();
   });
 
   it('shows an empty state and keeps a per-server failure scoped', async () => {

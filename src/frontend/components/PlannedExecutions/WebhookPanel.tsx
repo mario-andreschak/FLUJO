@@ -17,6 +17,7 @@ import CheckIcon from '@mui/icons-material/Check';
 import { WebhookTriggerConfig } from '@/shared/types/plannedExecution';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import Trans from '@/frontend/components/shared/Trans';
+import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 
 interface WebhookPanelProps {
   config: WebhookTriggerConfig;
@@ -37,7 +38,7 @@ const WebhookPanel = ({ config, onChange, executionId, saved }: WebhookPanelProp
   const [copied, setCopied] = useState<string | null>(null);
 
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
-  const url = `${origin}/api/webhooks/${executionId}`;
+  const url = withWorkspaceUrl(`${origin}/api/webhooks/${encodeURIComponent(executionId)}`);
 
   const copy = async (label: string, value: string) => {
     try {

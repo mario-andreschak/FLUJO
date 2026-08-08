@@ -436,6 +436,7 @@ export const chatMessageRows = {
   'chat.canvas.collapse': ['Collapse canvas', 'Contraer lienzo', 'Canvas einklappen', 'Réduire le canevas', 'Comprimi canvas', 'Recolher tela', '折叠画布'],
   'chat.canvas.resize': ['Resize app canvas', 'Redimensionar lienzo de aplicaciones', 'App-Canvas skalieren', 'Redimensionner le canevas des applications', 'Ridimensiona canvas delle app', 'Redimensionar tela de aplicativos', '调整应用画布大小'],
   'chat.canvas.dockLeft': ['Dock canvas left', 'Acoplar lienzo a la izquierda', 'Canvas links andocken', 'Ancrer le canevas à gauche', 'Aggancia canvas a sinistra', 'Acoplar tela à esquerda', '将画布停靠在左侧'],
+  'chat.canvas.dockTop': ['Dock canvas at top', 'Acoplar lienzo arriba', 'Canvas oben andocken', 'Ancrer le canevas en haut', 'Aggancia canvas in alto', 'Acoplar tela em cima', '将画布停靠在顶部'],
   'chat.canvas.dockBottom': ['Dock canvas at bottom', 'Acoplar lienzo abajo', 'Canvas unten andocken', 'Ancrer le canevas en bas', 'Aggancia canvas in basso', 'Acoplar tela embaixo', '将画布停靠在底部'],
   'chat.canvas.dockRight': ['Dock canvas right', 'Acoplar lienzo a la derecha', 'Canvas rechts andocken', 'Ancrer le canevas à droite', 'Aggancia canvas a destra', 'Acoplar tela à direita', '将画布停靠在右侧'],
   'chat.canvas.collapseToEdge': ['Collapse canvas to this edge', 'Contraer lienzo a este borde', 'Canvas an diesen Rand einklappen', 'Réduire le canevas sur ce bord', 'Comprimi canvas su questo lato', 'Recolher tela para esta borda', '将画布折叠到此边缘'],

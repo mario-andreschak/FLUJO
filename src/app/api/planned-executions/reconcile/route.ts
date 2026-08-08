@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { createLogger } from '@/utils/logger';
 import { getSchedulerService } from '@/backend/services/scheduler';
@@ -20,7 +21,7 @@ const log = createLogger('app/api/planned-executions/reconcile/route');
  * paused it no-ops arming, so the response echoes the pause state to tell the
  * caller nothing was armed.
  */
-export async function POST() {
+async function POST_handler(_request: Request) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -36,4 +37,11 @@ export async function POST() {
     log.error('Error handling POST reconcile request', error);
     return json({ error: 'Internal server error' }, 500);
   }
+}
+
+const POST_workspaceRoute = withWorkspaceRoute(POST_handler);
+export function POST(): ReturnType<typeof POST_workspaceRoute>;
+export function POST(request: Request): ReturnType<typeof POST_workspaceRoute>;
+export function POST(request: Request = new Request('http://localhost/')) {
+  return POST_workspaceRoute(request);
 }

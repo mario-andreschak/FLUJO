@@ -1,5 +1,6 @@
 import { SharedState } from './types';
 import { MAX_SUBFLOW_DEPTH } from './constants';
+import { workspaceCacheKey } from '@/utils/workspace';
 
 /**
  * Run-tree cancellation + deleted-conversation tombstones.
@@ -43,13 +44,13 @@ export function isCancelledByAncestry(
 const deletedConversationIds = new Set<string>();
 
 export function markConversationDeleted(conversationId: string): void {
-  deletedConversationIds.add(conversationId);
+  deletedConversationIds.add(workspaceCacheKey(conversationId));
 }
 
 export function unmarkConversationDeleted(conversationId: string): void {
-  deletedConversationIds.delete(conversationId);
+  deletedConversationIds.delete(workspaceCacheKey(conversationId));
 }
 
 export function isConversationDeleted(conversationId: string | undefined): boolean {
-  return !!conversationId && deletedConversationIds.has(conversationId);
+  return !!conversationId && deletedConversationIds.has(workspaceCacheKey(conversationId));
 }

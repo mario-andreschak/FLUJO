@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { spawn } from 'child_process';
 import { NextRequest } from 'next/server';
 
@@ -15,7 +16,7 @@ export const runtime = 'nodejs';
  * supplies a command, package id, arguments, or working directory, so this
  * local-only route cannot become a general shell-execution seam.
  */
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   // #77 deny-by-default encryption gate.
   const locked = await assertUnlocked();
   if (locked) return locked;
@@ -91,3 +92,5 @@ export async function POST(request: NextRequest) {
     });
   }, { signal: request.signal });
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

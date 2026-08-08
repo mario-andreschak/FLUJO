@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { NextRequest, NextResponse } from 'next/server';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import {
@@ -12,7 +13,7 @@ import {
  * its MCP read shape back into HTTP bytes so <img>, <audio>, and <video> can
  * consume it without putting base64 in conversation JSON.
  */
-export async function GET(
+async function GET_handler(
   _request: NextRequest,
   {
     params,
@@ -61,3 +62,5 @@ export async function GET(
     return NextResponse.json({ error: 'Failed to read resource' }, { status: 500 });
   }
 }
+
+export const GET = withWorkspaceRoute(GET_handler);

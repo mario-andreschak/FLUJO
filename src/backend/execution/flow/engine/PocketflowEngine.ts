@@ -5,6 +5,7 @@ import { createLogger } from '@/utils/logger';
 import { IMPLICIT_SUBFLOW_RETURN_ACTION, SharedState } from '../types';
 import { EmitFn } from '@/shared/types/execution/events';
 import { FlowEngine, ResolvedNode, RunNodeResult, HandoffResolution } from './FlowEngine';
+import { getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
 
 const log = createLogger('backend/execution/flow/engine/PocketflowEngine');
 
@@ -19,9 +20,12 @@ export class PocketflowEngine implements FlowEngine {
 
   clearCache(flowId?: string): void {
     if (flowId) {
-      this.pocketFlowCache.delete(flowId);
+      this.pocketFlowCache.delete(workspaceCacheKey(flowId));
     } else {
-      this.pocketFlowCache.clear();
+      const prefix = `${getCurrentWorkspace()}\0`;
+      for (const key of this.pocketFlowCache.keys()) {
+        if (key.startsWith(prefix)) this.pocketFlowCache.delete(key);
+      }
     }
   }
 
@@ -36,10 +40,11 @@ export class PocketflowEngine implements FlowEngine {
    */
   private async resolveFlowDefinition(sharedState: SharedState): Promise<PocketFlow> {
     const flowId = sharedState.flowId;
-    if (this.pocketFlowCache.has(flowId)) {
+    const cacheKey = workspaceCacheKey(flowId);
+    if (this.pocketFlowCache.has(cacheKey)) {
       log.debug(`Using cached Pocket Flow for flowId: ${flowId}`);
       // Return a clone to prevent modification of the cached instance
-      return this.pocketFlowCache.get(flowId)!.clone() as PocketFlow;
+      return this.pocketFlowCache.get(cacheKey)!.clone() as PocketFlow;
     }
 
     let reactFlow = sharedState.flowSnapshot;
@@ -61,7 +66,7 @@ export class PocketflowEngine implements FlowEngine {
     });
 
     const pocketFlow = FlowConverter.convert(reactFlow);
-    this.pocketFlowCache.set(flowId, pocketFlow);
+    this.pocketFlowCache.set(cacheKey, pocketFlow);
     log.verbose(`Flow ${flowId} converted and cached.`);
     return pocketFlow.clone() as PocketFlow;
   }

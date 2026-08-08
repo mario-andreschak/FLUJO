@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useState } from 'react';
-import { useUiPreference } from '@/frontend/hooks/useUiPreference';
+import { useWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
 import {
   CardGroup,
   DEFAULT_CARD_GROUP_MODE,
@@ -102,9 +102,9 @@ export function useCardPicker<T>(domain: CardPickerDomain, rawList: T[]): UseCar
   const adapter = ADAPTERS[domain];
 
   const [searchTerm, setSearchTerm] = useState('');
-  const [sortOption] = useUiPreference<string>(`flujo-ui:${domain}:sort`, adapter.defaultSort);
-  const [groupMode] = useUiPreference<GroupMode>(`flujo-ui:${domain}:group`, DEFAULT_CARD_GROUP_MODE);
-  const [collapsedList, setCollapsedList] = useUiPreference<string[]>(`flujo-ui:${domain}:collapsed`, []);
+  const [sortOption] = useWorkspaceUiPreference<string>(`flujo-ui:${domain}:sort`, adapter.defaultSort);
+  const [groupMode] = useWorkspaceUiPreference<GroupMode>(`flujo-ui:${domain}:group`, DEFAULT_CARD_GROUP_MODE);
+  const [collapsedList, setCollapsedList] = useWorkspaceUiPreference<string[]>(`flujo-ui:${domain}:collapsed`, []);
   const collapsedKeys = useMemo(() => new Set(collapsedList), [collapsedList]);
 
   const items = useMemo(() => {

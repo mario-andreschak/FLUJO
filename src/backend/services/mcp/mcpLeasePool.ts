@@ -19,6 +19,7 @@
  */
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { createLogger } from '@/utils/logger';
+import { DEFAULT_WORKSPACE, getCurrentWorkspace } from '@/utils/workspace';
 import {
   addLease,
   addPin,
@@ -93,20 +94,33 @@ interface PoolCounters {
 
 declare global {
   var __flujo_mcp_pool_counters: PoolCounters | undefined;
+  var __flujo_mcp_pool_counters_by_workspace: Map<string, PoolCounters> | undefined;
 }
 
 function counters(): PoolCounters {
-  if (!global.__flujo_mcp_pool_counters) {
-    global.__flujo_mcp_pool_counters = {
-      acquires: 0,
-      coalesced: 0,
-      connects: 0,
-      failures: 0,
-      idleClosures: 0,
-      lruEvictions: 0,
-    };
+  const create = (): PoolCounters => ({
+    acquires: 0,
+    coalesced: 0,
+    connects: 0,
+    failures: 0,
+    idleClosures: 0,
+    lruEvictions: 0,
+  });
+  const workspace = getCurrentWorkspace();
+  if (workspace === DEFAULT_WORKSPACE) {
+    if (!global.__flujo_mcp_pool_counters) {
+      global.__flujo_mcp_pool_counters = create();
+    }
+    return global.__flujo_mcp_pool_counters;
   }
-  return global.__flujo_mcp_pool_counters;
+  const byWorkspace = global.__flujo_mcp_pool_counters_by_workspace ??=
+    new Map<string, PoolCounters>();
+  let value = byWorkspace.get(workspace);
+  if (!value) {
+    value = create();
+    byWorkspace.set(workspace, value);
+  }
+  return value;
 }
 
 function makeLease(serverName: string, client: Client, generation: number): McpLease {
@@ -298,5 +312,7 @@ export function getPoolDiagnostics(): PoolDiagnostics {
 
 /** Test-only: reset pool counters (runtime records reset separately). */
 export function _resetPoolForTests(): void {
-  global.__flujo_mcp_pool_counters = undefined;
+  const workspace = getCurrentWorkspace();
+  if (workspace === DEFAULT_WORKSPACE) global.__flujo_mcp_pool_counters = undefined;
+  else global.__flujo_mcp_pool_counters_by_workspace?.delete(workspace);
 }

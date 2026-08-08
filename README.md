@@ -230,9 +230,12 @@ Then open http://localhost:4200.
 > reuses the previously built image and runs the *old* version. `--build`
 > rebuilds when the source changed and is a fast no-op when it hasn't.
 
-- **Your data persists** in the named volumes `flujo-db` (flows, encrypted keys,
-  MCP configs, chat history) and `flujo-mcp-servers` (installed MCP server clones),
-  so it survives `docker compose down` / `up`.
+- **Your data persists** in `flujo-workspaces` (the workspace namespace and all
+  non-default workspace data), plus the existing `flujo-db` and
+  `flujo-mcp-servers` volumes mounted inside `default-workspace`. Reusing those
+  two established volume names makes an upgrade retain existing flows, models,
+  encrypted keys, chats, MCP configs, and installed server clones while every
+  newly created workspace also survives `docker compose down` / `up`.
 - **Updating**: use `git pull && docker compose up --build` instead of the
   in-app updater. FLUJO detects it is running in a container and shows this in
   the update settings. (`docker compose pull` only helps if you switched the
@@ -244,8 +247,9 @@ Then open http://localhost:4200.
   `claude setup-token` and pass it as `CLAUDE_CODE_OAUTH_TOKEN`.
 - **fileWatch triggers**: bind-mount the host folder you want to watch into the
   container (see the commented volume example in `docker-compose.yml`).
-- **MCP Apps**: Compose also publishes the isolated sandbox origin on
-  `http://localhost:4201`, loopback-only. Keep both `4200` and `4201` mappings
+- **MCP Apps**: Compose also publishes the shared sandbox listener on port
+  `4201`, loopback-only. Each App is loaded through its own
+  `http://<originKey>.localhost:4201` browser origin. Keep both port mappings
   when using interactive MCP Apps.
 
 > ⚠️ **Security:** FLUJO has no authentication layer and its git API runs
@@ -264,16 +268,16 @@ Use **Settings → Network access** to choose one deployment posture:
   this only behind an authenticating HTTPS reverse proxy.
 
 The one setting controls the UI, API, OpenAI/MCP endpoints, Host/Origin guard,
-and MCP Apps sandbox together. Restart FLUJO after changing it. Existing hosted
-installs that used the former host/sandbox environment variables remain
-supported as a compatibility path, but new setup no longer needs them.
+and MCP Apps sandbox binding together. Restart FLUJO after changing it.
 
-For MCP Apps over HTTPS, expose the sandbox listener on the same hostname at
-HTTPS port `4201` and proxy it to FLUJO's plain HTTP port `4201`. The port makes
-it a distinct browser origin, and FLUJO derives the URL and exact embedding
-origin automatically. Preserve the browser's `Referer` header through the
-proxy. Docker Compose still publishes both ports to host loopback by default;
-change those two port mappings when choosing Local Network or Public.
+For MCP Apps in Local Network or Public mode, configure
+`FLUJO_MCP_APP_SANDBOX_PUBLIC_URL` with `{app}` as one complete hostname label,
+for example `https://{app}.sandbox.example.com/sandbox.html`, and proxy those
+wildcard hostnames to FLUJO's plain HTTP port `4201`. A single shared sandbox
+hostname is rejected. Preserve the browser's `Host` and `Referer` headers
+through the proxy. Docker Compose publishes both listener ports to host
+loopback by default; change those mappings only as part of a properly
+authenticated/proxied Local Network or Public deployment.
 
 See [MCP Apps host support](docs/features/mcp/apps.md) for protocol behavior,
 security guarantees, display modes, compatibility limits, and the versioned
@@ -367,9 +371,11 @@ all detected prerequisites default to **keep**. The graphical bootstrapper is
 intentionally not registered in Windows Apps, so this direct PowerShell command
 is the supported uninstall entry point.
 
-> ⚠️ **This permanently deletes your data.** All flows, encrypted API keys, MCP server
-> configs and chat history live in `<install>\db\` and are removed with the folder. Use
-> FLUJO's built-in backup/export first if you want to keep them.
+> ⚠️ **This permanently deletes your data.** All workspace data—including flows,
+> encrypted API keys, MCP server configs, chat history, user files and runtime
+> artifacts—lives below `<data root>\workspaces\<workspace>\` and is removed with
+> the installation/data folder. Use FLUJO's built-in backup/export first if you
+> want to keep it.
 
 Installs created before this feature have no manifest; the uninstaller then defaults every
 prerequisite to **keep** (it can't tell which FLUJO installed). Re-running the installer

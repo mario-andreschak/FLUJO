@@ -45,7 +45,7 @@ import {
   DEFAULT_CARD_GROUP_MODE,
 } from '@/utils/shared/cardGrouping';
 import { FlowSortOption, deriveFlowSortGroup, sortFlowsFavoritesFirst } from '@/utils/shared/flowGrouping';
-import { useUiPreference } from '@/frontend/hooks/useUiPreference';
+import { useWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
 import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
 import ScrollNavCluster from '@/frontend/components/shared/ScrollNavCluster';
 import { useListScrollNav } from '@/frontend/hooks/useListScrollNav';
@@ -106,17 +106,17 @@ const FlowDashboard = ({
   // Persisted view preferences (#93): survive navigating away and back. Search
   // is intentionally NOT persisted (session-scoped), and the transient menu
   // anchors stay ephemeral.
-  const [sortOption, setSortOption] = useUiPreference<FlowSortOption>('flujo-ui:flows:sort', 'name-asc');
-  const [viewMode, setViewMode] = useUiPreference<'grid' | 'compact'>('flujo-ui:flows:view', 'grid');
+  const [sortOption, setSortOption] = useWorkspaceUiPreference<FlowSortOption>('flujo-ui:flows:sort', 'name-asc');
+  const [viewMode, setViewMode] = useWorkspaceUiPreference<'grid' | 'compact'>('flujo-ui:flows:view', 'grid');
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
-  const [groupMode, setGroupMode] = useUiPreference<GroupMode>('flujo-ui:flows:group', DEFAULT_CARD_GROUP_MODE);
+  const [groupMode, setGroupMode] = useWorkspaceUiPreference<GroupMode>('flujo-ui:flows:group', DEFAULT_CARD_GROUP_MODE);
   const [groupAnchorEl, setGroupAnchorEl] = useState<null | HTMLElement>(null);
   const [modelSelectionMode, setModelSelectionMode] = useState(false);
   const [selectedForModelChange, setSelectedForModelChange] = useState<Set<string>>(new Set());
   const [quickChangeOpen, setQuickChangeOpen] = useState(false);
   // Keys of the sections the user has collapsed; everything defaults to expanded.
   // Persisted as a string[] and re-derived into a Set for O(1) lookups.
-  const [collapsedList, setCollapsedList] = useUiPreference<string[]>('flujo-ui:flows:collapsed', []);
+  const [collapsedList, setCollapsedList] = useWorkspaceUiPreference<string[]>('flujo-ui:flows:collapsed', []);
   const collapsedKeys = useMemo(() => new Set(collapsedList), [collapsedList]);
 
   // Context for the per-card consistency badge. Loaded once; flows are revalidated

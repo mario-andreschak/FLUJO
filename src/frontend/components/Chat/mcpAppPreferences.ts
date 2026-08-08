@@ -1,9 +1,10 @@
 import { readUiPreference, writeUiPreference } from '@/frontend/hooks/useUiPreference';
+import { workspacePrefixedStorageKey } from '@/frontend/utils/workspaceSelection';
 
 const MCP_APP_DISMISSED_PREF_PREFIX = 'flujo-ui:mcp-canvas:dismissed:';
 
 export function dismissedMcpAppPreferenceKey(conversationId: string): string {
-  return `${MCP_APP_DISMISSED_PREF_PREFIX}${conversationId}`;
+  return workspacePrefixedStorageKey(`${MCP_APP_DISMISSED_PREF_PREFIX}${conversationId}`);
 }
 
 export function readDismissedMcpAppKeys(conversationId: string): string[] {
@@ -54,7 +55,7 @@ export function writeMcpAppsDismissed(
 export const MCP_APP_AUTO_OPEN_SUPPRESSED_PREFIX = 'flujo-ui:mcp-canvas:auto-open-suppressed:';
 
 export function autoOpenSuppressedPreferenceKey(conversationId: string): string {
-  return `${MCP_APP_AUTO_OPEN_SUPPRESSED_PREFIX}${conversationId}`;
+  return workspacePrefixedStorageKey(`${MCP_APP_AUTO_OPEN_SUPPRESSED_PREFIX}${conversationId}`);
 }
 
 export function readAutoOpenSuppressed(conversationId: string): boolean {

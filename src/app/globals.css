@@ -21,6 +21,12 @@
   --app-bar-height: 72px;
   --subnav-height: 44px;
   --active-subnav-height: 0px;
+  /* Reserved by the persistent app-shell MCP surface. A collapsed rail keeps
+     these at zero and overlays the edge, matching the chat canvas behavior. */
+  --global-mcp-dock-left: 0px;
+  --global-mcp-dock-right: 0px;
+  --global-mcp-dock-top: 0px;
+  --global-mcp-dock-bottom: 0px;
 }
 
 /* Scroll-heavy workspaces trade their introductory chrome for working room
@@ -312,7 +318,26 @@ a {
 .app-main {
   position: relative;
   z-index: 0;
-  min-height: calc(100dvh - var(--app-bar-height) - var(--active-subnav-height));
+  box-sizing: border-box;
+  width: calc(100% - var(--global-mcp-dock-left) - var(--global-mcp-dock-right));
+  min-height: calc(
+    100dvh
+    - var(--app-bar-height)
+    - var(--active-subnav-height)
+    - var(--global-mcp-dock-top)
+    - var(--global-mcp-dock-bottom)
+  );
+  margin-top: var(--global-mcp-dock-top);
+  margin-right: var(--global-mcp-dock-right);
+  margin-bottom: var(--global-mcp-dock-bottom);
+  margin-left: var(--global-mcp-dock-left);
+  transition: margin 160ms ease, width 160ms ease, min-height 160ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-main {
+    transition: none;
+  }
 }
 
 .app-loading {

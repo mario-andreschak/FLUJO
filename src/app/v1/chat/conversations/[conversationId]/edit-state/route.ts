@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
@@ -23,7 +24,7 @@ interface EditStateBody {
  * message's content or change which node runs next, then continue/step. Only
  * permitted while the conversation is paused for debugging.
  */
-export async function PATCH(
+async function PATCH_handler(
   request: NextRequest,
   { params }: { params: Promise<{ conversationId: string }> }
 ) {
@@ -95,3 +96,5 @@ export async function PATCH(
     return NextResponse.json({ error: 'Internal server error editing state' }, { status: 500 });
   }
 }
+
+export const PATCH = withWorkspaceRoute(PATCH_handler);

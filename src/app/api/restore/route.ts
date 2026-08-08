@@ -1,7 +1,6 @@
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
-import { promises as fs } from 'fs';
 import path from 'path';
 import JSZip from 'jszip';
 import { assertSafeCollectionId, saveCollectionItem, saveItem } from '@/utils/storage/backend';
@@ -12,6 +11,7 @@ import { createLogger } from '@/utils/logger';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { v4 as uuidv4 } from 'uuid';
+import { restoreFolderFromZipLinkSafe } from '@/backend/services/workspace/backupRestoreFs';
 
 const log = createLogger('app/api/restore/route');
 
@@ -168,7 +168,13 @@ async function POST_handler(request: NextRequest) {
     if (selections.includes('mcpServersFolder')) {
       try {
         log.debug(`Restoring MCP servers folder [${requestId}]`);
-        await restoreFolderFromZip(zip, 'mcp-servers', mcpServersDir());
+        await restoreFolderFromZipLinkSafe(
+          zip,
+          'mcp-servers',
+          mcpServersDir(),
+          getWorkspaceDataDir(),
+          (entryPath, reason) => log.warn(`Skipped unsafe MCP restore entry ${entryPath}: ${reason}`),
+        );
         log.debug(`Restored MCP servers folder [${requestId}]`);
       } catch (error) {
         log.error(`Error restoring MCP servers folder [${requestId}]:`, error);
@@ -184,82 +190,7 @@ async function POST_handler(request: NextRequest) {
   }
 }
 
-// Helper function to ensure a directory exists
-async function ensureDir(dir: string) {
-  try {
-    await fs.access(dir);
-  } catch {
-    await fs.mkdir(dir, { recursive: true });
-  }
-}
-
-/**
- * Resolve an archive-relative path against the restore target, refusing any
- * entry that would land outside it.
- *
- * Archive entry names are attacker-controlled data: `../../db/encryption_key`
- * or an absolute path inside a hand-crafted zip would otherwise escape the
- * restore target. With workspaces (#406) that escape is strictly worse than
- * before, because "outside the target" now includes OTHER WORKSPACES and the
- * shared parent data root. Returns null for an entry that must be skipped.
- */
-function safeJoinInside(targetPath: string, relativePath: string): string | null {
-  // Zip paths always use '/', regardless of the platform that produced them.
-  if (relativePath.split('/').some(segment => segment === '..')) return null;
-  const resolvedTarget = path.resolve(targetPath);
-  const resolved = path.resolve(resolvedTarget, ...relativePath.split('/'));
-  const rel = path.relative(resolvedTarget, resolved);
-  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return null;
-  return resolved;
-}
-
-// Helper function to recursively restore a folder from a zip file
-async function restoreFolderFromZip(zip: JSZip, zipPath: string, targetPath: string) {
-  // Ensure the target directory exists
-  await ensureDir(targetPath);
-  
-  // Get all files in the zip folder
-  const files = Object.keys(zip.files)
-    .filter(key => key.startsWith(`${zipPath}/`) && key !== `${zipPath}/`)
-    .map(key => ({
-      path: key,
-      isDirectory: zip.files[key].dir,
-      relativePath: key.substring(zipPath.length + 1)
-    }));
-  
-  // Process directories first
-  for (const file of files.filter(f => f.isDirectory)) {
-    if (!file.relativePath) continue;
-    
-    const dirPath = safeJoinInside(targetPath, file.relativePath);
-    if (!dirPath) {
-      log.warn('Skipped unsafe archive directory entry:', file.path);
-      continue;
-    }
-    await ensureDir(dirPath);
-  }
-  
-  // Then process files
-  for (const file of files.filter(f => !f.isDirectory)) {
-    if (!file.relativePath) continue;
-    
-    const filePath = safeJoinInside(targetPath, file.relativePath);
-    if (!filePath) {
-      log.warn('Skipped unsafe archive file entry:', file.path);
-      continue;
-    }
-    const content = await zip.files[file.path].async('nodebuffer');
-    
-    // Ensure parent directory exists
-    const parentDir = path.dirname(filePath);
-    await ensureDir(parentDir);
-    
-    // Write the file
-    await fs.writeFile(filePath, content);
-  }
-}
-
 // Workspaces (#406): restores into the selected workspace only; archive entries
-// that would escape it are refused above.
+// that would escape it or traverse links are refused by backupRestoreFs.
 export const POST = withWorkspaceRoute(POST_handler);
 

@@ -23,12 +23,17 @@ import {
 } from '@/backend/services/statistics/metadata';
 import type { StatisticsSubflowOutcome } from '@/shared/types/statistics';
 import type { SubflowLanePlan, SubflowNodePrepResult, SubflowNodeProperties, ToolDefinition } from '../types';
+import { bindToCurrentWorkspace, DEFAULT_WORKSPACE, getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
 
 const log = createLogger('backend/flow/execution/handlers/subflowDetachedInvocation');
 export const SUBFLOW_DETACHED_TOOL_PREFIX = 'start_subflow_';
 
 export interface DetachedJobEntry { controller: AbortController; promise: Promise<void>; }
 export const detachedJobRegistry = new Map<string, DetachedJobEntry>();
+
+function detachedJobKey(taskId: string): string {
+  return getCurrentWorkspace() === DEFAULT_WORKSPACE ? taskId : workspaceCacheKey(taskId);
+}
 
 export function buildDetachedSubflowTool(
   name: string,
@@ -123,7 +128,7 @@ async function runDetachedJob(
     // A job that ends without any terminal record (process death, unexpected
     // early return) is reported as incomplete instead of a success or failure.
     record('incomplete');
-    detachedJobRegistry.delete(task.taskId);
+    detachedJobRegistry.delete(detachedJobKey(task.taskId));
   }
 }
 
@@ -181,7 +186,10 @@ export async function executeDetachedSubflowStart(
     } catch {
       // Display names are best-effort; the stable subflow id is authoritative.
     }
-    const job = runDetachedJob(
+    // Bind the fire-and-forget job explicitly: it outlives the request that
+    // launched it and every storage/cache operation must retain that workspace.
+    const launchDetachedJob = bindToCurrentWorkspace(runDetachedJob);
+    const job = launchDetachedJob(
       task,
       prep,
       { nodeId: targetNodeId, nodeName: node?.data?.label, nodeType: 'subflow' },
@@ -198,7 +206,7 @@ export async function executeDetachedSubflowStart(
         childRunId: task.childConversationId,
       },
     );
-    detachedJobRegistry.set(task.taskId, { controller, promise: job });
+    detachedJobRegistry.set(detachedJobKey(task.taskId), { controller, promise: job });
     void job;
     return { success: true, data: toTaskHandle(task) };
   } catch (error) {
@@ -214,6 +222,6 @@ export async function executeTaskGet(taskId: string) {
 
 export async function executeTaskCancel(taskId: string) {
   const task = await requestCancel(taskId);
-  detachedJobRegistry.get(taskId)?.controller.abort();
+  detachedJobRegistry.get(detachedJobKey(taskId))?.controller.abort();
   return task ? { success: true, data: toTaskHandle(task) } : { success: false, error: 'Task not found.' };
 }

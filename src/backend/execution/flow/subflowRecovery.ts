@@ -12,6 +12,7 @@ import type {
   SubflowInvocationLane,
   SubflowInvocationLaneStatus,
 } from './types';
+import { bindToCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
 
 const log = createLogger('backend/execution/flow/subflowRecovery');
 
@@ -160,8 +161,9 @@ async function resumeReadyParent(parent: SharedState, invocation: SubflowInvocat
   if (parent.activeSubflowInvocationByNode?.[invocation.parentNodeId] !== invocation.id) return;
 
   const leases = resumeLeases();
-  if (leases.has(invocation.id)) return;
-  leases.add(invocation.id);
+  const leaseKey = workspaceCacheKey(invocation.id);
+  if (leases.has(leaseKey)) return;
+  leases.add(leaseKey);
   invocation.status = 'ready';
   invocation.resumeRequestedAt = Date.now();
   invocation.updatedAt = Date.now();
@@ -197,7 +199,7 @@ async function resumeReadyParent(parent: SharedState, invocation: SubflowInvocat
       error,
     });
   } finally {
-    leases.delete(invocation.id);
+    leases.delete(leaseKey);
   }
 }
 
@@ -232,14 +234,14 @@ export async function reportSubflowRunOutcome(result: SubflowRunOutcome): Promis
  * syncLaneFromPersistedChild if the process stops in between. */
 export function queueSubflowRunOutcome(result: SubflowRunOutcome): void {
   if (result.status !== 'completed' && result.status !== 'capped' && result.status !== 'error') return;
-  queueMicrotask(() => {
+  queueMicrotask(bindToCurrentWorkspace(() => {
     void reportSubflowRunOutcome(result).catch((error) => {
       log.error('Could not propagate subflow terminal outcome to its parent', {
         conversationId: result.conversationId,
         error,
       });
     });
-  });
+  }));
 }
 
 function isFailedState(state: SharedState): boolean {

@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
@@ -17,7 +18,7 @@ type RouteContext = { params: Promise<{ name: string }> };
  * contain characters awkward in a path segment, so it travels as a query parameter.
  * Responds 200 with `{ success, data, error? }` (data = the MCP ReadResourceResult).
  */
-export async function GET(request: NextRequest, { params }: RouteContext) {
+async function GET_handler(request: NextRequest, { params }: RouteContext) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -36,3 +37,5 @@ export async function GET(request: NextRequest, { params }: RouteContext) {
     return json({ success: false, ...formatErrorResponse(error) }, 500);
   }
 }
+
+export const GET = withWorkspaceRoute(GET_handler);

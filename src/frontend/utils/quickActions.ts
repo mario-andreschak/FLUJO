@@ -42,6 +42,18 @@ export interface McpAppQuickAction {
   toolName?: string;
 }
 
+/** A concrete app View that the persistent app-shell host can start directly. */
+export interface GlobalMcpAppLaunchRequest extends McpAppQuickAction {
+  /** Global launch always targets a discovered app resource, never Tool Tester. */
+  uri: string;
+}
+
+// The app-shell host is loaded asynchronously. Keep a small bounded queue so a
+// click made before its effect subscribes is replayed instead of disappearing.
+const GLOBAL_LAUNCH_QUEUE_LIMIT = 32;
+const pendingGlobalLaunches: GlobalMcpAppLaunchRequest[] = [];
+const globalLaunchHandlers = new Set<(request: GlobalMcpAppLaunchRequest) => void>();
+
 /**
  * Bounded FIFO of already-honored tokens. Bounded because the page can live for
  * a long time and every quick action mints a new token; 100 is far more than
@@ -135,4 +147,26 @@ export function subscribeOpenMcpApp(
       handler(request, token);
     },
   );
+}
+
+/** Start/focus an MCP App in the persistent app-shell surface. */
+export function emitLaunchGlobalMcpApp(request: GlobalMcpAppLaunchRequest): void {
+  if (globalLaunchHandlers.size === 0) {
+    pendingGlobalLaunches.push(request);
+    while (pendingGlobalLaunches.length > GLOBAL_LAUNCH_QUEUE_LIMIT) pendingGlobalLaunches.shift();
+    return;
+  }
+  for (const handler of globalLaunchHandlers) handler(request);
+}
+
+/** Subscribe from the single app-shell owner of globally running MCP Apps. */
+export function subscribeLaunchGlobalMcpApp(
+  handler: (request: GlobalMcpAppLaunchRequest) => void,
+): () => void {
+  globalLaunchHandlers.add(handler);
+  if (pendingGlobalLaunches.length > 0) {
+    const pending = pendingGlobalLaunches.splice(0, pendingGlobalLaunches.length);
+    for (const request of pending) handler(request);
+  }
+  return () => globalLaunchHandlers.delete(handler);
 }

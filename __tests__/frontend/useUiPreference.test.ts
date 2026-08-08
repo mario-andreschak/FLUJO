@@ -1,4 +1,9 @@
-import { readUiPreference, writeUiPreference } from '@/frontend/hooks/useUiPreference';
+import {
+  readUiPreference,
+  readWorkspaceUiPreference,
+  writeUiPreference,
+  writeWorkspaceUiPreference,
+} from '@/frontend/hooks/useUiPreference';
 
 // The hook itself is a thin useState/useCallback wrapper around these pure
 // storage helpers, which carry the risk-bearing logic (JSON round-trip, missing
@@ -69,6 +74,37 @@ describe('writeUiPreference', () => {
   it('is a no-op on the server without throwing', () => {
     delete g.window;
     expect(() => writeUiPreference('flujo-ui:test:view', 'compact')).not.toThrow();
+  });
+});
+
+describe('workspace UI preferences', () => {
+  const KEY = 'flujo-ui:test:content-filter';
+
+  it('moves an unscoped legacy value into default-workspace only after verifying the copy', () => {
+    storage.setItem(KEY, JSON.stringify('flow-a'));
+
+    expect(readWorkspaceUiPreference(KEY, 'all')).toBe('flow-a');
+    expect(storage.getItem(KEY)).toBeNull();
+    expect(storage.getItem(`${KEY}:default-workspace`)).toBe(JSON.stringify('flow-a'));
+  });
+
+  it('does not import a default legacy value into a sibling workspace', () => {
+    storage.setItem('flujo-ui:workspace', 'workspace-b');
+    storage.setItem(KEY, JSON.stringify('flow-a'));
+
+    expect(readWorkspaceUiPreference(KEY, 'all')).toBe('all');
+    expect(storage.getItem(KEY)).toBe(JSON.stringify('flow-a'));
+  });
+
+  it('keeps identical keys independent across workspaces', () => {
+    storage.setItem('flujo-ui:workspace', 'workspace-a');
+    writeWorkspaceUiPreference(KEY, 'flow-a');
+    storage.setItem('flujo-ui:workspace', 'workspace-b');
+    writeWorkspaceUiPreference(KEY, 'flow-b');
+
+    expect(readWorkspaceUiPreference(KEY, 'all')).toBe('flow-b');
+    storage.setItem('flujo-ui:workspace', 'workspace-a');
+    expect(readWorkspaceUiPreference(KEY, 'all')).toBe('flow-a');
   });
 });
 

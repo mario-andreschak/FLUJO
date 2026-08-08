@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
@@ -20,7 +21,7 @@ type RouteContext = { params: Promise<{ name: string; toolName: string }> };
  * The response carries the tool result and is given the tool's own status code when it
  * provides one (e.g. a timeout maps to 408), otherwise 200 on success / 500 on failure.
  */
-export async function POST(request: NextRequest, { params }: RouteContext) {
+async function POST_handler(request: NextRequest, { params }: RouteContext) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -53,3 +54,5 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
     return json({ success: false, ...formatErrorResponse(error) }, 500);
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

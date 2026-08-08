@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
@@ -222,7 +223,7 @@ async function handleRequest(request: NextRequest) {
 }
 
 // Handle OPTIONS requests for CORS preflight
-export async function OPTIONS(request: NextRequest) {
+async function OPTIONS_handler(request: NextRequest) {
   const requestId = `options-${Date.now()}`;
   log.info('OPTIONS request received (CORS preflight)', {
     requestId,
@@ -241,7 +242,7 @@ export async function OPTIONS(request: NextRequest) {
 }
 
 // Handle GET requests
-export async function GET(request: NextRequest) {
+async function GET_handler(request: NextRequest) {
   const _lock = await assertUnlocked({ openai: true });
   if (_lock) return _lock;
 
@@ -266,7 +267,7 @@ export async function GET(request: NextRequest) {
 }
 
 // Handle POST requests
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const _lock = await assertUnlocked({ openai: true });
   if (_lock) return _lock;
 
@@ -290,3 +291,7 @@ export async function POST(request: NextRequest) {
   
   return response;
 }
+
+export const GET = withWorkspaceRoute(GET_handler);
+export const POST = withWorkspaceRoute(POST_handler);
+export const OPTIONS = withWorkspaceRoute(OPTIONS_handler);

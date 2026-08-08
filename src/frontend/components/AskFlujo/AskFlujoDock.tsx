@@ -44,8 +44,7 @@ import {
   extractAskFlujoToolActions,
   parseAskFlujoResponse,
 } from '@/frontend/utils/askFlujoActions';
-
-const ASK_MODEL_STORAGE_KEY = 'flujo-ui:ask-flujo:model';
+import { askFlujoModelStorageKey } from '@/frontend/utils/workspaceContentKeys';
 
 const SHIPPED_TOOLS = [
   { key: 'flujo', label: 'FLUJO', packageId: '@mario.andreschak/mcp-flujo' },
@@ -149,7 +148,9 @@ export default function AskFlujoDock() {
       ]);
       const usableModels = loadedModels.filter(model => model.supportsTools !== false);
       setModels(usableModels);
-      const savedModel = typeof window === 'undefined' ? '' : window.localStorage.getItem(ASK_MODEL_STORAGE_KEY) || '';
+      const savedModel = typeof window === 'undefined'
+        ? ''
+        : window.localStorage.getItem(askFlujoModelStorageKey()) || '';
       setModelId(current => {
         const preferred = current || savedModel;
         return usableModels.some(model => model.id === preferred) ? preferred : usableModels[0]?.id || '';
@@ -334,7 +335,7 @@ export default function AskFlujoDock() {
     if (nextModelId === modelId) return;
     await resetConversation();
     setModelId(nextModelId);
-    window.localStorage.setItem(ASK_MODEL_STORAGE_KEY, nextModelId);
+    window.localStorage.setItem(askFlujoModelStorageKey(), nextModelId);
   };
 
   return (

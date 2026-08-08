@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest } from 'next/server';
@@ -17,7 +18,7 @@ const log = createLogger('app/api/mcp/test-connection/route');
  * This runs in the Next.js server process, so it can reach servers behind custom CAs and
  * send the configured custom headers (Authorization, X-SAP-*), which a browser fetch cannot.
  */
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   // Local-only: this route spawns a stdio child process from a caller-supplied
   // command, so reject cross-origin / DNS-rebinding callers before anything else (#141).
   const notLocal = assertLocalRequest(request);
@@ -44,3 +45,5 @@ export async function POST(request: NextRequest) {
     return json({ success: false, ...formatErrorResponse(error) }, 500);
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

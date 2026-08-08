@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
@@ -13,7 +14,7 @@ const log = createLogger('app/v1/chat/conversations/[conversationId]/breakpoints
  * Replace the set of breakpoint node IDs for a conversation (used by the
  * visual debugger). Body: { breakpoints: string[] }.
  */
-export async function PUT(
+async function PUT_handler(
   request: NextRequest,
   { params }: { params: Promise<{ conversationId: string }> }
 ) {
@@ -59,3 +60,5 @@ export async function PUT(
     return NextResponse.json({ error: 'Internal server error updating breakpoints' }, { status: 500 });
   }
 }
+
+export const PUT = withWorkspaceRoute(PUT_handler);

@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { createLogger } from '@/utils/logger';
 import { listPendingApprovals, removePendingApproval } from '@/backend/services/scheduler/pendingApprovals';
@@ -31,7 +32,7 @@ function json(body: unknown, status = 200): Response {
  * band, or the conversation was deleted) are pruned lazily here so the inbox
  * stays truthful.
  */
-export async function GET() {
+async function GET_handler(_request: Request) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -82,4 +83,11 @@ export async function GET() {
     log.error('Error handling GET /api/approvals', error);
     return json({ error: 'Internal server error' }, 500);
   }
+}
+
+const GET_workspaceRoute = withWorkspaceRoute(GET_handler);
+export function GET(): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request = new Request('http://localhost/')) {
+  return GET_workspaceRoute(request);
 }

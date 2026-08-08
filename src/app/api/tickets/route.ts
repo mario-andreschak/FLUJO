@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { NextRequest } from 'next/server';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
@@ -5,7 +6,7 @@ import { ticketService } from '@/backend/services/ticket';
 import { CreateTicketInputSchema } from '@/backend/services/ticket/schema';
 import { json } from './_helpers';
 
-export async function GET(request: NextRequest) {
+async function GET_handler(request: NextRequest) {
   const notLocal = assertLocalRequest(request); if (notLocal) return notLocal;
   const lock = await assertUnlocked(); if (lock) return lock;
   const { searchParams } = request.nextUrl;
@@ -24,7 +25,7 @@ export async function GET(request: NextRequest) {
   }));
 }
 
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const notLocal = assertLocalRequest(request); if (notLocal) return notLocal;
   const lock = await assertUnlocked(); if (lock) return lock;
   const body = await request.json().catch(() => null);
@@ -34,7 +35,7 @@ export async function POST(request: NextRequest) {
   return result.success ? json(result.ticket, 201) : json({ error: result.error }, 400);
 }
 
-export async function DELETE(request: NextRequest) {
+async function DELETE_handler(request: NextRequest) {
   const notLocal = assertLocalRequest(request); if (notLocal) return notLocal;
   const lock = await assertUnlocked(); if (lock) return lock;
   const body = await request.json().catch(() => null);
@@ -43,3 +44,7 @@ export async function DELETE(request: NextRequest) {
   }
   return json(await ticketService.deleteTickets(body.ids));
 }
+
+export const GET = withWorkspaceRoute(GET_handler);
+export const POST = withWorkspaceRoute(POST_handler);
+export const DELETE = withWorkspaceRoute(DELETE_handler);

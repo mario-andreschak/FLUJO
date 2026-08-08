@@ -1,17 +1,9 @@
 /**
- * MCP Apps (#387) — Mode B (hosted) sandbox listener Host-header originKey
- * resolution.
+ * MCP App sandbox origin isolation.
  *
- * `ensureSandboxForOriginKey()` mints a token scoped to the REQUESTED app's
- * originKey even though the underlying Mode B listener is started with the
- * shared/empty originKey `''`. Before this fix, `handleSandboxRequest()`
- * validated every token against that listener's own `''` key regardless of
- * which app's hostname the request actually arrived on — so per-app hostnames
- * were cosmetic (a token minted for app X either always failed, or — depending
- * on future changes — could be accepted on app Y's hostname). The fix derives
- * the effective originKey from the request's `Host` header (matched against
- * the `{app}` placeholder in the configured public URL template) and MUST
- * take priority over the listener's own key.
+ * Local and hosted deployments share one transport listener, but every app is
+ * addressed through a stable, key-bearing hostname. The listener must derive
+ * that key from Host before accepting the corresponding scoped token.
  */
 import http from 'node:http';
 
@@ -19,28 +11,33 @@ type SandboxModule = typeof import('@/backend/mcpApps/sandboxServer');
 
 /** The module adopts cross-bundle state from this key; drop it for a clean load. */
 const RUNTIME_STATE_KEY = Symbol.for('flujo.mcpApps.sandboxRuntimeState.v2');
+const PUBLIC_URL_ENV = 'FLUJO_MCP_APP_SANDBOX_PUBLIC_URL';
+const BIND_HOST_ENV = 'FLUJO_MCP_APP_SANDBOX_HOST';
+const PORT_ENV = 'FLUJO_MCP_APP_SANDBOX_PORT';
+const EXPOSURE_ENV = 'FLUJO_EXPOSURE_MODE';
+const EXPOSURE_SOURCE_ENV = 'FLUJO_EXPOSURE_MODE_SOURCE';
+
+const APP_A = `app${'a'.repeat(60)}`;
+const APP_B = `app${'b'.repeat(60)}`;
 
 /**
- * `deriveOriginKeyFromHost()` / `getSandboxPublicUrl()` read `process.env`
- * LAZILY -- at call time, not at module-load time -- so the env vars set up
- * by `loadSandboxModule()` below must stay in place until the *test's*
- * assertions have run, not just until the module has finished loading.
- * Restoring them in a `finally` block inside `loadSandboxModule()` would
- * un-set them before the test body even gets a chance to call into the
- * module, breaking every assertion. Instead we defer the restore to
- * `afterEach`, which still guarantees no env leakage across tests/suites.
+ * The module reads deployment variables lazily. Keep them in place through the
+ * test body, then restore them after each isolated module instance is stopped.
  */
 const pendingEnvRestores: Array<() => void> = [];
 
 afterEach(() => {
-  while (pendingEnvRestores.length > 0) {
-    pendingEnvRestores.pop()!();
-  }
+  while (pendingEnvRestores.length > 0) pendingEnvRestores.pop()!();
 });
 
-function loadSandboxModule(env: Record<string, string | undefined> = {}): SandboxModule {
+function loadSandboxModule(
+  env: Record<string, string | undefined>,
+  options: { preserveRuntime?: boolean } = {},
+): SandboxModule {
   let mod!: SandboxModule;
-  delete (globalThis as Record<symbol, unknown>)[RUNTIME_STATE_KEY];
+  if (!options.preserveRuntime) {
+    delete (globalThis as Record<symbol, unknown>)[RUNTIME_STATE_KEY];
+  }
 
   const previous: Record<string, string | undefined> = {};
   for (const [key, value] of Object.entries(env)) {
@@ -48,8 +45,6 @@ function loadSandboxModule(env: Record<string, string | undefined> = {}): Sandbo
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
-  // Restore after the test (see comment above), not right after the module
-  // load -- the module reads these env vars lazily at assertion time.
   pendingEnvRestores.push(() => {
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key];
@@ -60,133 +55,271 @@ function loadSandboxModule(env: Record<string, string | undefined> = {}): Sandbo
   jest.isolateModules(() => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     mod = require('@/backend/mcpApps/sandboxServer') as SandboxModule;
+    // Initialize the isolated runtime while this test's env is active.
     mod.getRegisteredSandboxHostOrigins();
   });
   return mod;
 }
 
-function fakeRequest(host: string | undefined): http.IncomingMessage {
-  return { headers: { host } } as unknown as http.IncomingMessage;
+async function findFreePort(): Promise<number> {
+  const server = http.createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  const port = typeof address === 'object' && address ? address.port : 0;
+  await new Promise<void>((resolve, reject) => {
+    server.close(error => error ? reject(error) : resolve());
+  });
+  return port;
 }
 
-describe('deriveOriginKeyFromHost (unit)', () => {
-  const PUBLIC_URL_ENV = 'FLUJO_MCP_APP_SANDBOX_PUBLIC_URL';
-
-  it('returns undefined when no {app} template is configured (Mode A/C unaffected)', () => {
-    const sandbox = loadSandboxModule({ [PUBLIC_URL_ENV]: undefined });
-    expect(sandbox.deriveOriginKeyFromHost('localhost:4203')).toBeUndefined();
+async function listenEphemeral(server: http.Server): Promise<number> {
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
   });
+  const address = server.address();
+  return typeof address === 'object' && address ? address.port : 0;
+}
 
-  it('returns undefined for a single-origin (Mode C) public URL without {app}', () => {
-    const sandbox = loadSandboxModule({ [PUBLIC_URL_ENV]: 'https://apps.example.test' });
-    expect(sandbox.deriveOriginKeyFromHost('apps.example.test')).toBeUndefined();
+function get(port: number, host: string, path: string): Promise<{ status: number }> {
+  return new Promise((resolve, reject) => {
+    const req = http.get(
+      { host: '127.0.0.1', port, path, headers: { host } },
+      (res) => {
+        res.resume();
+        res.on('end', () => resolve({ status: res.statusCode ?? 0 }));
+      },
+    );
+    req.on('error', reject);
   });
+}
 
-  it('extracts the {app} label from a matching Host header', () => {
+describe('sandbox hostname/key derivation', () => {
+  it('derives only a single key label under localhost in local mode', () => {
     const sandbox = loadSandboxModule({
-      [PUBLIC_URL_ENV]: 'https://{app}.sandbox.example.test',
+      [EXPOSURE_ENV]: 'localhost',
+      [EXPOSURE_SOURCE_ENV]: undefined,
+      [PUBLIC_URL_ENV]: undefined,
     });
-    expect(sandbox.deriveOriginKeyFromHost('my-app.sandbox.example.test')).toBe('my-app');
-    // Port is stripped before matching.
-    expect(sandbox.deriveOriginKeyFromHost('my-app.sandbox.example.test:443')).toBe('my-app');
-  });
 
-  it('rejects a Host header that does not match the template shape', () => {
-    const sandbox = loadSandboxModule({
-      [PUBLIC_URL_ENV]: 'https://{app}.sandbox.example.test',
-    });
-    expect(sandbox.deriveOriginKeyFromHost('sandbox.example.test')).toBeUndefined();
-    expect(sandbox.deriveOriginKeyFromHost('my-app.other.example.test')).toBeUndefined();
-    expect(sandbox.deriveOriginKeyFromHost('evil.test')).toBeUndefined();
+    expect(sandbox.deriveOriginKeyFromHost(`${APP_A}.localhost:4201`)).toBe(APP_A);
+    expect(sandbox.deriveOriginKeyFromHost(`${APP_A.toUpperCase()}.LOCALHOST`)).toBe(APP_A);
+    expect(sandbox.deriveOriginKeyFromHost('localhost:4201')).toBeUndefined();
+    expect(sandbox.deriveOriginKeyFromHost(`nested.${APP_A}.localhost`)).toBeUndefined();
+    expect(sandbox.deriveOriginKeyFromHost(`${APP_A}.localhost/../evil`)).toBeUndefined();
+    expect(sandbox.deriveOriginKeyFromHost(`${APP_A}.localhost?x=1`)).toBeUndefined();
     expect(sandbox.deriveOriginKeyFromHost(undefined)).toBeUndefined();
   });
 
-  it('rejects malicious/malformed Host headers that would otherwise smuggle an invalid label', () => {
+  it('builds a stable localhost URL and rejects non-label keys', () => {
     const sandbox = loadSandboxModule({
-      [PUBLIC_URL_ENV]: 'https://{app}.sandbox.example.test',
+      [EXPOSURE_ENV]: 'localhost',
+      [EXPOSURE_SOURCE_ENV]: undefined,
+      [PUBLIC_URL_ENV]: undefined,
     });
-    // DNS hostnames are case-insensitive; the Host header is normalized to
-    // lowercase before matching (same case-folding DNS itself applies), so an
-    // uppercase label still resolves to the (already-lowercase) originKey.
-    expect(sandbox.deriveOriginKeyFromHost('MYAPP.sandbox.example.test')).toBe('myapp');
-    // Dotted "label" (two labels stuffed into the {app} slot) must not be
-    // accepted as a single-label match.
-    expect(sandbox.deriveOriginKeyFromHost('my.app.sandbox.example.test')).toBeUndefined();
-    // Path/query smuggled into the Host header string.
-    expect(sandbox.deriveOriginKeyFromHost('my-app.sandbox.example.test/../evil')).toBeUndefined();
-    expect(sandbox.deriveOriginKeyFromHost('my-app.sandbox.example.test?x=1')).toBeUndefined();
+
+    expect(sandbox.deriveSandboxPublicUrl('http://localhost:4200', 4317, APP_A)).toBe(
+      `http://${APP_A}.localhost:4317/sandbox.html`,
+    );
+    expect(sandbox.deriveSandboxPublicUrl('http://localhost:4200', 4317, 'two.labels'))
+      .toBeUndefined();
+    expect(sandbox.deriveSandboxPublicUrl('http://localhost:4200', 4317))
+      .toBeUndefined();
+  });
+
+  it('accepts {app} only as one complete hosted DNS label', () => {
+    const sandbox = loadSandboxModule({
+      [EXPOSURE_ENV]: 'public',
+      [EXPOSURE_SOURCE_ENV]: undefined,
+      [PUBLIC_URL_ENV]: 'https://sandbox.{app}.example.test',
+    });
+
+    expect(sandbox.hasValidSandboxAppUrlTemplate()).toBe(true);
+    expect(sandbox.deriveOriginKeyFromHost(`sandbox.${APP_A}.example.test:443`)).toBe(APP_A);
+    expect(sandbox.deriveOriginKeyFromHost(`${APP_A}.sandbox.example.test`)).toBeUndefined();
+    expect(sandbox.deriveOriginKeyFromHost(`sandbox.nested.${APP_A}.example.test`))
+      .toBeUndefined();
+    expect(sandbox.deriveSandboxPublicUrl('https://flujo.example.test', 4201, APP_A)).toBe(
+      `https://sandbox.${APP_A}.example.test/sandbox.html`,
+    );
+  });
+
+  it.each([
+    'https://apps.example.test',
+    'https://prefix-{app}.example.test',
+    'https://{app}-suffix.example.test',
+    'https://{app}.{app}.example.test',
+    'https://apps.example.test/{app}',
+  ])('rejects a non-wildcard or ambiguous hosted template: %s', (publicUrl) => {
+    const sandbox = loadSandboxModule({
+      [EXPOSURE_ENV]: 'network',
+      [EXPOSURE_SOURCE_ENV]: undefined,
+      [PUBLIC_URL_ENV]: publicUrl,
+    });
+
+    expect(sandbox.hasValidSandboxAppUrlTemplate()).toBe(false);
+    expect(sandbox.deriveSandboxPublicUrl('https://flujo.example.test', 4201, APP_A))
+      .toBeUndefined();
+    expect(sandbox.deriveOriginKeyFromHost(`${APP_A}.example.test`)).toBeUndefined();
   });
 });
 
-describe('Mode B sandbox listener: per-app token/hostname isolation (integration)', () => {
-  const PUBLIC_URL_ENV = 'FLUJO_MCP_APP_SANDBOX_PUBLIC_URL';
-  const BIND_HOST_ENV = 'FLUJO_MCP_APP_SANDBOX_HOST';
-
-  function get(port: number, host: string, path: string): Promise<{ status: number }> {
-    return new Promise((resolve, reject) => {
-      const req = http.get(
-        { host: '127.0.0.1', port, path, headers: { host } },
-        (res) => {
-          res.resume();
-          res.on('end', () => resolve({ status: res.statusCode ?? 0 }));
-        },
-      );
-      req.on('error', reject);
+describe('singleton listener token/hostname isolation', () => {
+  it('adopts the base listener safely and closes legacy recycled-port entries', async () => {
+    const baseServer = http.createServer((_req, res) => {
+      res.statusCode = 418;
+      res.end('legacy shared handler');
     });
-  }
+    const legacyPerAppServer = http.createServer((_req, res) => {
+      res.statusCode = 200;
+      res.end('legacy per-app handler');
+    });
+    const basePort = await listenEphemeral(baseServer);
+    const legacyPort = await listenEphemeral(legacyPerAppServer);
 
-  it('validates a token against the per-app Host label, not the listener default key', async () => {
+    (globalThis as Record<symbol, unknown>)[RUNTIME_STATE_KEY] = {
+      secret: Buffer.alloc(32, 7),
+      entries: new Map([
+        ['', { server: baseServer, port: basePort, status: 'listening', lastUsedAt: 1 }],
+        ['legacy-origin', {
+          server: legacyPerAppServer,
+          port: legacyPort,
+          status: 'listening',
+          lastUsedAt: 1,
+        }],
+      ]),
+      basePort,
+      bindHost: '127.0.0.1',
+      configuredHostOrigins: [],
+      hostOrigins: [],
+    };
+
     const sandbox = loadSandboxModule({
-      [PUBLIC_URL_ENV]: 'https://{app}.sandbox.example.test',
+      [EXPOSURE_ENV]: 'localhost',
+      [EXPOSURE_SOURCE_ENV]: undefined,
+      [PUBLIC_URL_ENV]: undefined,
       [BIND_HOST_ENV]: '127.0.0.1',
+      [PORT_ENV]: String(basePort),
+    }, { preserveRuntime: true });
+
+    try {
+      const app = await sandbox.ensureSandboxForOriginKey(APP_A);
+      expect(app?.port).toBe(basePort);
+      expect((await get(
+        basePort,
+        `${APP_A}.localhost`,
+        `/sandbox.html?token=${app!.token}`,
+      )).status).toBe(200);
+
+      if (legacyPerAppServer.listening) {
+        await new Promise<void>(resolve => legacyPerAppServer.once('close', resolve));
+      }
+      expect(legacyPerAppServer.listening).toBe(false);
+    } finally {
+      await sandbox.stopAllSandboxListeners();
+      if (legacyPerAppServer.listening) {
+        await new Promise<void>(resolve => legacyPerAppServer.close(() => resolve()));
+      }
+      delete (globalThis as Record<symbol, unknown>)[RUNTIME_STATE_KEY];
+    }
+  });
+
+  it('shares one local listener during concurrent startup but never app tokens', async () => {
+    const port = await findFreePort();
+    const sandbox = loadSandboxModule({
+      [EXPOSURE_ENV]: 'localhost',
+      [EXPOSURE_SOURCE_ENV]: undefined,
+      [PUBLIC_URL_ENV]: undefined,
+      [BIND_HOST_ENV]: '127.0.0.1',
+      [PORT_ENV]: String(port),
     });
 
     try {
-      // Start the Mode B singleton listener (the empty '' entry).
-      const base = await sandbox.ensureSandboxForOriginKey('');
-      expect(base).toBeDefined();
-      const port = base!.port;
-
-      const appA = await sandbox.ensureSandboxForOriginKey('app-a');
-      const appB = await sandbox.ensureSandboxForOriginKey('app-b');
+      const [appA, appB, appASecond, readiness] = await Promise.all([
+        sandbox.ensureSandboxForOriginKey(APP_A),
+        sandbox.ensureSandboxForOriginKey(APP_B),
+        sandbox.ensureSandboxForOriginKey(APP_A),
+        sandbox.ensureSandboxForOriginKey(''),
+      ]);
       expect(appA).toBeDefined();
       expect(appB).toBeDefined();
-      // Both apps are served from the SAME singleton listener/port in Mode B.
+      expect(appASecond).toBeDefined();
+      expect(readiness).toBeDefined();
+      expect(new Set([appA!.port, appB!.port, appASecond!.port, readiness!.port]))
+        .toEqual(new Set([port]));
+      expect(appA!.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(appB!.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(appASecond!.token).toBe(appA!.token);
+      expect(appA!.token).not.toBe(appB!.token);
+      expect(readiness!.token).not.toBe(appA!.token);
+
+      expect((await get(port, `${APP_A}.localhost`, `/sandbox.html?token=${appA!.token}`)).status)
+        .toBe(200);
+      expect((await get(port, `${APP_B}.localhost`, `/sandbox.html?token=${appB!.token}`)).status)
+        .toBe(200);
+      expect((await get(port, `${APP_B}.localhost`, `/sandbox.html?token=${appA!.token}`)).status)
+        .toBe(403);
+      expect((await get(port, `${APP_A}.localhost`, `/sandbox.html?token=${appB!.token}`)).status)
+        .toBe(403);
+      // The internal readiness credential is not a shared HTTP fallback.
+      expect((await get(port, 'localhost', `/sandbox.html?token=${readiness!.token}`)).status)
+        .toBe(403);
+    } finally {
+      await sandbox.stopAllSandboxListeners();
+    }
+  });
+
+  it('uses the same singleton and Host-scoped tokens behind a hosted template', async () => {
+    const port = await findFreePort();
+    const sandbox = loadSandboxModule({
+      [EXPOSURE_ENV]: 'public',
+      [EXPOSURE_SOURCE_ENV]: undefined,
+      [PUBLIC_URL_ENV]: 'https://{app}.sandbox.example.test',
+      [BIND_HOST_ENV]: '127.0.0.1',
+      [PORT_ENV]: String(port),
+    });
+
+    try {
+      const [appA, appB] = await Promise.all([
+        sandbox.ensureSandboxForOriginKey(APP_A),
+        sandbox.ensureSandboxForOriginKey(APP_B),
+      ]);
+      expect(appA).toBeDefined();
+      expect(appB).toBeDefined();
       expect(appA!.port).toBe(port);
       expect(appB!.port).toBe(port);
       expect(appA!.token).not.toBe(appB!.token);
 
-      // app-a's token on app-a's hostname: allowed.
-      const okA = await get(port, 'app-a.sandbox.example.test', `/sandbox.html?token=${appA!.token}`);
-      expect(okA.status).toBe(200);
-
-      // app-a's token on app-b's hostname: MUST be rejected (this is the bug
-      // being fixed — cross-app token reuse via hostname).
-      const crossOverAonB = await get(
+      expect((await get(
         port,
-        'app-b.sandbox.example.test',
+        `${APP_A}.sandbox.example.test`,
         `/sandbox.html?token=${appA!.token}`,
-      );
-      expect(crossOverAonB.status).toBe(403);
-
-      // app-b's token on app-b's hostname: allowed.
-      const okB = await get(port, 'app-b.sandbox.example.test', `/sandbox.html?token=${appB!.token}`);
-      expect(okB.status).toBe(200);
-
-      // app-b's token on app-a's hostname: MUST be rejected.
-      const crossOverBonA = await get(
+      )).status).toBe(200);
+      expect((await get(
         port,
-        'app-a.sandbox.example.test',
-        `/sandbox.html?token=${appB!.token}`,
-      );
-      expect(crossOverBonA.status).toBe(403);
-
-      // An unknown/unmapped Host header falls back to the listener's own key
-      // ('' — the shared default) rather than accepting any app's token.
-      const unknownHost = await get(port, 'unrelated.example.test', `/sandbox.html?token=${appA!.token}`);
-      expect(unknownHost.status).toBe(403);
+        `${APP_B}.sandbox.example.test`,
+        `/sandbox.html?token=${appA!.token}`,
+      )).status).toBe(403);
     } finally {
       await sandbox.stopAllSandboxListeners();
     }
+  });
+
+  it('does not start in hosted/network mode without a valid wildcard template', async () => {
+    const port = await findFreePort();
+    const sandbox = loadSandboxModule({
+      [EXPOSURE_ENV]: 'network',
+      [EXPOSURE_SOURCE_ENV]: undefined,
+      [PUBLIC_URL_ENV]: 'https://apps.example.test',
+      [BIND_HOST_ENV]: '127.0.0.1',
+      [PORT_ENV]: String(port),
+    });
+
+    expect(await sandbox.ensureSandboxForOriginKey(APP_A)).toBeUndefined();
+    expect(await sandbox.ensureSandboxForOriginKey('')).toBeUndefined();
+    expect(sandbox.getSandboxServerStatus()).toBe('idle');
   });
 });

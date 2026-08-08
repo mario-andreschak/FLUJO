@@ -5,11 +5,12 @@ import {
   DEFAULT_WORKSPACE,
   WorkspaceInfo,
   getSelectedWorkspace,
-  installWorkspaceInterceptor,
   isValidWorkspaceName,
   onWorkspaceChanged,
+  readWorkspacePageRequest,
   setSelectedWorkspace,
   workspaceColor,
+  workspacePageUrl,
 } from '@/frontend/utils/workspaceSelection';
 
 /**
@@ -20,8 +21,9 @@ import {
  * visibly reset to `default-workspace` instead of silently 404-ing every
  * subsequent request.
  *
- * `selected` is seeded synchronously from localStorage, so the correct tab is
- * active on the very first paint and hydration doesn't flash the default.
+ * `selected` is seeded synchronously from the tab-local active workspace (which
+ * itself comes from a deep link or persisted preference), so the correct tab is
+ * active on the first paint and hydration doesn't flash the default.
  */
 export function useWorkspaces(): {
   workspaces: WorkspaceInfo[];
@@ -29,10 +31,6 @@ export function useWorkspaces(): {
   select: (workspace: string) => void;
   loading: boolean;
 } {
-  // Install before any data-fetching effect runs, so the first workspace-scoped
-  // request already carries the selection.
-  installWorkspaceInterceptor();
-
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([
     { name: DEFAULT_WORKSPACE, color: workspaceColor(DEFAULT_WORKSPACE), isDefault: true },
   ]);
@@ -50,12 +48,15 @@ export function useWorkspaces(): {
         const valid = data.workspaces.filter(w => isValidWorkspaceName(w?.name));
         if (valid.length === 0) return;
         setWorkspaces(valid);
-        // Fall back visibly when the persisted workspace has disappeared.
-        setSelected(current => {
-          if (valid.some(w => w.name === current)) return current;
+        // WorkspaceBootstrap handles this before providers mount. Keep a
+        // defensive recovery here for an out-of-band deletion after startup.
+        const current = getSelectedWorkspace();
+        if (!valid.some(w => w.name === current)) {
           setSelectedWorkspace(DEFAULT_WORKSPACE);
-          return DEFAULT_WORKSPACE;
-        });
+          window.location.assign(workspacePageUrl(DEFAULT_WORKSPACE));
+          return;
+        }
+        setSelected(current);
       } catch {
         /* keep the default-only list; navigation must never break on this */
       } finally {
@@ -71,14 +72,21 @@ export function useWorkspaces(): {
   useEffect(() => onWorkspaceChanged(setSelected), []);
 
   const select = useCallback((workspace: string) => {
-    if (!isValidWorkspaceName(workspace) || workspace === getSelectedWorkspace()) return;
+    if (!isValidWorkspaceName(workspace)) return;
+    const current = getSelectedWorkspace();
+    const pageRequest = readWorkspacePageRequest();
+    if (
+      workspace === current
+      && (pageRequest.kind === 'none'
+        || (pageRequest.kind === 'valid' && pageRequest.workspace === workspace))
+    ) return;
     setSelectedWorkspace(workspace);
     setSelected(workspace);
     // Every cached list, store and in-flight query belongs to the PREVIOUS
     // workspace. A full reload is the only way to guarantee not a single stale
     // record survives the switch — cheap, and it happens once per switch.
     if (typeof window !== 'undefined') {
-      window.location.reload();
+      window.location.assign(workspacePageUrl(workspace));
     }
   }, []);
 

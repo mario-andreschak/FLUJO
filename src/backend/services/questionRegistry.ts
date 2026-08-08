@@ -1,4 +1,5 @@
 import { createLogger } from '@/utils/logger';
+import { getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
 
 const log = createLogger('backend/services/questionRegistry');
 
@@ -41,6 +42,7 @@ export type QuestionResolution =
   | { action: 'timeout' };
 
 interface PendingQuestion {
+  workspace: string;
   conversationId: string;
   questionId: string;
   questions: QuestionSpec[];
@@ -58,7 +60,7 @@ const registry: Map<string, PendingQuestion> =
 
 /** Composite key so a conversation can have at most one pending question per id. */
 function keyOf(conversationId: string, questionId: string): string {
-  return `${conversationId}::${questionId}`;
+  return workspaceCacheKey(conversationId, questionId);
 }
 
 /**
@@ -81,7 +83,15 @@ export function registerPendingQuestion(
         resolve({ action: 'timeout' });
       }
     }, timeoutMs);
-    registry.set(key, { conversationId, questionId, questions, createdAt: Date.now(), resolve, timer });
+    registry.set(key, {
+      workspace: getCurrentWorkspace(),
+      conversationId,
+      questionId,
+      questions,
+      createdAt: Date.now(),
+      resolve,
+      timer,
+    });
   });
 }
 
@@ -123,7 +133,7 @@ export function listPendingQuestions(conversationId: string): Array<{
 }> {
   const out: Array<{ questionId: string; questions: QuestionSpec[]; createdAt: number }> = [];
   for (const p of registry.values()) {
-    if (p.conversationId === conversationId) {
+    if (p.workspace === getCurrentWorkspace() && p.conversationId === conversationId) {
       out.push({ questionId: p.questionId, questions: p.questions, createdAt: p.createdAt });
     }
   }
@@ -137,7 +147,8 @@ export function listAllPendingQuestions(): Array<{
   questions: QuestionSpec[];
   createdAt: number;
 }> {
-  return Array.from(registry.values()).map((p) => ({
+  const workspace = getCurrentWorkspace();
+  return Array.from(registry.values()).filter((p) => p.workspace === workspace).map((p) => ({
     conversationId: p.conversationId,
     questionId: p.questionId,
     questions: p.questions,
@@ -147,8 +158,9 @@ export function listAllPendingQuestions(): Array<{
 
 /** Decline + clear every pending question for a conversation (e.g. on cancel). */
 export function clearPendingQuestions(conversationId: string): void {
+  const workspace = getCurrentWorkspace();
   for (const [key, p] of registry.entries()) {
-    if (p.conversationId === conversationId) {
+    if (p.workspace === workspace && p.conversationId === conversationId) {
       clearTimeout(p.timer);
       registry.delete(key);
       p.resolve({ action: 'decline' });

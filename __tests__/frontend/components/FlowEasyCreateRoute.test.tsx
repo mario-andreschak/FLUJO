@@ -1,4 +1,8 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  WORKSPACE_STORAGE_KEY,
+  workspaceLocalStorageKey,
+} from '@/frontend/utils/workspaceSelection';
 
 const mockReplace = jest.fn();
 const mockPush = jest.fn();
@@ -142,7 +146,8 @@ describe('easy agent creation deep link', () => {
 
     expect(await screen.findByTestId('flow-builder')).toHaveTextContent('Untitled agent');
     expect(mockCreateNewFlow).toHaveBeenCalledWith('Untitled agent');
-    expect(window.localStorage.getItem('flujo-ui:flow-builder:mode')).toBe(JSON.stringify('guided'));
+    expect(window.localStorage.getItem(workspaceLocalStorageKey('flujo-ui:flow-builder:mode')))
+      .toBe(JSON.stringify('guided'));
     expect(screen.getByTestId('ai-generator')).toHaveTextContent('false');
     // The editor is now a real history entry (#374): entering it pushes
     // `?flow=<id>&mode=edit` rather than a bare replace to `/flows`.
@@ -150,6 +155,7 @@ describe('easy agent creation deep link', () => {
   });
 
   it('offers a third creation path that starts directly in Expert view', async () => {
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, 'team-b');
     window.history.replaceState({}, '', '/flows');
     render(<FlowsPage />);
 
@@ -158,7 +164,9 @@ describe('easy agent creation deep link', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start expert' }));
 
     expect(await screen.findByTestId('flow-builder')).toHaveTextContent('Untitled agent');
-    expect(window.localStorage.getItem('flujo-ui:flow-builder:mode')).toBe(JSON.stringify('advanced'));
+    expect(window.localStorage.getItem(workspaceLocalStorageKey('flujo-ui:flow-builder:mode')))
+      .toBe(JSON.stringify('advanced'));
+    expect(window.localStorage.getItem('flujo-ui:flow-builder:mode')).toBeNull();
   });
 
   it('opens an AI-generated draft in the simple builder even when it has expert features', async () => {

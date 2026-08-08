@@ -7,6 +7,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { mediaTypeFromMime } from '@/shared/types/model/media';
 import { parseDataUrl } from './messageUtils';
+import { getCurrentWorkspace } from '@/utils/workspace';
 
 const log = createLogger('backend/services/model/adapters/openaiResponsesAdapter');
 
@@ -72,21 +73,32 @@ type ReasoningItem = OpenAI.Responses.ResponseReasoningItem;
 
 /** Bounded LRU-ish store, keyed by `${conversationId}|${nodeId}`. */
 const MAX_TRACKED_SESSIONS = 200;
-const reasoningBySession = new Map<string, Map<string, ReasoningItem[]>>();
+const reasoningByWorkspace = new Map<string, Map<string, Map<string, ReasoningItem[]>>>();
+
+function reasoningBySession(): Map<string, Map<string, ReasoningItem[]>> {
+  const workspace = getCurrentWorkspace();
+  let value = reasoningByWorkspace.get(workspace);
+  if (!value) {
+    value = new Map();
+    reasoningByWorkspace.set(workspace, value);
+  }
+  return value;
+}
 
 const sessionKey = (conversationId?: string, nodeId?: string): string | undefined =>
   conversationId ? `${conversationId}|${nodeId ?? ''}` : undefined;
 
 function stashReasoning(key: string, callId: string, items: ReasoningItem[]): void {
-  let forSession = reasoningBySession.get(key);
+  const sessions = reasoningBySession();
+  let forSession = sessions.get(key);
   if (!forSession) {
     // Refresh insertion order so active sessions are not evicted first.
-    if (reasoningBySession.size >= MAX_TRACKED_SESSIONS) {
-      const oldest = reasoningBySession.keys().next();
-      if (!oldest.done) reasoningBySession.delete(oldest.value);
+    if (sessions.size >= MAX_TRACKED_SESSIONS) {
+      const oldest = sessions.keys().next();
+      if (!oldest.done) sessions.delete(oldest.value);
     }
     forSession = new Map();
-    reasoningBySession.set(key, forSession);
+    sessions.set(key, forSession);
   }
   forSession.set(callId, items);
   // A single node's loop can make many tool calls; keep the map from growing
@@ -100,12 +112,12 @@ function stashReasoning(key: string, callId: string, items: ReasoningItem[]): vo
 /** Drop a session's carried reasoning (housekeeping / tests). */
 export function forgetReasoning(conversationId: string, nodeId?: string): void {
   const key = sessionKey(conversationId, nodeId);
-  if (key) reasoningBySession.delete(key);
+  if (key) reasoningBySession().delete(key);
 }
 
 /** Test seam: clear all carried reasoning. */
 export function __resetReasoningStore(): void {
-  reasoningBySession.clear();
+  reasoningBySession().clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -556,7 +568,7 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     });
 
     const key = sessionKey(conversationId, nodeId);
-    const carried = key ? reasoningBySession.get(key) : undefined;
+    const carried = key ? reasoningBySession().get(key) : undefined;
 
     const input = toResponsesInput(messages, carried);
     const responsesTools = toResponsesTools(tools);
@@ -665,7 +677,7 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
       defaultHeaders: getProviderDefaultHeaders(model.provider),
     });
     const key = sessionKey(conversationId, nodeId);
-    const carried = key ? reasoningBySession.get(key) : undefined;
+    const carried = key ? reasoningBySession().get(key) : undefined;
     const input = toResponsesInput(messages, carried);
     const responsesTools = toResponsesTools(tools);
     const wantsImage = (model.outputModalities ?? [])

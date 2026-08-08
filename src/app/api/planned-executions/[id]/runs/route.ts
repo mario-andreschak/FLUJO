@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
@@ -11,7 +12,7 @@ const log = createLogger('app/api/planned-executions/[id]/runs/route');
  * GET /api/planned-executions/{id}/runs
  * The execution's run history (ring buffer of the newest 100, oldest first).
  */
-export async function GET(
+async function GET_handler(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -31,3 +32,5 @@ export async function GET(
     return json({ error: 'Internal server error' }, 500);
   }
 }
+
+export const GET = withWorkspaceRoute(GET_handler);

@@ -26,6 +26,7 @@ import {
 } from '@/backend/services/runResources';
 import { isCancelledByAncestry } from '../cancellation';
 import { buildConversationTitle } from '@/utils/shared/conversationTitle';
+import { getCurrentWorkspace } from '@/utils/workspace';
 import {
   persistSubflowParent,
   syncLaneFromPersistedChild,
@@ -197,7 +198,10 @@ async function promoteSubflowMedia(
         ...rest,
         resourceUri: copied.uri,
         ...(localPath ? { localPath } : {}),
-        url: `/v1/chat/conversations/${copied.conversationId}/resources/${copied.id}/content`,
+        url:
+          `/v1/chat/conversations/${encodeURIComponent(copied.conversationId)}`
+          + `/resources/${encodeURIComponent(copied.id)}/content`
+          + `?workspace=${encodeURIComponent(getCurrentWorkspace())}`,
       };
     } catch (error) {
       log.error('Subflow media promotion failed; retaining child resource URI', error);

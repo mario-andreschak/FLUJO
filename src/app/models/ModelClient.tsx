@@ -39,15 +39,12 @@ import { useAskFlujoPage } from '@/frontend/contexts/AskFlujoContext';
 
 const log = createLogger('app/models/ModelClient');
 
-interface ModelClientProps {
-  initialModels: Model[];
-}
-
-export default function ModelClient({ initialModels }: ModelClientProps) {
+export default function ModelClient() {
   const { t } = useI18n();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [models, setModels] = useState(initialModels);
+  const [models, setModels] = useState<Model[]>([]);
+  const [modelsLoaded, setModelsLoaded] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   // #372: caret placed automatically; this page scrolls the document, so the
   // search toolbar also needs to stay pinned while scrolling (see wrapper below).
@@ -131,8 +128,31 @@ export default function ModelClient({ initialModels }: ModelClientProps) {
     }
   }, []);
 
+  // Models must be loaded by the browser only after WorkspaceBootstrap has
+  // installed the selected workspace on fetch. Server components have no
+  // access to the browser's selection and would otherwise seed this page with
+  // default-workspace models.
+  useEffect(() => {
+    if (!serviceReady) return;
+    let cancelled = false;
+    void getModelService().loadModels()
+      .then(loaded => {
+        if (!cancelled) setModels(loaded);
+      })
+      .catch(loadError => {
+        log.error('Failed to load models', loadError);
+        if (!cancelled) setError(t('models.error.description'));
+      })
+      .finally(() => {
+        if (!cancelled) setModelsLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [serviceReady, t]);
+
   // Show loading spinner if service is not ready
-  if (!serviceReady) {
+  if (!serviceReady || !modelsLoaded) {
     log.debug('Waiting for model service to be ready...');
     return <Spinner />;
   }

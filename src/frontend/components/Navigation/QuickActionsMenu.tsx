@@ -25,14 +25,16 @@ import {
 import { alpha, useTheme } from '@mui/material/styles';
 
 import { useI18n } from '@/frontend/contexts/I18nContext';
-import { useMcpAppsDiscovery } from '@/frontend/components/mcp/useMcpAppsDiscovery';
+import {
+  useMcpAppsDiscovery,
+  type McpDiscoveredApp,
+} from '@/frontend/components/mcp/useMcpAppsDiscovery';
 import {
   createQuickActionToken,
+  emitLaunchGlobalMcpApp,
   emitNewChatRequest,
-  emitOpenMcpApp,
-  mcpAppPath,
   newChatPath,
-  type McpAppQuickAction,
+  type GlobalMcpAppLaunchRequest,
 } from '@/frontend/utils/quickActions';
 import { createLogger } from '@/utils/logger';
 
@@ -57,13 +59,13 @@ type QuickActionsView = 'root' | 'mcp';
 
 /**
  * Bottom-left quick actions (#396): `New Chat` and an `MCP App` hierarchy of
- * favorited servers → published apps → linked tools.
+ * favorited servers → published apps, with linked tools in a child menu.
  *
  * This component owns placement and interaction only. Everything it triggers is
  * delegated to the flows that already exist: chat creation happens in `Chat`
- * through `createNewConversation`, apps open in the MCP Apps dashboard and
- * linked tools open in the Tool Tester. No conversation API and no tool
- * invocation is called from here.
+ * through `createNewConversation`; apps are handed to the persistent app-shell
+ * host. Selecting a linked tool starts/focuses its app — it never invokes the
+ * tool and never enters Tool Tester.
  */
 export default function QuickActionsMenu({
   pathname,
@@ -75,11 +77,17 @@ export default function QuickActionsMenu({
   const theme = useTheme();
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
   const [view, setView] = useState<QuickActionsView>('root');
+  const [toolsMenu, setToolsMenu] = useState<{
+    anchorEl: HTMLElement;
+    focusEl: HTMLElement;
+    app: McpDiscoveredApp;
+  } | null>(null);
   const paperRef = useRef<HTMLDivElement | null>(null);
   const open = Boolean(anchorEl);
 
   const triggerId = `quick-actions-trigger-${variant}`;
   const menuId = `quick-actions-menu-${variant}`;
+  const toolsMenuId = `quick-actions-tools-menu-${variant}`;
 
   // MCP discovery is scoped to the MCP branch, so opening the menu — and
   // `New Chat` in particular — never waits for an MCP round trip.
@@ -88,6 +96,7 @@ export default function QuickActionsMenu({
     loading,
     refreshing,
     error,
+    discoveryId,
     refresh,
   } = useMcpAppsDiscovery({
     active: open && view === 'mcp',
@@ -98,12 +107,19 @@ export default function QuickActionsMenu({
   // A route change means the menu's context is gone; close it.
   useEffect(() => {
     setAnchorEl(null);
+    setToolsMenu(null);
   }, [pathname]);
 
   // Always reopen at the top of the hierarchy.
   useEffect(() => {
     if (!open) setView('root');
   }, [open]);
+
+  // A refresh can remove a server, app, or tool. Never leave a child menu
+  // anchored to the stale discovery snapshot while the new result arrives.
+  useEffect(() => {
+    setToolsMenu(null);
+  }, [discoveryId]);
 
   // Keep the keyboard inside the menu when the user drills in or back out:
   // the previously focused item unmounts with the view it belonged to.
@@ -115,7 +131,11 @@ export default function QuickActionsMenu({
     first?.focus();
   }, [open, view]);
 
-  const closeMenu = () => setAnchorEl(null);
+  const closeToolsMenu = () => setToolsMenu(null);
+  const closeMenu = () => {
+    closeToolsMenu();
+    setAnchorEl(null);
+  };
 
   const runAction = (action: () => void) => {
     action();
@@ -135,15 +155,19 @@ export default function QuickActionsMenu({
     onNavigate(newChatPath(token));
   });
 
-  const handleMcpTarget = (request: McpAppQuickAction) => runAction(() => {
-    const token = createQuickActionToken();
-    log.debug('Quick action: MCP target requested', { ...request, token });
-    if (pathname === '/mcp') {
-      emitOpenMcpApp(request, token);
-      return;
-    }
-    onNavigate(mcpAppPath(request, token));
+  const handleMcpTarget = (request: GlobalMcpAppLaunchRequest) => runAction(() => {
+    log.debug('Quick action: starting MCP App in global surface', request);
+    emitLaunchGlobalMcpApp(request);
   });
+
+  const openToolsMenu = (
+    anchor: HTMLElement,
+    app: McpDiscoveredApp,
+    focusEl: HTMLElement = anchor,
+  ) => {
+    if (app.toolNames.length === 0) return;
+    setToolsMenu({ anchorEl: anchor, focusEl, app });
+  };
 
   /**
    * Handled on the MenuList (not on the Menu/Modal root) so that stopping
@@ -254,11 +278,24 @@ export default function QuickActionsMenu({
       }
 
       for (const app of server.apps) {
+        const toolsMenuOpen = toolsMenu?.app.serverName === app.serverName
+          && toolsMenu.app.uri === app.uri;
         mcpItems.push(
           <MenuItem
             key={`app-${server.name}-${app.uri}`}
             onClick={() => handleMcpTarget({ serverName: app.serverName, uri: app.uri })}
+            onKeyDown={(event) => {
+              if (event.key !== 'ArrowRight' || app.toolNames.length === 0) return;
+              event.preventDefault();
+              event.stopPropagation();
+              openToolsMenu(event.currentTarget, app);
+            }}
             aria-label={t('nav.quickActions.openApp', { app: app.name })}
+            aria-haspopup={app.toolNames.length > 0 ? 'menu' : undefined}
+            aria-expanded={app.toolNames.length > 0 ? toolsMenuOpen : undefined}
+            aria-controls={toolsMenuOpen ? toolsMenuId : undefined}
+            aria-keyshortcuts={app.toolNames.length > 0 ? 'ArrowRight' : undefined}
+            sx={{ minWidth: 0 }}
           >
             <ListItemIcon><AppsRounded fontSize="small" /></ListItemIcon>
             <ListItemText
@@ -266,33 +303,32 @@ export default function QuickActionsMenu({
               secondary={app.uri}
               secondaryTypographyProps={{ sx: { overflowWrap: 'anywhere' } }}
             />
+            {app.toolNames.length > 0 && (
+              <Box
+                component="span"
+                data-linked-tools-trigger
+                title={t('nav.quickActions.linkedTools', { app: app.name })}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  openToolsMenu(event.currentTarget, app, event.currentTarget.parentElement ?? event.currentTarget);
+                }}
+                sx={{
+                  alignSelf: 'stretch',
+                  display: 'grid',
+                  minWidth: 42,
+                  ml: 0.5,
+                  placeItems: 'center',
+                  borderLeft: 1,
+                  borderColor: 'divider',
+                  cursor: 'pointer',
+                }}
+              >
+                <ChevronRightRounded fontSize="small" />
+              </Box>
+            )}
           </MenuItem>,
         );
-
-        if (app.toolNames.length === 0) {
-          mcpItems.push(
-            <Box key={`no-tools-${server.name}-${app.uri}`} component="li" sx={{ ...staticItemSx, pl: 6, py: 0.25 }}>
-              <Typography variant="caption" color="text.secondary">
-                {t('nav.quickActions.noTools')}
-              </Typography>
-            </Box>,
-          );
-          continue;
-        }
-
-        for (const toolName of app.toolNames) {
-          mcpItems.push(
-            <MenuItem
-              key={`tool-${server.name}-${app.uri}-${toolName}`}
-              onClick={() => handleMcpTarget({ serverName: app.serverName, toolName })}
-              aria-label={t('nav.quickActions.openTool', { tool: toolName })}
-              sx={{ pl: 5 }}
-            >
-              <ListItemIcon><BuildRounded fontSize="small" /></ListItemIcon>
-              <ListItemText primary={toolName} primaryTypographyProps={{ variant: 'body2' }} />
-            </MenuItem>,
-          );
-        }
       }
     }
   }
@@ -371,6 +407,43 @@ export default function QuickActionsMenu({
         }}
       >
         {view === 'root' ? rootItems : mcpItems}
+      </Menu>
+      <Menu
+        id={toolsMenuId}
+        anchorEl={toolsMenu?.anchorEl ?? null}
+        open={Boolean(toolsMenu)}
+        onClose={closeToolsMenu}
+        anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+        MenuListProps={{
+          'aria-label': toolsMenu
+            ? t('nav.quickActions.linkedTools', { app: toolsMenu.app.name })
+            : undefined,
+          onKeyDown: (event) => {
+            if (event.key !== 'Escape' && event.key !== 'ArrowLeft') return;
+            event.preventDefault();
+            event.stopPropagation();
+            const returnTarget = toolsMenu?.focusEl;
+            closeToolsMenu();
+            returnTarget?.focus();
+          },
+        }}
+        slotProps={{ paper: { sx: { minWidth: 240, maxWidth: 360, borderRadius: 2.5 } } }}
+      >
+        {toolsMenu?.app.toolNames.map((toolName) => (
+          <MenuItem
+            key={toolName}
+            onClick={() => handleMcpTarget({
+              serverName: toolsMenu.app.serverName,
+              uri: toolsMenu.app.uri,
+              toolName,
+            })}
+            aria-label={t('nav.quickActions.openTool', { tool: toolName })}
+          >
+            <ListItemIcon><BuildRounded fontSize="small" /></ListItemIcon>
+            <ListItemText primary={toolName} />
+          </MenuItem>
+        ))}
       </Menu>
     </>
   );

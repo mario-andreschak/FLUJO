@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
@@ -10,7 +11,7 @@ const log = createLogger('app/api/planned-executions/[id]/route');
  * GET /api/planned-executions/{id}
  * Fetch one planned execution (config only).
  */
-export async function GET(
+async function GET_handler(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -34,7 +35,7 @@ export async function GET(
  * PATCH /api/planned-executions/{id}
  * Update fields of a planned execution (partial body). Rearms the trigger.
  */
-export async function PATCH(
+async function PATCH_handler(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -60,7 +61,7 @@ export async function PATCH(
  * DELETE /api/planned-executions/{id}
  * Delete a planned execution, its run history and trigger state.
  */
-export async function DELETE(
+async function DELETE_handler(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -79,3 +80,7 @@ export async function DELETE(
     return json({ error: 'Internal server error' }, 500);
   }
 }
+
+export const GET = withWorkspaceRoute(GET_handler);
+export const PATCH = withWorkspaceRoute(PATCH_handler);
+export const DELETE = withWorkspaceRoute(DELETE_handler);

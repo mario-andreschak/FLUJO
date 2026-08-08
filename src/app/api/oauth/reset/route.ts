@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
@@ -11,7 +12,7 @@ const log = createLogger('api/oauth/reset');
  * Reset OAuth tokens for an MCP server
  * This endpoint clears stored OAuth tokens and forces re-authentication
  */
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -59,6 +60,9 @@ export async function POST(request: NextRequest) {
     // Clear OAuth tokens and related data
     serverConfig.oauthTokens = undefined;
     serverConfig.oauthCodeVerifier = undefined;
+    serverConfig.oauthState = undefined;
+    serverConfig.oauthStateWorkspace = undefined;
+    serverConfig.oauthStateCreatedAt = undefined;
 
     // Optionally clear client information to force re-registration
     // serverConfig.oauthClientInformation = undefined;
@@ -106,3 +110,5 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

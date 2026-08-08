@@ -9,6 +9,7 @@ import { I18nProvider, useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n';
 import useCompactAppChrome from '@/frontend/hooks/useCompactAppChrome';
 import { AskFlujoProvider } from '@/frontend/contexts/AskFlujoContext';
+import WorkspaceBootstrap from './WorkspaceBootstrap';
 
 const log = createLogger('frontend/components/AppWrapper');
 
@@ -76,6 +77,11 @@ const TelemetryNotice = dynamic(() => import('./TelemetryNotice'), {
 });
 
 const AskFlujoDock = dynamic(() => import('./AskFlujo/AskFlujoDock'), {
+  ssr: false,
+  loading: () => null,
+});
+
+const GlobalMcpAppsHost = dynamic(() => import('./mcp/GlobalMcpAppsHost'), {
   ssr: false,
   loading: () => null,
 });
@@ -160,17 +166,19 @@ export default function AppWrapper({ children }: AppWrapperProps) {
     <I18nProvider>
       <ErrorBoundary>
         <Suspense fallback={<AppLoading />}>
-          <ThemeProvider>
-            <StorageProvider>
-              <AskFlujoProvider>
-                <TourProvider>
-                  <LocalizedAppShell>
-                    {children}
-                  </LocalizedAppShell>
-                </TourProvider>
-              </AskFlujoProvider>
-            </StorageProvider>
-          </ThemeProvider>
+          <WorkspaceBootstrap fallback={<AppLoading message="shell.loading.workspace" />}>
+            <ThemeProvider>
+              <StorageProvider>
+                <AskFlujoProvider>
+                  <TourProvider>
+                    <LocalizedAppShell>
+                      {children}
+                    </LocalizedAppShell>
+                  </TourProvider>
+                </AskFlujoProvider>
+              </StorageProvider>
+            </ThemeProvider>
+          </WorkspaceBootstrap>
         </Suspense>
       </ErrorBoundary>
     </I18nProvider>
@@ -194,6 +202,9 @@ function LocalizedAppShell({ children }: { children: React.ReactNode }) {
       <main id="main-content" className="app-main" tabIndex={-1}>
         <RouteStage>{children}</RouteStage>
       </main>
+      {/* Persistent owner for Quick Actions MCP Apps. It remains mounted across
+          route changes, so a live iframe/bridge is never reparented or lost. */}
+      <GlobalMcpAppsHost />
       <TourOverlay />
     </div>
   );

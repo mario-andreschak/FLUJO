@@ -27,6 +27,7 @@
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from './FlowExecutor';
 import { SharedState } from './types';
+import { DEFAULT_WORKSPACE, getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
 
 const log = createLogger('backend/execution/flow/conversationStateCache');
 
@@ -77,6 +78,7 @@ interface CacheCounters {
 declare global {
   var __flujo_conversation_cache_meta: Map<string, CacheEntry> | undefined;
   var __flujo_conversation_cache_counters: CacheCounters | undefined;
+  var __flujo_conversation_cache_counters_by_workspace: Map<string, CacheCounters> | undefined;
   var __flujo_conversation_cache_loads: Map<string, Promise<SharedState | undefined>> | undefined;
 }
 
@@ -88,17 +90,29 @@ function meta(): Map<string, CacheEntry> {
 }
 
 function counters(): CacheCounters {
-  if (!global.__flujo_conversation_cache_counters) {
-    global.__flujo_conversation_cache_counters = {
+  const create = (): CacheCounters => ({
       hits: 0,
       misses: 0,
       evictions: 0,
       reloads: 0,
       coalescedLoads: 0,
       persistFailures: 0,
-    };
+    });
+  const workspace = getCurrentWorkspace();
+  if (workspace === DEFAULT_WORKSPACE) {
+    if (!global.__flujo_conversation_cache_counters) {
+      global.__flujo_conversation_cache_counters = create();
+    }
+    return global.__flujo_conversation_cache_counters;
   }
-  return global.__flujo_conversation_cache_counters;
+  const byWorkspace = global.__flujo_conversation_cache_counters_by_workspace ??
+    (global.__flujo_conversation_cache_counters_by_workspace = new Map());
+  let value = byWorkspace.get(workspace);
+  if (!value) {
+    value = create();
+    byWorkspace.set(workspace, value);
+  }
+  return value;
 }
 
 function inFlightLoads(): Map<string, Promise<SharedState | undefined>> {
@@ -109,6 +123,29 @@ function inFlightLoads(): Map<string, Promise<SharedState | undefined>> {
 }
 
 const TERMINAL_STATUSES = new Set(['completed', 'error', 'capped']);
+
+// Keep legacy raw keys for the default workspace so HMR/test reset hooks that
+// inspect these global maps continue to work. Every non-default workspace is
+// namespaced with the canonical helper.
+function cacheKey(conversationId: string): string {
+  return getCurrentWorkspace() === DEFAULT_WORKSPACE
+    ? conversationId
+    : workspaceCacheKey(conversationId);
+}
+
+function entriesForCurrentWorkspace(): Array<[string, CacheEntry]> {
+  const workspace = getCurrentWorkspace();
+  if (workspace === DEFAULT_WORKSPACE) {
+    return Array.from(meta()).filter(([key]) => !key.includes('\0'));
+  }
+  const prefix = `${workspace}\0`;
+  return Array.from(meta()).filter(([key]) => key.startsWith(prefix));
+}
+
+function conversationIdFromKey(key: string): string {
+  const separator = key.indexOf('\0');
+  return separator < 0 ? key : key.slice(separator + 1);
+}
 
 /**
  * Live ownership check. A state is non-evictable while it is running/paused, or
@@ -144,7 +181,8 @@ export function estimateStateBytes(state: SharedState | undefined): number {
 
 /** Register/refresh a state in the cache without changing its evictability. */
 export function noteWrite(conversationId: string, state: SharedState): void {
-  const entry = meta().get(conversationId);
+  const key = cacheKey(conversationId);
+  const entry = meta().get(key);
   if (entry) {
     entry.lastAccessAt = Date.now();
     if (isLiveOwned(state)) {
@@ -155,7 +193,7 @@ export function noteWrite(conversationId: string, state: SharedState): void {
     }
     return;
   }
-  meta().set(conversationId, {
+  meta().set(key, {
     evictable: false,
     lastAccessAt: Date.now(),
     bytes: estimateStateBytes(state),
@@ -166,13 +204,13 @@ export function noteWrite(conversationId: string, state: SharedState): void {
 export function noteRead(conversationId: string, hit: boolean): void {
   if (hit) counters().hits += 1;
   else counters().misses += 1;
-  const entry = meta().get(conversationId);
+  const entry = meta().get(cacheKey(conversationId));
   if (entry) entry.lastAccessAt = Date.now();
 }
 
 /** Forget bookkeeping for a conversation that was removed from the live map. */
 export function forget(conversationId: string): void {
-  meta().delete(conversationId);
+  meta().delete(cacheKey(conversationId));
 }
 
 /**
@@ -199,7 +237,7 @@ export async function markTerminal(
     });
     return;
   }
-  meta().set(conversationId, {
+  meta().set(cacheKey(conversationId), {
     evictable: true,
     lastAccessAt: Date.now(),
     terminalAt: Date.now(),
@@ -224,27 +262,27 @@ export function enforceBounds(): number {
   const evict = (conversationId: string, reason: string): void => {
     const state = map.get(conversationId);
     if (isLiveOwned(state)) {
-      const entry = meta().get(conversationId);
+      const entry = meta().get(cacheKey(conversationId));
       if (entry) entry.evictable = false;
       return;
     }
     map.delete(conversationId);
-    meta().delete(conversationId);
+    meta().delete(cacheKey(conversationId));
     counters().evictions += 1;
     evicted += 1;
     log.debug(`enforceBounds: evicted ${conversationId} (${reason})`);
   };
 
   // 1) TTL — an entry nobody touched for the whole window is dead weight.
-  for (const [conversationId, entry] of Array.from(meta())) {
+  for (const [key, entry] of entriesForCurrentWorkspace()) {
     if (!entry.evictable) continue;
     const since = entry.terminalAt ?? entry.lastAccessAt;
-    if (now - since >= ttl) evict(conversationId, 'ttl');
+    if (now - since >= ttl) evict(conversationIdFromKey(key), 'ttl');
   }
 
   // Candidates for the count/byte passes, least-recently-used first.
   const candidates = (): Array<[string, CacheEntry]> =>
-    Array.from(meta())
+    entriesForCurrentWorkspace()
       .filter(([, entry]) => entry.evictable)
       .sort((a, b) => a[1].lastAccessAt - b[1].lastAccessAt);
 
@@ -252,21 +290,21 @@ export function enforceBounds(): number {
   const limit = maxEntries();
   let list = candidates();
   let index = 0;
-  while (meta().size > limit && index < list.length) {
-    evict(list[index][0], 'max-entries');
+  while (entriesForCurrentWorkspace().length > limit && index < list.length) {
+    evict(conversationIdFromKey(list[index][0]), 'max-entries');
     index += 1;
   }
 
   // 3) Approximate byte budget.
   const budget = maxBytes();
   let total = 0;
-  for (const [, entry] of meta()) total += entry.bytes;
+  for (const [, entry] of entriesForCurrentWorkspace()) total += entry.bytes;
   if (total > budget) {
     list = candidates();
-    for (const [conversationId, entry] of list) {
+    for (const [key, entry] of list) {
       if (total <= budget) break;
       total -= entry.bytes;
-      evict(conversationId, 'max-bytes');
+      evict(conversationIdFromKey(key), 'max-bytes');
     }
   }
 
@@ -284,16 +322,17 @@ export function coalesceLoad(
   conversationId: string,
   loader: () => Promise<SharedState | undefined>,
 ): Promise<SharedState | undefined> {
-  const pending = inFlightLoads().get(conversationId);
+  const key = cacheKey(conversationId);
+  const pending = inFlightLoads().get(key);
   if (pending) {
     counters().coalescedLoads += 1;
     return pending;
   }
   counters().reloads += 1;
   const promise = loader().finally(() => {
-    inFlightLoads().delete(conversationId);
+    inFlightLoads().delete(key);
   });
-  inFlightLoads().set(conversationId, promise);
+  inFlightLoads().set(key, promise);
   return promise;
 }
 
@@ -311,19 +350,23 @@ export interface ConversationCacheDiagnostics extends CacheCounters {
 export function getConversationCacheDiagnostics(): ConversationCacheDiagnostics {
   let estimatedBytes = 0;
   let evictableEntries = 0;
-  for (const entry of meta().values()) {
+  const entries = entriesForCurrentWorkspace();
+  for (const [, entry] of entries) {
     estimatedBytes += entry.bytes;
     if (entry.evictable) evictableEntries += 1;
   }
   return {
     ...counters(),
-    entries: meta().size,
+    entries: entries.length,
     evictableEntries,
     estimatedBytes,
     ttlMs: ttlMs(),
     maxEntries: maxEntries(),
     maxBytes: maxBytes(),
-    inFlightLoads: inFlightLoads().size,
+    inFlightLoads: Array.from(inFlightLoads().keys()).filter((key) => {
+      const workspace = getCurrentWorkspace();
+      return workspace === DEFAULT_WORKSPACE ? !key.includes('\0') : key.startsWith(`${workspace}\0`);
+    }).length,
   };
 }
 
@@ -331,5 +374,6 @@ export function getConversationCacheDiagnostics(): ConversationCacheDiagnostics 
 export function _resetConversationCacheForTests(): void {
   global.__flujo_conversation_cache_meta = undefined;
   global.__flujo_conversation_cache_counters = undefined;
+  global.__flujo_conversation_cache_counters_by_workspace = undefined;
   global.__flujo_conversation_cache_loads = undefined;
 }

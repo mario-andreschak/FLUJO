@@ -33,6 +33,7 @@ import {
   recordSession,
   invalidateSession,
 } from './claudeSessionStore';
+import { prepareClaudeRuntimeEnvironment } from './claudeRuntimeHome';
 import { DEFAULT_AGENTIC_MAX_TURNS } from '@/shared/types/model/model';
 import {
   classifyStatisticsError,
@@ -309,6 +310,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // would break the (CommonJS) Jest transform for every module that merely
     // references the adapter factory.
     const { query, createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk');
+    const runtime = await prepareClaudeRuntimeEnvironment();
 
     // The FULL flatten of the whole history. `systemPrompt` is the hoisted,
     // prefix-stable system block (unchanged turn to turn for a given node); its
@@ -700,9 +702,10 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       ? { [SDK_SERVER_NAME]: createSdkMcpServer({ name: SDK_SERVER_NAME, version: '1.0.0', tools: sdkTools }) }
       : undefined;
 
-    // Replace the subprocess env wholesale (per SDK contract): inherit ours, add
-    // the OAuth token, and drop ANTHROPIC_API_KEY so it can't take precedence.
-    const childEnv: Record<string, string | undefined> = { ...process.env };
+    // Replace the subprocess env wholesale (per SDK contract): start with the
+    // workspace-isolated Claude runtime, add the OAuth token, and drop
+    // ANTHROPIC_API_KEY so it can't take precedence.
+    const childEnv: Record<string, string | undefined> = { ...runtime.env };
     childEnv.CLAUDE_CODE_OAUTH_TOKEN = apiKey;
     delete childEnv.ANTHROPIC_API_KEY;
 
@@ -731,6 +734,10 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       options: {
         model: model.name,
         env: childEnv,
+        cwd: runtime.workingDirectory,
+        // SDK isolation mode: never load ~/.claude, project .claude settings,
+        // CLAUDE.md, hooks, plugins, or MCP servers from the host filesystem.
+        settingSources: [],
         abortController,
         maxTurns: maxTurns && maxTurns > 0 ? maxTurns : DEFAULT_MAX_TURNS,
         includePartialMessages: true,

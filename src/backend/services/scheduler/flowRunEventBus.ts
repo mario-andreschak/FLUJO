@@ -1,4 +1,5 @@
 import { createLogger } from '@/utils/logger';
+import { bindToCurrentWorkspace, DEFAULT_WORKSPACE, getCurrentWorkspace } from '@/utils/workspace';
 
 const log = createLogger('backend/services/scheduler/flowRunEventBus');
 
@@ -126,9 +127,10 @@ export class FlowRunEventBus {
 
   /** Subscribe; returns an idempotent unsubscribe. */
   subscribe(listener: FlowRunEventListener): () => void {
-    this.listeners.add(listener);
+    const scopedListener = bindToCurrentWorkspace(listener);
+    this.listeners.add(scopedListener);
     return () => {
-      this.listeners.delete(listener);
+      this.listeners.delete(scopedListener);
     };
   }
 
@@ -140,11 +142,23 @@ export class FlowRunEventBus {
 
 declare global {
   var __flujo_flow_run_event_bus: FlowRunEventBus | undefined;
+  var __flujo_flow_run_event_buses_by_workspace: Map<string, FlowRunEventBus> | undefined;
 }
 
 export function getFlowRunEventBus(): FlowRunEventBus {
-  if (!global.__flujo_flow_run_event_bus) {
-    global.__flujo_flow_run_event_bus = new FlowRunEventBus();
+  const workspace = getCurrentWorkspace();
+  if (workspace === DEFAULT_WORKSPACE) {
+    if (!global.__flujo_flow_run_event_bus) {
+      global.__flujo_flow_run_event_bus = new FlowRunEventBus();
+    }
+    return global.__flujo_flow_run_event_bus;
   }
-  return global.__flujo_flow_run_event_bus;
+  const buses = global.__flujo_flow_run_event_buses_by_workspace ??
+    (global.__flujo_flow_run_event_buses_by_workspace = new Map());
+  let bus = buses.get(workspace);
+  if (!bus) {
+    bus = new FlowRunEventBus();
+    buses.set(workspace, bus);
+  }
+  return bus;
 }

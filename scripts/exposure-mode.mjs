@@ -4,6 +4,9 @@ import path from 'node:path';
 
 export const EXPOSURE_MODE_ENV = 'FLUJO_EXPOSURE_MODE';
 export const EXPOSURE_MODES = new Set(['localhost', 'network', 'public']);
+const WORKSPACE_LAYOUT_VERSION = 2;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 // Escape hatch: when the persisted network setting is enabled, this env var is
 // set so the MCP Apps sandbox and the browser live-view gateway relax their
 // origin allowlists. Read by src/backend/mcpApps/sandboxServer.ts and
@@ -29,33 +32,95 @@ function legacyMode(env) {
   return undefined;
 }
 
-/**
- * Read the one persisted Settings value before Next starts. Keeping this tiny
- * reader in the launcher gives proxy/route bundles a single immutable env value
- * and avoids filesystem access in the request hot path.
- */
-export function readPersistedExposureMode(env = process.env, cwd = process.cwd()) {
+function settingsCandidates(env, cwd) {
   const dataDir = env.FLUJO_DATA_DIR?.trim()
     ? path.resolve(env.FLUJO_DATA_DIR)
     : path.resolve(cwd);
-  const settingsFile = path.join(dataDir, 'db', 'speech_settings.json');
+  const workspaceSettings = path.join(
+    dataDir,
+    'workspaces',
+    'default-workspace',
+    'db',
+    'speech_settings.json',
+  );
+  const legacySettings = path.join(dataDir, 'db', 'speech_settings.json');
+  const markerFile = path.join(dataDir, 'workspaces', '.workspace-layout.json');
+
   try {
-    const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
-    const persistedMode = normalizedMode(settings?.network?.exposure);
-    if (persistedMode) return persistedMode;
+    const marker = JSON.parse(fs.readFileSync(markerFile, 'utf8'));
+    if (
+      !marker
+      || !Number.isInteger(marker.version)
+      || marker.version < 1
+      || marker.version > WORKSPACE_LAYOUT_VERSION
+      || typeof marker.completedAt !== 'string'
+      || !Number.isFinite(Date.parse(marker.completedAt))
+      || marker.defaultWorkspace !== 'default-workspace'
+      || !marker.subtrees
+      || typeof marker.subtrees !== 'object'
+      || (
+        marker.version === WORKSPACE_LAYOUT_VERSION
+        && (
+          typeof marker.transactionId !== 'string'
+          || !UUID_PATTERN.test(marker.transactionId)
+          || typeof marker.manifestDigest !== 'string'
+          || !SHA256_PATTERN.test(marker.manifestDigest)
+        )
+      )
+    ) {
+      console.warn(`[FLUJO] Workspace layout marker is invalid; using secure launcher defaults: ${markerFile}`);
+      return { files: [], failClosed: true };
+    }
+    // A durable marker means the root db is retired. Never let an obsolete copy
+    // silently re-enable network exposure if the workspace setting is absent.
+    return { files: [workspaceSettings], failClosed: false };
   } catch (error) {
-    if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) {
-      console.warn(`[FLUJO] Could not read network exposure setting from ${settingsFile}:`, error);
+    if (error?.code === 'ENOENT') {
+      // During the one upgrade launch before migration, prefer already-copied
+      // workspace data and fall back to the legacy root only if it is absent.
+      return { files: [workspaceSettings, legacySettings], failClosed: false };
+    }
+    console.warn(`[FLUJO] Could not validate workspace layout marker; using secure launcher defaults: ${markerFile}`, error);
+    return { files: [], failClosed: true };
+  }
+}
+
+function readPersistedSettings(env, cwd) {
+  const candidates = settingsCandidates(env, cwd);
+  for (const settingsFile of candidates.files) {
+    try {
+      return {
+        settings: JSON.parse(fs.readFileSync(settingsFile, 'utf8')),
+        failClosed: false,
+      };
+    } catch (error) {
+      if (error?.code === 'ENOENT') continue;
+      // A malformed/inaccessible preferred settings file is not permission to
+      // consult a stale legacy copy that may broaden network access.
+      console.warn(`[FLUJO] Could not read network settings from ${settingsFile}; using secure defaults:`, error);
+      return { settings: undefined, failClosed: true };
     }
   }
+  return { settings: undefined, failClosed: candidates.failClosed };
+}
 
-  return undefined;
+/**
+ * Read the default workspace's persisted Settings value before Next starts.
+ * Keeping this tiny reader in the launcher gives proxy/route bundles a single
+ * immutable env value and avoids filesystem access in the request hot path.
+ */
+export function readPersistedExposureMode(env = process.env, cwd = process.cwd()) {
+  return normalizedMode(readPersistedSettings(env, cwd).settings?.network?.exposure);
 }
 
 export function readExposureMode(env = process.env, cwd = process.cwd()) {
   const explicitRuntimeMode = normalizedMode(env[EXPOSURE_MODE_ENV]);
   if (explicitRuntimeMode) return explicitRuntimeMode;
-  return readPersistedExposureMode(env, cwd) || legacyMode(env) || 'localhost';
+  const persisted = readPersistedSettings(env, cwd);
+  const persistedMode = normalizedMode(persisted.settings?.network?.exposure);
+  if (persistedMode) return persistedMode;
+  if (persisted.failClosed) return 'localhost';
+  return legacyMode(env) || 'localhost';
 }
 
 /**
@@ -64,19 +129,7 @@ export function readExposureMode(env = process.env, cwd = process.cwd()) {
  * immutable env value to the sandbox and browser gateway. Missing/false => false.
  */
 export function readPersistedAllowAll(env = process.env, cwd = process.cwd()) {
-  const dataDir = env.FLUJO_DATA_DIR?.trim()
-    ? path.resolve(env.FLUJO_DATA_DIR)
-    : path.resolve(cwd);
-  const settingsFile = path.join(dataDir, 'db', 'speech_settings.json');
-  try {
-    const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
-    return settings?.network?.allowAllMcpAppContent === true;
-  } catch (error) {
-    if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) {
-      console.warn(`[FLUJO] Could not read allow-all MCP app setting from ${settingsFile}:`, error);
-    }
-  }
-  return false;
+  return readPersistedSettings(env, cwd).settings?.network?.allowAllMcpAppContent === true;
 }
 
 function isPrivateAddress(address) {
@@ -112,8 +165,11 @@ export function discoverLocalHostnames() {
 export function applyExposureRuntimeEnv(env, cwd = process.cwd()) {
   const next = { ...env };
   const explicit = normalizedMode(env[EXPOSURE_MODE_ENV]);
-  const persisted = explicit ? undefined : readPersistedExposureMode(env, cwd);
-  const legacy = explicit || persisted ? undefined : legacyMode(env);
+  const persistedState = readPersistedSettings(env, cwd);
+  const persisted = explicit
+    ? undefined
+    : normalizedMode(persistedState.settings?.network?.exposure);
+  const legacy = explicit || persisted || persistedState.failClosed ? undefined : legacyMode(env);
   next[EXPOSURE_MODE_ENV] = explicit || persisted || legacy || 'localhost';
   next.FLUJO_EXPOSURE_MODE_SOURCE = explicit
     ? 'runtime'
@@ -126,7 +182,8 @@ export function applyExposureRuntimeEnv(env, cwd = process.cwd()) {
   // Escape hatch: propagate the persisted allow-all setting to the sandbox and
   // browser gateway as a single immutable env value. Explicit env always wins.
   if (env[SANDBOX_ALLOW_ALL_ENV] === undefined) {
-    next[SANDBOX_ALLOW_ALL_ENV] = readPersistedAllowAll(env, cwd) ? '1' : '0';
+    next[SANDBOX_ALLOW_ALL_ENV] =
+      persistedState.settings?.network?.allowAllMcpAppContent === true ? '1' : '0';
   }
   return next;
 }

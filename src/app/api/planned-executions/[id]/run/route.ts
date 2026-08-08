@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
@@ -17,7 +18,7 @@ const log = createLogger('app/api/planned-executions/[id]/run/route');
  * idle, and it does not itself claim the lock. This keeps "Run now" a
  * predictable hard override that can never hang behind an exclusive queue.
  */
-export async function POST(
+async function POST_handler(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -36,3 +37,5 @@ export async function POST(
     return json({ error: 'Internal server error' }, 500);
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

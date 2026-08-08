@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { NextRequest } from "next/server";
 import { assertUnlocked } from "@/utils/encryption/lockGate";
 import { mcpService } from "@/backend/services/mcp";
@@ -9,7 +10,7 @@ const log = createLogger(
 );
 type RouteContext = { params: Promise<{ name: string }> };
 
-export async function POST(request: NextRequest, { params }: RouteContext) {
+async function POST_handler(request: NextRequest, { params }: RouteContext) {
   const locked = await assertUnlocked();
   if (locked) return locked;
 
@@ -40,3 +41,5 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
     );
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

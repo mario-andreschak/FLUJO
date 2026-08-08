@@ -17,7 +17,7 @@ import type { Wave, WavesResponse } from '@/shared/types/waves/waves';
 import { wavesService } from '@/frontend/services/waves';
 import { createLogger } from '@/utils/logger';
 import { useListScrollNav } from '@/frontend/hooks/useListScrollNav';
-import { useUiPreference } from '@/frontend/hooks/useUiPreference';
+import { useWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
 import ScrollNavCluster from '@/frontend/components/shared/ScrollNavCluster';
 import WaveCanvas from './WaveCanvas';
 import { formatIn } from './waveTimeline';
@@ -134,7 +134,7 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
   const [data, setData] = useState<WavesResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [now, setNow] = useState(() => Date.now());
-  const [selectedId, setSelectedId] = useUiPreference<string | null>(SELECTED_PREF_KEY, null);
+  const [selectedId, setSelectedId] = useWorkspaceUiPreference<string | null>(SELECTED_PREF_KEY, null);
 
   // Persist the LIST scroll position + back-to-top (#185); re-restore on new data.
   const { ref: scrollRef, clusterProps: scrollNavProps } = useListScrollNav<HTMLDivElement>(

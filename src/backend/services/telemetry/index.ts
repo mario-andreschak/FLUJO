@@ -20,6 +20,7 @@ import {
 import { getInstallMode } from '@/utils/paths';
 import { createLogger } from '@/utils/logger';
 import { loadItem, saveItem } from '@/utils/storage/backend';
+import { bindToCurrentWorkspace, getCurrentWorkspace } from '@/utils/workspace';
 
 const log = createLogger('backend/services/telemetry');
 const TELEMETRY_PATH = '/v1/telemetry/daily-active';
@@ -50,7 +51,7 @@ export interface DailyActivityCount {
   count: number;
 }
 
-let checkInFlight: Promise<DailyTelemetryResult> | null = null;
+const checksInFlight = new Map<string, Promise<DailyTelemetryResult>>();
 
 export function utcDateKey(now: Date = new Date()): string {
   return now.toISOString().slice(0, 10);
@@ -198,15 +199,18 @@ async function runDailyCheck(now: Date): Promise<DailyTelemetryResult> {
 export function checkDailyActivity(
   now: Date = new Date(),
 ): Promise<DailyTelemetryResult> {
-  if (!checkInFlight) {
-    checkInFlight = runDailyCheck(now).finally(() => {
-      checkInFlight = null;
-    });
-  }
-  return checkInFlight;
+  const workspace = getCurrentWorkspace();
+  const existing = checksInFlight.get(workspace);
+  if (existing) return existing;
+  const check = bindToCurrentWorkspace(runDailyCheck)(now);
+  const guarded = check.finally(bindToCurrentWorkspace(() => {
+    if (checksInFlight.get(workspace) === guarded) checksInFlight.delete(workspace);
+  }));
+  checksInFlight.set(workspace, guarded);
+  return guarded;
 }
 
 /** Test helper: clear only the process-local guard, never persisted state. */
 export function _resetTelemetrySingleFlight(): void {
-  checkInFlight = null;
+  checksInFlight.delete(getCurrentWorkspace());
 }

@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
@@ -21,7 +22,7 @@ export const dynamic = 'force-dynamic';
  * positions older than the buffer (evicted, channel GC'd, or after a process
  * restart) are replayed from the durable JSONL log.
  */
-export async function GET(
+async function GET_handler(
   request: NextRequest,
   { params }: { params: Promise<{ conversationId: string }> }
 ) {
@@ -175,3 +176,5 @@ export async function GET(
     },
   });
 }
+
+export const GET = withWorkspaceRoute(GET_handler);

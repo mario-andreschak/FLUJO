@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
@@ -86,7 +87,7 @@ function deriveOutputText(state: SharedState | undefined): string | undefined {
  * Gated behind the same unlock check as the rest of the API — these endpoints
  * resume real, side-effecting tool execution, so callers must be trusted.
  */
-export async function POST(
+async function POST_handler(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -247,3 +248,5 @@ export async function POST(
     return json({ error: 'Internal server error resolving approval' }, 500);
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

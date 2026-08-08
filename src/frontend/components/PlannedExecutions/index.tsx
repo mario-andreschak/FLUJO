@@ -63,7 +63,7 @@ import {
   sortPlannedExecutions,
   TRIGGER_TYPE_LABELS,
 } from '@/utils/shared/plannedExecutionGrouping';
-import { useUiPreference } from '@/frontend/hooks/useUiPreference';
+import { useWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
 import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
 import { useListScrollNav } from '@/frontend/hooks/useListScrollNav';
 import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCardSection';
@@ -100,23 +100,23 @@ const PlannedExecutionsManager = () => {
   // #372: caret placed automatically; this page scrolls the document, so the
   // search toolbar also needs to stay pinned while scrolling (see wrapper below).
   const searchInputRef = useAutoFocusSearch();
-  const [statusFilter, setStatusFilter] = useUiPreference<PlannedExecutionFilter>(
+  const [statusFilter, setStatusFilter] = useWorkspaceUiPreference<PlannedExecutionFilter>(
     'flujo-ui:planned-executions:filter',
     'all',
   );
-  const [triggerFilter, setTriggerFilter] = useUiPreference<'all' | TriggerType>(
+  const [triggerFilter, setTriggerFilter] = useWorkspaceUiPreference<'all' | TriggerType>(
     'flujo-ui:planned-executions:trigger',
     'all',
   );
-  const [sortOption, setSortOption] = useUiPreference<PlannedExecutionSortOption>(
+  const [sortOption, setSortOption] = useWorkspaceUiPreference<PlannedExecutionSortOption>(
     'flujo-ui:planned-executions:sort',
     'name-asc',
   );
-  const [groupMode, setGroupMode] = useUiPreference<GroupMode>(
+  const [groupMode, setGroupMode] = useWorkspaceUiPreference<GroupMode>(
     'flujo-ui:planned-executions:group',
     DEFAULT_CARD_GROUP_MODE,
   );
-  const [collapsedList, setCollapsedList] = useUiPreference<string[]>(
+  const [collapsedList, setCollapsedList] = useWorkspaceUiPreference<string[]>(
     'flujo-ui:planned-executions:collapsed',
     [],
   );

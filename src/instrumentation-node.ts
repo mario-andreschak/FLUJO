@@ -8,28 +8,33 @@
  * runs in the Node.js runtime.
  */
 import { createLogger } from '@/utils/logger';
-import { ensureBackendInitialized } from '@/backend/init';
-import { startSandboxServer } from '@/backend/mcpApps/sandboxServer';
+import { ensureWorkspaceLayoutReady } from '@/backend/services/workspace/migration';
 
 const log = createLogger('instrumentation');
 
-log.info('Server startup: initializing backend (storage + MCP servers)');
+export async function initializeNodeRuntime(): Promise<void> {
+  log.info('Server startup: preparing workspace layout');
 
-// MCP Apps (#97): bring up the separate-origin sandbox proxy listener so
-// interactive apps can render in a foreign-origin iframe. Never blocks startup
-// and never throws — if the port is taken or binding fails, apps just won't
-// render and the rest of FLUJO is unaffected.
-try {
-  startSandboxServer();
-} catch (error) {
-  log.error('Failed to start MCP Apps sandbox proxy', error);
+  // This is the startup barrier: no sandbox or backend service may open a
+  // runtime path until the transactional migration has completed or recovered.
+  await ensureWorkspaceLayoutReady();
+
+  // MCP Apps (#97): bring up the separate-origin sandbox proxy listener so
+  // interactive apps can render in a foreign-origin iframe. Never blocks startup
+  // and never throws — if the port is taken or binding fails, apps just won't
+  // render and the rest of FLUJO is unaffected.
+  try {
+    const { startSandboxServer } = await import('@/backend/mcpApps/sandboxServer');
+    startSandboxServer();
+  } catch (error) {
+    log.error('Failed to start MCP Apps sandbox proxy', error);
+  }
+
+  // Fire-and-forget after the layout barrier. Enumerating all workspaces ensures
+  // inactive workspaces still arm automations; slow MCP connections do not hold
+  // Next's readiness gate open.
+  const { ensureAllWorkspacesInitialized } = await import('@/backend/init');
+  void ensureAllWorkspacesInitialized()
+    .then(() => log.info('Server startup: all workspace initialization complete'))
+    .catch(error => log.error('Server startup: workspace initialization failed', error));
 }
-
-// Fire-and-forget: we deliberately do NOT await this. MCP servers can take
-// several seconds (and retry with backoff) to connect, and blocking the
-// server's "ready" on every one of them would make startup feel frozen.
-// getServerStatus() reports each as "connecting" until it settles, and the
-// MCP page polls and refreshes its cards automatically.
-ensureBackendInitialized()
-  .then(() => log.info('Server startup: backend initialization complete'))
-  .catch(error => log.error('Server startup: backend initialization failed', error));

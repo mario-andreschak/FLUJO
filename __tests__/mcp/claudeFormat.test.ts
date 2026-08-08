@@ -126,6 +126,27 @@ describe('claudeFormat — export (toClaudeFormat)', () => {
       url: 'http://localhost:4200/mcp-proxy/abap-mcp-flujo',
     });
   });
+
+  it('makes the selected workspace explicit on exported proxy URLs', () => {
+    const server = {
+      name: 'shared name',
+      transport: 'stdio',
+      exposeAsMcpServer: true,
+      disabled: false,
+      autoApprove: [],
+      rootPath: '',
+      env: {},
+      _buildCommand: '',
+      _installCommand: '',
+      command: 'node',
+    } as unknown as MCPServerConfig;
+    const out = toClaudeFormat([server], {
+      proxyBaseUrl: 'http://localhost:4200',
+      workspace: 'team-a',
+    });
+    expect(out.mcpServers['shared name'].url)
+      .toBe('http://localhost:4200/mcp-proxy/shared%20name?workspace=team-a');
+  });
 });
 
 describe('claudeFormat — import (fromClaudeFormat)', () => {

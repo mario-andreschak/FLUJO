@@ -12,7 +12,7 @@ const log = createLogger('app/api/flow/route');
  * GET /api/flow
  * List all flows.
  */
-async function GET_handler() {
+async function GET_handler(_request: Request) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -62,5 +62,10 @@ async function POST_handler(request: NextRequest) {
 
 
 // Workspaces (#406): flows live in the selected workspace's db/.
-export const GET = withWorkspaceRoute(GET_handler);
+const GET_workspaceRoute = withWorkspaceRoute(GET_handler);
+export function GET(): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request): ReturnType<typeof GET_workspaceRoute>;
+export function GET(request: Request = new Request('http://localhost/')) {
+  return GET_workspaceRoute(request);
+}
 export const POST = withWorkspaceRoute(POST_handler);

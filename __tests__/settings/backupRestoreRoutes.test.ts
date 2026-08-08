@@ -111,6 +111,10 @@ describe('backup route', () => {
 
     const zip = await JSZip.loadAsync(await response.arrayBuffer());
     expect(zip.file('backup-info.json')).toBeTruthy();
+    expect(JSON.parse(await zip.file('backup-info.json')!.async('string'))).toMatchObject({
+      workspace: 'default-workspace',
+      workspaceLayoutVersion: 2,
+    });
 
     const models = zip.file(`storage/${StorageKey.MODELS}.json`);
     const flows = zip.file(`storage/${StorageKey.FLOWS}.json`);

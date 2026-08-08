@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { FlowBuilder } from '@/frontend/components/Flow/FlowManager/FlowBuilder';
 import { modelService } from '@/frontend/services/model';
 import { flowService } from '@/frontend/services/flow';
+import { workspaceLocalStorageKey } from '@/frontend/utils/workspaceSelection';
 
 jest.mock('@xyflow/react', () => ({
   ReactFlowProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -122,7 +123,10 @@ describe('FlowBuilder toolbar', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     window.localStorage.clear();
-    window.localStorage.setItem('flujo-ui:flow-builder:mode', JSON.stringify('advanced'));
+    window.localStorage.setItem(
+      workspaceLocalStorageKey('flujo-ui:flow-builder:mode'),
+      JSON.stringify('advanced'),
+    );
   });
 
   it('keeps the high-frequency authoring goals visible and flow details in the inspector', () => {
@@ -154,7 +158,10 @@ describe('FlowBuilder toolbar', () => {
   });
 
   it('always exposes the Easy/Expert view toggle', () => {
-    window.localStorage.setItem('flujo-ui:flow-builder:mode', JSON.stringify('guided'));
+    window.localStorage.setItem(
+      workspaceLocalStorageKey('flujo-ui:flow-builder:mode'),
+      JSON.stringify('guided'),
+    );
     render(
       <FlowBuilder
         initialFlow={initialFlow}
@@ -178,7 +185,10 @@ describe('FlowBuilder toolbar', () => {
   });
 
   it('opens flows that require expert features directly in Expert view', () => {
-    window.localStorage.setItem('flujo-ui:flow-builder:mode', JSON.stringify('guided'));
+    window.localStorage.setItem(
+      workspaceLocalStorageKey('flujo-ui:flow-builder:mode'),
+      JSON.stringify('guided'),
+    );
     const expertFlow = {
       ...initialFlow,
       nodes: [
@@ -206,7 +216,10 @@ describe('FlowBuilder toolbar', () => {
   });
 
   it('honors an explicit simple-builder handoff for flows with expert features', () => {
-    window.localStorage.setItem('flujo-ui:flow-builder:mode', JSON.stringify('advanced'));
+    window.localStorage.setItem(
+      workspaceLocalStorageKey('flujo-ui:flow-builder:mode'),
+      JSON.stringify('advanced'),
+    );
     const expertFlow = {
       ...initialFlow,
       nodes: [
@@ -232,7 +245,8 @@ describe('FlowBuilder toolbar', () => {
 
     expect(screen.getByRole('checkbox', { name: 'Expert view' })).not.toBeChecked();
     expect(screen.getByLabelText('Guided agent builder')).toBeInTheDocument();
-    expect(window.localStorage.getItem('flujo-ui:flow-builder:mode')).toBe(JSON.stringify('guided'));
+    expect(window.localStorage.getItem(workspaceLocalStorageKey('flujo-ui:flow-builder:mode')))
+      .toBe(JSON.stringify('guided'));
   });
 
   it('retains both automatic and AI repair paths', () => {
@@ -509,7 +523,10 @@ describe('FlowBuilder toolbar', () => {
   });
 
   it('does not block goal creation when no AI is connected', async () => {
-    window.localStorage.setItem('flujo-ui:flow-builder:mode', JSON.stringify('guided'));
+    window.localStorage.setItem(
+      workspaceLocalStorageKey('flujo-ui:flow-builder:mode'),
+      JSON.stringify('guided'),
+    );
     (modelService.loadModels as jest.Mock).mockResolvedValueOnce([]);
     render(
       <FlowBuilder
@@ -531,7 +548,10 @@ describe('FlowBuilder toolbar', () => {
   });
 
   it('asks permission, prefills the favorite model, and saves before Try', async () => {
-    window.localStorage.setItem('flujo-ui:flow-builder:mode', JSON.stringify('guided'));
+    window.localStorage.setItem(
+      workspaceLocalStorageKey('flujo-ui:flow-builder:mode'),
+      JSON.stringify('guided'),
+    );
     const onSave = jest.fn().mockResolvedValue(true);
     const onTry = jest.fn();
     const guidedDraft = {

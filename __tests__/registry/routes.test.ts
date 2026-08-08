@@ -6,6 +6,20 @@
  */
 import type { NextRequest } from 'next/server';
 
+// These tests exercise the registry routes' own validation and status mapping.
+// Workspace dispatch has dedicated coverage and must not run a real layout
+// migration against the developer checkout from this unit-test suite.
+jest.mock('@/app/api/_workspace', () => ({
+  withWorkspaceRoute: <H extends (...args: never[]) => unknown>(handler: H): H => handler,
+}));
+jest.mock('@/utils/workspace', () => {
+  const actual = jest.requireActual('@/utils/workspace');
+  return {
+    ...actual,
+    workspaceExists: jest.fn(async () => true),
+  };
+});
+
 const authenticateMock = jest.fn();
 const getAccountStatusMock = jest.fn();
 const logoutMock = jest.fn();
@@ -14,6 +28,7 @@ const deletePublishedPackageMock = jest.fn();
 const requestPasswordResetMock = jest.fn();
 const beginOAuthMock = jest.fn();
 const completeOAuthMock = jest.fn();
+const pendingOAuthWorkspaceMock = jest.fn((_state?: string) => 'default-workspace');
 jest.mock('@/backend/services/registry', () => ({
   authenticate: (...a: unknown[]) => authenticateMock(...a),
   getAccountStatus: (...a: unknown[]) => getAccountStatusMock(...a),
@@ -23,6 +38,7 @@ jest.mock('@/backend/services/registry', () => ({
   requestPasswordReset: (...a: unknown[]) => requestPasswordResetMock(...a),
   beginOAuth: (...a: unknown[]) => beginOAuthMock(...a),
   completeOAuth: (...a: unknown[]) => completeOAuthMock(...a),
+  pendingOAuthWorkspace: (state: string) => pendingOAuthWorkspaceMock(state),
 }));
 
 // Store unlocked (default encryption mode). Individual tests can override with
@@ -64,7 +80,10 @@ function deleteReq(url: string, body: unknown, headers: Record<string, string> =
   }) as unknown as NextRequest;
 }
 
-beforeEach(() => jest.clearAllMocks());
+beforeEach(() => {
+  jest.clearAllMocks();
+  pendingOAuthWorkspaceMock.mockReturnValue('default-workspace');
+});
 
 describe('POST /api/registry/auth (#197)', () => {
   it('authenticates a local login request', async () => {
@@ -197,7 +216,10 @@ describe('POST /api/registry/oauth/initiate (#207)', () => {
     );
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ authorizationUrl: 'https://registry.example/authz' });
-    expect(beginOAuthMock).toHaveBeenCalledWith('github', 'http://localhost:4200/api/registry/oauth/callback');
+    expect(beginOAuthMock).toHaveBeenCalledWith(
+      'github',
+      'http://localhost:4200/api/registry/oauth/callback?workspace=default-workspace',
+    );
   });
 
   it('rejects a cross-origin (DNS-rebinding) request with 403 and never begins OAuth', async () => {

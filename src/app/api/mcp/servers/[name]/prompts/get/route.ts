@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
@@ -17,7 +18,7 @@ type RouteContext = { params: Promise<{ name: string }> };
  * because the prompt name can contain awkward characters and the arguments are structured.
  * Responds 200 with `{ success, data, error? }` (data = the MCP GetPromptResult).
  */
-export async function POST(request: NextRequest, { params }: RouteContext) {
+async function POST_handler(request: NextRequest, { params }: RouteContext) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -39,3 +40,5 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
     return json({ success: false, ...formatErrorResponse(error) }, 500);
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

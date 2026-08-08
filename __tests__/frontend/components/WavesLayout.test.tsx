@@ -9,6 +9,7 @@ jest.mock('@/frontend/services/waves', () => ({
 
 jest.mock('@/frontend/hooks/useUiPreference', () => ({
   useUiPreference: () => [null, jest.fn()],
+  useWorkspaceUiPreference: () => [null, jest.fn()],
 }));
 
 jest.mock('@/frontend/hooks/useScrollRestoration', () => ({

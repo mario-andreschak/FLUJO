@@ -1,3 +1,4 @@
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 /**
  * POST /api/packages/uninstall (issue #211).
  *
@@ -23,7 +24,7 @@ import { createLogger } from '@/utils/logger';
 
 const log = createLogger('app/api/packages/uninstall/route');
 
-export async function POST(request: NextRequest) {
+async function POST_handler(request: NextRequest) {
   const lock = await assertUnlocked();
   if (lock) return lock;
   const notLocal = assertLocalRequest(request);
@@ -52,3 +53,5 @@ export async function POST(request: NextRequest) {
   const summary = await uninstallPackage(packageName);
   return NextResponse.json(summary, { status: 200 });
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

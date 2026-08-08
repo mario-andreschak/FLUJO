@@ -28,6 +28,7 @@ import FolderAssignMenu from "@/frontend/components/shared/FolderAssignMenu";
 import { mcpService } from "@/frontend/services/mcp";
 import { MCPStdioOAuthStatus, MCPServerConfig } from "@/shared/types/mcp";
 import { buildSingleServerJson } from "@/utils/mcp/mcpFormats";
+import { getSelectedWorkspace, withWorkspaceUrl } from "@/frontend/utils/workspaceSelection";
 import TransportBadge from "./TransportBadge";
 import ServerLogo from "./ServerLogo";
 import ServerUpdateDialog from "./ServerUpdateDialog";
@@ -214,7 +215,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
   // The URL external MCP clients paste in. Only meaningful in the browser.
   const proxyUrl =
     typeof window !== "undefined"
-      ? `${window.location.origin}/mcp-proxy/${encodeURIComponent(name)}`
+      ? withWorkspaceUrl(`${window.location.origin}/mcp-proxy/${encodeURIComponent(name)}`)
       : "";
 
   const handleToggleExpose = async (checked: boolean) => {
@@ -266,7 +267,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
   const handleCopyServerJson = () => {
     const base = typeof window !== "undefined" ? window.location.origin : "";
     navigator.clipboard.writeText(
-      buildSingleServerJson(name, serverConfig, base),
+      buildSingleServerJson(name, serverConfig, base, 'claude', getSelectedWorkspace()),
     );
     setToastMessage(t("mcp.card.jsonCopied"));
     setToastSeverity("success");

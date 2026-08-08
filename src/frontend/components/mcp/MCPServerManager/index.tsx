@@ -3,6 +3,7 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { magicLinkPath } from '@/frontend/utils/magicLink';
+import { getSelectedWorkspace } from '@/frontend/utils/workspaceSelection';
 import ServerList from './ServerList';
 import ServerModal from './Modals/ServerModal/index';
 import { SaveAndAuthenticateResult, type ServerSetupTab } from './Modals/ServerModal/types';
@@ -72,7 +73,7 @@ import {
   DEFAULT_CARD_GROUP_MODE,
 } from '@/utils/shared/cardGrouping';
 import { ServerSortOption, deriveServerSortGroup, sortServersFavoritesFirst } from '@/utils/shared/serverGrouping';
-import { useUiPreference } from '@/frontend/hooks/useUiPreference';
+import { useWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
 import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
 import ScrollNavCluster from '@/frontend/components/shared/ScrollNavCluster';
 import StickySearchBar from '@/frontend/components/shared/StickySearchBar';
@@ -307,13 +308,13 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   // own scrollport — the document scrolls instead. The toolbar therefore needs
   // the same `StickySearchBar mode="page"` wrapper as Models/Automations.
   const searchInputRef = useAutoFocusSearch();
-  const [sortOption, setSortOption] = useUiPreference<ServerSortOption>('flujo-ui:mcp:sort', 'name-asc');
-  const [filterOption, setFilterOption] = useUiPreference<FilterOption>('flujo-ui:mcp:filter', 'all');
+  const [sortOption, setSortOption] = useWorkspaceUiPreference<ServerSortOption>('flujo-ui:mcp:sort', 'name-asc');
+  const [filterOption, setFilterOption] = useWorkspaceUiPreference<FilterOption>('flujo-ui:mcp:filter', 'all');
   const [sortAnchorEl, setSortAnchorEl] = useState<null | HTMLElement>(null);
-  const [groupMode, setGroupMode] = useUiPreference<GroupMode>('flujo-ui:mcp:group', DEFAULT_CARD_GROUP_MODE);
+  const [groupMode, setGroupMode] = useWorkspaceUiPreference<GroupMode>('flujo-ui:mcp:group', DEFAULT_CARD_GROUP_MODE);
   const [groupAnchorEl, setGroupAnchorEl] = useState<null | HTMLElement>(null);
   // Collapsed sections persisted as a string[] and re-derived into a Set.
-  const [collapsedList, setCollapsedList] = useUiPreference<string[]>('flujo-ui:mcp:collapsed', []);
+  const [collapsedList, setCollapsedList] = useWorkspaceUiPreference<string[]>('flujo-ui:mcp:collapsed', []);
   const collapsedKeys = useMemo(() => new Set(collapsedList), [collapsedList]);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedServers, setSelectedServers] = useState<Set<string>>(new Set());
@@ -456,6 +457,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     // against this origin (e.g. http://localhost:4200/mcp-proxy/<name>).
     const config = format.export(servers as unknown as MCPServerConfig[], {
       proxyBaseUrl: typeof window !== 'undefined' ? window.location.origin : '',
+      workspace: getSelectedWorkspace(),
     });
 
     const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
