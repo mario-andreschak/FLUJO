@@ -98,7 +98,7 @@ describe('setup-first home journey', () => {
     mockCountConversations.mockResolvedValue(1);
 
     const result = render(<HomePage />);
-    await waitFor(() => expect(screen.getByText('Completed')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: dismissLabels.ai })).toBeInTheDocument());
     return result;
   };
 
