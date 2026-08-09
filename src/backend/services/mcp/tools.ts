@@ -133,15 +133,13 @@ export async function listServerTools(
     log.verbose("Raw response from MCP server:", response);
 
     const tools = (response.tools || []).map((tool) => ({
-      name: tool.name,
+      // Preserve the complete SDK-validated definition so newer standard
+      // display and execution metadata (title, icons, outputSchema, execution)
+      // reaches host UIs without requiring another lossy mapping update. The
+      // explicit fallbacks retain FLUJO's existing behavior for older servers.
+      ...tool,
       description: tool.description || "",
-      inputSchema: tool.inputSchema || {},
-      // Preserve server-declared annotations and `_meta`. MCP Apps (#97) link a
-      // tool to its `ui://` UI resource via `_meta.ui.resourceUri` on the tool
-      // DEFINITION (per SEP-1865 / ext-apps), so this must survive listing or
-      // the app link is lost before detection can ever see it.
-      ...(tool.annotations ? { annotations: tool.annotations } : {}),
-      ...(tool._meta ? { _meta: tool._meta } : {}),
+      inputSchema: tool.inputSchema || { type: "object" },
     })) as ToolResponse[];
 
     const visibleTools = filterToolsForAudience(tools, audience);

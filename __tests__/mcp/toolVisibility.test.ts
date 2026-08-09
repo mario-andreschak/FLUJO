@@ -70,6 +70,25 @@ describe('MCP Apps tool visibility', () => {
     ]);
   });
 
+  it('preserves current standard tool display, schema, and execution metadata', async () => {
+    const definition = {
+      name: 'export',
+      title: 'Export records',
+      description: 'Export data.',
+      icons: [{ src: 'https://example.test/icon.png', mimeType: 'image/png' }],
+      inputSchema: { type: 'object' as const },
+      outputSchema: { type: 'object' as const, properties: { url: { type: 'string' } } },
+      annotations: { readOnlyHint: true },
+      execution: { taskSupport: 'optional' as const },
+      _meta: { ui: { resourceUri: 'ui://export' } },
+    };
+    const client = { listTools: jest.fn(async () => ({ tools: [definition] })) } as unknown as Client;
+
+    const result = await listServerTools(client, 'srv', 'all');
+
+    expect(result.tools[0]).toEqual(definition);
+  });
+
   it('rejects an app call when the same-server definition lacks app visibility', async () => {
     const { client, callToolMock } = clientWithTools([modelOnly]);
 

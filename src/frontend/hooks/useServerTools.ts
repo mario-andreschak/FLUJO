@@ -1,21 +1,18 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { mcpService } from '@/frontend/services/mcp';
 import { createLogger } from '@/utils/logger';
+import type { MCPToolResponse } from '@/shared/types/mcp';
 
 // Create a logger instance for this file
 const log = createLogger('frontend/hooks/useServerTools');
-
-interface Tool {
-  name: string;
-  description: string;
-  inputSchema: Record<string, any>;
-}
 
 interface ToolTestResult {
   success: boolean;
   output: string;
   error?: string;
 }
+
+export type ServerTool = Omit<MCPToolResponse, 'description'> & { description: string };
 
 /**
  * Custom hook for managing server tools
@@ -24,11 +21,12 @@ interface ToolTestResult {
  * to ensure tools are always displayed for the correct server.
  */
 export function useServerTools(serverName: string | null) {
-  const [tools, setTools] = useState<Tool[]>([]);
+  const [tools, setTools] = useState<ServerTool[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [currentServerName, setCurrentServerName] = useState<string | null>(null);
+  const [toolsServerName, setToolsServerName] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
   const [isRetrying, setIsRetrying] = useState(false);
   const retryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -48,6 +46,7 @@ export function useServerTools(serverName: string | null) {
   const loadTools = useCallback(async (force: boolean = false) => {
     if (!serverName) {
       setTools([]);
+      setToolsServerName(null);
       setError(null);
       return;
     }
@@ -69,6 +68,8 @@ export function useServerTools(serverName: string | null) {
 
     log.debug(`Loading tools for server: ${serverName}`);
     setIsLoading(true);
+    setTools([]);
+    setToolsServerName(null);
     setError(null);
 
     try {
@@ -87,9 +88,13 @@ export function useServerTools(serverName: string | null) {
         setTools([]);
       } else {
         // Ensure tools is always an array
-        const toolsArray = result.tools || [];
+        const toolsArray: ServerTool[] = (result.tools || []).map((tool: MCPToolResponse) => ({
+          ...tool,
+          description: tool.description || '',
+        }));
         log.debug(`Loaded ${toolsArray.length} tools for ${serverName}`);
         setTools(toolsArray);
+        setToolsServerName(serverName);
         setLastRefresh(new Date());
         // Reset retry count on success
         setRetryCount(0);
@@ -105,6 +110,7 @@ export function useServerTools(serverName: string | null) {
       setError(`Failed to load tools: ${error instanceof Error ? error.message : 'Unknown error'}`);
       // Clear tools when there's an exception to prevent showing tools from a previously selected server
       setTools([]);
+      setToolsServerName(null);
     } finally {
       // Only update loading state if this is still the current server
       if (serverName === currentServerName) {
@@ -207,6 +213,7 @@ export function useServerTools(serverName: string | null) {
     } else {
       log.debug('Clearing tools as no server is selected');
       setTools([]);
+      setToolsServerName(null);
       setError(null);
       setCurrentServerName(null);
     }
@@ -214,6 +221,7 @@ export function useServerTools(serverName: string | null) {
 
   return {
     tools,
+    toolsServerName,
     isLoading: isLoading || isRetrying,
     error,
     loadTools,
