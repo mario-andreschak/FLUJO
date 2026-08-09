@@ -23,6 +23,7 @@ import {
   listConversationSummaries,
   persistConversationSummary,
 } from '@/backend/execution/flow/conversationSummaryStore';
+import { flowService } from '@/backend/services/flow';
 import {
   ConversationCursorError,
   paginateConversationSummaries,
@@ -58,6 +59,70 @@ const listSummaryCacheKey = (file: string) => workspaceCacheKey('conversation-li
 // the server.
 const MAX_SEARCH_TERM_LEN = 256;
 const MAX_CONTENT_SCAN_BYTES = 8 * 1024 * 1024; // 8 MiB per conversation file
+
+const ORIGIN_SEARCH_TERMS: Record<string, string> = {
+  chat: 'chat user interactive',
+  api: 'api',
+  schedule: 'automation schedule planned execution',
+  trigger: 'trigger unattended',
+  subflow: 'subagent subflow child',
+  mcp: 'mcp run',
+  internal: 'internal',
+  meeting: 'meeting multi-flow',
+  unknown: 'unknown origin',
+};
+
+/** Searchable sidebar metadata is resolved on the server so the browser only
+ *  receives the requested result page. Flow names are included because the UI
+ *  presents those names (rather than opaque flow ids) as the conversation's
+ *  agent. */
+function sidebarMetadataMatches(
+  item: ConversationListItem,
+  query: string,
+  flowNames: ReadonlyMap<string, string>,
+): boolean {
+  if (!query) return true;
+  const origin = item.source
+    ?? (item.parentConversationId ? 'subflow' : item.plannedExecutionId ? 'schedule' : 'unknown');
+  const flowName = item.flowId?.startsWith('quickchat-')
+    ? 'Quick Chat'
+    : item.flowId ? (flowNames.get(item.flowId) ?? '') : 'No agent';
+  return [
+    item.id,
+    item.title,
+    item.flowId ?? '',
+    flowName,
+    origin,
+    ORIGIN_SEARCH_TERMS[origin] ?? '',
+  ].join(' ').toLocaleLowerCase().includes(query);
+}
+
+function conversationOrigin(item: ConversationListItem): string {
+  return item.source
+    ?? (item.parentConversationId ? 'subflow' : item.plannedExecutionId ? 'schedule' : 'unknown');
+}
+
+/** Resolve a complete transitive descendant set from durable parent links.
+ *  Cycle guarded so corrupt lineage cannot loop forever. */
+function descendantIds(items: ConversationListItem[], ancestorId: string): Set<string> {
+  const childrenByParent = new Map<string, string[]>();
+  for (const item of items) {
+    const parentId = item.parentConversationId;
+    if (!parentId || parentId === item.id) continue;
+    const children = childrenByParent.get(parentId) ?? [];
+    children.push(item.id);
+    childrenByParent.set(parentId, children);
+  }
+  const descendants = new Set<string>();
+  const pending = [...(childrenByParent.get(ancestorId) ?? [])];
+  while (pending.length > 0) {
+    const id = pending.pop()!;
+    if (id === ancestorId || descendants.has(id)) continue;
+    descendants.add(id);
+    pending.push(...(childrenByParent.get(id) ?? []));
+  }
+  return descendants;
+}
 
 /** Case-insensitive substring test against a conversation's message CONTENT.
  *  Handles plain-string content and the multimodal array/object shapes (by
@@ -121,6 +186,19 @@ async function GET_handler(request: NextRequest) {
   const paged = url.searchParams.get('paged') === '1';
   const rawLimit = url.searchParams.get('limit');
   const cursor = url.searchParams.get('cursor') ?? undefined;
+  const requestedOrigin = (url.searchParams.get('origin') ?? '').trim();
+  const descendantsOf = (url.searchParams.get('descendantsOf') ?? '').trim();
+  const allowedOrigins = new Set(['chat', 'schedule', 'subflow', 'meeting']);
+  if (requestedOrigin && !allowedOrigins.has(requestedOrigin)) {
+    return NextResponse.json({ error: 'invalid origin filter' }, { status: 400 });
+  }
+  if (descendantsOf) {
+    try {
+      assertSafeCollectionId(descendantsOf);
+    } catch {
+      return NextResponse.json({ error: 'invalid ancestor conversation id' }, { status: 400 });
+    }
+  }
   if (rawSearch.length > MAX_SEARCH_TERM_LEN) {
     return NextResponse.json(
       { error: `search term too long (max ${MAX_SEARCH_TERM_LEN} chars)` },
@@ -160,13 +238,10 @@ async function GET_handler(request: NextRequest) {
     if (paged && !contentSearch) {
       const summaries = await listConversationSummaries();
       const query = rawSearch.toLocaleLowerCase();
-      const visible = summaries
-        .filter((summary) => {
-          if (!query) return true;
-          return `${summary.id} ${summary.title} ${summary.flowId ?? ''} ${summary.source ?? ''}`
-            .toLocaleLowerCase()
-            .includes(query);
-        })
+      const flowNames = query
+        ? new Map((await flowService.loadFlows()).map((flow) => [flow.id, flow.name]))
+        : new Map<string, string>();
+      let visible = summaries
         .map((summary): ConversationListItem => {
           const live = FlowExecutor.conversationStates.get(summary.id);
           let status = live?.status ?? summary.status;
@@ -186,7 +261,15 @@ async function GET_handler(request: NextRequest) {
             rootConversationId: live?.rootConversationId ?? summary.rootConversationId ?? null,
             recovery: live?.recovery ?? summary.recovery,
           };
-        });
+        })
+        .filter((summary) => sidebarMetadataMatches(summary, query, flowNames));
+      if (requestedOrigin) {
+        visible = visible.filter((summary) => conversationOrigin(summary) === requestedOrigin);
+      }
+      if (descendantsOf) {
+        const ids = descendantIds(visible, descendantsOf);
+        visible = visible.filter((summary) => ids.has(summary.id));
+      }
       try {
         return NextResponse.json(paginateConversationSummaries(visible, pageLimit, cursor));
       } catch (error) {
@@ -219,7 +302,9 @@ async function GET_handler(request: NextRequest) {
           if (contentSearch && stats.size > MAX_CONTENT_SCAN_BYTES) {
             return null;
           }
-          const fileContent = await fs.readFile(filePath, 'utf-8');
+          const fileContent = contentSearch
+            ? await fs.readFile(filePath, { encoding: 'utf-8', signal: request.signal })
+            : await fs.readFile(filePath, 'utf-8');
           const state = JSON.parse(fileContent) as SharedState;
           parsedState = state;
           // On the first sidebar load after a process restart, convert a running
@@ -298,6 +383,9 @@ async function GET_handler(request: NextRequest) {
 
         return { ...base, title, updatedAt, lastUserMessageAt, status, source, plannedExecutionId };
       } catch (parseError) {
+        if (request.signal.aborted || (parseError as { name?: string })?.name === 'AbortError') {
+          return null;
+        }
         log.error(`Error reading or parsing conversation file: ${file}`, { requestId, filePath, error: parseError });
         // Under content search an unparseable file can't be said to match, so
         // drop it rather than surfacing an "Error Loading" placeholder (#182).
@@ -343,8 +431,11 @@ async function GET_handler(request: NextRequest) {
     log.info(`Successfully retrieved conversation list`, { requestId, count: validConversations.length, duration: `${duration}ms` });
 
     if (paged) {
+      const visibleConversations = requestedOrigin
+        ? validConversations.filter((conversation) => conversationOrigin(conversation) === requestedOrigin)
+        : validConversations;
       try {
-        return NextResponse.json(paginateConversationSummaries(validConversations, pageLimit, cursor));
+        return NextResponse.json(paginateConversationSummaries(visibleConversations, pageLimit, cursor));
       } catch (error) {
         if (error instanceof ConversationCursorError) {
           return NextResponse.json({ error: error.message }, { status: 400 });

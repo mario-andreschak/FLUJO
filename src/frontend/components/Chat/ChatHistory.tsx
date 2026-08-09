@@ -48,6 +48,9 @@ import GroupsRoundedIcon from '@mui/icons-material/GroupsRounded';
 import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded';
 import AccessTimeRoundedIcon from '@mui/icons-material/AccessTimeRounded';
 import LinkOffRoundedIcon from '@mui/icons-material/LinkOffRounded';
+import FilterListRoundedIcon from '@mui/icons-material/FilterListRounded';
+import UnfoldMoreRoundedIcon from '@mui/icons-material/UnfoldMoreRounded';
+import UnfoldLessRoundedIcon from '@mui/icons-material/UnfoldLessRounded';
 import { ConversationListItem } from './index'; // Import ConversationListItem instead
 import type { ChatRevealRequest } from './index';
 import { isQuickChatFlowId } from '@/utils/shared/quickChat';
@@ -118,6 +121,16 @@ interface ChatHistoryProps {
 type GroupMode = 'none' | 'date' | 'flow' | 'origin' | 'wave' | 'chain';
 type StatusFilter = 'all' | NonNullable<ConversationListItem['status']>;
 type DateFilter = 'all' | 'today' | '7d' | '30d';
+type SearchDimension = 'title' | 'content';
+type OriginFilter = 'all' | 'chat' | 'schedule' | 'subflow' | 'meeting';
+
+interface ConversationSearchPage {
+  key: string;
+  items: ConversationListItem[];
+  total: number;
+  hasMore: boolean;
+  nextCursor?: string;
+}
 
 // Persisted per-browser UI preferences (issue #147). Namespaced with the app's
 // existing `flujo-ui:` convention so they sit alongside the other list-surface
@@ -127,6 +140,8 @@ const PREF = {
   status: 'flujo-ui:chat-sidebar:status',
   flow: 'flujo-ui:chat-sidebar:flow',
   date: 'flujo-ui:chat-sidebar:date',
+  origin: 'flujo-ui:chat-sidebar:origin',
+  filtersOpen: 'flujo-ui:chat-sidebar:filters-open',
   collapsed: 'flujo-ui:chat-sidebar:collapsed',
   searchDim: 'flujo-ui:chat-sidebar:search-dim',
 } as const;
@@ -135,10 +150,35 @@ const PREF = {
 // late (Collapse mount, list re-render); it must never retry forever when a
 // filter or a closed mobile drawer keeps it unmounted.
 const MAX_REVEAL_ATTEMPTS = 10;
+const SEARCH_PAGE_SIZE = 50;
 
 const STATUS_OPTIONS: StatusFilter[] = ['all', 'running', 'awaiting_tool_approval', 'paused_debug', 'completed', 'error'];
 const DATE_OPTIONS: DateFilter[] = ['all', 'today', '7d', '30d'];
 const GROUP_OPTIONS: GroupMode[] = ['none', 'date', 'flow', 'origin', 'wave', 'chain'];
+const ORIGIN_FILTER_OPTIONS: OriginFilter[] = ['all', 'chat', 'schedule', 'subflow', 'meeting'];
+
+function collectLoadedDescendantIds(
+  items: ConversationListItem[],
+  ancestorId: string,
+): string[] {
+  const childrenByParent = new Map<string, string[]>();
+  for (const item of items) {
+    const parentId = item.parentConversationId;
+    if (!parentId || parentId === item.id) continue;
+    const children = childrenByParent.get(parentId) ?? [];
+    children.push(item.id);
+    childrenByParent.set(parentId, children);
+  }
+  const descendants = new Set<string>();
+  const pending = [...(childrenByParent.get(ancestorId) ?? [])];
+  while (pending.length > 0) {
+    const id = pending.pop()!;
+    if (id === ancestorId || descendants.has(id)) continue;
+    descendants.add(id);
+    pending.push(...(childrenByParent.get(id) ?? []));
+  }
+  return [...descendants];
+}
 
 const ORIGIN_ICONS: Record<ConversationOriginKey, React.ElementType> = {
   chat: ChatBubbleOutlineRoundedIcon,
@@ -184,27 +224,41 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     open: boolean; ids: string[]; label: string;
   }>({ open: false, ids: [], label: '' });
   const [bulkResolving, setBulkResolving] = React.useState(false);
-  // Search dimension (issue #182): 'title' filters client-side over titles+flow
-  // (Phase 1); 'content' resolves matches server-side against message bodies
-  // (which aren't all resident on the client). Persisted so the choice sticks.
-  const [searchDimension, setSearchDimension] = useWorkspaceUiPreference<'title' | 'content'>(
+  const [deleteLookupId, setDeleteLookupId] = React.useState<string | null>(null);
+  const [deleteFamilyDialog, setDeleteFamilyDialog] = React.useState<{
+    open: boolean;
+    parent: ConversationListItem | null;
+    descendantIds: string[];
+    lookupFailed: boolean;
+  }>({ open: false, parent: null, descendantIds: [], lookupFailed: false });
+  // Search dimension (issue #182). Matching and pagination live on the server;
+  // the browser only holds the result pages the user has asked to see.
+  const [searchDimension, setSearchDimension] = useWorkspaceUiPreference<SearchDimension>(
     PREF.searchDim,
     'title',
   );
-  // Search must span unloaded pages. While a query is active, this complete
-  // server-backed result set temporarily replaces the incrementally-loaded
-  // browse pages. null means the debounced request is still in flight.
-  const [searchResults, setSearchResults] = React.useState<ConversationListItem[] | null>(null);
+  const [searchPage, setSearchPage] = React.useState<ConversationSearchPage | null>(null);
+  const [isSearching, setIsSearching] = React.useState(false);
+  const [isLoadingMoreSearch, setIsLoadingMoreSearch] = React.useState(false);
+  const [searchErrorKey, setSearchErrorKey] = React.useState<string | null>(null);
+  const searchAbortRef = React.useRef<AbortController | null>(null);
   const [groupMode, setGroupMode] = useWorkspaceUiPreference<GroupMode>(PREF.group, 'none');
   const [statusFilter, setStatusFilter] = useWorkspaceUiPreference<StatusFilter>(PREF.status, 'all');
   const [flowFilter, setFlowFilter] = useWorkspaceUiPreference<string>(PREF.flow, 'all');
   const [dateFilter, setDateFilter] = useWorkspaceUiPreference<DateFilter>(PREF.date, 'all');
+  const [originFilter, setOriginFilter] = useWorkspaceUiPreference<OriginFilter>(PREF.origin, 'all');
+  const [filtersOpen, setFiltersOpen] = useWorkspaceUiPreference<boolean>(PREF.filtersOpen, false);
   const [collapsedGroups, setCollapsedGroups] = useWorkspaceUiPreference<Record<string, boolean>>(
     PREF.collapsed,
     {},
   );
-  const sourceConversations = search.trim().length > 0
-    ? (searchResults ?? [])
+  const trimmedSearch = search.trim();
+  const searchKey = `${searchDimension}\u0000${originFilter}\u0000${trimmedSearch}`;
+  const currentSearchPage = trimmedSearch.length > 0 && searchPage?.key === searchKey
+    ? searchPage
+    : null;
+  const sourceConversations = trimmedSearch.length > 0
+    ? (currentSearchPage?.items ?? [])
     : conversations;
 
   // Wave grouping (issue #181): the wave graph is only needed while grouping by
@@ -230,30 +284,92 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
 
   const waveLookup = useMemo(() => buildWaveLookup(waves), [waves]);
 
-  // Search spans the complete paged collection rather than only loaded browse
-  // rows. Content matching remains server-side; title mode loads lightweight
-  // summaries and keeps the existing title/flow/origin matching semantics.
+  // Debounce the query, cancel the superseded request, and fetch only the first
+  // matching page. Further pages are explicit via the same Load more control as
+  // normal sidebar browsing. This prevents a single keystroke from launching a
+  // full cursor traversal of the entire conversation collection.
   React.useEffect(() => {
-    const q = search.trim();
+    const q = trimmedSearch;
     if (q.length === 0) {
-      setSearchResults(null);
+      searchAbortRef.current?.abort();
+      searchAbortRef.current = null;
+      setSearchPage(null);
+      setSearchErrorKey(null);
+      setIsSearching(false);
+      setIsLoadingMoreSearch(false);
       return;
     }
-    let cancelled = false;
-    setSearchResults(null);
+    const key = `${searchDimension}\u0000${originFilter}\u0000${q}`;
+    const controller = new AbortController();
+    searchAbortRef.current?.abort();
+    searchAbortRef.current = controller;
+    setSearchPage(null);
+    setSearchErrorKey(null);
+    setIsSearching(true);
+    setIsLoadingMoreSearch(false);
     const timer = setTimeout(() => {
-      chatService.listAllConversationPages({
-        ...(searchDimension === 'content' ? { search: q } : {}),
+      chatService.listConversationPage({
+        limit: SEARCH_PAGE_SIZE,
+        search: q,
         dimension: searchDimension,
+        ...(originFilter !== 'all' ? { origin: originFilter } : {}),
+        signal: controller.signal,
       })
-        .then((data) => {
-          if (cancelled) return;
-          setSearchResults(data);
+        .then((page) => {
+          if (controller.signal.aborted) return;
+          setSearchPage({ key, ...page });
         })
-        .catch(() => { if (!cancelled) setSearchResults([]); });
+        .catch((error: unknown) => {
+          if (controller.signal.aborted || (error as { name?: string })?.name === 'AbortError') return;
+          setSearchPage({ key, items: [], total: 0, hasMore: false });
+          setSearchErrorKey(key);
+        })
+        .finally(() => {
+          if (searchAbortRef.current === controller && !controller.signal.aborted) {
+            setIsSearching(false);
+          }
+        });
     }, 300);
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [search, searchDimension]);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+      if (searchAbortRef.current === controller) searchAbortRef.current = null;
+    };
+  }, [trimmedSearch, searchDimension, originFilter]);
+
+  const loadMoreSearchResults = React.useCallback(async () => {
+    const page = currentSearchPage;
+    const controller = searchAbortRef.current;
+    if (!page?.hasMore || !page.nextCursor || !controller || controller.signal.aborted || isLoadingMoreSearch) {
+      return;
+    }
+    setIsLoadingMoreSearch(true);
+    setSearchErrorKey(null);
+    try {
+      const next = await chatService.listConversationPage({
+        limit: SEARCH_PAGE_SIZE,
+        cursor: page.nextCursor,
+        search: trimmedSearch,
+        dimension: searchDimension,
+        ...(originFilter !== 'all' ? { origin: originFilter } : {}),
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted) return;
+      setSearchPage((previous) => {
+        if (!previous || previous.key !== searchKey) return previous;
+        const seen = new Set(previous.items.map((item) => item.id));
+        const additions = next.items.filter((item) => !seen.has(item.id));
+        return { key: searchKey, ...next, items: [...previous.items, ...additions] };
+      });
+    } catch (error) {
+      if (controller.signal.aborted || (error as { name?: string })?.name === 'AbortError') return;
+      setSearchErrorKey(searchKey);
+    } finally {
+      if (searchAbortRef.current === controller && !controller.signal.aborted) {
+        setIsLoadingMoreSearch(false);
+      }
+    }
+  }, [currentSearchPage, isLoadingMoreSearch, originFilter, searchDimension, searchKey, trimmedSearch]);
 
   // Format date for display
   const formatTimestamp = (timestamp: number) =>
@@ -300,6 +416,15 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     [t],
   );
 
+  const originFilterLabel = React.useCallback(
+    (key: OriginFilter) => key === 'all'
+      ? t('chat.history.anyOrigin')
+      : key === 'subflow'
+        ? t('chat.history.originSubflow')
+        : originLabel(key),
+    [originLabel, t],
+  );
+
   // Get status description for tooltip
   const getStatusDescription = (status?: ConversationListItem['status']) => {
     switch (status) {
@@ -339,10 +464,9 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
       .sort((a, b) => a.label.localeCompare(b.label));
   }, [sourceConversations, flowMeta]);
 
-  // Apply search + filters, then sort most-recent-first. Memoized so SSE-driven
-  // re-renders of the parent don't re-run the whole pipeline needlessly.
+  // Search is already resolved by the server. Apply the remaining presentation
+  // filters to the loaded result page, then sort most-recent-first.
   const filterConversations = React.useCallback((source: ConversationListItem[]) => {
-    const q = search.trim().toLowerCase();
     const now = Date.now();
     const DAY = 24 * 60 * 60 * 1000;
     const dateCutoff =
@@ -355,20 +479,12 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
       .filter((c) => {
         if (statusFilter !== 'all' && c.status !== statusFilter) return false;
         if (flowFilter !== 'all' && flowMeta(c.flowId).key !== flowFilter) return false;
+        if (originFilter !== 'all' && getConversationOrigin(c).key !== originFilter) return false;
         if (dateCutoff && c.updatedAt < dateCutoff) return false;
-        if (q) {
-          if (searchDimension === 'content') {
-            // Content search is already resolved server-side.
-          } else {
-            const origin = getConversationOrigin(c);
-            const haystack = `${c.title} ${flowMeta(c.flowId).label} ${originLabel(origin.key)}`.toLowerCase();
-            if (!haystack.includes(q)) return false;
-          }
-        }
         return true;
       })
       .sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt));
-  }, [search, searchDimension, statusFilter, flowFilter, dateFilter, flowMeta, originLabel]);
+  }, [statusFilter, flowFilter, originFilter, dateFilter, flowMeta]);
 
   const filtered = useMemo(
     () => filterConversations(sourceConversations),
@@ -450,6 +566,37 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     for (const g of groups) map.set(g.key, buildChainIndex(g.items));
     return map;
   }, [groupMode, groups]);
+
+  const expandableChainIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (groupMode === 'chain') {
+      chainIndex.childrenByParent.forEach((_children, parentId) => ids.add(parentId));
+    } else if (groupMode === 'wave') {
+      waveChainByGroup.forEach((index) => {
+        index.childrenByParent.forEach((_children, parentId) => ids.add(parentId));
+      });
+    }
+    return [...ids];
+  }, [chainIndex, groupMode, waveChainByGroup]);
+
+  const setAllHierarchyExpanded = React.useCallback((expanded: boolean) => {
+    setExpandedChains((previous) => {
+      const next = { ...previous };
+      expandableChainIds.forEach((id) => { next[id] = expanded; });
+      return next;
+    });
+    if (groupMode === 'wave') {
+      setCollapsedGroups((previous) => {
+        const next = { ...previous };
+        groups.forEach((group) => { next[group.key] = !expanded; });
+        return next;
+      });
+    }
+  }, [expandableChainIds, groupMode, groups, setCollapsedGroups]);
+
+  const showHierarchyControls =
+    (groupMode === 'chain' && expandableChainIds.length > 0)
+    || (groupMode === 'wave' && groups.length > 0);
 
   // --- URL reveal (issue #397) ---------------------------------------------
   // Opening a chat through `/chat?conversation=<id>` must actually SHOW that
@@ -565,7 +712,9 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   const activeFilterCount =
     (statusFilter !== 'all' ? 1 : 0) +
     (flowFilter !== 'all' ? 1 : 0) +
+    (originFilter !== 'all' ? 1 : 0) +
     (dateFilter !== 'all' ? 1 : 0);
+  const activeControlCount = activeFilterCount + (groupMode !== 'none' ? 1 : 0);
 
   // `detached` = this row's parent chain could not be resolved in the current
   // view; the tree placement is a fallback, so the card says so explicitly.
@@ -638,12 +787,15 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                 edge="end"
                 size="small"
                 aria-label={t('chat.history.delete')}
+                disabled={deleteLookupId === conversation.id}
                 onClick={(e) => {
                   e.stopPropagation();
-                  onDeleteConversation(conversation.id);
+                  void requestDeleteConversation(conversation);
                 }}
               >
-                <DeleteIcon fontSize="small" />
+                {deleteLookupId === conversation.id
+                  ? <CircularProgress size={16} />
+                  : <DeleteIcon fontSize="small" />}
               </IconButton>
             </Tooltip>
           </Box>
@@ -849,8 +1001,49 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     );
   };
 
-  const totalCount = search.trim() ? sourceConversations.length : totalConversations;
+  const searchActive = trimmedSearch.length > 0;
+  const searchFailed = searchErrorKey === searchKey;
+  const searchPending = searchActive && !currentSearchPage && !searchFailed;
+  const totalCount = searchActive ? (currentSearchPage?.total ?? 0) : totalConversations;
   const matchCount = filtered.length;
+
+  const requestDeleteConversation = async (conversation: ConversationListItem) => {
+    if (deleteLookupId) return;
+    setDeleteLookupId(conversation.id);
+    const locallyAvailable = Array.from(
+      new Map([...conversations, ...sourceConversations].map((item) => [item.id, item])).values(),
+    );
+    const loadedIds = new Set(collectLoadedDescendantIds(locallyAvailable, conversation.id));
+    const collectionIsComplete = !hasMoreConversations && conversations.length >= totalConversations;
+    try {
+      if (!collectionIsComplete) {
+        const serverDescendants = await chatService.listAllConversationPages({
+          descendantsOf: conversation.id,
+        });
+        serverDescendants.forEach((item) => loadedIds.add(item.id));
+      }
+      const descendantIds = [...loadedIds];
+      if (descendantIds.length === 0) {
+        onDeleteConversation(conversation.id);
+        return;
+      }
+      setDeleteFamilyDialog({
+        open: true,
+        parent: conversation,
+        descendantIds,
+        lookupFailed: false,
+      });
+    } catch {
+      setDeleteFamilyDialog({
+        open: true,
+        parent: conversation,
+        descendantIds: [...loadedIds],
+        lookupFailed: true,
+      });
+    } finally {
+      setDeleteLookupId(null);
+    }
+  };
 
   const openDeleteAllDialog = async () => {
     setBulkResolving(true);
@@ -869,8 +1062,12 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   const openDeleteVisibleDialog = async () => {
     setBulkResolving(true);
     try {
-      const completeSource = search.trim()
-        ? sourceConversations
+      const completeSource = searchActive
+        ? await chatService.listAllConversationPages({
+          search: trimmedSearch,
+          dimension: searchDimension,
+          ...(originFilter !== 'all' ? { origin: originFilter } : {}),
+        })
         : (onLoadAll ? await onLoadAll() : conversations);
       const visible = filterConversations(completeSource);
       setBulkDeleteDialog({
@@ -925,7 +1122,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
             </span>
           </Tooltip>
         )}
-        {filtered.length > 0 && (search.trim().length > 0 || activeFilterCount > 0) && (
+        {filtered.length > 0 && (searchActive || activeFilterCount > 0) && (
           <Tooltip title={t('chat.history.deleteVisible')}>
             <span>
               <IconButton
@@ -993,11 +1190,14 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                     <SearchIcon fontSize="small" />
                   </InputAdornment>
                 ),
-                endAdornment: search ? (
+                endAdornment: search || isSearching ? (
                   <InputAdornment position="end">
-                    <IconButton size="small" aria-label={t('chat.history.clearSearch')} onClick={() => setSearch('')}>
-                      <ClearIcon fontSize="small" />
-                    </IconButton>
+                    {isSearching && <CircularProgress size={16} aria-label={t('chat.history.searching')} />}
+                    {search && (
+                      <IconButton size="small" aria-label={t('chat.history.clearSearch')} onClick={() => setSearch('')}>
+                        <ClearIcon fontSize="small" />
+                      </IconButton>
+                    )}
                   </InputAdornment>
                 ) : undefined,
               }}
@@ -1005,8 +1205,8 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
             <FormControl size="small" sx={{ minWidth: 100 }}>
               <Select
                 value={searchDimension}
-                onChange={(e) => setSearchDimension(e.target.value as 'title' | 'content')}
-                aria-label={t('chat.history.searchDimension')}
+                onChange={(e) => setSearchDimension(e.target.value as SearchDimension)}
+                inputProps={{ 'aria-label': t('chat.history.searchDimension') }}
               >
                 <MenuItem value="title">{t('chat.history.searchTitleOption')}</MenuItem>
                 <MenuItem value="content">{t('chat.history.searchContentOption')}</MenuItem>
@@ -1014,57 +1214,94 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
             </FormControl>
           </Box>
         </StickySearchBar>
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-          <FormControl size="small" sx={{ minWidth: 128, flex: '1 1 128px' }}>
-            <Select
-              value={groupMode}
-              onChange={(e) => setGroupMode(e.target.value as GroupMode)}
-              aria-label={t('chat.history.groupAria')}
-            >
-              {GROUP_OPTIONS.map((option) => (
-                <MenuItem key={option} value={option}>{groupLabel(option)}</MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-          <FormControl size="small" sx={{ minWidth: 128, flex: '1 1 128px' }}>
-            <Select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-              aria-label={t('chat.history.filterStatus')}
-            >
-              {STATUS_OPTIONS.map((option) => (
-                <MenuItem key={option} value={option}>{statusLabel(option)}</MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-          <FormControl size="small" sx={{ minWidth: 128, flex: '1 1 128px' }}>
-            <Select
-              value={flowOptions.some((o) => o.key === flowFilter) ? flowFilter : 'all'}
-              onChange={(e) => setFlowFilter(e.target.value)}
-              aria-label={t('chat.history.filterAgent')}
-            >
-              <MenuItem value="all">{t('chat.history.anyAgent')}</MenuItem>
-              {flowOptions.map((o) => (
-                <MenuItem key={o.key} value={o.key}>{o.label}</MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-          <FormControl size="small" sx={{ minWidth: 128, flex: '1 1 128px' }}>
-            <Select
-              value={dateFilter}
-              onChange={(e) => setDateFilter(e.target.value as DateFilter)}
-              aria-label={t('chat.history.filterDate')}
-            >
-              {DATE_OPTIONS.map((option) => (
-                <MenuItem key={option} value={option}>{dateLabel(option)}</MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-        </Box>
-        {(search || activeFilterCount > 0) && (
+        <Button
+          size="small"
+          color="inherit"
+          startIcon={<FilterListRoundedIcon />}
+          endIcon={filtersOpen ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+          aria-expanded={filtersOpen}
+          aria-controls="chat-sidebar-filter-controls"
+          onClick={() => setFiltersOpen((open) => !open)}
+          sx={{ alignSelf: 'stretch', justifyContent: 'flex-start', color: 'text.secondary' }}
+        >
+          {t('chat.history.filters')}
+          {activeControlCount > 0 && (
+            <Chip
+              label={activeControlCount}
+              size="small"
+              color="primary"
+              sx={{ ml: 1, height: 20, '& .MuiChip-label': { px: 0.75 } }}
+            />
+          )}
+        </Button>
+        <Collapse in={filtersOpen} timeout="auto">
+          <Box id="chat-sidebar-filter-controls" sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+            <FormControl size="small" sx={{ minWidth: 128, flex: '1 1 128px' }}>
+              <Select
+                value={groupMode}
+                onChange={(e) => setGroupMode(e.target.value as GroupMode)}
+                inputProps={{ 'aria-label': t('chat.history.groupAria') }}
+              >
+                {GROUP_OPTIONS.map((option) => (
+                  <MenuItem key={option} value={option}>{groupLabel(option)}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <FormControl size="small" sx={{ minWidth: 128, flex: '1 1 128px' }}>
+              <Select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+                inputProps={{ 'aria-label': t('chat.history.filterStatus') }}
+              >
+                {STATUS_OPTIONS.map((option) => (
+                  <MenuItem key={option} value={option}>{statusLabel(option)}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <FormControl size="small" sx={{ minWidth: 128, flex: '1 1 128px' }}>
+              <Select
+                value={flowOptions.some((o) => o.key === flowFilter) ? flowFilter : 'all'}
+                onChange={(e) => setFlowFilter(e.target.value)}
+                inputProps={{ 'aria-label': t('chat.history.filterAgent') }}
+              >
+                <MenuItem value="all">{t('chat.history.anyAgent')}</MenuItem>
+                {flowOptions.map((o) => (
+                  <MenuItem key={o.key} value={o.key}>{o.label}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <FormControl size="small" sx={{ minWidth: 128, flex: '1 1 128px' }}>
+              <Select
+                value={originFilter}
+                onChange={(e) => setOriginFilter(e.target.value as OriginFilter)}
+                inputProps={{ 'aria-label': t('chat.history.filterOrigin') }}
+              >
+                {ORIGIN_FILTER_OPTIONS.map((option) => (
+                  <MenuItem key={option} value={option}>{originFilterLabel(option)}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <FormControl size="small" sx={{ minWidth: 128, flex: '1 1 128px' }}>
+              <Select
+                value={dateFilter}
+                onChange={(e) => setDateFilter(e.target.value as DateFilter)}
+                inputProps={{ 'aria-label': t('chat.history.filterDate') }}
+              >
+                {DATE_OPTIONS.map((option) => (
+                  <MenuItem key={option} value={option}>{dateLabel(option)}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          </Box>
+        </Collapse>
+        {(searchActive || activeFilterCount > 0) && (
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <Typography variant="caption" color="text.secondary">
-              {t('chat.history.matchCount', { shown: matchCount, total: totalCount })}
+              {searchPending || isSearching
+                ? t('chat.history.searching')
+                : searchFailed
+                  ? t('chat.history.searchFailed')
+                  : t('chat.history.matchCount', { shown: matchCount, total: totalCount })}
             </Typography>
             <Button
               size="small"
@@ -1072,6 +1309,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                 setSearch('');
                 setStatusFilter('all');
                 setFlowFilter('all');
+                setOriginFilter('all');
                 setDateFilter('all');
               }}
             >
@@ -1083,9 +1321,44 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
 
       <Divider />
 
+      {showHierarchyControls && (
+        <Box
+          sx={{
+            px: 1.5,
+            py: 0.75,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 1,
+            bgcolor: alpha(muiTheme.palette.primary.main, modern ? 0.055 : 0.025),
+          }}
+        >
+          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
+            {t('chat.chain.hierarchy')}
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 0.5 }}>
+            <Button
+              size="small"
+              startIcon={<UnfoldMoreRoundedIcon />}
+              onClick={() => setAllHierarchyExpanded(true)}
+            >
+              {t('chat.chain.expandAll')}
+            </Button>
+            <Button
+              size="small"
+              startIcon={<UnfoldLessRoundedIcon />}
+              onClick={() => setAllHierarchyExpanded(false)}
+            >
+              {t('chat.chain.collapseAll')}
+            </Button>
+          </Box>
+        </Box>
+      )}
+
       <List
         ref={listRef}
         aria-label={t('chat.history.title')}
+        aria-busy={searchPending || isSearching || isLoadingMoreSearch}
         sx={{
           overflow: 'auto',
           flex: 1,
@@ -1094,7 +1367,23 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
           scrollbarGutter: 'stable',
         }}
       >
-        {totalCount === 0 ? (
+        {searchPending || isSearching ? (
+          <ListItem sx={{ justifyContent: 'center', gap: 1, py: 3 }}>
+            <CircularProgress size={18} />
+            <Typography variant="body2" color="text.secondary">
+              {t('chat.history.searching')}
+            </Typography>
+          </ListItem>
+        ) : searchFailed && sourceConversations.length === 0 ? (
+          <ListItem>
+            <ListItemText
+              primary={t('chat.history.searchFailed')}
+              secondary={t('chat.history.searchFailedHelp')}
+              primaryTypographyProps={{ align: 'center' }}
+              secondaryTypographyProps={{ align: 'center' }}
+            />
+          </ListItem>
+        ) : !searchActive && totalCount === 0 ? (
           <ListItem>
             <ListItemText
               primary={t('chat.history.empty')}
@@ -1162,7 +1451,20 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
             );
           })
         )}
-        {!search.trim() && hasMoreConversations && onLoadMore && (
+        {searchActive && currentSearchPage?.hasMore && (
+          <Box sx={{ display: 'flex', justifyContent: 'center', py: 1.5 }}>
+            <Button
+              size="small"
+              variant="outlined"
+              disabled={isLoadingMoreSearch}
+              startIcon={isLoadingMoreSearch ? <CircularProgress size={14} /> : undefined}
+              onClick={() => void loadMoreSearchResults()}
+            >
+              {t('chat.history.loadMore')}
+            </Button>
+          </Box>
+        )}
+        {!searchActive && hasMoreConversations && onLoadMore && (
           <Box sx={{ display: 'flex', justifyContent: 'center', py: 1.5 }}>
             <Button
               size="small"
@@ -1176,6 +1478,56 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
           </Box>
         )}
       </List>
+
+      <Dialog
+        open={deleteFamilyDialog.open}
+        onClose={() => setDeleteFamilyDialog((previous) => ({ ...previous, open: false }))}
+        aria-labelledby="delete-family-dialog-title"
+      >
+        <DialogTitle id="delete-family-dialog-title">
+          {t('chat.history.deleteFamilyTitle')}
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            {deleteFamilyDialog.lookupFailed
+              ? t('chat.history.deleteFamilyLookupFailed')
+              : t('chat.history.deleteFamilyQuestion', {
+                  title: deleteFamilyDialog.parent?.title ?? '',
+                  count: deleteFamilyDialog.descendantIds.length,
+                })}
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteFamilyDialog((previous) => ({ ...previous, open: false }))}>
+            {t('common.cancel')}
+          </Button>
+          {!deleteFamilyDialog.lookupFailed && deleteFamilyDialog.parent && (
+            <>
+              <Button
+                color="error"
+                onClick={() => {
+                  const parentId = deleteFamilyDialog.parent!.id;
+                  setDeleteFamilyDialog((previous) => ({ ...previous, open: false }));
+                  void onDeleteConversation(parentId);
+                }}
+              >
+                {t('chat.history.deleteParentOnly')}
+              </Button>
+              <Button
+                variant="contained"
+                color="error"
+                onClick={() => {
+                  const ids = [deleteFamilyDialog.parent!.id, ...deleteFamilyDialog.descendantIds];
+                  setDeleteFamilyDialog((previous) => ({ ...previous, open: false }));
+                  void onBulkDelete(ids);
+                }}
+              >
+                {t('chat.history.deleteFamilyAction', { count: deleteFamilyDialog.descendantIds.length })}
+              </Button>
+            </>
+          )}
+        </DialogActions>
+      </Dialog>
 
       <Dialog
         open={bulkDeleteDialog.open}

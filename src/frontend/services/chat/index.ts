@@ -70,6 +70,11 @@ export interface ConversationPageQuery {
   cursor?: string;
   search?: string;
   dimension?: 'title' | 'content';
+  origin?: 'chat' | 'schedule' | 'subflow' | 'meeting';
+  /** Return only transitive descendants of this conversation. */
+  descendantsOf?: string;
+  /** Cancels both the current page request and any all-pages traversal. */
+  signal?: AbortSignal;
 }
 
 export interface SubflowRecoveryOptions {
@@ -434,7 +439,12 @@ class ChatService {
     if (query.cursor) params.set('cursor', query.cursor);
     if (query.search?.trim()) params.set('search', query.search.trim());
     if (query.dimension) params.set('dimension', query.dimension);
-    const response = await fetch(`${BASE}?${params.toString()}`);
+    if (query.origin) params.set('origin', query.origin);
+    if (query.descendantsOf) params.set('descendantsOf', query.descendantsOf);
+    const url = `${BASE}?${params.toString()}`;
+    const response = query.signal
+      ? await fetch(url, { signal: query.signal })
+      : await fetch(url);
     return parse<ConversationPage>(response);
   }
 
@@ -443,9 +453,11 @@ class ChatService {
     const items: ConversationListItem[] = [];
     let cursor: string | undefined;
     do {
+      query.signal?.throwIfAborted();
       const page = await this.listConversationPage({ ...query, limit: 200, cursor });
       items.push(...page.items);
       cursor = page.nextCursor;
+      query.signal?.throwIfAborted();
     } while (cursor);
     return items;
   }

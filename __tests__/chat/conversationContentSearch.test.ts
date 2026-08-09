@@ -47,6 +47,7 @@ beforeEach(async () => {
   convDir = path.join(tmpDir, 'workspaces', 'default-workspace', 'db', 'conversations');
   await fs.mkdir(convDir, { recursive: true });
   process.env.FLUJO_DATA_DIR = tmpDir;
+  delete (global as any).__flujo_flowsCache;
   jest.resetModules();
   ({ GET } = await import('@/app/v1/chat/conversations/route'));
 });
@@ -136,10 +137,64 @@ describe('GET /v1/chat/conversations content search (issue #182)', () => {
     expect(second.body).toMatchObject({ total: 3, hasMore: false });
   });
 
+  it('filters paged title searches on the server by title, origin, and agent name', async () => {
+    const flowDir = path.join(tmpDir, 'workspaces', 'default-workspace', 'db', 'flows');
+    await fs.mkdir(flowDir, { recursive: true });
+    await fs.writeFile(
+      path.join(flowDir, 'invoice-agent.json'),
+      JSON.stringify({ id: 'invoice-agent', name: 'Invoice Assistant', nodes: [], edges: [] }),
+      'utf-8',
+    );
+    await writeConv('invoice-run', {
+      title: 'Quarterly reconciliation',
+      flowId: 'invoice-agent',
+      source: 'schedule',
+      updatedAt: 30,
+      messages: [],
+    });
+    await writeConv('other', {
+      title: 'Unrelated chat',
+      flowId: 'flow-2',
+      source: 'chat',
+      updatedAt: 20,
+      messages: [],
+    });
+
+    const byTitle = await getJson('?paged=1&limit=50&search=reconciliation&dimension=title');
+    expect(byTitle.body.items.map((c: any) => c.id)).toEqual(['invoice-run']);
+
+    const byOrigin = await getJson('?paged=1&limit=50&search=automation&dimension=title');
+    expect(byOrigin.body.items.map((c: any) => c.id)).toEqual(['invoice-run']);
+
+    const byAgent = await getJson('?paged=1&limit=50&search=assistant&dimension=title');
+    expect(byAgent.body.items.map((c: any) => c.id)).toEqual(['invoice-run']);
+
+    const originFilter = await getJson('?paged=1&limit=50&origin=schedule');
+    expect(originFilter.body.items.map((c: any) => c.id)).toEqual(['invoice-run']);
+  });
+
+  it('returns only transitive descendants for delete-family checks', async () => {
+    await writeConv('root', { title: 'Root', messages: [], updatedAt: 40 });
+    await writeConv('child', {
+      title: 'Child', messages: [], parentConversationId: 'root', rootConversationId: 'root', updatedAt: 30,
+    });
+    await writeConv('grandchild', {
+      title: 'Grandchild', messages: [], parentConversationId: 'child', rootConversationId: 'root', updatedAt: 20,
+    });
+    await writeConv('other', { title: 'Other', messages: [], updatedAt: 10 });
+
+    const { status, body } = await getJson('?paged=1&limit=50&descendantsOf=root');
+    expect(status).toBe(200);
+    expect(body.items.map((c: any) => c.id)).toEqual(['child', 'grandchild']);
+    expect(body).toMatchObject({ total: 2, hasMore: false });
+  });
+
   it('returns 400 for an invalid paging cursor or limit', async () => {
     await writeConv('a', { title: 'A', messages: [] });
     await expect(getJson('?paged=1&limit=0')).resolves.toMatchObject({ status: 400 });
     await expect(getJson('?paged=1&cursor=broken')).resolves.toMatchObject({ status: 400 });
+    await expect(getJson('?paged=1&origin=invalid')).resolves.toMatchObject({ status: 400 });
+    await expect(getJson('?paged=1&descendantsOf=../escape')).resolves.toMatchObject({ status: 400 });
   });
 
   it('rejects an over-long search term with 400', async () => {

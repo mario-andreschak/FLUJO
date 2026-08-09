@@ -107,6 +107,41 @@ describe('chatService REST methods', () => {
     expect(result).toEqual(page);
   });
 
+  it('listConversationPage: forwards an abort signal without serializing it into the URL', async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse(200, {
+      items: [], total: 0, hasMore: false,
+    }));
+    const controller = new AbortController();
+
+    await chatService.listConversationPage({
+      limit: 50,
+      search: 'needle',
+      dimension: 'title',
+      signal: controller.signal,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/v1/chat/conversations?paged=1&limit=50&search=needle&dimension=title',
+      { signal: controller.signal },
+    );
+  });
+
+  it('listConversationPage: sends origin and descendant filters to the backend', async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse(200, {
+      items: [], total: 0, hasMore: false,
+    }));
+
+    await chatService.listConversationPage({
+      limit: 50,
+      origin: 'subflow',
+      descendantsOf: 'parent-1',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/v1/chat/conversations?paged=1&limit=50&origin=subflow&descendantsOf=parent-1',
+    );
+  });
+
   it('listAllConversationPages: follows cursors until the collection is complete', async () => {
     fetchMock
       .mockResolvedValueOnce(makeResponse(200, {
@@ -123,6 +158,24 @@ describe('chatService REST methods', () => {
       '/v1/chat/conversations?paged=1&limit=200&cursor=cursor-2',
     ]);
     expect(result).toEqual([{ id: 'a' }, { id: 'b' }]);
+  });
+
+  it('listAllConversationPages: stops before requesting another page when aborted', async () => {
+    const controller = new AbortController();
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => {
+        controller.abort();
+        return JSON.stringify({
+          items: [{ id: 'a' }], total: 2, hasMore: true, nextCursor: 'cursor-2',
+        });
+      },
+    } as Response);
+
+    await expect(chatService.listAllConversationPages({ signal: controller.signal }))
+      .rejects.toMatchObject({ name: 'AbortError' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('subscribeToSidebarEvents: uses the filtered global lifecycle stream', () => {
