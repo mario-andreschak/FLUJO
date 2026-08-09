@@ -120,6 +120,7 @@ describe('direct workspace layout migration', () => {
     await Promise.all([
       write('mcp-servers/bash/package.json', 'bundled'),
       write('mcp-servers/custom-server/config.json', 'custom'),
+      write('mcp-servers/custom-metadata.json', 'metadata'),
     ]);
 
     await migrateWorkspaceLayout();
@@ -130,7 +131,12 @@ describe('direct workspace layout migration', () => {
       path.join(workspaceRoot(), 'mcp-servers', 'custom-server', 'config.json'),
       'utf8',
     )).resolves.toBe('custom');
+    await expect(fs.readFile(
+      path.join(workspaceRoot(), 'mcp-servers', 'custom-metadata.json'),
+      'utf8',
+    )).resolves.toBe('metadata');
     await expect(exists(path.join(dataRoot, 'mcp-servers', 'custom-server'))).resolves.toBe(false);
+    await expect(exists(path.join(dataRoot, 'mcp-servers', 'custom-metadata.json'))).resolves.toBe(false);
   });
 
   it('moves a same-name empty MCP server folder as one top-level directory', async () => {

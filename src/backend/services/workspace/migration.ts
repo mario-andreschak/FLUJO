@@ -73,6 +73,7 @@ type MoveCandidate = {
   subtree: string;
   source: string;
   destination: string;
+  requireDirectory?: boolean;
 };
 
 type PathMapping = {
@@ -568,6 +569,10 @@ async function candidates(
           subtree: 'mcp-servers',
           source: path.join(legacyMcp, entry),
           destination: path.join(workspaceMcp, entry),
+          // Runtime MCP roots normally contain repositories, but installers
+          // may also leave useful top-level metadata/config files. Those files
+          // are migration entries, not unsafe workspace roots.
+          requireDirectory: false,
         });
       }
     } catch (error) {
@@ -666,7 +671,7 @@ async function runDirectMigration(): Promise<WorkspaceLayoutMarker> {
         continue;
       }
       present.add(candidate.subtree);
-      if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      if (stat.isSymbolicLink() || (candidate.requireDirectory !== false && !stat.isDirectory())) {
         errors.push(`Skipped unsafe legacy root ${candidate.source}`);
         narration.push({
           status: 'SKIPPED',
@@ -682,13 +687,15 @@ async function runDirectMigration(): Promise<WorkspaceLayoutMarker> {
         outcome: 'moved',
         strategy: 'direct rename/merge',
       });
-      await collectAndRemoveLinks(
-        candidate.source,
-        candidate.destination,
-        mappings,
-        savedLinks,
-        errors,
-      );
+      if (stat.isDirectory()) {
+        await collectAndRemoveLinks(
+          candidate.source,
+          candidate.destination,
+          mappings,
+          savedLinks,
+          errors,
+        );
+      }
       const destinationExisted = Boolean(await lstatOptional(candidate.destination));
       // Keep the workspace mcp-servers container in place, but prefer moving
       // each server folder below it wholesale. This matters for pre-created
@@ -796,18 +803,50 @@ export function migrateWorkspaceLayout(): Promise<WorkspaceLayoutMarker> {
 
 export const ensureWorkspaceLayoutReady = migrateWorkspaceLayout;
 
+function browserStartUrl(): string {
+  const configured = process.env.FLUJO_BROWSER_URL?.trim()
+    || process.env.FLUJO_BASE_URL?.trim();
+  const fallbackPort = /^\d+$/.test(process.env.FLUJO_PORT?.trim() || '')
+    ? process.env.FLUJO_PORT!.trim()
+    : '4200';
+  try {
+    const url = new URL(configured || `http://localhost:${fallbackPort}`);
+    if (['127.0.0.1', '[::1]', '::1', '0.0.0.0', '[::]', '::'].includes(url.hostname)) {
+      url.hostname = 'localhost';
+    }
+    url.username = '';
+    url.password = '';
+    url.search = '';
+    url.hash = '';
+    return url.toString().replace(/\/$/, '');
+  } catch {
+    return `http://localhost:${fallbackPort}`;
+  }
+}
+
 function printCompletionSummary(marker: WorkspaceLayoutMarker, elapsed: string): void {
   const moved = lastNarration.filter(item => item.status === 'MOVED').length;
   const merged = lastNarration.filter(item => item.status === 'MERGED').length;
   const updated = lastNarration.filter(item => item.status === 'UPDATED').length;
   const skipped = lastNarration.filter(item => item.status === 'SKIPPED').length;
   const cleaned = lastNarration.filter(item => item.status === 'CLEANED').length;
-  const lines = [
-    '',
-    '[FLUJO] Workspace migration summary',
-    `[FLUJO] Result: ${moved} moved, ${merged} merged, ${updated} updated, ${skipped} skipped, `
-      + `${marker.errors?.length ?? 0} errors, ${cleaned} obsolete artifacts cleaned (${elapsed})`,
-  ];
+  const errorCount = marker.errors?.length ?? 0;
+  const browserUrl = browserStartUrl();
+  const onlySkipped = errorCount === 0
+    && lastNarration.length > 0
+    && lastNarration.every(item => item.status === 'SKIPPED');
+
+  if (onlySkipped) {
+    console.info([
+      '',
+      `[FLUJO] Workspace migration: nothing to do (${skipped} skipped, ${elapsed})`,
+      `[FLUJO] Start FLUJO in the browser: [${browserUrl}](${browserUrl})`,
+      '',
+    ].join('\n'));
+    return;
+  }
+
+  const lines = [''];
   for (const item of lastNarration) {
     const route = item.source && item.destination
       ? `${item.source} -> ${item.destination}`
@@ -819,6 +858,12 @@ function printCompletionSummary(marker: WorkspaceLayoutMarker, elapsed: string):
     lines.push(`[FLUJO] ERROR   ${error}`);
     lines.push('[FLUJO]         Why: the direct mover continued instead of blocking application startup');
   }
-  lines.push('[FLUJO] Workspace migration summary complete', '');
+  lines.push(
+    '[FLUJO] Workspace migration summary',
+    `[FLUJO] Result: ${moved} moved, ${merged} merged, ${updated} updated, ${skipped} skipped, `
+      + `${errorCount} errors, ${cleaned} obsolete artifacts cleaned (${elapsed})`,
+    `[FLUJO] Start FLUJO in the browser: [${browserUrl}](${browserUrl})`,
+    '',
+  );
   console.info(lines.join('\n'));
 }

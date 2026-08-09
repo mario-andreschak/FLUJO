@@ -11,13 +11,16 @@ describe('direct workspace migration startup behavior', () => {
   let root: string;
   let priorDataDir: string | undefined;
   let priorAppRoot: string | undefined;
+  let priorBaseUrl: string | undefined;
 
   beforeEach(async () => {
     priorDataDir = process.env.FLUJO_DATA_DIR;
     priorAppRoot = process.env.FLUJO_APP_ROOT;
+    priorBaseUrl = process.env.FLUJO_BASE_URL;
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-direct-startup-'));
     process.env.FLUJO_DATA_DIR = root;
     process.env.FLUJO_APP_ROOT = path.join(root, 'application');
+    process.env.FLUJO_BASE_URL = 'http://127.0.0.1:4310';
     _resetWorkspaceMigrationState();
   });
 
@@ -27,6 +30,8 @@ describe('direct workspace migration startup behavior', () => {
     else process.env.FLUJO_DATA_DIR = priorDataDir;
     if (priorAppRoot === undefined) delete process.env.FLUJO_APP_ROOT;
     else process.env.FLUJO_APP_ROOT = priorAppRoot;
+    if (priorBaseUrl === undefined) delete process.env.FLUJO_BASE_URL;
+    else process.env.FLUJO_BASE_URL = priorBaseUrl;
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -66,6 +71,13 @@ describe('direct workspace migration startup behavior', () => {
       expect(output).toContain('Why:');
       expect(output).toContain('legacy source does not exist');
       expect(output).toContain('renamed the legacy directory directly into the workspace');
+      expect(output.indexOf('[FLUJO] MOVED')).toBeLessThan(
+        output.indexOf('[FLUJO] Workspace migration summary'),
+      );
+      expect(output).toContain(
+        '[FLUJO] Start FLUJO in the browser: '
+        + '[http://localhost:4310](http://localhost:4310)',
+      );
     } finally {
       info.mockRestore();
     }
@@ -85,6 +97,27 @@ describe('direct workspace migration startup behavior', () => {
       .filter(candidate => candidate === payloadRoot || candidate.startsWith(`${payloadRoot}${path.sep}`));
     readdir.mockRestore();
     expect(targetReads).toEqual([]);
+  });
+
+  it('collapses an error-free all-skipped run to nothing-to-do and the browser link', async () => {
+    await migrateWorkspaceLayout();
+    _resetWorkspaceMigrationState();
+    const info = jest.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    try {
+      await migrateWorkspaceLayout();
+      const completion = info.mock.calls
+        .flat()
+        .map(String)
+        .find(line => line.includes('Workspace migration: nothing to do'));
+      expect(completion).toContain('Workspace migration: nothing to do');
+      expect(completion).toContain('[http://localhost:4310](http://localhost:4310)');
+      expect(completion).not.toContain('[FLUJO] SKIPPED');
+      expect(completion).not.toContain('Why:');
+      expect(completion).not.toContain('Workspace migration summary');
+    } finally {
+      info.mockRestore();
+    }
   });
 
   it('skips an unsafe legacy root, records the error, and still completes startup', async () => {

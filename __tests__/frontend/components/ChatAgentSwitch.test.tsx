@@ -21,11 +21,16 @@ jest.mock('@/utils/storage', () => {
   };
   return {
     StorageKey,
-    useLocalStorage: (key: string, initialValue: unknown) => React.useState(
-      key.startsWith(`${StorageKey.CURRENT_CONVERSATION_ID}:`)
-        ? 'conversation-current'
-        : initialValue,
-    ),
+    useLocalStorage: (key: string, initialValue: unknown) => {
+      if (!Object.values(StorageKey).includes(key)) {
+        throw new Error(`Server storage received a non-enum key: ${key}`);
+      }
+      return React.useState(
+        key === StorageKey.CURRENT_CONVERSATION_ID
+          ? 'conversation-current'
+          : initialValue,
+      );
+    },
   };
 });
 

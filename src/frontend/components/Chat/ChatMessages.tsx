@@ -48,6 +48,8 @@ import TerminalIcon from '@mui/icons-material/Terminal';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import EditIcon from '@mui/icons-material/Edit';
+import ContentCopyRoundedIcon from '@mui/icons-material/ContentCopyRounded';
+import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
 import ThumbUpIcon from '@mui/icons-material/ThumbUp'; // For Approve
 import ThumbDownIcon from '@mui/icons-material/ThumbDown'; // For Reject
 import ArrowRightAltIcon from '@mui/icons-material/ArrowRightAlt'; // For handoff marker
@@ -296,6 +298,23 @@ const formatTime = (timestamp: number) => {
     minute: '2-digit'
   });
 };
+
+/** Plain text represented by a message body, for the header copy action. */
+export function messageContentText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+
+  return content
+    .map((part) => {
+      if (typeof part === 'string') return part;
+      if (!part || typeof part !== 'object') return '';
+      const record = part as Record<string, unknown>;
+      if (typeof record.text === 'string') return record.text;
+      return typeof record.content === 'string' ? record.content : '';
+    })
+    .filter(Boolean)
+    .join('\n');
+}
 
 // Markdown renderers are pure of any per-message state, so they live at module
 // scope: a stable identity means memoized bubbles don't re-parse/re-render
@@ -998,6 +1017,24 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
 }) {
   const { t, formatDate: formatLocalizedDate, formatNumber } = useI18n();
   const [orphanToolExpanded, setOrphanToolExpanded] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const copyableText = useMemo(() => messageContentText(message.content), [message.content]);
+  const handleCopyMessage = useCallback(async () => {
+    const copied = await copyText(copyableText);
+    setCopyStatus(copied ? 'copied' : 'failed');
+  }, [copyableText]);
+
+  useEffect(() => {
+    if (copyStatus === 'idle') return;
+    const timeout = window.setTimeout(() => setCopyStatus('idle'), 1500);
+    return () => window.clearTimeout(timeout);
+  }, [copyStatus]);
+
+  const copyLabel = copyStatus === 'copied'
+    ? t('chat.actions.copied')
+    : copyStatus === 'failed'
+      ? t('chat.actions.copyFailed')
+      : t('chat.actions.copy');
   // Subflow steps (depth > 0) render nested: indented per level, marked with a
   // guide line + chip. They are display-only (never sent back as history).
   const depth = message.depth ?? 0;
@@ -1095,10 +1132,26 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
           );
         })()}
 
+        {copyableText && (
+          <Tooltip title={copyLabel} disableInteractive>
+            <IconButton
+              size="small"
+              onClick={() => void handleCopyMessage()}
+              aria-label={copyLabel}
+              sx={{ ml: 1 }}
+            >
+              {copyStatus === 'copied'
+                ? <CheckRoundedIcon fontSize="small" color="success" />
+                : <ContentCopyRoundedIcon fontSize="small" />}
+            </IconButton>
+          </Tooltip>
+        )}
+
         <IconButton
           size="small"
           onClick={(e) => onMenuOpen(e, message.id)}
-          sx={{ ml: 1 }}
+          aria-label={t('chat.actions.more')}
+          sx={{ ml: copyableText ? 0.25 : 1 }}
         >
           <MoreVertIcon fontSize="small" />
         </IconButton>
@@ -1136,6 +1189,15 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
           outlineColor: 'warning.main',
           overflowWrap: 'break-word', // Ensure long words break
           wordBreak: 'break-word', // Ensure words break correctly
+          // The default white-on-violet selection is effectively invisible on
+          // the modern light user bubble. Reverse those colors locally so the
+          // selected range has a clear light block and dark-violet text.
+          ...(message.role === 'user' && {
+            ':root.modern-theme:not(.dark-theme) & ::selection': {
+              color: theme.palette.primary.dark,
+              backgroundColor: theme.palette.common.white,
+            },
+          }),
           // NOTE: do NOT set white-space: pre-wrap here. react-markdown emits
           // literal "\n" text nodes *between* block elements; a pre-wrap
           // container renders those as visible blank lines on top of the
