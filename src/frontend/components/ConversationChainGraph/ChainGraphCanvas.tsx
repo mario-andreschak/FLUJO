@@ -32,6 +32,12 @@ import ChainNodeBubble, { type ChainBubbleData } from './ChainNodeBubble';
 // Flow re-create its internal node registry (and warn) on each pass.
 const nodeTypes = { chainBubble: ChainNodeBubble };
 
+// React Flow's wrapper is `height: 100%`, so its immediate parent must have a
+// definite height. A percentage here collapses when this page is hosted below
+// `.app-main` (which intentionally provides only a min-height), leaving the
+// bordered canvas visible while every React Flow layer is 0px tall.
+export const DEFAULT_CHAIN_GRAPH_HEIGHT = 'clamp(420px, 64dvh, 760px)';
+
 export interface ChainGraphCanvasProps {
   nodes: ConversationChainNode[];
   onOpenConversation: (conversationId: string) => void;
@@ -44,7 +50,7 @@ function ChainGraphCanvasInner({
   nodes,
   onOpenConversation,
   reducedMotion = false,
-  height = '100%',
+  height = DEFAULT_CHAIN_GRAPH_HEIGHT,
 }: ChainGraphCanvasProps) {
   const theme = useTheme();
   const { t } = useI18n();
@@ -104,8 +110,8 @@ function ChainGraphCanvasInner({
     <Box
       role="application"
       aria-label={t('chainChat.canvasLabel')}
+      style={{ height }}
       sx={{
-        height,
         width: '100%',
         minHeight: 320,
         borderRadius: 3,
