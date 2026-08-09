@@ -517,6 +517,7 @@ describe('CodexAdapter — tool bridging', () => {
       undefined,
       expect.any(AbortSignal),
       'model',
+      undefined,
     );
     const roles = transcript!.map(m => m.role);
     // assistant(tool_call) + tool(result) + final assistant answer.

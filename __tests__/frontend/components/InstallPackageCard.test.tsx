@@ -141,7 +141,6 @@ describe('InstallPackageCard', () => {
     render(<InstallPackageCard />);
 
     fireEvent.click(await screen.findByText('Example package'));
-    fireEvent.click(await screen.findByRole('button', { name: 'Continue to review' }));
 
     const secretInput = await screen.findByLabelText('API key');
     expect(secretInput).toHaveAttribute('type', 'password');
@@ -299,13 +298,13 @@ describe('InstallPackageCard', () => {
 
     render(<InstallPackageCard />);
     fireEvent.click(await screen.findByText('Example package'));
-    fireEvent.click(await screen.findByRole('button', { name: 'Continue to review' }));
     fireEvent.change(await screen.findByLabelText('REPOSITORY_URL'), {
       target: { value: 'https://github.com/example/repo' },
     });
     fireEvent.change(screen.getByLabelText('API_TOKEN'), {
       target: { value: 'secret-token' },
     });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to review' }));
     fireEvent.click(screen.getByRole('button', { name: 'Install package' }));
 
     await waitFor(() =>

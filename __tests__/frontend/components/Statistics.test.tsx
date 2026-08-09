@@ -148,6 +148,7 @@ describe('Statistics dashboard', () => {
       providerAttempts: 0,
       nodeVisits: 0,
       toolCalls: 0,
+      subflowCalls: 0,
     });
     empty.daily = [];
     empty.rankings = {

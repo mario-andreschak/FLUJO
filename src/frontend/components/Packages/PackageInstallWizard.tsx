@@ -60,6 +60,7 @@ import type {
   InstallStep,
   InstallStepStatus,
   PackageDeclarationInfo,
+  PackageServerInfo,
 } from '@/backend/services/packages/installPackage';
 import {
   buildRenamePreview,
@@ -147,7 +148,29 @@ export default function PackageInstallWizard({
   const manifest = preview?.preview;
   const models = manifest?.models ?? [];
   const installedModels = manifest?.installedModels ?? [];
-  const servers = useMemo(() => manifest?.serverDetails ?? [], [manifest]);
+  const servers = useMemo<PackageServerInfo[]>(() =>
+    manifest?.serverDetails ?? (manifest?.servers ?? []).map((server) => {
+      const source = server.source.toLocaleLowerCase();
+      const sourceType = source.includes('github')
+        ? 'github'
+        : /^(?:https?|wss?):/.test(source)
+          ? 'remote'
+          : 'registry';
+      return {
+        ...server,
+        transport: source.startsWith('ws')
+          ? 'websocket'
+          : sourceType === 'remote'
+            ? 'streamable'
+            : 'stdio',
+        sourceType,
+        disabled: false,
+        autoApprove: [],
+        argTemplates: [],
+        env: [],
+        headers: [],
+      };
+    }), [manifest]);
   const flows = useMemo(() => manifest?.flowDetails ?? [], [manifest]);
   const triggers = useMemo(() => manifest?.triggerDetails ?? [], [manifest]);
   const secrets = useMemo(
@@ -993,6 +1016,29 @@ export default function PackageInstallWizard({
           </Stack>
         </Paper>
 
+        {models.length > 0 && (
+          <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+            <Typography variant="subtitle2" fontWeight={700} gutterBottom>
+              {t('packages.install.modelPlan')}
+            </Typography>
+            <Stack spacing={1}>
+              {models.map((model) => {
+                const installedChoice = installedModels.find(
+                  (installed) => installed.id === modelMappings[model.id],
+                );
+                return (
+                  <Stack key={model.id} direction="row" spacing={1} justifyContent="space-between">
+                    <Typography variant="body2">{model.displayName}</Typography>
+                    <Typography variant="body2" fontWeight={700}>
+                      {installedChoice?.displayName ?? model.displayName}
+                    </Typography>
+                  </Stack>
+                );
+              })}
+            </Stack>
+          </Paper>
+        )}
+
         {missingRequiredSecrets.length > 0 && (
           <Alert severity="warning" sx={{ mb: 2 }}>
             {t('packages.install.missingSecretsWarning', {
@@ -1220,7 +1266,7 @@ export default function PackageInstallWizard({
                 onClick={() => setActiveStep((s) => Math.min(steps.length - 1, s + 1))}
                 disabled={busy || nextDisabled}
               >
-                {currentStep === 'models' && steps[activeStep + 1]?.key === 'review'
+                {steps[activeStep + 1]?.key === 'review'
                   ? t('packages.install.continueReview')
                   : t('packages.install.next')}
               </Button>

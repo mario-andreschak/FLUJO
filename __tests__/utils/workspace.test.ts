@@ -1,10 +1,8 @@
 import path from 'path';
+import os from 'os';
 
-let dataDir = '/tmp/flujo-workspace-tests';
-
-jest.mock('@/utils/paths', () => ({
-  getDataDir: () => dataDir,
-}));
+const dataDir = path.join(os.tmpdir(), 'flujo-workspace-tests');
+let previousDataDir: string | undefined;
 
 import {
   DEFAULT_WORKSPACE,
@@ -19,7 +17,13 @@ import {
 
 describe('workspace primitives (#406)', () => {
   beforeEach(() => {
-    dataDir = '/tmp/flujo-workspace-tests';
+    previousDataDir = process.env.FLUJO_DATA_DIR;
+    process.env.FLUJO_DATA_DIR = dataDir;
+  });
+
+  afterEach(() => {
+    if (previousDataDir === undefined) delete process.env.FLUJO_DATA_DIR;
+    else process.env.FLUJO_DATA_DIR = previousDataDir;
   });
 
   it('uses the default workspace when selection is omitted or blank', () => {

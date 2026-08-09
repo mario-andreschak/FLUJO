@@ -12,11 +12,16 @@
 export const JSDOM_TEST_GLOBS = [
   '__tests__/frontend/components/**/*.test.{ts,tsx}',
   '__tests__/frontend/hooks/**/*.test.{ts,tsx}',
+  '__tests__/frontend/workspaceSelection.test.{ts,tsx}',
 ];
 // The node project owns everything else (backend/engine/util tests).
 export const NODE_TEST_GLOBS = ['__tests__/**/*.test.{ts,tsx}'];
 // The node project must not also run the jsdom-scoped folders (would run twice).
-export const NODE_IGNORE_GLOBS = ['__tests__/frontend/components/', '__tests__/frontend/hooks/'];
+export const NODE_IGNORE_GLOBS = [
+  '__tests__/frontend/components/',
+  '__tests__/frontend/hooks/',
+  '__tests__/frontend/workspaceSelection\\.test\\.(?:ts|tsx)$',
+];
 
 const withRoot = (globs) => globs.map((g) => `<rootDir>/${g}`);
 

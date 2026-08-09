@@ -31,14 +31,18 @@ const moduleNameMapper = {
 
 // Packages that ship ESM-only builds and are pulled in (directly or
 // transitively) by code under test — chokidar v4+ and its readdirp v5+
-// dependency, which the scheduler's file-watch trigger imports.
+// dependency from file-watch triggers, plus the MCP Apps browser bridge.
 //
 // next/jest hard-codes a leading "/node_modules/(?!(<transpilePackages>)/)"
 // ignore pattern and only APPENDS whatever a caller passes in. Because
 // transformIgnorePatterns is OR-ed, an extra pattern can never re-enable
 // transformation for a package the generated pattern already ignored. So we
 // widen that generated allowlist instead of appending to it.
-const esmOnlyTestPackages = ["chokidar", "readdirp"];
+const esmOnlyTestPackages = [
+  "chokidar",
+  "readdirp",
+  "@modelcontextprotocol/ext-apps",
+];
 
 function allowEsmOnlyPackages(patterns = []) {
   return patterns.map((pattern) =>

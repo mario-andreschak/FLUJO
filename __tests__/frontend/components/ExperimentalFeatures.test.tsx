@@ -140,6 +140,7 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
     const tabs = within(moreSections).getAllByRole('tab');
     expect(tabs.map((tab) => tab.getAttribute('href'))).toEqual([
       '/automation/triggers',
+      '/meetings',
       '/packages',
       '/statistics',
       '/docs',
@@ -200,6 +201,7 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
     expect(tabs.map((tab) => tab.textContent?.trim())).toEqual([
       'Automations',
       'Waves',
+      'Meetings',
       'Extensions',
       'Activity',
       'Chain Chat',
@@ -209,6 +211,7 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
     expect(tabs.map((tab) => tab.getAttribute('href'))).toEqual([
       '/automation/triggers',
       '/automation/waves',
+      '/meetings',
       '/packages',
       '/statistics',
       '/chain-chat',

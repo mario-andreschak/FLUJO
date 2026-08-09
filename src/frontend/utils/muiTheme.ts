@@ -184,6 +184,10 @@ export function createAppTheme(mode: PaletteMode): Theme {
       },
       info: {
         main: secondary,
+        // Cyan's generated `light` shade is too bright for MUI's default white
+        // contrast text (about 2.5:1 in the light theme). Chat system bubbles
+        // use info.light, so keep their inherited text and links legible.
+        contrastText: '#171A2B',
       },
       success: {
         main: isDark ? '#57D59B' : '#15885A',
