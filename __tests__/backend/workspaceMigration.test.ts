@@ -13,6 +13,7 @@ jest.mock('@/utils/paths', () => ({
 
 import {
   _resetWorkspaceMigrationState,
+  _workspaceMigrationPathsForTests,
   migrateWorkspaceLayout,
 } from '@/backend/services/workspace/migration';
 
@@ -52,6 +53,55 @@ describe('workspace layout migration (#406)', () => {
     await expect(
       fs.stat(path.join(dataDir, 'workspaces', 'default-workspace', 'db')),
     ).resolves.toBeDefined();
+  });
+
+  it('does not traverse or stage a populated workspace when every legacy source is absent', async () => {
+    const workspaceUserdata = path.join(
+      dataDir,
+      'workspaces',
+      'default-workspace',
+      'userdata',
+    );
+    const payload = path.join(workspaceUserdata, 'large-repository', '.git', 'objects', 'payload.bin');
+    await fs.mkdir(path.dirname(payload), { recursive: true });
+    await fs.writeFile(payload, 'destination-data-must-stay-in-place', 'utf8');
+
+    const readdir = jest.spyOn(fs, 'readdir');
+    const open = jest.spyOn(fs, 'open');
+    const readFile = jest.spyOn(fs, 'readFile');
+    const copyFile = jest.spyOn(fs, 'copyFile');
+    let destinationIo: string[] = [];
+    let result: Awaited<ReturnType<typeof migrateWorkspaceLayout>>;
+    try {
+      result = await migrateWorkspaceLayout();
+      const withinUserdata = (candidate: unknown) => {
+        const resolved = path.resolve(String(candidate));
+        const relative = path.relative(workspaceUserdata, resolved);
+        return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+      };
+      destinationIo = [
+        ...readdir.mock.calls.map(([candidate]) => `readdir:${candidate.toString()}`),
+        ...open.mock.calls.map(([candidate]) => `open:${candidate.toString()}`),
+        ...readFile.mock.calls.map(([candidate]) => `readFile:${candidate.toString()}`),
+        ...copyFile.mock.calls.flatMap(([source, destination]) => [
+          `copyFile:${source.toString()}`,
+          `copyFile:${destination.toString()}`,
+        ]),
+      ].filter(operation => withinUserdata(operation.slice(operation.indexOf(':') + 1)));
+    } finally {
+      readdir.mockRestore();
+      open.mockRestore();
+      readFile.mockRestore();
+      copyFile.mockRestore();
+    }
+
+    expect(destinationIo).toEqual([]);
+    expect(result!.subtrees.userdata).toBe('already-migrated');
+    await expect(fs.readFile(payload, 'utf8')).resolves.toBe('destination-data-must-stay-in-place');
+    const { journal, fastJournal, transactions } = _workspaceMigrationPathsForTests();
+    await expect(fs.stat(journal)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(fastJournal)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(transactions)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('reconciles disjoint legacy and workspace data without losing either copy', async () => {
