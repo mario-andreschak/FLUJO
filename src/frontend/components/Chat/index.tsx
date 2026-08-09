@@ -23,6 +23,7 @@ import { workspaceLocalStorageKey } from '@/frontend/utils/workspaceSelection';
 import ChatHistory from './ChatHistory';
 import ChatMessages from './ChatMessages';
 import type { CanvasLaunchInfo, PendingElicitation, PendingQuestion } from './ChatMessages';
+import { buildSplitMessages, type SplitHalf } from './conversationSplit';
 import ChatInput from './ChatInput';
 import DevCanvasDock, { type CanvasDockLayout } from './DevCanvasDock'; // #216: docked MCP Apps canvas
 import {
@@ -3716,21 +3717,32 @@ const Chat: React.FC = () => {
 
   const handleCancelEditingMessage = useCallback(() => setEditingMessage(null), []);
 
-  // Split conversation at a message (creates new local conversation)
-  const splitConversationAtMessage = (messageId: string) => {
+  // Split conversation at a message (creates new local conversation).
+  //
+  // `half` picks which side of the cut is kept:
+  //   'head' → start … picked message (inclusive) — the original behaviour
+  //   'tail' → picked message … end of the conversation
+  const splitConversationAtMessage = (messageId: string, half: SplitHalf = 'head') => {
     if (!detailedConversation) return;
-    log.debug('Splitting conversation at message', { messageId });
+    log.debug('Splitting conversation at message', { messageId, half });
 
     const messageIndex = detailedConversation.messages.findIndex(msg => msg.id === messageId);
     if (messageIndex === -1) return;
 
-    const messagesBeforeSplit = detailedConversation.messages.slice(0, messageIndex + 1);
+    const messagesBeforeSplit = buildSplitMessages(detailedConversation.messages, messageIndex, half);
+
+    // A tail split can end up empty once orphan tool results are dropped —
+    // creating a blank conversation would only confuse.
+    if (messagesBeforeSplit.length === 0) {
+      log.debug('Split produced no messages — ignoring', { messageId, half });
+      return;
+    }
 
     // Create a new *local* conversation based on the split
     const newId = uuidv4();
     const newSplitConversation: Conversation = {
       id: newId,
-      title: t('chat.page.splitTitle', { title: detailedConversation.title }),
+      title: t(half === 'head' ? 'chat.page.splitTitle' : 'chat.page.splitTailTitle', { title: detailedConversation.title }),
       messages: messagesBeforeSplit,
       flowId: detailedConversation.flowId,
       createdAt: Date.now(), // New creation time
@@ -3756,6 +3768,10 @@ const Chat: React.FC = () => {
     setDetailsError(null);
     // Note: This split conversation doesn't exist on the backend until a message is sent.
   };
+
+  // Mirror of the above: keep the picked message through the END of the thread.
+  const splitConversationFromMessage = (messageId: string) =>
+    splitConversationAtMessage(messageId, 'tail');
 
   // Handle Approve/Reject Tool Call
   const handleToolResponse = async (action: 'approve' | 'reject', toolCallId: string, always?: boolean, feedback?: string) => {
@@ -4781,6 +4797,7 @@ const Chat: React.FC = () => {
                 editingMessageId={editingMessage?.messageId ?? null} // Bubble being edited (in the input)
                 onToggleDisabled={toggleMessageDisabled}
                 onSplitConversation={splitConversationAtMessage}
+                onSplitConversationFromHere={splitConversationFromMessage}
                 onRevertToHere={() => fetchDetailedConversation(detailedConversation.id)}
                 onBeginEditMessage={beginEditMessage} // "Edit" opens the input editor
                 onApproveToolCall={handleApproveToolCall}

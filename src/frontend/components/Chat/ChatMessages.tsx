@@ -124,7 +124,14 @@ interface ChatMessagesProps {
   /** Id of the message currently being edited in the ChatInput (or null). */
   editingMessageId?: string | null;
   onToggleDisabled: (messageId: string) => void;
+  /** Split off the head of the thread: start → the picked message (inclusive). */
   onSplitConversation: (messageId: string) => void;
+  /**
+   * Mirror of `onSplitConversation`: split off the TAIL of the thread — the
+   * picked message → end. Optional so read-only hosts (debugger, flow
+   * generator preview) can omit it and simply not show the entry.
+   */
+  onSplitConversationFromHere?: (messageId: string) => void;
   /** Called after a confirmed message-scoped worktree revert. */
   onRevertToHere?: (messageId: string) => void;
   /** Start editing a message — opens the editor in the ChatInput, not inline. */
@@ -1637,6 +1644,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   editingMessageId,
   onToggleDisabled,
   onSplitConversation,
+  onSplitConversationFromHere,
   onRevertToHere,
   onBeginEditMessage,
   onApproveToolCall, // Destructure new prop
@@ -1794,6 +1802,13 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   const handleSplitConversation = () => {
     if (activeMessageId) {
       onSplitConversation(activeMessageId);
+      handleMenuClose();
+    }
+  };
+
+  const handleSplitConversationFromHere = () => {
+    if (activeMessageId && onSplitConversationFromHere) {
+      onSplitConversationFromHere(activeMessageId);
       handleMenuClose();
     }
   };
@@ -1999,6 +2014,17 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
           <ListItemIcon><CallSplitIcon fontSize="small" /></ListItemIcon>
           <ListItemText>{t('chat.actions.split')}</ListItemText>
         </MenuItem>
+        {/* Same action mirrored: keep this message through the end instead.
+            The icon is the split glyph flipped, so the two directions read as
+            a pair at a glance. */}
+        {onSplitConversationFromHere && (
+          <MenuItem onClick={handleSplitConversationFromHere}>
+            <ListItemIcon>
+              <CallSplitIcon fontSize="small" sx={{ transform: 'rotate(180deg)' }} />
+            </ListItemIcon>
+            <ListItemText>{t('chat.actions.splitFromHere')}</ListItemText>
+          </MenuItem>
+        )}
         {FEATURES.ENABLE_REVERT_TO_HERE && activeMsgForMenu?.changedFiles?.length ? (
           <MenuItem onClick={handleRevertToHere}>
             <ListItemIcon><RestoreIcon fontSize="small" /></ListItemIcon>
