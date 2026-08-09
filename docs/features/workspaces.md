@@ -67,20 +67,19 @@ share the readiness promise; workspace discovery returns a retryable `503` with
 request can race the old layout.
 
 Migration progress is always visible in the server console in runtime builds.
-The default is a durable, line-oriented transcript—even in an interactive
-terminal—so every inventory, recovery and transaction checkpoint remains in
-scrollback after this breaking upgrade. It reports aggregate
-file/directory/link/byte counts and measured processing time without printing
-individual filenames, which keeps secrets out of logs while making a long first
-upgrade observable.
+A color-capable interactive terminal at least 56 columns by 18 rows opens the
+full-screen, slow-scrolling FLUJO riverside landscape by default; its HUD uses
+real migration telemetry. Pressing `Q` or `Esc` restores the terminal and lets
+the same migration continue with a durable, line-oriented transcript. Pipes,
+CI, services, dumb terminals and containers without a TTY select that transcript
+automatically so log collectors never receive cursor-control output.
 
-An optional compact animation can be selected with
-`FLUJO_MIGRATION_UI=compact` or `FLUJO_MIGRATION_UI=tty`. A color-capable
-terminal at least 56 columns by 18 rows can opt into the full-screen,
-slow-scrolling FLUJO riverside landscape with
-`FLUJO_MIGRATION_UI=landscape`; its HUD uses the same real migration telemetry.
-`FLUJO_MIGRATION_UI=plain` explicitly selects the default transcript,
-`FLUJO_MIGRATION_ASCII=1` selects the compact ASCII presentation, and the
+The transcript reports every inventory, recovery and transaction checkpoint,
+including aggregate file/directory/link/byte counts and measured processing
+time, without printing individual filenames. `FLUJO_MIGRATION_UI=plain`
+selects it explicitly. `FLUJO_MIGRATION_UI=compact` (or `tty`) selects the
+compact animation, `FLUJO_MIGRATION_UI=landscape` forces the landscape when the
+terminal supports it, `FLUJO_MIGRATION_ASCII=1` selects compact ASCII, and the
 standard `NO_COLOR` setting disables color and the full-screen scene.
 
 Layout v2 inventories every legacy root and destination before renaming any user

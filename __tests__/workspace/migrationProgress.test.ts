@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import {
   createMigrationProgressReporter,
   shouldUseFullscreenMigrationUI,
@@ -22,6 +23,30 @@ class MemoryTerminal {
 
   output(): string {
     return this.chunks.join('');
+  }
+}
+
+class MemoryInput extends EventEmitter {
+  isTTY = true;
+  isRaw = false;
+  paused = true;
+
+  isPaused(): boolean {
+    return this.paused;
+  }
+
+  setRawMode(mode: boolean): void {
+    this.isRaw = mode;
+  }
+
+  resume(): this {
+    this.paused = false;
+    return this;
+  }
+
+  pause(): this {
+    this.paused = true;
+    return this;
   }
 }
 
@@ -152,14 +177,15 @@ describe('workspace migration progress renderer', () => {
     expect(terminal.output()).toContain('\u001B[32m✓\u001B[0m');
   });
 
-  it('keeps a durable transcript by default and enables animation only when requested', () => {
+  it('uses the interactive UI by default only for capable attached terminals', () => {
     const tty = { isTTY: true, write: () => true };
     const pipe = { isTTY: false, write: () => true };
 
-    expect(shouldUseInteractiveMigrationUI(tty, {})).toBe(false);
+    expect(shouldUseInteractiveMigrationUI(tty, {})).toBe(true);
     expect(shouldUseInteractiveMigrationUI(tty, { CI: 'true' })).toBe(false);
     expect(shouldUseInteractiveMigrationUI(tty, { TERM: 'dumb' })).toBe(false);
     expect(shouldUseInteractiveMigrationUI(tty, { FLUJO_MIGRATION_UI: 'plain' })).toBe(false);
+    expect(shouldUseInteractiveMigrationUI(pipe, {})).toBe(false);
     expect(shouldUseInteractiveMigrationUI(pipe, { FLUJO_MIGRATION_UI: 'tty' })).toBe(true);
   });
 
@@ -192,7 +218,7 @@ describe('workspace migration progress renderer', () => {
     const terminal = new MemoryTerminal();
     terminal.hasColors = () => true;
 
-    expect(shouldUseFullscreenMigrationUI(terminal, {})).toBe(false);
+    expect(shouldUseFullscreenMigrationUI(terminal, {})).toBe(true);
     expect(shouldUseFullscreenMigrationUI(terminal, { FLUJO_MIGRATION_UI: 'landscape' })).toBe(true);
     expect(shouldUseFullscreenMigrationUI(terminal, { NO_COLOR: '1' })).toBe(false);
     expect(shouldUseFullscreenMigrationUI(terminal, { FLUJO_MIGRATION_UI: 'compact' })).toBe(false);
@@ -240,5 +266,43 @@ describe('workspace migration progress renderer', () => {
     expect(terminal.output()).toContain('\u001B[?1049l');
     expect(terminal.output()).toContain('Workspace migration complete · 5.2s');
     now.mockRestore();
+  });
+
+  it.each(['q', '\u001B'])('switches from the landscape to durable logs when %p is pressed', key => {
+    const terminal = new MemoryTerminal();
+    const input = new MemoryInput();
+    terminal.columns = 90;
+    terminal.rows = 24;
+    terminal.hasColors = () => true;
+    const reporter = createMigrationProgressReporter({
+      interactive: true,
+      fullscreen: true,
+      stream: terminal,
+      input,
+      colors: true,
+      trueColor: false,
+    });
+
+    reporter.report('started', { version: 2, dataRoot: 'C:\\data' });
+    reporter.report('inventory progress', {
+      purpose: 'preflight source for db',
+      files: 12,
+      bytes: '4.00 KiB',
+    });
+    expect(input.isRaw).toBe(true);
+    expect(input.isPaused()).toBe(false);
+
+    input.emit('data', key);
+
+    expect(input.isRaw).toBe(false);
+    expect(input.isPaused()).toBe(true);
+    expect(terminal.output()).toContain('\u001B[?1049l');
+    expect(terminal.output()).toContain('[FLUJO] Workspace migration: landscape closed; continuing with log output');
+    expect(terminal.output()).toContain('[FLUJO] Workspace migration: inventory progress');
+
+    reporter.report('cleanup complete', { entries: 11 });
+    reporter.report('finished successfully', { elapsed: '5.2s' });
+    expect(terminal.output()).toContain('[FLUJO] Workspace migration: cleanup complete | entries=11');
+    expect(terminal.output()).toContain('[FLUJO] Workspace migration: finished successfully | elapsed="5.2s"');
   });
 });

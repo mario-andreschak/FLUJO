@@ -23,6 +23,17 @@ interface MigrationTerminalStream {
   off?(event: 'resize', listener: () => void): unknown;
 }
 
+interface MigrationTerminalInput {
+  isTTY?: boolean;
+  isRaw?: boolean;
+  isPaused?(): boolean;
+  setRawMode?(mode: boolean): unknown;
+  resume?(): unknown;
+  pause?(): unknown;
+  on?(event: 'data', listener: (chunk: unknown) => void): unknown;
+  off?(event: 'data', listener: (chunk: unknown) => void): unknown;
+}
+
 type MigrationEnvironment = Readonly<Record<string, string | undefined>>;
 
 interface MigrationProgressReporter {
@@ -44,6 +55,7 @@ export interface MigrationProgressReporterOptions {
   fullscreen?: boolean;
   trueColor?: boolean;
   animationIntervalMs?: number;
+  input?: MigrationTerminalInput;
 }
 
 const ANSI = {
@@ -119,19 +131,32 @@ interface ActivitySample {
 
 class LandscapeMigrationProgressReporter implements MigrationProgressReporter {
   private readonly landscape: MigrationLandscapeSession;
+  private readonly fallbackReporter: PlainMigrationProgressReporter;
   private progress = 0.02;
   private bytesPerSecond = 0;
   private filesPerSecond = 0;
   private activityLabel = 'Preparing';
   private readonly samples = new Map<string, ActivitySample>();
   private ended = false;
+  private dismissed = false;
+  private inputAttached = false;
+  private inputWasPaused = false;
+  private inputWasRaw = false;
+  private lastMessage = 'started';
+  private lastDetails: MigrationProgressDetails = {};
+  private lastLevel: MigrationProgressLevel = 'info';
 
   constructor(
     private readonly stream: MigrationTerminalStream,
     private readonly colors: boolean,
     trueColor: boolean,
+    private readonly input: MigrationTerminalInput = process.stdin,
   ) {
     this.landscape = new MigrationLandscapeSession({ stream, trueColor });
+    this.fallbackReporter = new PlainMigrationProgressReporter(
+      line => { this.stream.write(`${line}\n`); },
+      line => { this.stream.write(`${line}\n`); },
+    );
   }
 
   report(
@@ -140,6 +165,16 @@ class LandscapeMigrationProgressReporter implements MigrationProgressReporter {
     _level: MigrationProgressLevel = 'info',
   ): void {
     if (this.ended && message !== 'started') return;
+
+    this.lastMessage = message;
+    this.lastDetails = details;
+    this.lastLevel = _level;
+
+    if (this.dismissed) {
+      this.fallbackReporter.report(message, details, _level);
+      if (TERMINAL_EVENT_NAMES.has(message)) this.ended = true;
+      return;
+    }
 
     if (message === 'started') {
       this.ended = false;
@@ -152,6 +187,7 @@ class LandscapeMigrationProgressReporter implements MigrationProgressReporter {
           || 'Preparing a safe workspace upgrade',
         progress: this.progress,
       });
+      this.attachInput();
       return;
     }
 
@@ -303,8 +339,60 @@ class LandscapeMigrationProgressReporter implements MigrationProgressReporter {
   }
 
   close(): void {
+    this.detachInput();
     this.landscape.close();
     this.ended = true;
+  }
+
+  private readonly handleInput = (chunk: unknown): void => {
+    const key = String(chunk);
+    if (key === 'q' || key === 'Q' || key === '\u001B') {
+      this.dismissToLogs();
+      return;
+    }
+    // Raw mode turns Ctrl+C into input instead of SIGINT. Restore the terminal
+    // before forwarding it so the server's normal shutdown handlers still run.
+    if (key.includes('\u0003')) {
+      this.detachInput();
+      this.landscape.close();
+      process.kill(process.pid, 'SIGINT');
+    }
+  };
+
+  private attachInput(): void {
+    if (this.inputAttached || !this.input.isTTY || !this.input.setRawMode || !this.input.on) return;
+    this.inputWasPaused = this.input.isPaused?.() ?? false;
+    this.inputWasRaw = Boolean(this.input.isRaw);
+    try {
+      if (!this.inputWasRaw) this.input.setRawMode(true);
+      this.input.on('data', this.handleInput);
+      this.input.resume?.();
+      this.inputAttached = true;
+    } catch {
+      // The landscape remains usable when stdin is detached or cannot enter raw mode.
+      if (!this.inputWasRaw) {
+        try { this.input.setRawMode(false); } catch { /* Best effort. */ }
+      }
+    }
+  }
+
+  private detachInput(): void {
+    if (!this.inputAttached) return;
+    this.input.off?.('data', this.handleInput);
+    if (!this.inputWasRaw && this.input.setRawMode) {
+      try { this.input.setRawMode(false); } catch { /* Terminal may already be detached. */ }
+    }
+    if (this.inputWasPaused) this.input.pause?.();
+    this.inputAttached = false;
+  }
+
+  private dismissToLogs(): void {
+    if (this.dismissed || this.ended) return;
+    this.dismissed = true;
+    this.detachInput();
+    this.landscape.close();
+    this.fallbackReporter.report('landscape closed; continuing with log output');
+    this.fallbackReporter.report(this.lastMessage, this.lastDetails, this.lastLevel);
   }
 
   private update(phase: string, detail = '', progress?: number): void {
@@ -419,6 +507,7 @@ class LandscapeMigrationProgressReporter implements MigrationProgressReporter {
       'Everything is right where it should be',
       1,
     );
+    this.detachInput();
     this.landscape.close();
     const elapsed = stringDetail(details, 'elapsed');
     this.stream.write(`${style('✓', ANSI.green, this.colors)} ${style(
@@ -430,6 +519,7 @@ class LandscapeMigrationProgressReporter implements MigrationProgressReporter {
   }
 
   private finishFailure(details: MigrationProgressDetails): void {
+    this.detachInput();
     this.landscape.close();
     this.stream.write(`${style('✕', ANSI.red, this.colors)} ${style(
       'Workspace migration failed safely; no conflicting data was overwritten',
@@ -860,13 +950,15 @@ class TtyMigrationProgressReporter implements MigrationProgressReporter {
 }
 
 export function shouldUseInteractiveMigrationUI(
-  _stream: MigrationTerminalStream = process.stdout,
+  stream: MigrationTerminalStream = process.stdout,
   env: MigrationEnvironment = process.env,
 ): boolean {
   const requested = env.FLUJO_MIGRATION_UI?.trim().toLowerCase();
   if (requested === 'plain') return false;
   if (requested === 'tty' || requested === 'compact' || requested === 'landscape') return true;
-  return false;
+  const ci = env.CI?.trim().toLowerCase();
+  const isCi = Boolean(ci && ci !== '0' && ci !== 'false');
+  return Boolean(stream.isTTY) && env.TERM !== 'dumb' && !isCi;
 }
 
 export function shouldUseFullscreenMigrationUI(
@@ -874,7 +966,7 @@ export function shouldUseFullscreenMigrationUI(
   env: MigrationEnvironment = process.env,
 ): boolean {
   const requested = env.FLUJO_MIGRATION_UI?.trim().toLowerCase();
-  if (requested !== 'landscape') return false;
+  if (requested === 'plain' || requested === 'tty' || requested === 'compact') return false;
   if (!shouldUseInteractiveMigrationUI(stream, env)) return false;
   if (!terminalSupportsColor(stream, env)) return false;
   if (['1', 'true', 'yes'].includes(env.FLUJO_MIGRATION_ASCII?.trim().toLowerCase() ?? '')) return false;
@@ -914,6 +1006,7 @@ export function createMigrationProgressReporter(
       stream,
       colors,
       options.trueColor ?? terminalSupportsTrueColor(stream, process.env),
+      options.input ?? process.stdin,
     );
   }
   return new TtyMigrationProgressReporter(

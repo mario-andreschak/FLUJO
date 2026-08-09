@@ -727,17 +727,20 @@ export class MigrationLandscapeSession {
     );
 
     const rate = formatRate(this.state.bytesPerSecond, this.state.filesPerSecond);
-    const rateLabel = rate ? `${this.state.activityLabel ?? 'Processing'}  ${rate}` : `${this.palette.name} · local time`;
-    const maximumBar = Math.max(10, canvas.width - Array.from(rateLabel).length - left - 8);
+    const activityLabel = rate
+      ? `${this.state.activityLabel ?? 'Processing'}  ${rate}`
+      : `${this.palette.name} · local time`;
+    const controls = canvas.width >= 86 ? `${activityLabel} · Q/Esc logs` : 'Q/Esc logs';
+    const maximumBar = Math.max(10, canvas.width - Array.from(controls).length - left - 8);
     const barWidth = Math.min(44, maximumBar);
     const filled = Math.round(this.state.progress * barWidth);
     const bar = `${'█'.repeat(filled)}${'░'.repeat(Math.max(0, barWidth - filled))}`;
     canvas.text(left, hudTop + 3, bar, this.palette.accent, canvas.cell(left, hudTop + 3)?.background);
-    const rateX = Math.max(left + barWidth + 3, canvas.width - Array.from(rateLabel).length - 2);
+    const rateX = Math.max(left + barWidth + 3, canvas.width - Array.from(controls).length - 2);
     canvas.text(
       rateX,
       hudTop + 3,
-      truncateText(rateLabel, Math.max(1, canvas.width - rateX - 1)),
+      truncateText(controls, Math.max(1, canvas.width - rateX - 1)),
       this.palette.muted,
       canvas.cell(rateX, hudTop + 3)?.background,
     );
@@ -753,7 +756,7 @@ export class MigrationLandscapeSession {
     );
     canvas.centeredText(
       canvas.height - 2,
-      truncateText('Resize to at least 56 × 18 for the landscape', canvas.width - 2),
+      truncateText('Resize to at least 56 × 18 · Q/Esc logs', canvas.width - 2),
       this.palette.muted,
     );
   }
