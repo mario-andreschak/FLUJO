@@ -5,8 +5,6 @@ import path from 'node:path';
 export const EXPOSURE_MODE_ENV = 'FLUJO_EXPOSURE_MODE';
 export const EXPOSURE_MODES = new Set(['localhost', 'network', 'public']);
 const WORKSPACE_LAYOUT_VERSION = 2;
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 // Escape hatch: when the persisted network setting is enabled, this env var is
 // set so the MCP Apps sandbox and the browser live-view gateway relax their
 // origin allowlists. Read by src/backend/mcpApps/sandboxServer.ts and
@@ -58,15 +56,6 @@ function settingsCandidates(env, cwd) {
       || marker.defaultWorkspace !== 'default-workspace'
       || !marker.subtrees
       || typeof marker.subtrees !== 'object'
-      || (
-        marker.version === WORKSPACE_LAYOUT_VERSION
-        && (
-          typeof marker.transactionId !== 'string'
-          || !UUID_PATTERN.test(marker.transactionId)
-          || typeof marker.manifestDigest !== 'string'
-          || !SHA256_PATTERN.test(marker.manifestDigest)
-        )
-      )
     ) {
       console.warn(`[FLUJO] Workspace layout marker is invalid; using secure launcher defaults: ${markerFile}`);
       return { files: [], failClosed: true };
