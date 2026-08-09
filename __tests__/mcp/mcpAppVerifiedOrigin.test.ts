@@ -1,4 +1,7 @@
-import { deriveVerifiedMcpAppOriginKey } from '@/backend/mcpApps/appOrigin';
+import {
+  deriveVerifiedMcpAppOriginKey,
+  MCP_APP_ORIGIN_NAMESPACE_ENV,
+} from '@/backend/mcpApps/appOrigin';
 import { isValidMcpAppDomain } from '@/shared/utils/mcpAppOrigin';
 
 describe('verified MCP App browser origin identity', () => {
@@ -36,5 +39,32 @@ describe('verified MCP App browser origin identity', () => {
     expect(() => deriveVerifiedMcpAppOriginKey({
       ...identity, workspace: '',
     })).toThrow(/required/);
+  });
+
+  it('partitions identical App identities by deployment namespace without changing the label shape', () => {
+    const brainA = deriveVerifiedMcpAppOriginKey({ ...identity, namespace: 'brain-a' });
+    const brainB = deriveVerifiedMcpAppOriginKey({ ...identity, namespace: 'brain-b' });
+
+    expect(brainA).not.toBe(brainB);
+    expect(brainA).toMatch(/^app[0-9a-f]{60}$/);
+    expect(brainB).toMatch(/^app[0-9a-f]{60}$/);
+  });
+
+  it('uses FLUJO_MCP_APP_ORIGIN_NAMESPACE while preserving the legacy empty default', () => {
+    const previous = process.env[MCP_APP_ORIGIN_NAMESPACE_ENV];
+    try {
+      delete process.env[MCP_APP_ORIGIN_NAMESPACE_ENV];
+      const legacy = deriveVerifiedMcpAppOriginKey(identity);
+      expect(deriveVerifiedMcpAppOriginKey({ ...identity, namespace: '' })).toBe(legacy);
+
+      process.env[MCP_APP_ORIGIN_NAMESPACE_ENV] = 'brain-env';
+      expect(deriveVerifiedMcpAppOriginKey(identity)).toBe(
+        deriveVerifiedMcpAppOriginKey({ ...identity, namespace: 'brain-env' }),
+      );
+      expect(deriveVerifiedMcpAppOriginKey(identity)).not.toBe(legacy);
+    } finally {
+      if (previous === undefined) delete process.env[MCP_APP_ORIGIN_NAMESPACE_ENV];
+      else process.env[MCP_APP_ORIGIN_NAMESPACE_ENV] = previous;
+    }
   });
 });

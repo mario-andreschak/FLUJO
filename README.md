@@ -13,7 +13,7 @@ FLUJO is open-source and local-first: connect models, tools, and reusable subflo
 [**Visit flujo.com.co →**](https://flujo.com.co/) · [**Watch the 2:28 product film →**](https://flujo.com.co/short/) · [**Install FLUJO ↓**](#-quick-install-recommended) · [**Explore features ↓**](#-key-features) · [**Try FLUJO online →**](https://try.flujo.com.co/)
 
 [![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-3.43.0-green.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-3.43.1-green.svg)](package.json)
 
 </div>
 
@@ -275,7 +275,10 @@ For MCP Apps in Local Network or Public mode, configure
 for example `https://{app}.sandbox.example.com/sandbox.html`, and proxy those
 wildcard hostnames to FLUJO's plain HTTP port `4201`. A single shared sandbox
 hostname is rejected. Preserve the browser's `Host` and `Referer` headers
-through the proxy. Docker Compose publishes both listener ports to host
+through the proxy, and enable WebSocket upgrades on the same route for Apps
+that expose a capability-registered sidecar UI runtime. Multi-tenant launchers
+must also set `FLUJO_MCP_APP_ORIGIN_NAMESPACE` to a stable tenant identifier so
+otherwise-identical Apps cannot share a wildcard hostname. Docker Compose publishes both listener ports to host
 loopback by default; change those mappings only as part of a properly
 authenticated/proxied Local Network or Public deployment.
 

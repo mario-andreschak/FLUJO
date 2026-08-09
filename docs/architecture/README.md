@@ -28,6 +28,10 @@ This section provides technical architecture and design documentation for Flujo.
 
 ## Decision Records
 
+- [Enduring-agent foundation contracts](./enduring-agent-foundation-contracts.md):
+  Phase 0 domain ownership, immutable revision, Persona lease/fencing, memory
+  trust, Flow tool-authority, compatibility, workspace, privacy, and threat-model
+  contracts for issue #415.
 - [FlowSpec node-type inclusion policy](./flowspec-node-inclusion-policy.md): which
   ReactFlow node types belong in the FlowSpec authoring contract, why, and the
   checklist for classifying future node types (issue #380).

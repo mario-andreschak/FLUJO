@@ -58,6 +58,7 @@ import {
   STDIO_OAUTH_EXTENSION_CAPABILITY,
   STDIO_OAUTH_EXTENSION_ID,
 } from "mcp-stdio-oauth/protocol";
+import { issueMcpAppRuntimeBrokerEnvironment } from '@/backend/mcpApps/runtimeBroker';
 
 // We stash a capabilities key on the client so shouldRecreateClient can detect a change to
 // a client-declared MCP capability that is negotiated at connect time (the SDK doesn't
@@ -91,6 +92,16 @@ export interface TransportWithConfigKey {
   __flujoKind?: "stdio" | "streamable" | "sse" | "websocket";
   /** Inner SDK transport when FLUJO applies a protocol decorator. */
   __flujoInnerTransport?: unknown;
+  /** Capability generation owning this child's registered App UI runtime. */
+  __flujoRuntimeBrokerLeaseId?: string;
+}
+
+export interface McpTransportFactoryOptions {
+  /**
+   * Give this managed stdio child a sidecar-runtime registration capability.
+   * Throwaway connection probes deliberately leave this false.
+   */
+  enableRuntimeBroker?: boolean;
 }
 
 /** Resolve through FLUJO-owned transport decorators without relying on SDK privates. */
@@ -309,7 +320,7 @@ export function createNewClient(config: MCPServerConfig): Client {
   const client = new Client(
     {
       name: `flujo-${config.name}-client`,
-      version: "3.43.0",
+      version: "3.43.1",
     },
     {
       capabilities: {
@@ -357,6 +368,7 @@ export function createNewClient(config: MCPServerConfig): Client {
  */
 export function createTransport(
   config: MCPServerConfig,
+  options: McpTransportFactoryOptions = {},
 ):
   | StdioClientTransport
   | WebSocketClientTransport
@@ -519,7 +531,7 @@ export function createTransport(
     );
     return new WebSocketClientTransport(new URL(config.websocketUrl));
   } else {
-    return createStdioTransport(config);
+    return createStdioTransport(config, options);
   }
 }
 
@@ -770,6 +782,7 @@ export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
  */
 export function createStdioTransport(
   config: MCPServerConfig,
+  options: McpTransportFactoryOptions = {},
 ): StdioClientTransport {
   log.debug("Entering createStdioTransport method");
 
@@ -779,6 +792,10 @@ export function createStdioTransport(
   }
 
   const { command, args, env, cwd } = resolveStdioLaunch(config);
+  const runtimeBroker = options.enableRuntimeBroker && config.enableMcpApps === true
+    ? issueMcpAppRuntimeBrokerEnvironment(config.name)
+    : undefined;
+  if (runtimeBroker) Object.assign(env, runtimeBroker.env);
 
   // Create the transport with stderr capture
   log.info(
@@ -799,6 +816,8 @@ export function createStdioTransport(
   // later config is byte-identical, independent of the command/args rewrites above.
   (transport as unknown as TransportWithConfigKey).__flujoStdioKey =
     stdioConfigKey(config);
+  (transport as unknown as TransportWithConfigKey).__flujoRuntimeBrokerLeaseId =
+    runtimeBroker?.leaseId;
 
   // Check if stderr is available
   if (transport.stderr) {

@@ -382,6 +382,51 @@ export async function listCollectionItems<T>(collection: string): Promise<T[]> {
 }
 
 /**
+ * Fail-closed collection scan for records that participate in runtime
+ * uniqueness, ordering, or fencing. Unlike the tolerant UI/listing helper, a
+ * malformed, empty, unreadable, or filename-mismatched JSON item aborts the
+ * whole authoritative read.
+ */
+export async function listCollectionItemEntriesStrict<T>(
+  collection: string,
+): Promise<Array<{ id: string; item: T }>> {
+  const dirPath = getCollectionDir(collection);
+  let entries: string[];
+  try {
+    entries = await fs.readdir(dirPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+
+  const items: Array<{ id: string; item: T }> = [];
+  for (const entry of entries.sort()) {
+    if (!entry.endsWith('.json')) continue;
+    if (entry.includes('.tmp.') || entry.includes('.corrupted.') || entry.endsWith('.bak')) {
+      continue;
+    }
+    const id = entry.slice(0, -'.json'.length);
+    assertSafeCollectionId(id);
+    const filePath = path.join(dirPath, entry);
+    const content = await fs.readFile(filePath, 'utf8');
+    if (content.trim().length === 0) {
+      throw new Error(`Authoritative collection item ${JSON.stringify(`${collection}/${id}`)} is empty.`);
+    }
+    let item: T;
+    try {
+      item = JSON.parse(content) as T;
+    } catch (error) {
+      throw new Error(
+        `Authoritative collection item ${JSON.stringify(`${collection}/${id}`)} is invalid JSON: `
+        + `${(error as Error).message}`,
+      );
+    }
+    items.push({ id, item });
+  }
+  return items;
+}
+
+/**
  * Like listCollectionItems, but also returns each file's last-modified time
  * (mtimeMs, epoch ms). Used to backfill server-managed timestamps for legacy
  * items that predate them (e.g. flows without createdAt/updatedAt — #108),

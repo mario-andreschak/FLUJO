@@ -14,7 +14,8 @@
  *   - **Hosted/network**: a configured `{app}` DNS-label template routes every
  *     app hostname to the same listener through wildcard DNS/reverse proxying.
  *
- * The listener serves exactly one document — `sandbox.html` — with a host-facing
+ * The listener serves the `sandbox.html` document plus capability-registered,
+ * route-scoped sidecar runtime traffic. The sandbox has a host-facing
  * Content-Security-Policy set via HTTP header. The resource's `_meta.ui.csp`,
  * passed in via the `?csp=` query param by the host, is sanitized into both that
  * header and a `<meta>` policy prepended to the View's HTML as its first byte.
@@ -30,7 +31,7 @@
  * bundler step and stays in lockstep with the constants below.
  *
  * Security posture: the listener binds loopback by default and serves only the
- * sandbox document; every other path 404s. Origin allocation fails closed when
+ * sandbox document or a proved/registered route; every other path 404s. Origin allocation fails closed when
  * the listener cannot start or a non-local deployment lacks a valid wildcard
  * hostname template. There is deliberately no shared browser-origin fallback.
  */
@@ -45,6 +46,10 @@ import {
   MCP_APP_IFRAME_SANDBOX,
   MCP_APP_IFRAME_SANDBOX_ALLOWED_TOKENS,
 } from '@/shared/utils/mcpApps';
+import {
+  handleMcpAppRuntimeHttpRequest,
+  handleMcpAppRuntimeUpgrade,
+} from '@/backend/mcpApps/runtimeBroker';
 
 const log = createLogger('backend/mcpApps/sandboxServer');
 
@@ -99,7 +104,7 @@ interface SandboxListenerState {
 /** Global sandbox runtime state. */
 interface SandboxRuntimeState {
   /** Transport architecture marker used to safely adopt state across HMR bundles. */
-  architectureVersion?: 3;
+  architectureVersion?: 4;
   /** Stable process secret, used to derive per-originKey tokens. */
   secret: Buffer;
   /** Singleton listener stored under the internal empty-string key. */
@@ -143,7 +148,7 @@ function getOrInitRuntimeState(): SandboxRuntimeState {
       shared.hostOrigins ??= [];
       sandboxRuntime = shared;
 
-      if (shared.architectureVersion !== 3) {
+      if (shared.architectureVersion !== 4) {
         // A pre-singleton/HMR bundle may have left per-app listeners alive. Drop
         // every recycled-port entry so none of those old browser origins can be
         // issued again, and close their transports immediately.
@@ -166,13 +171,15 @@ function getOrInitRuntimeState(): SandboxRuntimeState {
         if (baseListener?.server) {
           baseListener.server.removeAllListeners('request');
           baseListener.server.on('request', handleSandboxRequest);
+          baseListener.server.removeAllListeners('upgrade');
+          baseListener.server.on('upgrade', handleSandboxUpgrade);
         }
-        shared.architectureVersion = 3;
+        shared.architectureVersion = 4;
       }
       return sandboxRuntime;
     }
     sandboxRuntime = {
-      architectureVersion: 3,
+      architectureVersion: 4,
       secret: randomBytes(32),
       entries: new Map(),
       basePort: getSandboxPort(),
@@ -917,6 +924,7 @@ async function startSandboxListener(
     const server = http.createServer((req, res) => {
       handleSandboxRequest(req, res);
     });
+    server.on('upgrade', handleSandboxUpgrade);
 
     listenerState.server = server;
     let startupSettled = false;
@@ -1165,14 +1173,24 @@ function handleSandboxRequest(
   // Never let an untrusted/malformed Host header participate in URL parsing.
   const url = new URL(req.url || '/', 'http://localhost');
 
+  const effectiveOriginKey = deriveOriginKeyFromHost(req.headers.host);
+  if (handleMcpAppRuntimeHttpRequest(req, res, {
+    originKey: effectiveOriginKey,
+    publicUrlForOriginKey: originKey => deriveSandboxPublicUrl(
+      'http://localhost',
+      getOrInitRuntimeState().basePort,
+      originKey,
+    ),
+  })) {
+    return;
+  }
+
   // Only allow GET on /sandbox.html or /
   if (req.method !== 'GET' || (url.pathname !== '/' && url.pathname !== '/sandbox.html')) {
     res.statusCode = 404;
     res.end('Not found');
     return;
   }
-
-  const effectiveOriginKey = deriveOriginKeyFromHost(req.headers.host);
 
   // Validate token scoped to this originKey.
   const token = url.searchParams.get(SANDBOX_AUTH_QUERY_PARAM);
@@ -1215,6 +1233,19 @@ function handleSandboxRequest(
     csp,
     sandboxAllowAllContent(),
   ));
+}
+
+/**
+ * The sandbox transport also carries capability-registered sidecar runtime
+ * WebSockets. No other upgrade path is meaningful on this listener.
+ */
+function handleSandboxUpgrade(
+  req: http.IncomingMessage,
+  socket: import('node:stream').Duplex,
+  head: Buffer,
+): void {
+  const originKey = deriveOriginKeyFromHost(req.headers.host);
+  if (!handleMcpAppRuntimeUpgrade(req, socket, head, originKey)) socket.destroy();
 }
 
 /**

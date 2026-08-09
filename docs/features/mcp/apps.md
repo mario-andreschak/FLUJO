@@ -31,6 +31,14 @@ For hosted HTTPS deployment, choose **Settings → Network access → Public** a
 
 Every App gets a stable browser origin derived from its workspace and verified resource identity. On a local install, Apps use `http://<originKey>.localhost:4201`; all of those hostnames resolve to one loopback listener, but the browser keeps their storage partitions separate. FLUJO does not recycle ports into another App's origin and does not fall back to a shared origin.
 
+Multi-tenant launchers that run otherwise-identical FLUJO processes behind one
+wildcard domain must set `FLUJO_MCP_APP_ORIGIN_NAMESPACE` to a stable,
+tenant-unique value (for example the Brain ID). The namespace becomes part of
+the origin-key hash while the output remains `app` plus 60 lowercase hex
+characters. It defaults to empty and therefore preserves existing local origin
+keys byte-for-byte. Changing it intentionally gives every App a new browser
+storage partition.
+
 A hosted or local-network deployment must set `FLUJO_MCP_APP_SANDBOX_PUBLIC_URL` to an HTTP(S) URL whose hostname contains the literal placeholder `{app}` as one complete DNS label, for example:
 
 ```
@@ -40,6 +48,91 @@ FLUJO_MCP_APP_SANDBOX_PUBLIC_URL=https://{app}.sandbox.example.com/sandbox.html
 Before issuing sandbox credentials, FLUJO re-reads the exact resource through the App-authorized MCP path and requires an exact URI plus the stable MCP App HTML MIME type. It then computes the `{app}` label with SHA-256 over the active workspace, configured server name, and exact resource URI. App metadata and caller-provided origin hints cannot select or merge browser origins. Each access token is scoped to that derived hostname.
 
 **The reverse proxy must preserve the original `Host` header when forwarding requests to the sandbox listener.** The listener extracts the effective key from that header and rejects a token minted for any other hostname. A missing/malformed host, an invalid `{app}` template, or a public URL without the placeholder fails closed; there is no shared-key compatibility path.
+
+The proxy must also support WebSocket upgrades on this wildcard route. This is
+needed when an App has registered a private sidecar runtime as described below.
+
+### Private sidecar runtime broker
+
+Some local stdio MCP servers own a real browser runtime on loopback. The
+`mcp-vscode` server, for example, keeps OpenVSCode and its gateway on
+`127.0.0.1`; a visitor's browser cannot connect to that address when FLUJO runs
+on another machine. FLUJO can carry selected gateway paths through the existing
+per-App sandbox origin without publishing the child's loopback port.
+
+This broker is a FLUJO host/deployment extension, not an MCP protocol message.
+The App remains specification-compliant: its resource declares the resulting
+HTTPS origin in `_meta.ui.csp.frameDomains` (and any required connection/resource
+domains) in the normal way.
+
+For each managed stdio connection with MCP Apps enabled, FLUJO injects two
+process-only variables:
+
+```text
+FLUJO_MCP_APP_RUNTIME_REGISTER_URL=http://127.0.0.1:4201/_flujo/runtime/register
+FLUJO_MCP_APP_RUNTIME_REGISTER_TOKEN=<single-use 256-bit bearer>
+```
+
+They are host-owned and override persisted server environment values. A
+throwaway **Test connection** process does not receive them. A participating
+server follows this version-1 contract before it exposes a public URL:
+
+1. Start its HTTP/WebSocket gateway on an explicit `127.0.0.1:<port>` origin.
+2. Answer `GET /.well-known/flujo/mcp-app-runtime`. FLUJO supplies a random
+   `X-Flujo-Runtime-Challenge`; the response is `204` with
+   `X-Flujo-Runtime-Proof` equal to base64url
+   `HMAC-SHA256(registerToken, "flujo-mcp-app-runtime-proof-v1:" + challenge)`.
+3. `POST` the registration URL with `Authorization: Bearer <registerToken>` and
+   JSON like:
+
+```json
+{
+  "version": 1,
+  "resourceUri": "ui://mcp-vscode/workbench.html",
+  "targetOrigin": "http://127.0.0.1:54321",
+  "routes": [
+    {
+      "path": "/ide/AbCdEf0123456789AbCdEf0123456789",
+      "match": "prefix",
+      "httpMethods": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+      "websocket": true
+    },
+    {
+      "path": "/stream",
+      "match": "exact",
+      "websocket": true
+    }
+  ]
+}
+```
+
+4. Use the `201` response's `publicOrigin`/`publicBaseUrl` when building the MCP
+   App resource and session payload:
+
+```json
+{
+  "version": 1,
+  "originKey": "app<60 lowercase hex characters>",
+  "publicOrigin": "https://app….sandbox.example.com",
+  "publicBaseUrl": "https://app….sandbox.example.com/"
+}
+```
+
+Registration succeeds only for an explicit loopback HTTP origin that passes the
+nonce proof. Paths must be absolute, normalized, non-reserved, and individually
+declare their HTTP methods and/or WebSocket permission. Matching is exact or on
+a path-segment boundary; query strings are forwarded but never participate in
+authorization. The bearer is deleted immediately after the first successful
+registration. The route is revoked when that MCP connection closes, errors,
+restarts, is disabled, or is deleted, so a later process reusing the loopback
+port cannot inherit it.
+
+For mcp-vscode, the intended public manifest is only its unguessable
+`/ide/<192-bit-base64url>/` prefix (HTTP plus WebSocket) and, when configured,
+the exact `/stream` WebSocket. `/bridge`, `/mcp`, `/app`, `/session.json`, and
+`/healthz` remain private. The server must remove both registration variables
+from the environment inherited by OpenVSCode and stop serving the proof endpoint
+after registration succeeds.
 
 ## Lifecycle and display modes
 

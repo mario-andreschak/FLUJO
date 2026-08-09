@@ -24,6 +24,7 @@ const schedulerStartMock = jest.fn();
 const isEncryptionLockedMock = jest.fn();
 const isUserEncryptionEnabledMock = jest.fn();
 const ensureVendoredFlowGeneratorMock = jest.fn();
+const ensureBuiltInDeveloperRoleMock = jest.fn();
 
 jest.mock('@/utils/storage/backend', () => ({
   verifyStorage: (...a: unknown[]) => verifyStorageMock(...a),
@@ -50,6 +51,9 @@ jest.mock('@/utils/encryption/secure', () => ({
 jest.mock('@/backend/services/flow/systemFlows', () => ({
   ensureVendoredFlowGenerator: (...a: unknown[]) => ensureVendoredFlowGeneratorMock(...a),
 }));
+jest.mock('@/backend/services/enduringAgents', () => ({
+  ensureBuiltInDeveloperRole: (...a: unknown[]) => ensureBuiltInDeveloperRoleMock(...a),
+}));
 
 import {
   ensureAllWorkspacesInitialized,
@@ -72,6 +76,7 @@ describe('backend init startup gating (#78)', () => {
     verifyStorageMock.mockResolvedValue(undefined);
     migrateWorkspaceLayoutMock.mockResolvedValue(undefined);
     ensureVendoredFlowGeneratorMock.mockResolvedValue(undefined);
+    ensureBuiltInDeveloperRoleMock.mockResolvedValue(undefined);
     migrateInternalMcpServersMock.mockResolvedValue(undefined);
     startEnabledServersMock.mockResolvedValue(undefined);
     refreshSpotlightMock.mockResolvedValue(undefined);
@@ -89,6 +94,10 @@ describe('backend init startup gating (#78)', () => {
       verifyStorageMock.mock.invocationCallOrder[0]
     );
     expect(ensureVendoredFlowGeneratorMock).toHaveBeenCalledTimes(1);
+    expect(ensureBuiltInDeveloperRoleMock).toHaveBeenCalledTimes(1);
+    expect(ensureVendoredFlowGeneratorMock.mock.invocationCallOrder[0]).toBeLessThan(
+      ensureBuiltInDeveloperRoleMock.mock.invocationCallOrder[0]
+    );
     expect(migrateInternalMcpServersMock).toHaveBeenCalledTimes(1);
     expect(startEnabledServersMock).toHaveBeenCalledTimes(1);
     expect(schedulerStartMock).toHaveBeenCalledTimes(1);
@@ -111,6 +120,7 @@ describe('backend init startup gating (#78)', () => {
 
     expect(verifyStorageMock).not.toHaveBeenCalled();
     expect(ensureVendoredFlowGeneratorMock).not.toHaveBeenCalled();
+    expect(ensureBuiltInDeveloperRoleMock).not.toHaveBeenCalled();
     expect(migrateInternalMcpServersMock).not.toHaveBeenCalled();
     expect(startEnabledServersMock).not.toHaveBeenCalled();
     expect(schedulerStartMock).not.toHaveBeenCalled();
@@ -132,6 +142,17 @@ describe('backend init startup gating (#78)', () => {
 
     await ensureBackendInitialized();
     expect(migrateInternalMcpServersMock).toHaveBeenCalledTimes(2);
+    expect(startEnabledServersMock).toHaveBeenCalledTimes(1);
+    expect(schedulerStartMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps legacy services available when the additive Developer Role seed fails', async () => {
+    ensureBuiltInDeveloperRoleMock.mockRejectedValueOnce(new Error('role seed conflict'));
+
+    await ensureBackendInitialized();
+
+    expect(ensureBuiltInDeveloperRoleMock).toHaveBeenCalledTimes(1);
+    expect(migrateInternalMcpServersMock).toHaveBeenCalledTimes(1);
     expect(startEnabledServersMock).toHaveBeenCalledTimes(1);
     expect(schedulerStartMock).toHaveBeenCalledTimes(1);
   });

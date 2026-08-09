@@ -21,8 +21,10 @@ import {
   stdioConfigKey,
   capabilityKey,
   ClientWithBetaMarker,
+  McpTransportFactoryOptions,
   TransportWithConfigKey,
 } from "./connection";
+import { issueMcpAppRuntimeBrokerEnvironment } from '@/backend/mcpApps/runtimeBroker';
 import { createOAuthClientProvider } from "./oauth";
 import { createRootsListHandler } from "./roots";
 import { samplingEnabled, createSamplingHandler } from "./sampling";
@@ -110,7 +112,7 @@ export function createNewBetaClient(config: MCPServerConfig): Client {
   const client = new BetaClient(
     {
       name: `flujo-${config.name}-client`,
-      version: "3.43.0",
+      version: "3.43.1",
     },
     {
       capabilities: {
@@ -206,6 +208,7 @@ function betaRequestInit(config: {
  */
 export function createBetaTransport(
   config: MCPServerConfig,
+  factoryOptions: McpTransportFactoryOptions = {},
 ):
   | BetaStdioClientTransport
   | BetaStreamableHTTPClientTransport
@@ -282,6 +285,10 @@ export function createBetaTransport(
 
   // Default: stdio, spawned from the SAME resolved parameters as the v1 path.
   const { command, args, env, cwd } = resolveStdioLaunch(config);
+  const runtimeBroker = factoryOptions.enableRuntimeBroker && config.enableMcpApps === true
+    ? issueMcpAppRuntimeBrokerEnvironment(config.name)
+    : undefined;
+  if (runtimeBroker) Object.assign(env, runtimeBroker.env);
   const transport = new BetaStdioClientTransport({
     command,
     args,
@@ -292,6 +299,7 @@ export function createBetaTransport(
   const keyed = transport as unknown as TransportWithConfigKey;
   keyed.__flujoStdioKey = stdioConfigKey(config);
   keyed.__flujoKind = "stdio";
+  keyed.__flujoRuntimeBrokerLeaseId = runtimeBroker?.leaseId;
   stdioOAuthControllers.set(transport, new StdioOAuthDeferredMrtrController());
   log.info(`Created v2-beta stdio transport for ${config.name}`);
   return transport;

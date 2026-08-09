@@ -219,6 +219,7 @@ import {
   registerExternalAuthorizationClient,
   serverSupportsExternalAuthorization,
 } from "./externalAuthorization";
+import { revokeMcpAppRuntimeBrokerForServer } from '@/backend/mcpApps/runtimeBroker';
 
 // Define a type for tool arguments
 type ToolArgs = Record<string, unknown>;
@@ -438,6 +439,7 @@ export class MCPService {
     this.clients.delete(serverName);
     this.activeTransports.delete(serverName);
     clearExternalAuthorizationState(serverName);
+    revokeMcpAppRuntimeBrokerForServer(serverName);
   }
 
   // -------------------------------------------------------------------------
@@ -1015,8 +1017,8 @@ export class MCPService {
       // existing servers keep working either way).
       client = useBeta ? createNewBetaClient(config) : createNewClient(config);
       const transport = useBeta
-        ? createBetaTransport(config)
-        : createTransport(config);
+        ? createBetaTransport(config, { enableRuntimeBroker: true })
+        : createTransport(config, { enableRuntimeBroker: true });
       if (config.transport === "stdio") {
         registerExternalAuthorizationClient(
           client,
@@ -1299,6 +1301,11 @@ export class MCPService {
       );
       return { success: true };
     } catch (error) {
+      // A child may have registered its sidecar before the MCP handshake
+      // failed. Never leave that browser route pointing at a dead/reused port.
+      if (config.transport === 'stdio') {
+        revokeMcpAppRuntimeBrokerForServer(config.name);
+      }
       log.error(
         `connectServer: Failed to connect to server ${config.name}:`,
         error,

@@ -1,6 +1,6 @@
 {
   "name": "@mario.andreschak/mcp-bash",
-  "version": "3.43.0",
+  "version": "3.43.1",
   "description": "FLUJO's standalone cross-platform shell MCP server",
   "type": "module",
   "main": "dist/index.js",
