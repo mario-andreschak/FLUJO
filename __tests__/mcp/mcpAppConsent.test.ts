@@ -10,8 +10,12 @@ jest.mock('@/utils/storage/backend', () => ({
 }));
 
 import {
+  clearMcpAppConsent,
+  getEffectiveMcpAppConsent,
   getMcpAppConsent,
   isInternalMcpAppServer,
+  isMcpAppConsentRequired,
+  listMcpAppConsents,
   mcpAppConsentKey,
   setMcpAppConsent,
 } from '@/backend/mcpApps/appConsent';
@@ -153,5 +157,35 @@ describe('MCP App consent decisions (#331)', () => {
 
     await setMcpAppConsent('acme', URI, 'deny-always');
     await expect(getMcpAppConsent(external(), 'acme', URI)).resolves.toBe('denied');
+  });
+
+  it('bypasses and hides per-app decisions unless click-to-display consent is enabled', async () => {
+    await setMcpAppConsent('acme', URI, 'deny-always');
+
+    await expect(isMcpAppConsentRequired()).resolves.toBe(false);
+    await expect(getEffectiveMcpAppConsent(external(), 'acme', URI)).resolves.toBe('granted');
+
+    store[StorageKey.SPEECH_SETTINGS] = {
+      speech: { enabled: true },
+      experimental: { enabled: false, requireMcpAppLaunchClick: true },
+    };
+    await expect(isMcpAppConsentRequired()).resolves.toBe(true);
+    await expect(getEffectiveMcpAppConsent(external(), 'acme', URI)).resolves.toBe('denied');
+  });
+
+  it('lists and clears remembered decisions for the Settings consent manager', async () => {
+    await setMcpAppConsent('acme', URI, 'deny-always');
+    await setMcpAppConsent('other', 'ui://other/app', 'allow-always');
+
+    await expect(listMcpAppConsents()).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ serverName: 'acme', uri: URI, decision: 'deny-always' }),
+      expect.objectContaining({ serverName: 'other', uri: 'ui://other/app', decision: 'allow-always' }),
+    ]));
+
+    await clearMcpAppConsent('acme', URI);
+    await expect(getMcpAppConsent(external(), 'acme', URI)).resolves.toBe('prompt');
+    await expect(listMcpAppConsents()).resolves.not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ serverName: 'acme', uri: URI }),
+    ]));
   });
 });

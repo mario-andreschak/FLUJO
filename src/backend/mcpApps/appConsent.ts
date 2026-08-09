@@ -2,6 +2,7 @@ import { StorageKey } from '@/shared/types/storage';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { SHIPPED_MCP_SERVERS } from '@/backend/services/mcp/shippedServers';
 import type { MCPServerConfig } from '@/shared/types/mcp';
+import type { Settings } from '@/shared/types/storage';
 
 export type McpAppConsentDecision = 'allow-once' | 'allow-always' | 'deny-always';
 export type McpAppConsentStatus = 'internal' | 'granted' | 'prompt' | 'denied';
@@ -10,6 +11,11 @@ export interface McpAppConsentRecord {
   decision: McpAppConsentDecision;
   grantedFor?: string;
   updatedAt: number;
+}
+
+export interface McpAppConsentEntry extends McpAppConsentRecord {
+  serverName: string;
+  uri: string;
 }
 
 type McpAppConsentStore = Record<string, McpAppConsentRecord>;
@@ -41,6 +47,15 @@ function isConsentRecord(value: unknown): value is McpAppConsentRecord {
 
 export function mcpAppConsentKey(serverName: string, uri: string): string {
   return `${serverName}::${uri}`;
+}
+
+/**
+ * Per-app consent is the optional click-to-display policy. With that policy
+ * disabled, the server's enableMcpApps switch is the complete render grant.
+ */
+export async function isMcpAppConsentRequired(): Promise<boolean> {
+  const settings = await loadItem<Settings | null>(StorageKey.SPEECH_SETTINGS, null);
+  return settings?.experimental?.requireMcpAppLaunchClick === true;
 }
 
 export function isInternalMcpAppServer(config: MCPServerConfig | undefined): boolean {
@@ -83,6 +98,35 @@ export async function getMcpAppConsent(
     : 'prompt';
 }
 
+/** Resolve the consent status that should actually gate rendering. */
+export async function getEffectiveMcpAppConsent(
+  config: MCPServerConfig | undefined,
+  serverName: string,
+  uri: string,
+  conversationId?: string,
+): Promise<McpAppConsentStatus> {
+  if (!await isMcpAppConsentRequired()) {
+    return isInternalMcpAppServer(config) ? 'internal' : 'granted';
+  }
+  return getMcpAppConsent(config, serverName, uri, conversationId);
+}
+
+/** Records shown by the Settings consent manager. */
+export async function listMcpAppConsents(): Promise<McpAppConsentEntry[]> {
+  const store = await loadStore();
+  return Object.entries(store)
+    .flatMap(([key, record]) => {
+      const separator = key.indexOf('::');
+      if (separator <= 0 || separator >= key.length - 2) return [];
+      return [{
+        serverName: key.slice(0, separator),
+        uri: key.slice(separator + 2),
+        ...record,
+      }];
+    })
+    .sort((left, right) => right.updatedAt - left.updatedAt);
+}
+
 export async function setMcpAppConsent(
   serverName: string,
   uri: string,
@@ -95,5 +139,11 @@ export async function setMcpAppConsent(
     ...(decision === 'allow-once' && conversationId ? { grantedFor: conversationId } : {}),
     updatedAt: Date.now(),
   };
+  await saveItem(StorageKey.MCP_APP_CONSENT, store);
+}
+
+export async function clearMcpAppConsent(serverName: string, uri: string): Promise<void> {
+  const store = await loadStore();
+  delete store[mcpAppConsentKey(serverName, uri)];
   await saveItem(StorageKey.MCP_APP_CONSENT, store);
 }

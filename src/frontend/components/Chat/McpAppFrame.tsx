@@ -29,6 +29,7 @@ import type {
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useStorage } from '@/frontend/contexts/StorageContext';
 import type {
   Transport,
   TransportSendOptions,
@@ -871,6 +872,12 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   onUserOpen,
 }) => {
   const { t } = useI18n();
+  const { settings, settingsHydrated } = useStorage();
+  // Do not race an automatic mount against the persisted policy read. Test and
+  // lightweight hosts that predate settingsHydrated omit it and are considered
+  // ready; the real provider explicitly reports false while locked/loading.
+  const consentPolicyReady = settingsHydrated !== false;
+  const consentRequired = settings?.experimental?.requireMcpAppLaunchClick === true;
   const theme = useTheme();
   const frameInstanceId = useId();
   const ownerScope = useMemo(
@@ -884,13 +891,27 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [consentStatus, setConsentStatus] = useState<'loading' | 'internal' | 'granted' | 'prompt' | 'denied'>('loading');
+  const [consentStatus, setConsentStatus] = useState<'loading' | 'internal' | 'granted' | 'prompt' | 'denied'>(
+    consentPolicyReady && !consentRequired ? 'granted' : 'loading',
+  );
+  const [consentSaving, setConsentSaving] = useState(false);
+  const [consentError, setConsentError] = useState<string | null>(null);
   // #375: mirrors `error` without triggering re-renders, so async continuations
   // (handshake handoff) can cheaply check "did this frame already fail?".
   const errorRef = useRef<string | null>(null);
   useEffect(() => { errorRef.current = error; }, [error]);
   useEffect(() => {
+    if (!consentPolicyReady) {
+      setConsentStatus('loading');
+      return undefined;
+    }
+    if (!consentRequired) {
+      setConsentStatus('granted');
+      setConsentError(null);
+      return undefined;
+    }
     let active = true;
+    setConsentStatus('loading');
     const params = new URLSearchParams({ serverName, uri });
     if (conversationId) params.set('conversationId', conversationId);
     void fetch(`/api/mcp/app-consent?${params}`)
@@ -902,16 +923,38 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       })
       .catch(() => { if (active) setConsentStatus('denied'); });
     return () => { active = false; };
-  }, [conversationId, serverName, uri]);
+  }, [consentPolicyReady, consentRequired, conversationId, serverName, uri]);
   const decideConsent = useCallback(async (decision: 'allow-once' | 'allow-always' | 'deny-always') => {
-    const response = await fetch('/api/mcp/app-consent', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ serverName, uri, conversationId, decision }),
-    });
-    if (!response.ok) throw new Error('Unable to save MCP App consent');
-    const data = await response.json() as { status?: 'granted' | 'denied' };
-    setConsentStatus(data.status === 'granted' ? 'granted' : 'denied');
-  }, [conversationId, serverName, uri]);
+    setConsentSaving(true);
+    setConsentError(null);
+    try {
+      const response = await fetch('/api/mcp/app-consent', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serverName, uri, conversationId, decision }),
+      });
+      if (!response.ok) throw new Error('Unable to save MCP App consent');
+      const data = await response.json() as { status?: 'granted' | 'denied' };
+      setConsentStatus(data.status === 'granted' ? 'granted' : 'denied');
+    } catch {
+      setConsentError(t('chat.app.consentSaveFailed'));
+    } finally {
+      setConsentSaving(false);
+    }
+  }, [conversationId, serverName, t, uri]);
+  const resetConsent = useCallback(async () => {
+    setConsentSaving(true);
+    setConsentError(null);
+    try {
+      const params = new URLSearchParams({ serverName, uri });
+      const response = await fetch(`/api/mcp/app-consent?${params}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error('Unable to reset MCP App consent');
+      setConsentStatus('prompt');
+    } catch {
+      setConsentError(t('chat.app.consentSaveFailed'));
+    } finally {
+      setConsentSaving(false);
+    }
+  }, [serverName, t, uri]);
   const [displayMode, setDisplayMode] = useState<McpUiDisplayMode>(docked ? 'pip' : 'inline');
   const [floatingRect, setFloatingRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [appDisplayModes, setAppDisplayModes] = useState<McpUiDisplayMode[]>([]);
@@ -1780,17 +1823,24 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
           flexDirection: 'column',
         }}
       >
-        {consentStatus === 'loading' && <Typography variant="body2" sx={{ p: 2 }}>Checking MCP App consent…</Typography>}
+        {consentPolicyReady && consentRequired && consentStatus === 'loading' && <Typography variant="body2" sx={{ p: 2 }}>{t('chat.app.consentChecking')}</Typography>}
         {consentStatus === 'prompt' && (
           <Box sx={{ p: 2 }}>
-            <Typography variant="body2" sx={{ mb: 1 }}>This external MCP App runs sandboxed on a separate origin. Allow it to render?</Typography>
+            <Typography variant="body2" sx={{ mb: 1 }}>{t('chat.app.consentPrompt')}</Typography>
             <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>{serverName} — {uri}</Typography>
-            <Button size="small" onClick={() => { void decideConsent('allow-once'); }}>Allow once</Button>
-            <Button size="small" onClick={() => { void decideConsent('allow-always'); }}>Always allow</Button>
-            <Button size="small" color="inherit" onClick={() => { void decideConsent('deny-always'); }}>Never allow</Button>
+            <Button size="small" disabled={consentSaving} onClick={() => { void decideConsent('allow-once'); }}>{t('chat.app.consentAllowOnce')}</Button>
+            <Button size="small" disabled={consentSaving} onClick={() => { void decideConsent('allow-always'); }}>{t('chat.app.consentAllowAlways')}</Button>
+            <Button size="small" disabled={consentSaving} color="inherit" onClick={() => { void decideConsent('deny-always'); }}>{t('chat.app.consentNeverAllow')}</Button>
           </Box>
         )}
-        {consentStatus === 'denied' && <Typography variant="body2" color="text.secondary" sx={{ p: 2 }}>This MCP App is blocked by your consent preference.</Typography>}
+        {consentStatus === 'denied' && (
+          <Box sx={{ p: 2 }}>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>{t('chat.app.consentBlocked')}</Typography>
+            <Button size="small" disabled={consentSaving} onClick={() => { void decideConsent('allow-always'); }}>{t('chat.app.consentAllowAlways')}</Button>
+            <Button size="small" disabled={consentSaving} color="inherit" onClick={() => { void resetConsent(); }}>{t('chat.app.consentAskAgain')}</Button>
+          </Box>
+        )}
+        {consentError && <Alert severity="error" sx={{ m: 1 }}>{consentError}</Alert>}
         {(consentStatus === 'internal' || consentStatus === 'granted') && loading && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 2, justifyContent: 'center' }}>
             <CircularProgress size={16} thickness={6} />
@@ -1915,16 +1965,23 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
         </Button>
       </Box>
 
-      {consentStatus === 'prompt' && (
+      {expanded && consentStatus === 'prompt' && (
         <Box sx={{ p: 1 }}>
-          <Typography variant="body2" sx={{ mb: 1 }}>This external MCP App runs sandboxed on a separate origin. Allow it to render?</Typography>
+          <Typography variant="body2" sx={{ mb: 1 }}>{t('chat.app.consentPrompt')}</Typography>
           <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>{uri}</Typography>
-          <Button size="small" onClick={() => { void decideConsent('allow-once'); }}>Allow once</Button>
-          <Button size="small" onClick={() => { void decideConsent('allow-always'); }}>Always allow</Button>
-          <Button size="small" color="inherit" onClick={() => { void decideConsent('deny-always'); }}>Never allow</Button>
+          <Button size="small" disabled={consentSaving} onClick={() => { void decideConsent('allow-once'); }}>{t('chat.app.consentAllowOnce')}</Button>
+          <Button size="small" disabled={consentSaving} onClick={() => { void decideConsent('allow-always'); }}>{t('chat.app.consentAllowAlways')}</Button>
+          <Button size="small" disabled={consentSaving} color="inherit" onClick={() => { void decideConsent('deny-always'); }}>{t('chat.app.consentNeverAllow')}</Button>
         </Box>
       )}
-      {consentStatus === 'denied' && <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>This MCP App is blocked by your consent preference.</Typography>}
+      {expanded && consentStatus === 'denied' && (
+        <Box sx={{ p: 1 }}>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>{t('chat.app.consentBlocked')}</Typography>
+          <Button size="small" disabled={consentSaving} onClick={() => { void decideConsent('allow-always'); }}>{t('chat.app.consentAllowAlways')}</Button>
+          <Button size="small" disabled={consentSaving} color="inherit" onClick={() => { void resetConsent(); }}>{t('chat.app.consentAskAgain')}</Button>
+        </Box>
+      )}
+      {expanded && consentError && <Alert severity="error" sx={{ m: 1 }}>{consentError}</Alert>}
       <Collapse
         in={expanded && (consentStatus === 'internal' || consentStatus === 'granted')}
         onExited={() => { void teardown(); }}

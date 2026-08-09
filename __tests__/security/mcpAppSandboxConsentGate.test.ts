@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import type { MCPServerConfig } from '@/shared/types/mcp';
+import { StorageKey } from '@/shared/types/storage';
 
 /**
  * Issue #331 — the consent decision must be BACKEND-authoritative. The sandbox
@@ -95,6 +96,10 @@ describe('MCP App sandbox token issuance is consent-gated (#331)', () => {
   beforeEach(() => {
     process.env.FLUJO_EXPOSURE_MODE = 'localhost';
     for (const key of Object.keys(consentStore)) delete consentStore[key];
+    consentStore[StorageKey.SPEECH_SETTINGS] = {
+      speech: { enabled: true },
+      experimental: { enabled: false, requireMcpAppLaunchClick: true },
+    };
     jest.clearAllMocks();
     loadServerConfigs.mockResolvedValue([]);
     readResourceFromApp.mockResolvedValue({
@@ -179,6 +184,21 @@ describe('MCP App sandbox token issuance is consent-gated (#331)', () => {
     expect(response.status).toBe(200);
     expect(registerSandboxHostOrigin).toHaveBeenCalledWith('http://localhost:4200');
     await expect(response.json()).resolves.toMatchObject({ token: 'scoped-token', shared: false });
+  });
+
+  it('uses the server MCP Apps grant directly when click-to-display consent is off', async () => {
+    consentStore[StorageKey.SPEECH_SETTINGS] = {
+      speech: { enabled: true },
+      experimental: { enabled: false, requireMcpAppLaunchClick: false },
+    };
+    await setMcpAppConsent('acme', URI, 'deny-always');
+    loadServerConfigs.mockResolvedValue([external('acme')]);
+
+    const response = await GET(request(`?serverName=acme&uri=${encodeURIComponent(URI)}`));
+
+    expect(response.status).toBe(200);
+    expect(readResourceFromApp).toHaveBeenCalledWith('acme', URI);
+    await expect(response.json()).resolves.toMatchObject({ token: 'scoped-token' });
   });
 
   it('rejects a caller origin hint that disagrees with the verified identity', async () => {

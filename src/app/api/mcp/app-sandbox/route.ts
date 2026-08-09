@@ -4,7 +4,7 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { isValidMcpAppDomain } from '@/shared/utils/mcpAppOrigin';
 import { extractAppHtml } from '@/shared/utils/mcpApps';
 import { mcpService } from '@/backend/services/mcp';
-import { getMcpAppConsent } from '@/backend/mcpApps/appConsent';
+import { getEffectiveMcpAppConsent } from '@/backend/mcpApps/appConsent';
 import { deriveVerifiedMcpAppOriginKey } from '@/backend/mcpApps/appOrigin';
 import { getCurrentWorkspace } from '@/utils/workspace';
 import { getExposureMode } from '@/utils/http/exposureMode';
@@ -61,7 +61,7 @@ async function GET_handler(request: NextRequest) {
   }
   const configs = await mcpService.loadServerConfigs();
   const config = Array.isArray(configs) ? configs.find((candidate) => candidate.name === serverName) : undefined;
-  const consent = await getMcpAppConsent(config, serverName, uri, conversationId);
+  const consent = await getEffectiveMcpAppConsent(config, serverName, uri, conversationId);
   if (consent !== 'internal' && consent !== 'granted') {
     return NextResponse.json(
       { error: 'mcp_app_consent_required' },
@@ -69,10 +69,11 @@ async function GET_handler(request: NextRequest) {
     );
   }
 
-  // Consent proves the user approved an app identity; it does not prove that a
-  // caller-supplied server/URI pair is a renderable MCP App. Re-read through the
-  // app-authorized service and require an exact URI + stable MCP App MIME match
-  // before deriving or minting anything.
+  // The effective render grant (server opt-in while click gating is off, or a
+  // per-app decision while it is on) does not prove that a caller-supplied
+  // server/URI pair is a renderable MCP App. Re-read through the app-authorized
+  // service and require an exact URI + stable MCP App MIME match before deriving
+  // or minting anything.
   let resource: Awaited<ReturnType<typeof mcpService.readResourceFromApp>>;
   try {
     resource = await mcpService.readResourceFromApp(serverName, uri);

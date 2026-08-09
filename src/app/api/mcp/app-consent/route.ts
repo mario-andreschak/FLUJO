@@ -4,7 +4,9 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { mcpService } from '@/backend/services/mcp';
 import {
-  getMcpAppConsent,
+  clearMcpAppConsent,
+  getEffectiveMcpAppConsent,
+  listMcpAppConsents,
   setMcpAppConsent,
   type McpAppConsentDecision,
 } from '@/backend/mcpApps/appConsent';
@@ -25,10 +27,21 @@ async function GET_handler(request: NextRequest) {
   const lock = await assertUnlocked();
   if (lock) return lock;
   const { serverName, uri, conversationId } = input(request);
+  if (request.nextUrl.searchParams.get('manage') === 'true') {
+    return NextResponse.json(
+      { entries: await listMcpAppConsents() },
+      { headers: { 'Cache-Control': 'no-store' } },
+    );
+  }
   if (!serverName || !uri) {
     return NextResponse.json({ error: 'Invalid MCP App identity' }, { status: 400 });
   }
-  const status = await getMcpAppConsent(await serverConfig(serverName), serverName, uri, conversationId);
+  const status = await getEffectiveMcpAppConsent(
+    await serverConfig(serverName),
+    serverName,
+    uri,
+    conversationId,
+  );
   return NextResponse.json({ status }, { headers: { 'Cache-Control': 'no-store' } });
 }
 
@@ -53,7 +66,7 @@ async function POST_handler(request: NextRequest) {
     body.decision as McpAppConsentDecision,
     typeof body.conversationId === 'string' ? body.conversationId : undefined,
   );
-  const status = await getMcpAppConsent(
+  const status = await getEffectiveMcpAppConsent(
     await serverConfig(body.serverName.trim()),
     body.serverName.trim(),
     body.uri.trim(),
@@ -62,5 +75,19 @@ async function POST_handler(request: NextRequest) {
   return NextResponse.json({ status }, { headers: { 'Cache-Control': 'no-store' } });
 }
 
+async function DELETE_handler(request: NextRequest) {
+  const notLocal = assertLocalRequest(request);
+  if (notLocal) return notLocal;
+  const lock = await assertUnlocked();
+  if (lock) return lock;
+  const { serverName, uri } = input(request);
+  if (!serverName || !uri) {
+    return NextResponse.json({ error: 'Invalid MCP App identity' }, { status: 400 });
+  }
+  await clearMcpAppConsent(serverName, uri);
+  return NextResponse.json({ success: true }, { headers: { 'Cache-Control': 'no-store' } });
+}
+
 export const GET = withWorkspaceRoute(GET_handler);
 export const POST = withWorkspaceRoute(POST_handler);
+export const DELETE = withWorkspaceRoute(DELETE_handler);

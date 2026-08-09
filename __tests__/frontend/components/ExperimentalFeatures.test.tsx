@@ -7,7 +7,7 @@
  *  - The ExperimentalFeaturesSettings toggle calls updateSettings with the
  *    correctly merged payload.
  */
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 
 // --- Shared useStorage mock (configured per-test) -------------------------
 const mockUpdateSettings = jest.fn();
@@ -340,6 +340,58 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
     expect(screen.getByRole('checkbox', {
       name: /Restrict MCP filesystem access to configured roots/i,
     })).not.toBeChecked();
+    expect(screen.queryByText('MCP App consent')).not.toBeInTheDocument();
+  });
+
+  it('shows and updates remembered MCP App consent when click gating is enabled', async () => {
+    mockStorageValue = {
+      settings: {
+        speech: { enabled: true },
+        experimental: { enabled: false, requireMcpAppLaunchClick: true },
+      },
+      settingsHydrated: true,
+      updateSettings: mockUpdateSettings,
+    };
+    const originalFetch = global.fetch;
+    const fetchSpy = jest.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          entries: [{
+            serverName: 'acme',
+            uri: 'ui://acme/dashboard',
+            decision: 'deny-always',
+            updatedAt: 1,
+          }],
+        }),
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ status: 'granted' }) });
+    global.fetch = fetchSpy as typeof fetch;
+
+    try {
+      render(<ExperimentalFeaturesSettings />);
+
+      expect(await screen.findByText('MCP App consent')).toBeInTheDocument();
+      expect(await screen.findByText('ui://acme/dashboard')).toBeInTheDocument();
+      expect(screen.getByText('Blocked')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Allow' }));
+      await waitFor(() => expect(fetchSpy).toHaveBeenLastCalledWith(
+        '/api/mcp/app-consent',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            serverName: 'acme',
+            uri: 'ui://acme/dashboard',
+            decision: 'allow-always',
+          }),
+        }),
+      ));
+      expect(await screen.findByText('Allowed')).toBeInTheDocument();
+    } finally {
+      if (originalFetch) global.fetch = originalFetch;
+      else delete (global as { fetch?: typeof fetch }).fetch;
+    }
   });
 
   it('persists both optional restrictions without dropping other settings', () => {

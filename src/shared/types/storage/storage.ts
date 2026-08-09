@@ -24,7 +24,7 @@ export enum StorageKey {
   PLANNED_EXECUTIONS = 'planned_executions',
   MCP_AUTO_INSTALL_SETTINGS = 'mcp_auto_install_settings',
   MCP_QUALITY_SETTINGS = 'mcp_quality_settings',
-  /** Backend-authoritative per-app consent decisions for third-party MCP Apps. */
+  /** Per-app decisions used while the optional click-to-display policy is enabled. */
   MCP_APP_CONSENT = 'mcp_app_consent',
   RUN_RESOURCE_SETTINGS = 'run_resource_settings',
   SUBFLOW_TASK_SETTINGS = 'subflow_task_settings',
