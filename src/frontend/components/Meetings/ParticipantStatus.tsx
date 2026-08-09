@@ -40,9 +40,11 @@ const statusColors: Record<MeetingParticipantStatus, 'default' | 'primary' | 'se
 interface ParticipantStatusProps {
   participant: MeetingParticipant;
   compact?: boolean;
+  onClick?: () => void;
+  selected?: boolean;
 }
 
-export default function ParticipantStatus({ participant, compact = false }: ParticipantStatusProps) {
+export default function ParticipantStatus({ participant, compact = false, onClick, selected = false }: ParticipantStatusProps) {
   const { t } = useI18n();
   const theme = useTheme();
   const initials = participant.name
@@ -56,15 +58,28 @@ export default function ParticipantStatus({ participant, compact = false }: Part
   return (
     <Paper
       variant="outlined"
+      component={onClick ? 'button' : 'div'}
+      type={onClick ? 'button' : undefined}
+      onClick={onClick}
+      aria-pressed={onClick ? selected : undefined}
       sx={{
+        width: '100%',
+        textAlign: 'left',
+        color: 'inherit',
+        font: 'inherit',
         p: compact ? 1.2 : 1.5,
-        borderColor: participant.status === 'running'
+        borderColor: selected
+          ? 'primary.main'
+          : participant.status === 'running'
           ? alpha(theme.palette.primary.main, 0.45)
           : participant.status === 'error'
             ? alpha(theme.palette.error.main, 0.45)
             : 'divider',
         bgcolor: participant.status === 'running' ? alpha(theme.palette.primary.main, 0.055) : undefined,
         transition: 'border-color 180ms ease, background-color 180ms ease',
+        cursor: onClick ? 'pointer' : 'default',
+        '&:hover': onClick ? { bgcolor: alpha(theme.palette.primary.main, 0.075) } : undefined,
+        '&:focus-visible': onClick ? { outline: `2px solid ${theme.palette.primary.main}`, outlineOffset: 2 } : undefined,
       }}
     >
       <Stack direction="row" alignItems="center" spacing={1.2}>
@@ -126,4 +141,3 @@ export default function ParticipantStatus({ participant, compact = false }: Part
     </Paper>
   );
 }
-

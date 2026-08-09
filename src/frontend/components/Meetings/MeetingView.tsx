@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Alert,
   Box,
@@ -12,16 +13,21 @@ import {
   DialogContent,
   DialogTitle,
   Divider,
+  Drawer,
+  IconButton,
   LinearProgress,
   Paper,
   Stack,
   Typography,
+  Tooltip,
 } from '@mui/material';
 import { alpha, useTheme } from '@mui/material/styles';
 import {
   ArrowBackRounded,
   FiberManualRecordRounded,
   HowToVoteRounded,
+  CloseRounded,
+  OpenInNewRounded,
   PlayArrowRounded,
   ReplayRounded,
   StopCircleRounded,
@@ -34,6 +40,8 @@ import MeetingStatusChip from './MeetingStatusChip';
 import MeetingTranscript from './MeetingTranscript';
 import { countDiscussionRounds, isTranscriptVisibleEvent } from './meetingTranscriptProjection';
 import ParticipantStatus from './ParticipantStatus';
+import { magicLinkPath } from '@/frontend/utils/magicLink';
+import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 
 const phaseKeys: Record<MeetingPhase, TranslationKey> = {
   draft: 'meetings.phase.draft',
@@ -67,8 +75,10 @@ export default function MeetingView({
   onStop,
 }: MeetingViewProps) {
   const { t, formatNumber } = useI18n();
+  const router = useRouter();
   const theme = useTheme();
   const [confirmStop, setConfirmStop] = useState(false);
+  const [selectedParticipantId, setSelectedParticipantId] = useState<string | null>(null);
   const isRunning = meeting.status === 'running';
   const canStart = meeting.status === 'draft' || meeting.status === 'paused';
   const discussionRoundCount = countDiscussionRounds(meeting, events);
@@ -163,7 +173,15 @@ export default function MeetingView({
           <Paper variant="outlined" sx={{ p: 1.5 }}>
             <Typography variant="subtitle2" sx={{ px: 0.25, mb: 1.2, fontWeight: 750 }}>{t('meetings.team')}</Typography>
             <Stack spacing={1}>
-              {meeting.participants.map((participant) => <ParticipantStatus key={participant.id} participant={participant} compact />)}
+              {meeting.participants.map((participant) => (
+                <ParticipantStatus
+                  key={participant.id}
+                  participant={participant}
+                  compact
+                  selected={selectedParticipantId === participant.id}
+                  onClick={() => setSelectedParticipantId(participant.id)}
+                />
+              ))}
             </Stack>
           </Paper>
 
@@ -215,6 +233,43 @@ export default function MeetingView({
           <Button color="error" variant="contained" onClick={() => { setConfirmStop(false); void onStop(); }}>{t('meetings.stop')}</Button>
         </DialogActions>
       </Dialog>
+
+      {(() => {
+        const participant = meeting.participants.find((item) => item.id === selectedParticipantId);
+        const chatPath = participant
+          ? magicLinkPath({ kind: 'conversation', id: participant.conversationId })
+          : null;
+        return (
+          <Drawer
+            anchor="right"
+            open={Boolean(participant)}
+            onClose={() => setSelectedParticipantId(null)}
+            PaperProps={{ sx: { width: { xs: '100%', md: 'min(920px, 76vw)' }, maxWidth: '100%' } }}
+          >
+            {participant && chatPath && (
+              <Stack sx={{ height: '100%', minHeight: 0 }}>
+                <Stack direction="row" spacing={1} alignItems="center" sx={{ px: 1.5, py: 1 }}>
+                  <Box sx={{ flex: 1, minWidth: 0 }}>
+                    <Typography variant="subtitle1" fontWeight={760} noWrap>{participant.name}</Typography>
+                    <Typography variant="caption" color="text.secondary">FLUJO Chat · meeting run</Typography>
+                  </Box>
+                  <Tooltip title="Open full chat">
+                    <IconButton onClick={() => router.push(chatPath)} aria-label="Open full chat"><OpenInNewRounded /></IconButton>
+                  </Tooltip>
+                  <IconButton onClick={() => setSelectedParticipantId(null)} aria-label={t('common.close')}><CloseRounded /></IconButton>
+                </Stack>
+                <Divider />
+                <Box
+                  component="iframe"
+                  title={`${participant.name} FLUJO Chat`}
+                  src={withWorkspaceUrl(chatPath)}
+                  sx={{ flex: 1, width: '100%', minHeight: 0, border: 0, bgcolor: 'background.default' }}
+                />
+              </Stack>
+            )}
+          </Drawer>
+        );
+      })()}
     </Box>
   );
 }
