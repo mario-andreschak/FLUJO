@@ -168,11 +168,11 @@ function buildSystemPrompt(
 
   const acquisition = allowInstall
     ? `CAPABILITY ACQUISITION — you are allowed to EXPAND this FLUJO instance:
-- If the task needs a capability none of the configured servers provides (voice, vision, browsing, email, code execution, …), use search_mcp_marketplace to find a server for it, then install_mcp_server to install the best match. Prefer servers that need no API keys (empty requiredEnv); if the best option needs keys, install a keyless alternative or note the requirement in the flow description.
+- If the task needs a capability none of the configured servers provides (voice, vision, browsing, email, code execution, …), use find_mcp_server to find a server for it, then install_mcp_server to install the selected source. Prefer servers that need no API keys (empty requiredEnv); if the best option needs keys, install a keyless alternative or note the requirement in the flow description.
 - After a successful install, reference the returned server name in a process node's "servers" list and enable the tools it reported.
 - Be ambitious: an actual capability (real audio, real browsing, real files) beats a text approximation. Search with several short terms ("voice", "tts", "speech") — the registry matches server NAMES only.`
     : `CAPABILITY DISCOVERY — you may search but NOT install:
-- If the task needs a capability none of the configured servers provides, you may use search_mcp_marketplace to see what exists. Do NOT reference unconfigured servers in the spec; instead mention the recommended server (its registry name) in the flow "description" so the user can install it.`;
+- If the task needs a capability none of the configured servers provides, you may use find_mcp_server to see what exists. Do NOT reference unconfigured servers in the spec; instead mention the recommended server (its registry name) in the flow "description" so the user can install it.`;
 
   return `You design workflows for FLUJO, an MCP-first workflow builder. The user describes what they want; you emit a flow specification as JSON.
 
@@ -202,7 +202,7 @@ function generatorTools(allowInstall: boolean): OpenAI.ChatCompletionFunctionToo
     {
       type: 'function',
       function: {
-        name: 'search_mcp_marketplace',
+        name: 'find_mcp_server',
         description:
           'Search the public MCP server registry. The registry matches the query against server NAMES only (substring), so use short single terms ("voice", "tts", "browser") and try several. Returns name, description, whether FLUJO can install it, and which env vars/keys it requires.',
         parameters: {
@@ -247,7 +247,7 @@ async function executeGeneratorTool(
   allowInstall: boolean,
   state: ToolLoopState
 ): Promise<unknown> {
-  if (name === 'search_mcp_marketplace') {
+  if (name === 'find_mcp_server') {
     const query = typeof args.query === 'string' ? args.query : '';
     try {
       return await searchRegistry(query);

@@ -118,7 +118,7 @@ describe('tool definitions', () => {
     expect(JSON.stringify(create.inputSchema)).toContain(JSON.stringify(SIMPLE_FLOW_SPEC_SCHEMA.required));
   });
 
-  // #338/A2c: a 30B-class model reads all twelve descriptions before it can pick
+  // #338/A2c: a 30B-class model reads all descriptions before it can pick
   // one. Long-form rules belong in get_flow_authoring_guide or the per-argument
   // schema descriptions, not in the always-resent tool block.
   it('keeps every authoring tool description within the wire budget', () => {
@@ -141,7 +141,8 @@ describe('tool definitions', () => {
     expect(install.description).toContain('DOWNLOADS AND RUNS third-party code');
     expect(install.description).toContain('consent-gated');
     expect(best.description).toContain('DOWNLOADS AND MAY RUN third-party code');
-    expect(JSON.stringify(install.inputSchema)).toContain('consentRequired=true');
+    expect(JSON.stringify(install.inputSchema)).toContain('server.json');
+    expect(JSON.stringify(install.inputSchema)).toContain('GitHub URL');
   });
 });
 

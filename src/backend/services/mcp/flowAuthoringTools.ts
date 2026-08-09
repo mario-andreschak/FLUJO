@@ -15,7 +15,8 @@
  *     errors, so the loop is: blocks → spec → validate → fix → create.
  *   - suggest/apply tools + plausibility: consent-gated assistance for one Process
  *     step or a complete root/subflow draft bundle; none of these tools save.
- *   - search_mcp_marketplace / install_mcp_server: capability acquisition for the
+ *   - find/install MCP tools: read-only discovery is kept separate from the
+ *     consent-gated mutation that connects a selected server.
  *     brain / self-improvement track — an external agent can find and install NEW
  *     MCP servers (downloading + running third-party packages on this host) and
  *     wire them into the flows it authors. Localhost-only posture, same as the
@@ -39,8 +40,19 @@ import {
 } from '@/backend/services/flow/assistedAuthoring';
 import type { Flow } from '@/shared/types/flow';
 import type { StepToolSuggestion } from '@/shared/types/flow/assistance';
-import { searchRegistry, installRegistryServer, installBestForCapability } from '@/backend/services/mcp/registryInstall';
+import {
+  findBestRegistryServers,
+  searchRegistry,
+  installRegistryServer,
+  installBestForCapability,
+} from '@/backend/services/mcp/registryInstall';
 import { researchMcpServers, sameMcpInstallPlan } from '@/backend/services/mcp/assistedInstall';
+import {
+  installResolvedDirectMcp,
+  looksLikeRegistryName,
+  resolveDirectMcpInstall,
+  type DirectInstallInput,
+} from '@/backend/services/mcp/directInstall';
 import { loadAutoInstallSettings, appendInstallAudit } from '@/backend/services/mcp/autoInstall';
 import { decideInstallConsent, planToAuditEntry } from '@/utils/mcp/autoInstallConsent';
 import { isVerifiedStatus } from '@/utils/mcp/registry';
@@ -65,7 +77,8 @@ export const AUTHORING_TOOL_NAMES = [
   'suggest_tools_for_flow_step',
   'apply_tools_to_flow_step',
   'check_flow_plausibility',
-  'search_mcp_marketplace',
+  'find_mcp_server',
+  'find_best_mcp_server',
   'install_mcp_server',
   'install_best_mcp_server',
 ] as const;
@@ -78,7 +91,7 @@ export function isAuthoringTool(name: string): boolean {
  * Hard budget for an authoring tool's `description` (#338).
  *
  * The whole authoring tool block is re-sent on every turn of an agentic loop and
- * a 30B-class model has to read all twelve of them before it can pick one. One
+ * a 30B-class model has to read all thirteen of them before it can pick one. One
  * sentence of purpose plus one of "when to use it" is the contract; every rule,
  * caveat and example belongs in `get_flow_authoring_guide` (fetched on demand)
  * or in the per-argument `inputSchema` descriptions, which the model only pays
@@ -258,40 +271,71 @@ export function authoringToolDefinitions(): Tool[] {
       },
     },
     {
-      name: 'search_mcp_marketplace',
+      name: 'find_mcp_server',
       description:
-        'Search the public MCP server registry for a new capability (voice, browsing, files, email, vision, …) and see whether FLUJO can install it.',
+        'Find matching official MCP Registry entries without installing or changing anything.',
       inputSchema: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           query: {
             type: 'string',
             description:
-              'Short search term. The registry matches server NAMES only (substring), so use single terms and try several. Results give the name, description, installability, and the env vars/keys the server would require.',
+              'Registry name or short name fragment. Results include exact names, descriptions, installability, required inputs, and quality evidence.',
           },
         },
         required: ['query'],
       },
     },
     {
-      name: 'install_mcp_server',
+      name: 'find_best_mcp_server',
       description:
-        'Install an MCP server by exact registry name and connect it. DOWNLOADS AND RUNS third-party code on this host; consent-gated and audited (SEP-1024).',
+        'Research and rank MCP servers for a natural-language capability request without installing anything.',
       inputSchema: {
         type: 'object',
+        additionalProperties: false,
         properties: {
+          capability: {
+            type: 'string',
+            description: 'What the server should do or connect to. Searches the Registry plus GitHub, npm, and community evidence when a model is configured.',
+          },
+          modelId: { type: 'string', description: 'Optional configured model id for assisted research.' },
+          limit: { type: 'integer', minimum: 1, maximum: 20, description: 'Maximum candidates in deterministic fallback mode. Default 8.' },
+        },
+        required: ['capability'],
+      },
+    },
+    {
+      name: 'install_mcp_server',
+      description:
+        'Install one specified MCP source and connect it. DOWNLOADS AND RUNS third-party code on this host; consent-gated and audited (SEP-1024).',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          source: {
+            description: 'Exact Registry name, full GitHub URL, hosted MCP URL, npx/uvx/docker command, server.json object/JSON string, or FLUJO/Claude-style MCP config.',
+            oneOf: [{ type: 'string' }, { type: 'object' }],
+          },
           name: {
             type: 'string',
             description:
-              'Exact registry name from search_mcp_marketplace, e.g. "ai.keenable/web-search". Unless this trusted authoring tool is allowed by the mcpAutoInstall settings (trustBrainStem / requireConsent / namespaceAllowlist), the exact resolved command + arguments are returned with consentRequired=true INSTEAD of installing and the caller must obtain explicit approval. Every attempt is audited (command, args, env NAMES, verification status — never secret values) before any spawn. On success returns the FLUJO server name to reference in FlowSpec "servers" plus the tools it provides. A first install can take minutes (package download).',
+              'Backward-compatible alias for an exact Registry name. Prefer source for new calls.',
           },
+          serverName: { type: 'string', description: 'Optional safe FLUJO config name; also selects one entry from a multi-server mcpServers document.' },
+          transport: { type: 'string', enum: ['stdio', 'streamable', 'sse', 'websocket'], description: 'Optional transport override/selection.' },
           env: {
             type: 'object',
             description: 'Optional env var values for the server (e.g. required API keys). Omit them to get needsEnv listing exactly which keys are required.',
             additionalProperties: { type: 'string' },
           },
+          headers: { type: 'object', description: 'Optional headers for a hosted endpoint.', additionalProperties: { type: 'string' } },
+          ref: { type: 'string', description: 'Optional Git ref for a GitHub source.' },
+          subdirectory: { type: 'string', description: 'Optional GitHub repository subdirectory containing package.json.' },
+          installCommand: { type: 'string', description: 'Optional reviewed GitHub dependency-install command.' },
+          buildCommand: { type: 'string', description: 'Optional reviewed GitHub build command.' },
         },
-        required: ['name'],
+        anyOf: [{ required: ['source'] }, { required: ['name'] }],
       },
     },
     {
@@ -442,18 +486,101 @@ export async function authoringCallTool(
       }));
     }
 
-    if (toolName === 'search_mcp_marketplace') {
+    if (toolName === 'find_mcp_server') {
       const query = typeof args?.query === 'string' ? args.query : '';
       const hits = await searchRegistry(query);
       return textResult(hits);
     }
 
+    if (toolName === 'find_best_mcp_server') {
+      const capability = typeof args?.capability === 'string' ? args.capability.trim() : '';
+      const requestedModelId = typeof args?.modelId === 'string' ? args.modelId.trim() : '';
+      const limit = typeof args?.limit === 'number' && Number.isInteger(args.limit)
+        ? Math.min(Math.max(args.limit, 1), 20)
+        : 8;
+      if (!capability) return textResult({ error: 'Describe the required MCP capability.' }, true);
+      const models = await modelService.loadModels();
+      const configuredModel = requestedModelId
+        ? models.find((model) => model.id === requestedModelId)
+        : models[0];
+      if (configuredModel) {
+        try {
+          const research = await researchMcpServers({ query: capability, modelId: configuredModel.id });
+          if (research.candidates.length > 0) {
+            return textResult({ ...research, researchMode: 'ai-assisted', installed: false });
+          }
+        } catch (error) {
+          log.warn('find_best_mcp_server: assisted research failed', error);
+        }
+      }
+      const candidates = await findBestRegistryServers(capability, limit);
+      return textResult({
+        capability,
+        installed: false,
+        researchMode: 'registry-fallback',
+        candidates,
+        ...(configuredModel
+          ? { researchWarning: 'Assisted research was unavailable or returned no candidates.' }
+          : { researchWarning: requestedModelId ? `Configured model "${requestedModelId}" was not found.` : 'No AI model is configured.' }),
+      });
+    }
+
     if (toolName === 'install_mcp_server') {
-      const name = typeof args?.name === 'string' ? args.name : '';
+      const source = args?.source ?? args?.name;
       const env =
         args?.env && typeof args.env === 'object' && !Array.isArray(args.env)
           ? (args.env as Record<string, string>)
           : undefined;
+
+      if (source === undefined || source === null || source === '') {
+        return textResult({ error: 'Pass source (or the legacy exact Registry name field).' }, true);
+      }
+
+      if (!looksLikeRegistryName(source)) {
+        const directInput: DirectInstallInput = {
+          source,
+          ...(typeof args.serverName === 'string' ? { serverName: args.serverName } : {}),
+          ...(args.transport === 'stdio' || args.transport === 'streamable' || args.transport === 'sse' || args.transport === 'websocket'
+            ? { transport: args.transport }
+            : {}),
+          ...(env ? { env } : {}),
+          ...(args.headers && typeof args.headers === 'object' && !Array.isArray(args.headers)
+            ? { headers: args.headers as Record<string, string> }
+            : {}),
+          ...(typeof args.ref === 'string' ? { ref: args.ref } : {}),
+          ...(typeof args.subdirectory === 'string' ? { subdirectory: args.subdirectory } : {}),
+          ...(typeof args.installCommand === 'string' ? { installCommand: args.installCommand } : {}),
+          ...(typeof args.buildCommand === 'string' ? { buildCommand: args.buildCommand } : {}),
+        };
+        const resolved = await resolveDirectMcpInstall(directInput);
+        const settings = await loadAutoInstallSettings();
+        const decision = decideInstallConsent({
+          caller: 'authoring-tool',
+          settings,
+          registryName: resolved.plan.registryName,
+        });
+        await appendInstallAudit(planToAuditEntry(resolved.plan, 'authoring-tool', decision, false));
+        if (!decision.allowed) {
+          return textResult({
+            installed: false,
+            consentRequired: true,
+            message: decision.message,
+            sourceType: resolved.kind,
+            plan: resolved.plan,
+          });
+        }
+        const result = await installResolvedDirectMcp(resolved, directInput);
+        await appendInstallAudit(planToAuditEntry(
+          result.plan ?? resolved.plan,
+          'authoring-tool',
+          decision,
+          result.installed,
+          result.error,
+        ));
+        return textResult({ ...result, sourceType: resolved.kind }, !result.installed);
+      }
+
+      const name = source.trim();
 
       // SEP-1024: resolve WITHOUT spawning first, so the exact command/args can be
       // shown/logged/approved before anything runs.

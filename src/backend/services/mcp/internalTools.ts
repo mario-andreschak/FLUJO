@@ -200,7 +200,7 @@ export function internalToolDefinitions(): Tool[] {
   return [
     // FlowSpec authoring + marketplace acquisition, shared verbatim with the
     // external /mcp-flows endpoint (list_flow_building_blocks, validate_flow_spec,
-    // create_flow, search_mcp_marketplace, install_mcp_server).
+    // create_flow and the four MCP discovery/install tools).
     ...authoringToolDefinitions(),
     {
       name: 'create_ticket_for_human',

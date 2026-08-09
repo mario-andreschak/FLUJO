@@ -108,6 +108,26 @@ export async function searchRegistry(
   return ranked.map((sc) => toSearchHit(sc.candidate.server, sc));
 }
 
+/**
+ * Read-only capability discovery for callers that want ranked recommendations
+ * without coupling research to installation. Unlike searchRegistry, this fans a
+ * natural-language request into Registry-friendly name terms before ranking.
+ */
+export async function findBestRegistryServers(
+  query: string,
+  limit = DEFAULT_SEARCH_LIMIT,
+): Promise<RegistrySearchHit[]> {
+  if (!query || typeof query !== 'string') return [];
+  const pages = await Promise.all(capabilitySearchTerms(query).map((term) => fetchRegistryResults(term, 10)));
+  const byName = new Map<string, RegistryServerResult>();
+  for (const result of pages.flat()) {
+    if (!byName.has(result.server.name)) byName.set(result.server.name, result);
+  }
+  const ranked = await enrichAndRank(query, [...byName.values()].map(toCandidate));
+  return ranked.slice(0, Math.min(Math.max(limit, 1), 30))
+    .map((candidate) => toSearchHit(candidate.candidate.server, candidate));
+}
+
 /** Raw registry list fetch (no ranking), shared by search + resolve paths. */
 async function fetchRegistryResults(query: string, limit: number): Promise<RegistryServerResult[]> {
   const url = new URL(REGISTRY_ORIGIN + REGISTRY_LIST_PATH);
@@ -273,6 +293,7 @@ function plansMatch(left: ResolvedInstallPlan, right: ResolvedInstallPlan): bool
     command: value.command,
     args: value.args,
     serverUrl: value.serverUrl,
+    steps: value.steps,
     requiredEnvNames: value.requiredEnvNames,
     verificationStatus: value.verificationStatus,
   });
@@ -309,7 +330,8 @@ function applyArgTemplates(
 }
 
 /**
- * Resolve a registry entry by its exact name (falls back to best search hit).
+ * Resolve a registry entry by its exact name. Never substitute a fuzzy hit:
+ * callers use this result to approve and execute a specific install plan.
  * Returns the full result (not just `.server`) so the caller can read the
  * `_meta … status` verification field.
  */
@@ -320,8 +342,7 @@ export async function resolveRegistryEntry(registryName: string): Promise<Regist
   url.searchParams.set('search', registryName);
   const data = (await registryGetJson(url, REGISTRY_TIMEOUT_MS)) as RegistryListResponse;
   const results: RegistryServerResult[] = Array.isArray(data?.servers) ? data.servers : [];
-  const exact = results.find((r) => r.server?.name === registryName);
-  return exact ?? results[0] ?? null;
+  return results.find((r) => r.server?.name === registryName) ?? null;
 }
 
 /**

@@ -17,11 +17,13 @@ const AUTHORING_TOOLS = new Set([
   'get_flow_authoring_guide',
   'validate_flow_spec',
   'draft_flow',
+  'draft_generated_flow',
   'create_flow',
   'suggest_tools_for_flow_step',
   'apply_tools_to_flow_step',
   'check_flow_plausibility',
-  'search_mcp_marketplace',
+  'find_mcp_server',
+  'find_best_mcp_server',
   'install_mcp_server',
   'install_best_mcp_server',
 ]);
@@ -53,6 +55,7 @@ const AUTOMATION_TOOLS = new Set([
   'update_planned_execution',
   'create_planned_execution',
   'delete_planned_execution',
+  'create_ticket_for_human',
 ]);
 const STATE_TOOLS = new Set([
   'list_conversations',

@@ -49,7 +49,8 @@ describe('vendored Flow Generator', () => {
       'list_flow_building_blocks',
       'get_flow_authoring_guide',
       'draft_generated_flow',
-      'search_mcp_marketplace',
+      'find_mcp_server',
+      'find_best_mcp_server',
     ]));
     expect(enabledTools).not.toEqual(expect.arrayContaining([
       'install_mcp_server',
@@ -60,7 +61,8 @@ describe('vendored Flow Generator', () => {
       'list_flow_building_blocks',
       'get_flow_authoring_guide',
       'draft_generated_flow',
-      'search_mcp_marketplace',
+      'find_mcp_server',
+      'find_best_mcp_server',
     ]));
     expect(flow.permissionRules?.map((rule) => rule.action)).not.toEqual(
       expect.arrayContaining(['install_mcp_server', 'install_best_mcp_server'])
@@ -95,7 +97,7 @@ describe('vendored Flow Generator', () => {
     expect(saveFlowMock).toHaveBeenCalledTimes(1);
   });
 
-  it.each([1, 2, 3])('upgrades incomplete v%s through the versioned save path', async (version) => {
+  it.each([1, 2, 3, 4])('upgrades incomplete v%s through the versioned save path', async (version) => {
     const legacy = buildVendoredFlowGenerator();
     for (const stage of legacy.nodes.filter((node) => node.type === 'process')) {
       stage.data.properties = {

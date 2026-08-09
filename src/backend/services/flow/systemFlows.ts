@@ -14,14 +14,15 @@ import {
 } from './generationDraft';
 
 export const FLOW_GENERATOR_ID = 'system-flow-generator';
-export const FLOW_GENERATOR_VERSION = 4;
+export const FLOW_GENERATOR_VERSION = 5;
 export const FLOW_GENERATOR_ROLE = 'flow-generator';
 
 const SAFE_AUTHORING_TOOLS = [
   'list_flow_building_blocks',
   'get_flow_authoring_guide',
   'draft_generated_flow',
-  'search_mcp_marketplace',
+  'find_mcp_server',
+  'find_best_mcp_server',
 ] as const;
 const INSTALL_AUTHORING_TOOLS = [
   'install_mcp_server',
@@ -85,7 +86,8 @@ export function buildVendoredFlowGenerator(): Flow {
           tools: [
             'list_flow_building_blocks',
             'get_flow_authoring_guide',
-            'search_mcp_marketplace',
+            'find_mcp_server',
+            'find_best_mcp_server',
             ...INSTALL_AUTHORING_TOOLS,
           ],
         }],
@@ -158,7 +160,7 @@ export function buildVendoredFlowGenerator(): Flow {
 }
 
 /**
- * Seed once when missing. Versions 1–3 predate the current authoring guidance.
+ * Seed once when missing. Versions 1–4 predate the current authoring guidance.
  * Upgrade those exact bundled versions once; saveFlow archives the prior definition
  * so edits remain recoverable.
  */
@@ -168,7 +170,7 @@ export async function ensureVendoredFlowGenerator(): Promise<Flow> {
     .filter((node) => node.type === 'process')
     .map((node) => Number(node.data?.properties?.systemFlowVersion ?? 0))
     .find((version) => version > 0);
-  if (existing && existingVersion !== 1 && existingVersion !== 2 && existingVersion !== 3) return existing;
+  if (existing && existingVersion !== 1 && existingVersion !== 2 && existingVersion !== 3 && existingVersion !== 4) return existing;
   const bundled = buildVendoredFlowGenerator();
   const saved = await flowService.saveFlow(bundled);
   if (!saved.success) {

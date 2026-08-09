@@ -760,13 +760,18 @@ export interface ResolvedInstallPlan {
   resolvedName: string;
   /** Sanitized FLUJO server name the config would be saved under. */
   serverName: string;
-  transport: 'stdio' | 'streamable' | 'sse';
+  transport: 'stdio' | 'streamable' | 'sse' | 'websocket';
   /** Runner command for stdio packages, e.g. "npx" / "uvx" / "docker". */
   command?: string;
   /** Untruncated argument vector as it would be spawned. */
   args?: string[];
   /** Endpoint for remote transports. */
   serverUrl?: string;
+  /**
+   * Multi-command sources (notably GitHub) list every reviewed execution step.
+   * Registry packages normally use the top-level command/args only.
+   */
+  steps?: Array<{ label: string; command: string; args?: string[]; cwd?: string }>;
   /** Required env-var / header NAMES this entry declares — NEVER values. */
   requiredEnvNames: string[];
   /**
@@ -805,7 +810,7 @@ export function resolvedPlanFrom(
   server: RegistryServer,
   option: InstallOption,
   verificationStatus: string
-): ResolvedInstallPlan {
+): ResolvedInstallPlan & { transport: 'stdio' | 'streamable' | 'sse' } {
   // MCPServerConfig is a discriminated union (stdio | websocket | streamable | …);
   // read the transport-specific fields through a loose view rather than narrowing.
   const config = buildConfigFromOption(server, option) as Partial<MCPServerConfig> & {

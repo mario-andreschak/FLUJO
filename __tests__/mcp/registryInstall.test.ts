@@ -262,4 +262,14 @@ describe('installRegistryServer', () => {
     expect(failed.installed).toBe(false);
     expect(failed.error).toContain('registry down');
   });
+
+  it('never substitutes the first fuzzy result for a requested exact name', async () => {
+    registryGetJsonMock.mockResolvedValue({ servers: [npmEntry('ai.example/similar')] });
+    const result = await installRegistryServer('ai.example/exact');
+    expect(result).toEqual(expect.objectContaining({
+      installed: false,
+      error: 'No registry entry found for "ai.example/exact"',
+    }));
+    expect(updateServerConfigMock).not.toHaveBeenCalled();
+  });
 });

@@ -651,6 +651,7 @@ function comparableInstallPlan(value: ResolvedInstallPlan | undefined) {
     command: value.command,
     args: value.args,
     serverUrl: value.serverUrl,
+    steps: value.steps,
     requiredEnvNames: value.requiredEnvNames,
     verificationStatus: value.verificationStatus,
   } : null;

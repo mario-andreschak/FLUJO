@@ -28,6 +28,12 @@ describe('standalone flujo HTTP client', () => {
     expect(toolRoute('suggest_tools_for_flow_step')).toBe('/api/mcp/flujo/authoring');
     expect(toolRoute('apply_tools_to_flow_step')).toBe('/api/mcp/flujo/authoring');
     expect(toolRoute('check_flow_plausibility')).toBe('/api/mcp/flujo/authoring');
+    expect(toolRoute('find_mcp_server')).toBe('/api/mcp/flujo/authoring');
+    expect(toolRoute('find_best_mcp_server')).toBe('/api/mcp/flujo/authoring');
+    expect(toolRoute('install_mcp_server')).toBe('/api/mcp/flujo/authoring');
+    expect(toolRoute('install_best_mcp_server')).toBe('/api/mcp/flujo/authoring');
+    expect(toolRoute('draft_generated_flow')).toBe('/api/mcp/flujo/authoring');
+    expect(toolRoute('create_ticket_for_human')).toBe('/api/mcp/flujo/automation');
     expect(() => toolRoute('arbitrary_internal_dispatch')).toThrow('Unknown FLUJO tool');
   });
 

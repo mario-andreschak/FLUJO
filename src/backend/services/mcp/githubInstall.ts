@@ -111,6 +111,12 @@ function repoSlug(repositoryUrl: string, ref?: string): string {
   return `${readable}-${digest}`;
 }
 
+/** Deterministic workspace-owned checkout path used by preview and execution. */
+export function githubInstallRepositoryPath(repositoryUrl: string, ref?: string): string {
+  const parsed = parseGithubRepositoryReference(repositoryUrl, ref);
+  return path.join(getWorkspaceDataDir(), 'mcp-servers', repoSlug(parsed.repositoryUrl, parsed.ref));
+}
+
 function redact(message: string, secretValues: string[]): string {
   return secretValues.reduce(
     (safe, value) => value ? safe.split(value).join('[REDACTED]') : safe,
