@@ -1,4 +1,5 @@
-import { GET as getPersona } from '@/app/v1/personas/[personaId]/route';
+import { DELETE as deletePersona, GET as getPersona } from '@/app/v1/personas/[personaId]/route';
+import { GET as previewPersonaDeletion } from '@/app/v1/personas/[personaId]/deletion-preview/route';
 import { POST as createPersona } from '@/app/v1/personas/route';
 import { GET as listRoles } from '@/app/v1/roles/route';
 import { ensureWorkspaceDirs } from '@/utils/workspace';
@@ -71,5 +72,41 @@ describe('enduring-agent production routes', () => {
     expect(result.roleVersions).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'rolever_builtin_developer_v1', version: 1 }),
     ]));
+  });
+
+  it('previews and deletes through the production workspace-scoped API', async () => {
+    const created = await createPersona(request('/v1/personas', workspaceA, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'persona_route_delete', name: 'Delete Me' }),
+    }) as never);
+    const personaId = (await created.json()).persona.id as string;
+    const previewResponse = await previewPersonaDeletion(
+      request(`/v1/personas/${personaId}/deletion-preview`, workspaceA) as never,
+      { params: Promise.resolve({ personaId }) } as never,
+    );
+    expect(previewResponse.status).toBe(200);
+    const preview = await previewResponse.json();
+
+    const deleted = await deletePersona(
+      request(`/v1/personas/${personaId}`, workspaceA, {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          previewToken: preview.previewToken,
+          archivePolicy: 'anonymize',
+          confirmation: 'DELETE',
+        }),
+      }) as never,
+      { params: Promise.resolve({ personaId }) } as never,
+    );
+    expect(deleted.status).toBe(200);
+    expect((await deleted.json()).status).toBe('completed');
+
+    const missing = await getPersona(
+      request(`/v1/personas/${personaId}`, workspaceA) as never,
+      { params: Promise.resolve({ personaId }) } as never,
+    );
+    expect(missing.status).toBe(404);
   });
 });

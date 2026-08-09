@@ -33,11 +33,13 @@ import {
 import {
   getBehaviorRevision,
   getPersona,
+  getPersonaDeletionTombstone,
   getPersonaActivity,
   getPersonaLease,
   getPersonaLeaseRecord,
   getPersonaMailboxItem,
   listBehaviorBindings,
+  listPersonaActivities,
   listPersonaBundle,
   listPersonaLeaseRecords,
   listPersonaMailboxItems,
@@ -429,6 +431,12 @@ async function projectPersonaLifecycle(
 async function requireReadyPersona(personaId: string): Promise<Persona> {
   const persona = await getPersona(personaId);
   if (!persona) throw new PersonaRuntimeNotFoundError('Persona', personaId);
+  if (await getPersonaDeletionTombstone(personaId)) {
+    throw new PersonaRuntimeUnavailableError(
+      personaId,
+      `Persona ${JSON.stringify(personaId)} is pending deletion and cannot run or accept work.`,
+    );
+  }
   if (persona.provisioningState !== 'ready') {
     throw new PersonaRuntimeUnavailableError(
       personaId,
@@ -1394,6 +1402,77 @@ export async function completePersonaActivity(
     });
     return { activity: completed, mailboxItem: completedItem, lease: released };
   });
+}
+
+/**
+ * Close every live runtime projection while the caller holds the Persona lock.
+ * This is the administrative boundary used by privacy deletion: disabling is
+ * written first so a crash cannot admit new work, and the fencing head is
+ * expired last so an in-flight worker immediately loses authority.
+ */
+export async function quiescePersonaForDeletionWithinRuntimeLock(
+  personaId: string,
+  lock: PersonaRuntimeLock,
+): Promise<void> {
+  assertSafeCollectionId(personaId);
+  await lock.assertOwned();
+  let persona = await getPersona(personaId);
+  if (!persona) throw new PersonaRuntimeNotFoundError('Persona', personaId);
+  const disabledAt = Math.max(Date.now(), persona.updatedAt);
+  if (persona.lifecycleState !== 'disabled') {
+    persona = await updatePersonaWithinRuntimeLock({
+      ...persona,
+      lifecycleState: 'disabled',
+      updatedAt: disabledAt,
+    }, lock);
+  }
+
+  const [activities, items] = await Promise.all([
+    listPersonaActivities(personaId),
+    listPersonaMailboxItems(personaId),
+  ]);
+  const head = await reconcilePersonaLeaseHead(lock, personaId);
+  const now = Math.max(
+    Date.now(),
+    persona.updatedAt,
+    ...activities.map((activity) => activity.updatedAt),
+    ...items.map((item) => item.updatedAt),
+    head?.renewedAt ?? 0,
+  );
+
+  for (const activity of activities) {
+    if (isTerminalActivity(activity)) continue;
+    await saveActivity(lock, {
+      ...activity,
+      status: 'cancelled',
+      updatedAt: now,
+      completedAt: Math.max(now, activity.startedAt ?? activity.createdAt),
+      error: undefined,
+    });
+  }
+
+  for (const item of items) {
+    if (
+      item.status === 'coalesced'
+      || item.status === 'completed'
+      || item.status === 'rejected'
+    ) continue;
+    await saveMailboxItem(lock, {
+      ...item,
+      status: 'rejected',
+      coalescedIntoId: undefined,
+      updatedAt: now,
+      completedAt: Math.max(now, item.createdAt),
+    });
+  }
+
+  if (head?.status === 'active') {
+    await saveLeaseHead(lock, {
+      ...head,
+      status: 'expired',
+      releasedAt: undefined,
+    });
+  }
 }
 
 /** Coherent inspection snapshot across the runtime's multi-file projection. */

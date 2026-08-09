@@ -37,3 +37,11 @@ export function randomEnduringAgentId(prefix: string): string {
   validateEnduringAgentIdPrefix(prefix);
   return assertSafeGeneratedId(`${prefix}_${randomUUID().replaceAll('-', '')}`);
 }
+
+export function personaDeletionTombstoneId(workspaceId: string, personaId: string): string {
+  return stableEnduringAgentId('deletion', {
+    purpose: 'persona-deletion-tombstone-v1',
+    workspaceId,
+    personaId,
+  });
+}

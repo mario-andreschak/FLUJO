@@ -6,5 +6,6 @@ export * from './collections';
 export * from './factory';
 export * from './ids';
 export * from './namespaces';
+export * from './personaDeletion';
 export * from './recordMigrations';
 export * from './store';

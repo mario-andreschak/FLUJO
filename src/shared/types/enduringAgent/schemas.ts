@@ -12,6 +12,8 @@ import {
   PERSONA_ACTIVITY_SOURCE_KINDS,
   PERSONA_ACTIVITY_STATUSES,
   PERSONA_AUTONOMY_LEVELS,
+  PERSONA_DELETION_ARCHIVE_POLICIES,
+  PERSONA_DELETION_STATUSES,
   PERSONA_INTERRUPTION_POLICIES,
   PERSONA_LEASE_STATUSES,
   PERSONA_LIFECYCLE_STATES,
@@ -715,3 +717,82 @@ export const CreatePersonaLeaseInputSchema = z.object({
   holderId: EnduringAgentIdSchema,
   ttlMs: z.number().int().min(1_000).max(24 * 60 * 60 * 1_000),
 }).strict();
+
+export const PersonaDeletionCountsSchema = z.object({
+  behaviorBindings: z.number().int().nonnegative(),
+  behaviorRevisions: z.number().int().nonnegative(),
+  memoryItems: z.number().int().nonnegative(),
+  workItems: z.number().int().nonnegative(),
+  liveActivities: z.number().int().nonnegative(),
+  archivedActivities: z.number().int().nonnegative(),
+  openMailboxItems: z.number().int().nonnegative(),
+  archivedMailboxItems: z.number().int().nonnegative(),
+  leaseRecords: z.number().int().nonnegative(),
+  coreMemoryItems: z.number().int().nonnegative(),
+  homeFiles: z.number().int().nonnegative(),
+  homeBytes: z.number().int().nonnegative(),
+}).strict();
+
+export const DeletePersonaInputSchema = z.object({
+  previewToken: z.string().regex(SHA256_PATTERN),
+  archivePolicy: z.enum(PERSONA_DELETION_ARCHIVE_POLICIES),
+  confirmation: z.literal('DELETE'),
+}).strict();
+
+export const PersonaDeletionTombstoneSchema = z.object({
+  schemaVersion: z.literal(ENDURING_AGENT_SCHEMA_VERSION),
+  id: EnduringAgentIdSchema,
+  workspaceId: NonEmptyText(256),
+  personaIdHash: z.string().regex(SHA256_PATTERN),
+  retainedPersonaId: EnduringAgentIdSchema.optional(),
+  status: z.enum(PERSONA_DELETION_STATUSES),
+  archivePolicy: z.enum(PERSONA_DELETION_ARCHIVE_POLICIES),
+  previewToken: z.string().regex(SHA256_PATTERN),
+  counts: PersonaDeletionCountsSchema,
+  requestedAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+  completedAt: TimestampSchema.optional(),
+}).strict().superRefine((record, ctx) => {
+  if (record.updatedAt < record.requestedAt) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'updatedAt cannot precede requestedAt.',
+      path: ['updatedAt'],
+    });
+  }
+  if (record.completedAt !== undefined && record.completedAt > record.updatedAt) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'completedAt cannot follow updatedAt.',
+      path: ['completedAt'],
+    });
+  }
+  if (record.status === 'completed' && record.completedAt === undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'A completed deletion requires completedAt.',
+      path: ['completedAt'],
+    });
+  }
+  if (record.status !== 'completed' && record.completedAt !== undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Only a completed deletion may have completedAt.',
+      path: ['completedAt'],
+    });
+  }
+  if (record.archivePolicy === 'anonymize' && record.retainedPersonaId !== undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'An anonymized deletion cannot retain the Persona id.',
+      path: ['retainedPersonaId'],
+    });
+  }
+  if (record.archivePolicy === 'retain_tombstone' && record.retainedPersonaId === undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'A retained tombstone requires the Persona id.',
+      path: ['retainedPersonaId'],
+    });
+  }
+});

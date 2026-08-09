@@ -34,6 +34,7 @@ import {
   createPersona,
   getMemoryItem,
   getPersona,
+  getPersonaDeletionTombstone,
   getRoleVersion,
   listPersonaBundle,
   updatePersonaWithinRuntimeLock,
@@ -220,6 +221,11 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
   assertSafeCollectionId(personaId);
 
   return withPersonaRuntimeLock(personaId, async (lock) => {
+    if (await getPersonaDeletionTombstone(personaId)) {
+      throw new PersonaFactoryConflictError(
+        `Persona ${JSON.stringify(personaId)} was deleted and cannot be recreated in this workspace.`,
+      );
+    }
     const roleVersion = await resolveRoleVersion(input.roleVersionId);
     const effectiveRequest = effectiveFactoryRequest(input, roleVersion);
     const requestHash = sha256({

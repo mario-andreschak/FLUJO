@@ -1,6 +1,6 @@
 # Enduring-agent foundation contracts
 
-Status: **Accepted; foundation and Phase 2A runtime implemented**
+Status: **Accepted; Phase 1 foundation and Phase 2A runtime implemented**
 
 Decision owner: issue [#415](https://github.com/mario-andreschak/FLUJO/issues/415)
 
@@ -13,6 +13,12 @@ eligible ordering, immutable Behavior resolution at Activity start, durable leas
 acquisition history, exclusive local-filesystem lease fencing, renewal, graceful
 yield, completion, expiry handling, and crash-prefix reconciliation. Expired work
 with unknown external side effects is failed rather than replayed automatically.
+The completed Phase 1 service surface also provides a workspace-scoped deletion
+preview and explicit-confirmation operation. It disables admission, cancels live
+Activity state, expires active fencing authority, erases Persona-owned Behaviors,
+memory, WorkItems, mailbox/runtime records and home data, retains shared Roles and
+MCP configurations, and writes a minimal policy-labelled anti-resurrection
+tombstone. Backup expiry remains controlled by the workspace backup subsystem.
 
 The Phase 2A critical section combines workspace-qualified in-process serialization
 with an atomic hard-link lock, live-process ownership checks, and published
@@ -30,7 +36,8 @@ Chat/meeting/schedule/trigger routing,
 steering/coalescing/interruption,
 cross-system attribution, dependency manifests (Behavior publication currently
 rejects Subflow nodes), the complete compatibility matrix, privacy-aware
-backup/restore, deletion/export, and UI remain gated follow-up work.
+backup/restore, configuration export, cross-system archive anonymization, and UI
+remain gated follow-up work.
 
 ## Context
 
@@ -313,6 +320,16 @@ Persona metadata MUST NOT alter Flow compilation or MCP `boundServer` /
 backward compatible.
 
 ### Deletion, retention, and export privacy
+
+Phase 1 implements the native Persona-owned portion of this contract through
+`GET /v1/personas/{personaId}/deletion-preview` and an explicitly confirmed
+`DELETE /v1/personas/{personaId}`. The preview token binds confirmation to the
+inspected workspace state. Deletion is idempotent, workspace-scoped, revokes
+runtime authority before erasure, never cascades to Role or MCP configuration,
+and retains only the selected minimal tombstone plus backup-policy disclosure.
+Cross-system records gain concrete anonymization adapters when Persona
+attribution is added in Phase 3; the deletion manifest already declares that
+policy rather than silently treating those future records as a cascade.
 
 Deleting or exporting a Persona is a privacy-sensitive workflow, not a generic
 cascade or a raw workspace dump.

@@ -6,6 +6,7 @@ import {
   ENDURING_AGENT_SCHEMA_VERSION,
   MemoryItemSchema,
   PersonaActivitySchema,
+  PersonaDeletionTombstoneSchema,
   PersonaLeaseSchema,
   PersonaMailboxItemSchema,
   PersonaSchema,
@@ -17,6 +18,7 @@ import {
   type MemoryItem,
   type Persona,
   type PersonaActivity,
+  type PersonaDeletionTombstone,
   type PersonaLease,
   type PersonaMailboxItem,
   type PersonaWorkItem,
@@ -41,6 +43,7 @@ import {
   snapshotBehaviorFlow,
 } from './behaviorRevisions';
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
+import { personaDeletionTombstoneId } from './ids';
 import {
   UnsupportedEnduringAgentSchemaError,
   migrateAndParseRecord,
@@ -332,6 +335,11 @@ export function createPersona(value: Persona): Promise<Persona> {
   assertSafeCollectionId(record.id);
 
   return recordMutation(ENDURING_AGENT_COLLECTIONS.personas, record.id, async () => {
+    if (await getPersonaDeletionTombstone(record.id)) {
+      throw new Error(
+        `Persona ${JSON.stringify(record.id)} was deleted and cannot be recreated in this workspace.`,
+      );
+    }
     if (await getPersona(record.id)) {
       throw new Error(`Persona ${JSON.stringify(record.id)} already exists.`);
     }
@@ -345,6 +353,94 @@ export function createPersona(value: Persona): Promise<Persona> {
     await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.personas, record.id, record);
     return record;
   });
+}
+
+export function getPersonaDeletionTombstone(
+  personaId: string,
+): Promise<PersonaDeletionTombstone | null> {
+  assertSafeCollectionId(personaId);
+  const id = personaDeletionTombstoneId(getCurrentWorkspace(), personaId);
+  return getRecord({
+    collection: ENDURING_AGENT_COLLECTIONS.deletionTombstones,
+    id,
+    recordKind: 'PersonaDeletionTombstone',
+    schema: PersonaDeletionTombstoneSchema,
+  });
+}
+
+export function savePersonaDeletionTombstone(
+  value: PersonaDeletionTombstone,
+): Promise<PersonaDeletionTombstone> {
+  const record = parseRecord(
+    'PersonaDeletionTombstone',
+    PersonaDeletionTombstoneSchema,
+    value,
+  );
+  const expectedId = record.retainedPersonaId
+    ? personaDeletionTombstoneId(record.workspaceId, record.retainedPersonaId)
+    : record.id;
+  if (record.workspaceId !== getCurrentWorkspace()) {
+    throw new Error(
+      `PersonaDeletionTombstone ${JSON.stringify(record.id)} belongs to another workspace.`,
+    );
+  }
+  if (expectedId !== record.id) {
+    throw new Error('PersonaDeletionTombstone id does not match its retained Persona identity.');
+  }
+  return recordMutation(ENDURING_AGENT_COLLECTIONS.deletionTombstones, record.id, async () => {
+    const existing = await getRecord({
+      collection: ENDURING_AGENT_COLLECTIONS.deletionTombstones,
+      id: record.id,
+      recordKind: 'PersonaDeletionTombstone',
+      schema: PersonaDeletionTombstoneSchema,
+    });
+    if (existing) {
+      const immutableExisting = {
+        ...existing,
+        status: undefined,
+        updatedAt: undefined,
+        completedAt: undefined,
+      };
+      const immutableCandidate = {
+        ...record,
+        status: undefined,
+        updatedAt: undefined,
+        completedAt: undefined,
+      };
+      if (canonicalJson(immutableExisting) !== canonicalJson(immutableCandidate)) {
+        throw new Error(
+          `PersonaDeletionTombstone ${JSON.stringify(record.id)} immutable audit fields changed.`,
+        );
+      }
+      if (existing.status === 'completed' && record.status !== 'completed') {
+        throw new Error(
+          `PersonaDeletionTombstone ${JSON.stringify(record.id)} cannot return to deleting.`,
+        );
+      }
+      if (record.updatedAt < existing.updatedAt) {
+        throw new Error(
+          `PersonaDeletionTombstone ${JSON.stringify(record.id)} updatedAt moved backwards.`,
+        );
+      }
+    }
+    await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.deletionTombstones, record.id, record);
+    return record;
+  });
+}
+
+async function requireWritablePersona(personaId: string, recordKind: string): Promise<Persona> {
+  const persona = await getPersona(personaId);
+  if (!persona) {
+    throw new Error(
+      `${recordKind} references missing Persona ${JSON.stringify(personaId)} in this workspace.`,
+    );
+  }
+  if (await getPersonaDeletionTombstone(personaId)) {
+    throw new Error(
+      `${recordKind} cannot mutate Persona ${JSON.stringify(personaId)} while deletion is pending.`,
+    );
+  }
+  return persona;
 }
 
 /**
@@ -405,6 +501,7 @@ export function updatePersona(value: Persona): Promise<Persona> {
   const record = parseRecord('Persona', PersonaSchema, value);
   assertSafeCollectionId(record.id);
   return withPersonaRuntimeLock(record.id, async (lock) => {
+    await requireWritablePersona(record.id, 'Persona update');
     const [lease, leaseHistory] = await Promise.all([
       getPersonaLease(record.id),
       listPersonaLeaseRecords(record.id),
@@ -601,13 +698,10 @@ export function createBehaviorRevision(value: BehaviorRevision): Promise<Behavio
       );
     }
 
-    const persona = await getPersona(record.personaId);
-    if (!persona) {
-      throw new Error(
-        `BehaviorRevision ${JSON.stringify(record.id)} references missing Persona `
-        + `${JSON.stringify(record.personaId)} in this workspace.`,
-      );
-    }
+    const persona = await requireWritablePersona(
+      record.personaId,
+      `BehaviorRevision ${JSON.stringify(record.id)}`,
+    );
 
     const revisions = await listBehaviorRevisions();
     const behaviorOwner = revisions.find(
@@ -696,12 +790,10 @@ export function saveBehaviorBinding(value: BehaviorBinding): Promise<BehaviorBin
     `enduring-agent:${ENDURING_AGENT_COLLECTIONS.behaviorBindings}/slot/`
       + `${record.personaId}/${record.slotKey}`,
   ], async () => {
-    if (!await getPersona(record.personaId)) {
-      throw new Error(
-        `BehaviorBinding ${JSON.stringify(record.id)} references missing Persona `
-        + `${JSON.stringify(record.personaId)} in this workspace.`,
-      );
-    }
+    await requireWritablePersona(
+      record.personaId,
+      `BehaviorBinding ${JSON.stringify(record.id)}`,
+    );
 
     const revision = await getBehaviorRevision(record.activeRevisionId);
     if (!revision) {
@@ -761,12 +853,10 @@ export function createBehaviorBindingIfAbsent(
     `enduring-agent:${ENDURING_AGENT_COLLECTIONS.behaviorBindings}/slot/`
       + `${record.personaId}/${record.slotKey}`,
   ], async () => {
-    if (!await getPersona(record.personaId)) {
-      throw new Error(
-        `BehaviorBinding ${JSON.stringify(record.id)} references missing Persona `
-        + `${JSON.stringify(record.personaId)} in this workspace.`,
-      );
-    }
+    await requireWritablePersona(
+      record.personaId,
+      `BehaviorBinding ${JSON.stringify(record.id)}`,
+    );
 
     const revision = await getBehaviorRevision(record.activeRevisionId);
     if (!revision) {
@@ -875,12 +965,10 @@ export function createMemoryItem(record: MemoryItem): Promise<MemoryItem> {
     value: record,
     immutable: false,
     validateReferences: async (candidate) => {
-      if (!await getPersona(candidate.personaId)) {
-        throw new Error(
-          `MemoryItem ${JSON.stringify(candidate.id)} references missing Persona `
-          + `${JSON.stringify(candidate.personaId)} in this workspace.`,
-        );
-      }
+      await requireWritablePersona(
+        candidate.personaId,
+        `MemoryItem ${JSON.stringify(candidate.id)}`,
+      );
     },
   });
 }

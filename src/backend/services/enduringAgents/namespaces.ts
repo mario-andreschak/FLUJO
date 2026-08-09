@@ -58,3 +58,61 @@ export function getPersonaHome(personaId: string): string {
   assertSafeCollectionId(personaId);
   return path.join(getWorkspaceDataDir(), 'userdata', 'personas', personaId);
 }
+
+export interface PersonaHomeInspection {
+  exists: boolean;
+  fileCount: number;
+  totalBytes: number;
+}
+
+async function assertPersonaHomeBoundary(personaId: string): Promise<string> {
+  const home = path.resolve(getPersonaHome(personaId));
+  const parent = path.resolve(getWorkspaceDataDir(), 'userdata', 'personas');
+  const relative = path.relative(parent, home);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error(`Persona home escapes its workspace boundary: ${home}`);
+  }
+  return home;
+}
+
+export async function inspectPersonaHome(personaId: string): Promise<PersonaHomeInspection> {
+  const home = await assertPersonaHomeBoundary(personaId);
+  let root;
+  try {
+    root = await fs.lstat(home);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { exists: false, fileCount: 0, totalBytes: 0 };
+    }
+    throw error;
+  }
+  if (!root.isDirectory() || root.isSymbolicLink()) {
+    throw new Error(`Persona home must be a real directory: ${home}`);
+  }
+
+  let fileCount = 0;
+  let totalBytes = 0;
+  const pending = [home];
+  while (pending.length > 0) {
+    const directory = pending.pop()!;
+    for (const entry of await fs.readdir(directory)) {
+      const child = path.join(directory, entry);
+      const stats = await fs.lstat(child);
+      if (stats.isDirectory() && !stats.isSymbolicLink()) {
+        pending.push(child);
+      } else {
+        fileCount += 1;
+        totalBytes += stats.size;
+      }
+    }
+  }
+  return { exists: true, fileCount, totalBytes };
+}
+
+/** Erase only the validated Persona-owned home; shared workspace trees are untouched. */
+export async function deletePersonaHome(personaId: string): Promise<void> {
+  const home = await assertPersonaHomeBoundary(personaId);
+  const inspected = await inspectPersonaHome(personaId);
+  if (!inspected.exists) return;
+  await fs.rm(home, { recursive: true, force: true });
+}

@@ -1,9 +1,11 @@
 import {
   ENDURING_AGENT_SAFE_ID_PATTERN,
   MemoryItemSchema,
+  DeletePersonaInputSchema,
   PersonaActivitySchema,
   PersonaLeaseSchema,
   PersonaMailboxItemSchema,
+  PersonaDeletionTombstoneSchema,
   PersonaWorkItemSchema,
 } from '@/shared/types/enduringAgent';
 import {
@@ -191,6 +193,53 @@ describe('enduring-agent lifecycle schemas', () => {
     expect(MemoryItemSchema.safeParse({
       ...memory,
       updatedAt: 99,
+    }).success).toBe(false);
+  });
+
+  it('requires explicit deletion confirmation and policy-consistent tombstones', () => {
+    const input = {
+      previewToken: 'b'.repeat(64),
+      archivePolicy: 'anonymize',
+      confirmation: 'DELETE',
+    };
+    expect(DeletePersonaInputSchema.safeParse(input).success).toBe(true);
+    expect(DeletePersonaInputSchema.safeParse({ ...input, confirmation: 'delete' }).success)
+      .toBe(false);
+
+    const tombstone = {
+      schemaVersion: 1,
+      id: 'deletion_1',
+      workspaceId: 'workspace-1',
+      personaIdHash: 'c'.repeat(64),
+      status: 'completed',
+      archivePolicy: 'anonymize',
+      previewToken: 'd'.repeat(64),
+      counts: {
+        behaviorBindings: 0,
+        behaviorRevisions: 0,
+        memoryItems: 0,
+        workItems: 0,
+        liveActivities: 0,
+        archivedActivities: 0,
+        openMailboxItems: 0,
+        archivedMailboxItems: 0,
+        leaseRecords: 0,
+        coreMemoryItems: 0,
+        homeFiles: 0,
+        homeBytes: 0,
+      },
+      requestedAt: 100,
+      updatedAt: 110,
+      completedAt: 110,
+    };
+    expect(PersonaDeletionTombstoneSchema.safeParse(tombstone).success).toBe(true);
+    expect(PersonaDeletionTombstoneSchema.safeParse({
+      ...tombstone,
+      retainedPersonaId: 'persona_1',
+    }).success).toBe(false);
+    expect(PersonaDeletionTombstoneSchema.safeParse({
+      ...tombstone,
+      archivePolicy: 'retain_tombstone',
     }).success).toBe(false);
   });
 });

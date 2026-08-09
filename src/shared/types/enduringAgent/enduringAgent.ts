@@ -476,3 +476,77 @@ export interface CreatePersonaLeaseInput {
   holderId: string;
   ttlMs: number;
 }
+
+export const PERSONA_DELETION_ARCHIVE_POLICIES = [
+  'anonymize',
+  'retain_tombstone',
+] as const;
+export type PersonaDeletionArchivePolicy =
+  (typeof PERSONA_DELETION_ARCHIVE_POLICIES)[number];
+
+export const PERSONA_DELETION_STATUSES = ['deleting', 'completed'] as const;
+export type PersonaDeletionStatus = (typeof PERSONA_DELETION_STATUSES)[number];
+
+export interface PersonaDeletionCounts {
+  behaviorBindings: number;
+  behaviorRevisions: number;
+  memoryItems: number;
+  workItems: number;
+  liveActivities: number;
+  archivedActivities: number;
+  openMailboxItems: number;
+  archivedMailboxItems: number;
+  leaseRecords: number;
+  coreMemoryItems: number;
+  homeFiles: number;
+  homeBytes: number;
+}
+
+/** Privacy review returned before any destructive Persona operation. */
+export interface PersonaDeletionPreview {
+  personaId: string;
+  workspaceId: string;
+  generatedAt: number;
+  /** Binds confirmation to the exact inspected state without persisting private content. */
+  previewToken: string;
+  counts: PersonaDeletionCounts;
+  activeLease: boolean;
+  homeExists: boolean;
+  referencedArchiveEvidence: {
+    activities: number;
+    mailboxItems: number;
+    futureCrossSystemAttributionPolicy: 'anonymize_or_minimal_tombstone';
+  };
+  externalSharedResources: {
+    /** Named configs referenced by owned Behavior snapshots; the configs are retained. */
+    mcpConfigNames: string[];
+    action: 'retained';
+  };
+  backupPolicy: {
+    action: 'retained_until_workspace_backup_expiry';
+    immediatePurgeSupported: false;
+  };
+}
+
+export interface DeletePersonaInput {
+  previewToken: string;
+  archivePolicy: PersonaDeletionArchivePolicy;
+  confirmation: 'DELETE';
+}
+
+/** Minimal durable anti-resurrection marker and deletion audit record. */
+export interface PersonaDeletionTombstone {
+  schemaVersion: typeof ENDURING_AGENT_SCHEMA_VERSION;
+  id: string;
+  workspaceId: string;
+  personaIdHash: string;
+  /** Present only when the caller explicitly chooses retained attribution. */
+  retainedPersonaId?: string;
+  status: PersonaDeletionStatus;
+  archivePolicy: PersonaDeletionArchivePolicy;
+  previewToken: string;
+  counts: PersonaDeletionCounts;
+  requestedAt: number;
+  updatedAt: number;
+  completedAt?: number;
+}

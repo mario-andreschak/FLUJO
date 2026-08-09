@@ -1,6 +1,8 @@
 const listPersonasMock = jest.fn();
 const createPersonaFromRoleMock = jest.fn();
 const listPersonaBundleMock = jest.fn();
+const previewPersonaDeletionMock = jest.fn();
+const deletePersonaMock = jest.fn();
 const ensureBuiltInDeveloperRoleMock = jest.fn();
 const listRoleDefinitionsMock = jest.fn();
 const listRoleVersionsMock = jest.fn();
@@ -14,12 +16,18 @@ jest.mock('@/backend/services/enduringAgents', () => {
       super(`RoleVersion ${JSON.stringify(roleVersionId)} not found.`);
     }
   }
+  class PersonaDeletionNotFoundError extends Error {}
+  class PersonaDeletionConflictError extends Error {}
   return {
     PersonaFactoryConflictError,
     RoleVersionNotFoundError,
+    PersonaDeletionNotFoundError,
+    PersonaDeletionConflictError,
     listPersonas: (...args: unknown[]) => listPersonasMock(...args),
     createPersonaFromRole: (...args: unknown[]) => createPersonaFromRoleMock(...args),
     listPersonaRuntimeBundle: (...args: unknown[]) => listPersonaBundleMock(...args),
+    previewPersonaDeletion: (...args: unknown[]) => previewPersonaDeletionMock(...args),
+    deletePersona: (...args: unknown[]) => deletePersonaMock(...args),
     ensureBuiltInDeveloperRole: (...args: unknown[]) => ensureBuiltInDeveloperRoleMock(...args),
     listRoleDefinitions: (...args: unknown[]) => listRoleDefinitionsMock(...args),
     listRoleVersions: (...args: unknown[]) => listRoleVersionsMock(...args),
@@ -42,11 +50,14 @@ jest.mock('@/utils/logger', () => ({
 
 import { ZodError } from 'zod';
 import {
+  PersonaDeletionConflictError,
+  PersonaDeletionNotFoundError,
   PersonaFactoryConflictError,
   RoleVersionNotFoundError,
 } from '@/backend/services/enduringAgents';
 import { GET as listPersonas, POST as createPersona } from '@/app/v1/personas/route';
-import { GET as getPersona } from '@/app/v1/personas/[personaId]/route';
+import { DELETE as deletePersonaRoute, GET as getPersona } from '@/app/v1/personas/[personaId]/route';
+import { GET as previewPersonaDeletionRoute } from '@/app/v1/personas/[personaId]/deletion-preview/route';
 import { GET as listRoles } from '@/app/v1/roles/route';
 
 const request = (path: string, init?: RequestInit) =>
@@ -149,6 +160,54 @@ describe('/v1/personas/[personaId]', () => {
 
     expect(response.status).toBe(404);
     expect(listPersonaBundleMock).not.toHaveBeenCalled();
+  });
+
+  it('requires a preview-bound explicit deletion confirmation', async () => {
+    const body = {
+      previewToken: 'a'.repeat(64),
+      archivePolicy: 'anonymize',
+      confirmation: 'DELETE',
+    };
+    deletePersonaMock.mockResolvedValue({ id: 'deletion_1', status: 'completed' });
+    const response = await deletePersonaRoute(
+      request('/v1/personas/jim', {
+        method: 'DELETE',
+        body: JSON.stringify(body),
+      }) as never,
+      { params: Promise.resolve({ personaId: 'jim' }) } as never,
+    );
+
+    expect(response.status).toBe(200);
+    expect(deletePersonaMock).toHaveBeenCalledWith('jim', body);
+  });
+
+  it('maps missing and stale deletion previews without deleting anything implicitly', async () => {
+    deletePersonaMock.mockRejectedValueOnce(new PersonaDeletionNotFoundError('missing'));
+    let response = await deletePersonaRoute(
+      request('/v1/personas/missing', { method: 'DELETE', body: '{}' }) as never,
+      { params: Promise.resolve({ personaId: 'missing' }) } as never,
+    );
+    expect(response.status).toBe(404);
+
+    deletePersonaMock.mockRejectedValueOnce(new PersonaDeletionConflictError('jim', 'stale'));
+    response = await deletePersonaRoute(
+      request('/v1/personas/jim', { method: 'DELETE', body: '{}' }) as never,
+      { params: Promise.resolve({ personaId: 'jim' }) } as never,
+    );
+    expect(response.status).toBe(409);
+  });
+});
+
+describe('/v1/personas/[personaId]/deletion-preview', () => {
+  it('returns the privacy manifest before deletion', async () => {
+    const preview = { personaId: 'jim', previewToken: 'b'.repeat(64), counts: {} };
+    previewPersonaDeletionMock.mockResolvedValue(preview);
+    const response = await previewPersonaDeletionRoute(
+      request('/v1/personas/jim/deletion-preview') as never,
+      { params: Promise.resolve({ personaId: 'jim' }) } as never,
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(preview);
   });
 });
 

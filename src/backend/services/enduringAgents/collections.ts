@@ -15,6 +15,7 @@ export const ENDURING_AGENT_COLLECTIONS = Object.freeze({
   mailboxItems: 'persona-mailbox',
   leaseHistory: 'persona-lease-history',
   leases: 'persona-leases',
+  deletionTombstones: 'persona-deletion-tombstones',
 } as const);
 
 export type EnduringAgentCollection =
