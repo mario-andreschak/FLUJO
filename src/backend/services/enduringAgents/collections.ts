@@ -9,6 +9,7 @@ export const ENDURING_AGENT_COLLECTIONS = Object.freeze({
   personas: 'personas',
   behaviorBindings: 'persona-behaviors',
   behaviorRevisions: 'behavior-revisions',
+  behaviorProposals: 'persona-behavior-proposals',
   appGrants: 'persona-app-grants',
   activities: 'persona-activities',
   workItems: 'persona-work-items',

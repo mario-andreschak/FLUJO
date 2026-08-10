@@ -626,6 +626,7 @@ export type PersonaDeletionStatus = (typeof PERSONA_DELETION_STATUSES)[number];
 export interface PersonaDeletionCounts {
   behaviorBindings: number;
   behaviorRevisions: number;
+  behaviorProposals: number;
   appGrants: number;
   memoryItems: number;
   workItems: number;

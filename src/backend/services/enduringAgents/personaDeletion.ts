@@ -35,6 +35,7 @@ import {
   listPersonaRuntimeRecoveryReceipts,
   quiescePersonaForDeletionWithinRuntimeLock,
 } from './activityRuntime';
+import { listBehaviorProposals } from './behaviorLearning';
 import { canonicalJson } from './behaviorRevisions';
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
 import { personaDeletionTombstoneId } from './ids';
@@ -204,6 +205,7 @@ async function buildPreview(personaId: string): Promise<PersonaDeletionPreview> 
   const [
     behaviorBindings,
     behaviorRevisions,
+    behaviorProposals,
     appGrants,
     memoryItems,
     workItems,
@@ -217,6 +219,7 @@ async function buildPreview(personaId: string): Promise<PersonaDeletionPreview> 
   ] = await Promise.all([
     listBehaviorBindings(personaId),
     listBehaviorRevisions(personaId),
+    listBehaviorProposals(personaId),
     listPersonaAppGrants(personaId),
     listMemoryItems(personaId),
     listPersonaWorkItems(personaId),
@@ -240,6 +243,7 @@ async function buildPreview(personaId: string): Promise<PersonaDeletionPreview> 
   const counts: PersonaDeletionCounts = {
     behaviorBindings: behaviorBindings.length,
     behaviorRevisions: behaviorRevisions.length,
+    behaviorProposals: behaviorProposals.length,
     appGrants: appGrants.length,
     memoryItems: memoryItems.length,
     workItems: workItems.length,
@@ -258,6 +262,7 @@ async function buildPreview(personaId: string): Promise<PersonaDeletionPreview> 
     persona: { id: persona.id, updatedAt: persona.updatedAt, state: persona.lifecycleState },
     behaviorBindings: behaviorBindings.map((item) => [item.id, item.updatedAt]),
     behaviorRevisions: behaviorRevisions.map((item) => [item.id, item.createdAt]),
+    behaviorProposals: behaviorProposals.map((item) => [item.id, item.updatedAt, item.status]),
     appGrants: appGrants.map((item) => [item.id, item.updatedAt, item.mcpServerName]),
     memoryItems: memoryItems.map((item) => [item.id, item.updatedAt, item.status]),
     workItems: workItems.map((item) => [item.id, item.updatedAt, item.status]),
@@ -310,6 +315,7 @@ async function erasePersonaOwnedState(personaId: string): Promise<void> {
   const [
     behaviorBindings,
     behaviorRevisions,
+    behaviorProposals,
     appGrants,
     memoryItems,
     workItems,
@@ -321,6 +327,7 @@ async function erasePersonaOwnedState(personaId: string): Promise<void> {
   ] = await Promise.all([
     listBehaviorBindings(personaId),
     listBehaviorRevisions(personaId),
+    listBehaviorProposals(personaId),
     listPersonaAppGrants(personaId),
     listMemoryItems(personaId),
     listPersonaWorkItems(personaId),
@@ -341,6 +348,10 @@ async function erasePersonaOwnedState(personaId: string): Promise<void> {
     )),
     ...behaviorRevisions.map((item) => deleteCollectionItem(
       ENDURING_AGENT_COLLECTIONS.behaviorRevisions,
+      item.id,
+    )),
+    ...behaviorProposals.map((item) => deleteCollectionItem(
+      ENDURING_AGENT_COLLECTIONS.behaviorProposals,
       item.id,
     )),
     ...appGrants.map((item) => deleteCollectionItem(

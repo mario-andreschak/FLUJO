@@ -1,4 +1,5 @@
 export * from './behaviorRevisions';
+export * from './behaviorLearning';
 export * from './activityRuntime';
 export * from './builtInDeveloperRole';
 export * from './builtInRoleStore';
