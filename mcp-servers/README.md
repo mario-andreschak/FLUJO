@@ -50,7 +50,7 @@ Extensions belong only to the dedicated trusted profile. A user can install ordi
 
 `sessionId` is optional on every browser tool. When omitted, the server targets the most recently used live session. `browser_open` creates a new random session only when no live session exists; supplying an explicit id remains the way to select, reuse, or create a particular session.
 
-Navigation permits only HTTP(S), rejects URL credentials, and blocks localhost/private-network destinations (including DNS resolutions, memoised for one minute so a media-heavy page does not pay a lookup per subresource) unless `FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS=1` is explicitly set. Set `FLUJO_BROWSER_ALLOWED_ORIGINS` to a comma-separated exact-origin allowlist for a narrower policy. Only top-level documents count against the redirect cap, so embed-heavy pages are not blocked by their tenth iframe.
+Navigation permits HTTP(S), including localhost and private-network destinations by default. Set `FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS=0` to block local/private destinations (including DNS resolutions, memoised for one minute so a media-heavy page does not pay a lookup per subresource). URL credentials remain blocked, and `FLUJO_BROWSER_ALLOWED_ORIGINS` provides a comma-separated exact-origin allowlist for a narrower policy. Only top-level documents count against the redirect cap, so embed-heavy pages are not blocked by their tenth iframe.
 
 `browser_diagnostics` reports the configured and actual mode/channel, headless and profile state, locale/timezone, service-worker policy, and the active page's browser fingerprint. Tool errors include a `category` (`policy`, `runtime`, `input`, or `cancelled`), and successful navigations expose destination-site/WAF challenge detection separately from FLUJO's request-policy counters.
 
@@ -80,7 +80,7 @@ Browser controls:
 
 - `FLUJO_BROWSER_ENABLED=1`: seed the ordinary browser MCP record enabled on first migration; default is disabled.
 - `FLUJO_BROWSER_ALLOWED_ORIGINS=https://example.com,https://docs.example.com`: optional exact-origin allowlist.
-- `FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS=1`: allow loopback/private/local destinations (off by default).
+- `FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS=0`: block loopback/private/local destinations (allowed by default).
 - `FLUJO_BROWSER_MODE=sandbox|trusted`: isolated managed Chromium (default) or headed installed Chrome with a dedicated persistent profile.
 - `FLUJO_BROWSER_EXECUTABLE_PATH`: use an operator-managed Chromium executable instead of Patchright's managed binary.
 - `FLUJO_BROWSER_PROFILE_DIR`: trusted-mode profile directory; defaults to `<FLUJO_DATA_DIR>/browser-profile/trusted`.
