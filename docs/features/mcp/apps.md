@@ -25,21 +25,13 @@ Declared CSP origins are normalized and constrained to supported HTTP(S) origins
 
 External links are limited to safe HTTP(S) URLs. App-originated tool calls and resource reads pass through host authorization. App-provided model context is treated as untrusted, validated, size-bounded, and applied to later turns using last-write-wins semantics.
 
-For hosted HTTPS deployment, choose **Settings → Network access → Public** and configure a wildcard sandbox hostname as described below. A single public sandbox hostname is rejected because it would share cookies, `localStorage`, and IndexedDB between Apps. See [Network exposure](../../../README.md#network-exposure).
+Localhost and plain-HTTP Local Network installs work without sandbox configuration. For a hosted HTTPS deployment, choose **Settings → Network access → Public** and optionally configure a wildcard sandbox hostname as described below. See [Network exposure](../../../README.md#network-exposure).
 
 ### Per-app sandbox origins
 
 Every App gets a stable browser origin derived from its workspace and verified resource identity. On a local install, Apps use `http://<originKey>.localhost:4201`; all of those hostnames resolve to one loopback listener, but the browser keeps their storage partitions separate. FLUJO does not recycle ports into another App's origin and does not fall back to a shared origin.
 
-Multi-tenant launchers that run otherwise-identical FLUJO processes behind one
-wildcard domain must set `FLUJO_MCP_APP_ORIGIN_NAMESPACE` to a stable,
-tenant-unique value (for example the Brain ID). The namespace becomes part of
-the origin-key hash while the output remains `app` plus 60 lowercase hex
-characters. It defaults to empty and therefore preserves existing local origin
-keys byte-for-byte. Changing it intentionally gives every App a new browser
-storage partition.
-
-A hosted or local-network deployment must set `FLUJO_MCP_APP_SANDBOX_PUBLIC_URL` to an HTTP(S) URL whose hostname contains the literal placeholder `{app}` as one complete DNS label, for example:
+A hosted HTTPS deployment can set `FLUJO_MCP_APP_SANDBOX_PUBLIC_URL` to an HTTP(S) URL whose hostname contains the literal placeholder `{app}` as one complete DNS label, for example:
 
 ```
 FLUJO_MCP_APP_SANDBOX_PUBLIC_URL=https://{app}.sandbox.example.com/sandbox.html
@@ -47,7 +39,9 @@ FLUJO_MCP_APP_SANDBOX_PUBLIC_URL=https://{app}.sandbox.example.com/sandbox.html
 
 Before issuing sandbox credentials, FLUJO re-reads the exact resource through the App-authorized MCP path and requires an exact URI plus the stable MCP App HTML MIME type. It then computes the `{app}` label with SHA-256 over the active workspace, configured server name, and exact resource URI. App metadata and caller-provided origin hints cannot select or merge browser origins. Each access token is scoped to that derived hostname.
 
-**The reverse proxy must preserve the original `Host` header when forwarding requests to the sandbox listener.** The listener extracts the effective key from that header and rejects a token minted for any other hostname. A missing/malformed host, an invalid `{app}` template, or a public URL without the placeholder fails closed; there is no shared-key compatibility path.
+On localhost, FLUJO automatically uses `<app>.localhost:4201`. On a plain-HTTP LAN, it automatically reuses the hostname or IP that opened the dashboard on port `4201`; the outer proxy origin is shared, while its URL and HMAC token remain scoped to the verified App identity. No DNS lookup or environment variable is required.
+
+For a configured wildcard HTTPS endpoint, **the reverse proxy must preserve the original `Host` header when forwarding requests to the sandbox listener.** The listener extracts the effective key from that header and rejects a token minted for any other hostname.
 
 The proxy must also support WebSocket upgrades on this wildcard route. This is
 needed when an App has registered a private sidecar runtime as described below.

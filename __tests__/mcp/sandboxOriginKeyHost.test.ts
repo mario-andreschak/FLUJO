@@ -130,6 +130,22 @@ describe('sandbox hostname/key derivation', () => {
       .toBeUndefined();
   });
 
+  it('keeps keyed localhost discovery working after Local Network is enabled', () => {
+    const sandbox = loadSandboxModule({
+      [EXPOSURE_ENV]: 'network',
+      [EXPOSURE_SOURCE_ENV]: 'settings',
+      [PUBLIC_URL_ENV]: undefined,
+    });
+
+    expect(sandbox.deriveOriginKeyFromHost(`${APP_A}.localhost:4201`)).toBe(APP_A);
+    expect(sandbox.deriveSandboxPublicUrl('http://localhost:4200', 4201, APP_A)).toBe(
+      `http://${APP_A}.localhost:4201/sandbox.html`,
+    );
+    expect(sandbox.deriveSandboxPublicUrl('http://192.168.1.20:4200', 4201, APP_A)).toBe(
+      `http://192.168.1.20:4201/sandbox.html?originKey=${APP_A}`,
+    );
+  });
+
   it('accepts {app} only as one complete hosted DNS label', () => {
     const sandbox = loadSandboxModule({
       [EXPOSURE_ENV]: 'public',
@@ -308,7 +324,7 @@ describe('singleton listener token/hostname isolation', () => {
     }
   });
 
-  it('does not start in hosted/network mode without a valid wildcard template', async () => {
+  it('starts in network mode without config and accepts app-scoped LAN URLs', async () => {
     const port = await findFreePort();
     const sandbox = loadSandboxModule({
       [EXPOSURE_ENV]: 'network',
@@ -318,8 +334,29 @@ describe('singleton listener token/hostname isolation', () => {
       [PORT_ENV]: String(port),
     });
 
-    expect(await sandbox.ensureSandboxForOriginKey(APP_A)).toBeUndefined();
-    expect(await sandbox.ensureSandboxForOriginKey('')).toBeUndefined();
-    expect(sandbox.getSandboxServerStatus()).toBe('idle');
+    try {
+      const appA = await sandbox.ensureSandboxForOriginKey(APP_A);
+      const readiness = await sandbox.ensureSandboxForOriginKey('');
+      expect(appA).toBeDefined();
+      expect(readiness).toBeDefined();
+      expect(sandbox.getSandboxServerStatus()).toBe('listening');
+      expect((await get(
+        port,
+        '192.168.1.20',
+        `/sandbox.html?originKey=${APP_A}&token=${appA!.token}`,
+      )).status).toBe(200);
+      expect((await get(
+        port,
+        '192.168.1.20',
+        `/sandbox.html?originKey=${APP_B}&token=${appA!.token}`,
+      )).status).toBe(403);
+      expect((await get(
+        port,
+        '192.168.1.20',
+        `/sandbox.html?token=${readiness!.token}`,
+      )).status).toBe(403);
+    } finally {
+      await sandbox.stopAllSandboxListeners();
+    }
   });
 });

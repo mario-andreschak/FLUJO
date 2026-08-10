@@ -331,11 +331,22 @@ describe('hosted sandbox endpoint configuration', () => {
     expect(getSandboxPublicUrl()).toBeUndefined();
   });
 
-  it('derives only keyed localhost or wildcard-hosted origins', () => {
+  it('derives keyed localhost, automatic HTTP LAN, or wildcard-hosted URLs', () => {
     delete process.env.FLUJO_EXPOSURE_MODE_SOURCE;
     process.env.FLUJO_EXPOSURE_MODE = 'public';
     process.env[SANDBOX_PUBLIC_URL_ENV] = 'https://apps.example.test';
     expect(deriveSandboxPublicUrl('https://flujo.example.test', 4201, originKey))
+      .toBeUndefined();
+
+    process.env.FLUJO_EXPOSURE_MODE = 'network';
+    delete process.env[SANDBOX_PUBLIC_URL_ENV];
+    expect(deriveSandboxPublicUrl('http://192.168.1.20:4200', 4201, originKey)).toBe(
+      `http://192.168.1.20:4201/sandbox.html?originKey=${originKey}`,
+    );
+    expect(deriveSandboxPublicUrl('http://localhost:4200', 4201, originKey)).toBe(
+      `http://${originKey}.localhost:4201/sandbox.html`,
+    );
+    expect(deriveSandboxPublicUrl('https://192.168.1.20:4200', 4201, originKey))
       .toBeUndefined();
 
     process.env[SANDBOX_PUBLIC_URL_ENV] = 'https://{app}.sandbox.example.test';

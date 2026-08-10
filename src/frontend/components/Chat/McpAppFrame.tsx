@@ -343,8 +343,8 @@ export function buildSandboxUrl(
   data: SandboxEndpointResponse,
   host: BrowserLocation,
 ): string {
-  if (data.shared !== false) {
-    throw new Error('Sandbox endpoint discovery did not return an isolated app origin');
+  if (typeof data.shared !== 'boolean') {
+    throw new Error('Sandbox endpoint discovery did not describe its origin mode');
   }
   if (!isValidMcpAppDomain(data.originKey)) {
     throw new Error('Sandbox endpoint discovery returned an invalid origin key');
@@ -372,7 +372,11 @@ export function buildSandboxUrl(
   if (host.protocol === 'https:' && sandboxUrl.protocol !== 'https:') {
     throw new Error('HTTPS FLUJO deployments require an HTTPS MCP Apps sandbox URL');
   }
-  if (!sandboxUrl.hostname.split('.').includes(data.originKey)) {
+  if (data.shared) {
+    if (sandboxUrl.searchParams.get('originKey') !== data.originKey) {
+      throw new Error('Shared sandbox URL is not bound to the verified app origin key');
+    }
+  } else if (!sandboxUrl.hostname.split('.').includes(data.originKey)) {
     throw new Error('Sandbox URL is not bound to the verified app origin key');
   }
 
@@ -415,7 +419,16 @@ async function resolveSandboxBaseUrl(
     const promise = fetch(url)
       .then(async (response) => {
         if (!response.ok) {
-          throw new Error(`Sandbox endpoint discovery failed (${response.status})`);
+          let detail = '';
+          try {
+            const payload = await response.json() as { error?: unknown };
+            if (typeof payload.error === 'string' && payload.error.trim()) {
+              detail = `: ${payload.error.trim()}`;
+            }
+          } catch {
+            // Preserve the status-only fallback for non-JSON proxy errors.
+          }
+          throw new Error(`Sandbox endpoint discovery failed (${response.status})${detail}`);
         }
         return await response.json() as SandboxEndpointResponse;
       })

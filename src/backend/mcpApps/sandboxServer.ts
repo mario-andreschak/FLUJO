@@ -384,37 +384,67 @@ function getValidSandboxAppUrlTemplate(): URL | undefined {
   }
 }
 
-/** Whether hosted/network mode has the wildcard-host prerequisite it needs. */
+/** Whether an optional hosted wildcard URL has been configured correctly. */
 export function hasValidSandboxAppUrlTemplate(): boolean {
   return getValidSandboxAppUrlTemplate() !== undefined;
 }
 
 /**
- * Derive sandbox origin URL for a given originKey. Supports:
- *   - Local: a stable `<originKey>.localhost` browser origin
- *   - Hosted/network: `{app}` as a whole hostname label in the configured URL
+ * Derive the browser-visible sandbox URL for a given originKey. Resolution is
+ * automatic for normal installs:
+ *   - Local requests use a stable `<originKey>.localhost` browser origin.
+ *   - A configured `{app}` hostname template is honored for hosted HTTPS.
+ *   - Plain-HTTP LAN requests reuse the already-working request hostname and
+ *     sandbox port. The scoped key travels in the authenticated URL because a
+ *     server cannot create DNS records for invented LAN subdomains.
  *
- * No shared/same-host fallback is provided. A deployment that cannot give each
- * app a distinct hostname must fail closed rather than sharing browser storage.
+ * The LAN fallback shares the outer proxy origin. Untrusted App HTML remains in
+ * the nested sandboxed View, while the query key keeps proxy tokens app-scoped.
  */
 export function deriveSandboxPublicUrl(
-  _hostOrigin: string,
+  hostOrigin: string,
   port = getSandboxPort(),
   originKey?: string,
 ): string | undefined {
   if (!isValidSandboxOriginKey(originKey)) return undefined;
 
-  if (getExposureMode() === 'localhost') {
+  let hostUrl: URL;
+  try {
+    hostUrl = new URL(hostOrigin);
+    if (
+      (hostUrl.protocol !== 'http:' && hostUrl.protocol !== 'https:')
+      || hostUrl.username
+      || hostUrl.password
+    ) return undefined;
+  } catch {
+    return undefined;
+  }
+
+  if (
+    getExposureMode() === 'localhost'
+    || (hostUrl.protocol === 'http:' && isLoopbackHostname(hostUrl.hostname))
+  ) {
     return `http://${originKey}.localhost:${port}/sandbox.html`;
   }
 
   const template = getValidSandboxAppUrlTemplate();
-  if (!template) return undefined;
-  const labels = template.hostname.toLowerCase().split('.');
-  template.hostname = labels
-    .map(label => label === '{app}' ? originKey : label)
-    .join('.');
-  return template.href;
+  if (template) {
+    const labels = template.hostname.toLowerCase().split('.');
+    template.hostname = labels
+      .map(label => label === '{app}' ? originKey : label)
+      .join('.');
+    return template.href;
+  }
+
+  // Browsers block an HTTP iframe inside an HTTPS page. HTTPS deployments need
+  // a real TLS endpoint, but ordinary HTTP LAN use needs no DNS/proxy config.
+  if (hostUrl.protocol !== 'http:') return undefined;
+  hostUrl.port = String(port);
+  hostUrl.pathname = '/sandbox.html';
+  hostUrl.search = '';
+  hostUrl.hash = '';
+  hostUrl.searchParams.set('originKey', originKey);
+  return hostUrl.href;
 }
 
 /**
@@ -889,8 +919,9 @@ async function ensureSharedSandboxListener(
 
 /**
  * Ensure the singleton sandbox transport is available and mint a token scoped
- * to `originKey`. Local installs separate browser state with `*.localhost`;
- * hosted/network installs must provide a valid wildcard hostname template.
+ * to `originKey`. Local installs separate browser state with `*.localhost`; LAN
+ * installs can use the request hostname directly, and hosted installs may use
+ * an optional wildcard hostname template.
  *
  * The empty key is reserved for internal startup/readiness compatibility. API
  * routes must derive and pass a non-empty verified key before returning a URL.
@@ -900,9 +931,6 @@ export async function ensureSandboxForOriginKey(
 ): Promise<{ port: number; token: string } | undefined> {
   const state = getOrInitRuntimeState();
   if (originKey !== '' && !isValidSandboxOriginKey(originKey)) return undefined;
-  if (getExposureMode() !== 'localhost' && !hasValidSandboxAppUrlTemplate()) {
-    return undefined;
-  }
 
   const listener = await ensureSharedSandboxListener(state);
   if (!listener) return undefined;
@@ -1126,17 +1154,17 @@ function parseHostHeaderHostname(hostHeader: string | undefined): string | undef
 }
 
 /**
- * Resolve the app key from the browser-visible hostname. Local mode accepts
- * exactly `<key>.localhost`; hosted/network mode matches the exact configured
- * hostname shape with `{app}` occupying one complete DNS label.
+ * Resolve the app key from a key-bearing browser-visible hostname. The
+ * `<key>.localhost` form remains valid regardless of global exposure mode, so
+ * switching on LAN access cannot break a dashboard opened on localhost. Hosted
+ * mode also matches `{app}` as one complete configured DNS label.
  */
 export function deriveOriginKeyFromHost(hostHeader: string | undefined): string | undefined {
   const requestHostname = parseHostHeaderHostname(hostHeader);
   if (!requestHostname) return undefined;
 
-  if (getExposureMode() === 'localhost') {
-    const suffix = '.localhost';
-    if (!requestHostname.endsWith(suffix)) return undefined;
+  const suffix = '.localhost';
+  if (requestHostname.endsWith(suffix)) {
     const candidate = requestHostname.slice(0, -suffix.length);
     return isValidSandboxOriginKey(candidate) ? candidate : undefined;
   }
@@ -1162,9 +1190,10 @@ export function deriveOriginKeyFromHost(hostHeader: string | undefined): string 
  * Request handler for sandbox proxy documents. Validates the authentication token
  * scoped to the originKey, and serves the sandbox proxy HTML with CSP headers.
  *
- * Browser requests carry the real app key in their hostname. A request whose
- * host cannot be resolved to a key is rejected; the listener's internal empty
- * startup key is not a browser-visible authentication fallback.
+ * Browser requests normally carry the app key in their hostname. The automatic
+ * LAN fallback carries it in the URL because arbitrary LAN subdomains do not
+ * resolve without managed DNS. In both cases the HMAC token is scoped to that
+ * exact key; the internal empty startup key is never a browser-visible fallback.
  */
 function handleSandboxRequest(
   req: http.IncomingMessage,
@@ -1191,6 +1220,8 @@ function handleSandboxRequest(
     res.end('Not found');
     return;
   }
+
+  const effectiveOriginKey = deriveOriginKeyFromHost(req.headers.host);
 
   // Validate token scoped to this originKey.
   const token = url.searchParams.get(SANDBOX_AUTH_QUERY_PARAM);

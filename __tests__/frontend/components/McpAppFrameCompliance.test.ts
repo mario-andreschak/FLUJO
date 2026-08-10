@@ -326,7 +326,7 @@ describe('MCP App host policy helpers', () => {
     expect(canFullscreenCanvas([], modes)).toBe(false);
   });
 
-  it('accepts only server-derived, per-key sandbox origins', () => {
+  it('accepts server-derived isolated origins and scoped LAN fallback URLs', () => {
     const originKey = `app${'a'.repeat(60)}`;
     expect(buildSandboxUrl(
       {
@@ -352,15 +352,26 @@ describe('MCP App host policy helpers', () => {
       { port: 4201, token: 'secret', originKey, shared: false },
       { origin: 'http://localhost:3000', protocol: 'http:' },
     )).toThrow(/isolated app URL/);
-    expect(() => buildSandboxUrl(
+    expect(buildSandboxUrl(
       {
-        url: `http://${originKey}.localhost:4201/sandbox.html`,
+        url: `http://192.168.1.20:4201/sandbox.html?originKey=${originKey}`,
         token: 'secret',
         originKey,
         shared: true,
       },
-      { origin: 'http://localhost:3000', protocol: 'http:' },
-    )).toThrow(/isolated app origin/);
+      { origin: 'http://192.168.1.20:4200', protocol: 'http:' },
+    )).toBe(
+      `http://192.168.1.20:4201/sandbox.html?originKey=${originKey}&token=secret`,
+    );
+    expect(() => buildSandboxUrl(
+      {
+        url: 'http://192.168.1.20:4201/sandbox.html?originKey=another-app',
+        token: 'secret',
+        originKey,
+        shared: true,
+      },
+      { origin: 'http://192.168.1.20:4200', protocol: 'http:' },
+    )).toThrow(/verified app origin key/);
     expect(() => buildSandboxUrl(
       {
         url: 'https://unrelated.apps.example.test/sandbox.html',
