@@ -15,11 +15,14 @@ import type { PackageSecret } from './secrets';
 import type {
   FlujoPackage,
   PackageApiKeyRef,
+  PackagedBehaviorTemplate,
   PackagedFlow,
   PackagedFlowReferences,
   PackagedMcpServer,
   PackagedModel,
+  PackagedPersonaTemplate,
   PackagedPlannedExecution,
+  PackagedRoleTemplate,
   PackageGlobal,
 } from './package';
 import { flujoPackageSchema, hasEncryptedBlob } from './package.schema';
@@ -100,6 +103,9 @@ export interface SerializePackageInput {
   mcpServers?: PackagedMcpServer[];
   flows?: Flow[];
   plannedExecutions?: PlannedExecution[];
+  roleTemplates?: PackagedRoleTemplate[];
+  behaviorTemplates?: PackagedBehaviorTemplate[];
+  personaTemplates?: PackagedPersonaTemplate[];
 }
 
 /** Strip `ApiKey` from a live model, attaching an explicit apiKeyRef. */
@@ -147,6 +153,9 @@ function buildPackage(input: SerializePackageInput): FlujoPackage {
       return Object.keys(references).length ? { flow, references } : { flow };
     }),
     plannedExecutions: (input.plannedExecutions ?? []).map(packPlannedExecution),
+    roleTemplates: input.roleTemplates ? clone(input.roleTemplates) : undefined,
+    behaviorTemplates: input.behaviorTemplates ? clone(input.behaviorTemplates) : undefined,
+    personaTemplates: input.personaTemplates ? clone(input.personaTemplates) : undefined,
   };
 }
 
