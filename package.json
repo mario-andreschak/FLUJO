@@ -55,7 +55,7 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "prepublishOnly": "npm run build && npm run validate:mcp-release",
-    "version": "node scripts/sync-version.mjs && git add -A src README.md githubpages/index.html mcp-servers package.json package-lock.json",
+    "version": "node scripts/sync-version.mjs && git add -u -- src README.md githubpages/index.html mcp-servers package.json package-lock.json",
     "release": "node scripts/release.mjs"
   },
   "dependencies": {
