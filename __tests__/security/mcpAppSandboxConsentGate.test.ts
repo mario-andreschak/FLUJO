@@ -51,14 +51,12 @@ jest.mock('@/backend/services/mcp', () => ({
 
 const ensureSandboxForOriginKey = jest.fn(async (_originKey?: string) => ({ port: 4100, token: 'scoped-token' }));
 const registerSandboxHostOrigin = jest.fn();
-const hasValidSandboxAppUrlTemplate = jest.fn(() => true);
 
 jest.mock('@/backend/mcpApps/sandboxServer', () => ({
   ensureSandboxForOriginKey: (key: string) => ensureSandboxForOriginKey(key),
   registerSandboxHostOrigin: (origin: string) => registerSandboxHostOrigin(origin),
   deriveSandboxPublicUrl: (_host: string, port: number, key: string) =>
     `http://${key}.localhost:${port}/sandbox.html`,
-  hasValidSandboxAppUrlTemplate: () => hasValidSandboxAppUrlTemplate(),
 }));
 
 import { GET } from '@/app/api/mcp/app-sandbox/route';
@@ -109,7 +107,6 @@ describe('MCP App sandbox token issuance is consent-gated (#331)', () => {
       },
     });
     ensureSandboxForOriginKey.mockResolvedValue({ port: 4100, token: 'scoped-token' });
-    hasValidSandboxAppUrlTemplate.mockReturnValue(true);
   });
 
   afterAll(() => {
@@ -233,16 +230,15 @@ describe('MCP App sandbox token issuance is consent-gated (#331)', () => {
     expect(registerSandboxHostOrigin).not.toHaveBeenCalled();
   });
 
-  it('refuses hosted mode without a per-app hostname template', async () => {
+  it('keeps a localhost dashboard working after Public mode is selected', async () => {
     process.env.FLUJO_EXPOSURE_MODE = 'public';
-    hasValidSandboxAppUrlTemplate.mockReturnValue(false);
     await setMcpAppConsent('acme', URI, 'allow-always');
     loadServerConfigs.mockResolvedValue([external('acme')]);
 
     const response = await GET(request(`?serverName=acme&uri=${encodeURIComponent(URI)}`));
-    expect(response.status).toBe(503);
-    expect(ensureSandboxForOriginKey).not.toHaveBeenCalled();
-    expect(registerSandboxHostOrigin).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(ensureSandboxForOriginKey).toHaveBeenCalled();
+    expect(registerSandboxHostOrigin).toHaveBeenCalledWith('http://localhost:4200');
   });
 
   it('stays locked behind the encryption gate before consent is even considered', async () => {

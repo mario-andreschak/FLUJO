@@ -7,11 +7,9 @@ import { mcpService } from '@/backend/services/mcp';
 import { getEffectiveMcpAppConsent } from '@/backend/mcpApps/appConsent';
 import { deriveVerifiedMcpAppOriginKey } from '@/backend/mcpApps/appOrigin';
 import { getCurrentWorkspace } from '@/utils/workspace';
-import { getExposureMode } from '@/utils/http/exposureMode';
 import {
   deriveSandboxPublicUrl,
   ensureSandboxForOriginKey,
-  hasValidSandboxAppUrlTemplate,
   registerSandboxHostOrigin,
 } from '@/backend/mcpApps/sandboxServer';
 
@@ -25,15 +23,17 @@ import {
  *   - originKey (optional compatibility hint): Must exactly match the key the
  *     server derives. It never selects an origin and a mismatch is rejected.
  *
- * Local installs use `http://<originKey>.localhost:<port>/sandbox.html` on a
- * shared loopback listener. Hosted installs require a `{app}` hostname template.
+ * Local requests use `http://<originKey>.localhost:<port>/sandbox.html` on a
+ * shared listener. Plain-HTTP LAN requests automatically reuse the requested
+ * hostname on the sandbox port; hosted HTTPS installs may provide a `{app}`
+ * hostname template for separately routed/TLS-terminated app origins.
  *
  * Response shape:
  *   - port: Port number for the sandbox listener
  *   - token: Access token (per-app scoped or shared)
  *   - url?: Browser-visible URL (hosted HTTPS deployments)
  *   - originKey: Server-derived, workspace-scoped origin key
- *   - shared: Always false; retained only for compatibility with older clients
+ *   - shared: Whether the automatic LAN fallback shares one browser origin
  *
  * Gated like the rest of the API (deny-by-default): MCP Apps only render inside
  * an active chat, which already requires the encryption unlock.
@@ -133,13 +133,6 @@ async function GET_handler(request: NextRequest) {
     }
   }
 
-  if (getExposureMode() !== 'localhost' && !hasValidSandboxAppUrlTemplate()) {
-    return NextResponse.json(
-      { error: 'Hosted MCP Apps require a sandbox URL with {app} as a hostname label' },
-      { status: 503, headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } },
-    );
-  }
-
   let sandboxResult;
   try {
     sandboxResult = await ensureSandboxForOriginKey(originKey);
@@ -176,13 +169,22 @@ async function GET_handler(request: NextRequest) {
 
   // Validate that the sandbox URL origin differs from the request origin
   // (enforces foreign-origin isolation).
+  let shared = false;
   try {
-    const sandboxUrlOrigin = new URL(publicUrl).origin;
+    const sandboxUrl = new URL(publicUrl);
+    const sandboxUrlOrigin = sandboxUrl.origin;
     const requestOrigin = new URL(hostOrigin).origin;
     if (sandboxUrlOrigin === requestOrigin) {
       return NextResponse.json(
         { error: 'Sandbox origin must differ from host origin' },
         { status: 500, headers: { 'Cache-Control': 'no-store' } },
+      );
+    }
+    shared = !sandboxUrl.hostname.toLowerCase().split('.').includes(originKey);
+    if (shared && sandboxUrl.searchParams.get('originKey') !== originKey) {
+      return NextResponse.json(
+        { error: 'Shared MCP Apps sandbox URL is missing its scoped app identity' },
+        { status: 503, headers: { 'Cache-Control': 'no-store' } },
       );
     }
   } catch {
@@ -202,7 +204,7 @@ async function GET_handler(request: NextRequest) {
       token: sandboxResult.token,
       url: publicUrl,
       originKey,
-      shared: false,
+      shared,
     },
     {
       headers: {
