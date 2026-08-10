@@ -49,6 +49,7 @@ import {
   listBehaviorBindings,
   listBehaviorRevisions,
   listMemoryItems,
+  listPersonaAppGrants,
   listPersonaActivities,
   listPersonaLeaseRecords,
   listPersonaMailboxItems,
@@ -203,6 +204,7 @@ async function buildPreview(personaId: string): Promise<PersonaDeletionPreview> 
   const [
     behaviorBindings,
     behaviorRevisions,
+    appGrants,
     memoryItems,
     workItems,
     activities,
@@ -215,6 +217,7 @@ async function buildPreview(personaId: string): Promise<PersonaDeletionPreview> 
   ] = await Promise.all([
     listBehaviorBindings(personaId),
     listBehaviorRevisions(personaId),
+    listPersonaAppGrants(personaId),
     listMemoryItems(personaId),
     listPersonaWorkItems(personaId),
     listPersonaActivities(personaId),
@@ -237,6 +240,7 @@ async function buildPreview(personaId: string): Promise<PersonaDeletionPreview> 
   const counts: PersonaDeletionCounts = {
     behaviorBindings: behaviorBindings.length,
     behaviorRevisions: behaviorRevisions.length,
+    appGrants: appGrants.length,
     memoryItems: memoryItems.length,
     workItems: workItems.length,
     liveActivities: activities.length - archivedActivities,
@@ -254,6 +258,7 @@ async function buildPreview(personaId: string): Promise<PersonaDeletionPreview> 
     persona: { id: persona.id, updatedAt: persona.updatedAt, state: persona.lifecycleState },
     behaviorBindings: behaviorBindings.map((item) => [item.id, item.updatedAt]),
     behaviorRevisions: behaviorRevisions.map((item) => [item.id, item.createdAt]),
+    appGrants: appGrants.map((item) => [item.id, item.updatedAt, item.mcpServerName]),
     memoryItems: memoryItems.map((item) => [item.id, item.updatedAt, item.status]),
     workItems: workItems.map((item) => [item.id, item.updatedAt, item.status]),
     activities: activities.map((item) => [item.id, item.updatedAt, item.status]),
@@ -283,7 +288,10 @@ async function buildPreview(personaId: string): Promise<PersonaDeletionPreview> 
       futureCrossSystemAttributionPolicy: 'anonymize_or_minimal_tombstone',
     },
     externalSharedResources: {
-      mcpConfigNames: referencedMcpConfigs(behaviorRevisions),
+      mcpConfigNames: [...new Set([
+        ...referencedMcpConfigs(behaviorRevisions),
+        ...appGrants.map((grant) => grant.mcpServerName),
+      ])].sort(),
       action: 'retained',
     },
     backupPolicy: {
@@ -302,6 +310,7 @@ async function erasePersonaOwnedState(personaId: string): Promise<void> {
   const [
     behaviorBindings,
     behaviorRevisions,
+    appGrants,
     memoryItems,
     workItems,
     activities,
@@ -312,6 +321,7 @@ async function erasePersonaOwnedState(personaId: string): Promise<void> {
   ] = await Promise.all([
     listBehaviorBindings(personaId),
     listBehaviorRevisions(personaId),
+    listPersonaAppGrants(personaId),
     listMemoryItems(personaId),
     listPersonaWorkItems(personaId),
     listPersonaActivities(personaId),
@@ -331,6 +341,10 @@ async function erasePersonaOwnedState(personaId: string): Promise<void> {
     )),
     ...behaviorRevisions.map((item) => deleteCollectionItem(
       ENDURING_AGENT_COLLECTIONS.behaviorRevisions,
+      item.id,
+    )),
+    ...appGrants.map((item) => deleteCollectionItem(
+      ENDURING_AGENT_COLLECTIONS.appGrants,
       item.id,
     )),
     ...memoryItems.map((item) => deleteCollectionItem(

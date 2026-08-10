@@ -9,6 +9,8 @@ import type {
   MemoryItem,
   Persona,
   PersonaActivity,
+  PersonaAppGrant,
+  PersonaAppLaunchDescriptor,
   PersonaMailboxItem,
   PersonaWorkItem,
   RoleDefinition,
@@ -52,6 +54,7 @@ export interface PersonaDetail {
   roleVersion: RoleVersion;
   behaviorBindings: BehaviorBinding[];
   behaviorRevisions: BehaviorRevision[];
+  appGrants: PersonaAppGrant[];
   memoryItems: MemoryItem[];
   workItems: PersonaWorkItem[];
   activities: PersonaActivity[];
@@ -225,6 +228,28 @@ class PersonasService {
       personaId,
       `/behaviors/${encodeURIComponent(behaviorId)}/activate`,
     ), 'POST', input);
+  }
+
+  grantApp(personaId: string, mcpServerName: string): Promise<PersonaAppGrant> {
+    return jsonRequest(personaPath(personaId, '/app-grants'), 'POST', { mcpServerName });
+  }
+
+  revokeApp(personaId: string, grantId: string): Promise<void> {
+    return jsonRequest(personaPath(
+      personaId,
+      `/app-grants/${encodeURIComponent(grantId)}`,
+    ), 'DELETE');
+  }
+
+  authorizeAppLaunch(
+    personaId: string,
+    grantId: string,
+    uri: string,
+  ): Promise<PersonaAppLaunchDescriptor> {
+    return jsonRequest(personaPath(
+      personaId,
+      `/app-grants/${encodeURIComponent(grantId)}/launch`,
+    ), 'POST', { uri });
   }
 
   recoverRuntime(personaId: string): Promise<unknown> {

@@ -13,6 +13,7 @@ export * from './namespaces';
 export * from './personaDeletion';
 export * from './personaDispatcher';
 export * from './personaAdmin';
+export * from './personaAppGrants';
 export * from './recordMigrations';
 export * from './runtimeEvents';
 export * from './runtimeObservability';

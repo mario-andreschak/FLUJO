@@ -7,6 +7,35 @@ const getMock = jest.fn();
 const rolesMock = jest.fn();
 const replaceMock = jest.fn();
 const pushMock = jest.fn();
+const grantAppMock = jest.fn();
+const revokeAppMock = jest.fn();
+const authorizeAppLaunchMock = jest.fn();
+const emitLaunchGlobalMcpAppMock = jest.fn();
+const discoveryRefreshMock = jest.fn();
+
+const mockDiscoveryState = {
+  servers: [
+    {
+      name: 'github-jim',
+      apps: [{
+        serverName: 'github-jim',
+        uri: 'ui://github/dashboard',
+        name: 'GitHub Dashboard',
+        mimeType: 'text/html;profile=mcp-app',
+        toolNames: ['list_issues'],
+        listedResource: true,
+      }],
+    },
+    { name: 'github-sarah', apps: [] },
+  ],
+  apps: [],
+  loading: false,
+  refreshing: false,
+  error: null,
+  serverErrors: [],
+  discoveryId: 1,
+  refresh: discoveryRefreshMock,
+};
 
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ replace: replaceMock, push: pushMock }),
@@ -27,8 +56,19 @@ jest.mock('@/frontend/services/personas', () => ({
     updateWorkItem: jest.fn(),
     deleteWorkItem: jest.fn(),
     activateBehavior: jest.fn(),
+    grantApp: (...args: unknown[]) => grantAppMock(...args),
+    revokeApp: (...args: unknown[]) => revokeAppMock(...args),
+    authorizeAppLaunch: (...args: unknown[]) => authorizeAppLaunchMock(...args),
     recoverRuntime: jest.fn(),
   },
+}));
+
+jest.mock('@/frontend/components/mcp/useMcpAppsDiscovery', () => ({
+  useMcpAppsDiscovery: () => mockDiscoveryState,
+}));
+
+jest.mock('@/frontend/utils/quickActions', () => ({
+  emitLaunchGlobalMcpApp: (...args: unknown[]) => emitLaunchGlobalMcpAppMock(...args),
 }));
 
 import PersonasDesk from '@/frontend/components/Personas';
@@ -100,6 +140,14 @@ const detail = {
       createdAt: 2,
     },
   ],
+  appGrants: [{
+    schemaVersion: 1,
+    id: 'appgrant_jim',
+    personaId: 'jim',
+    mcpServerName: 'github-jim',
+    createdAt: 4,
+    updatedAt: 4,
+  }],
   memoryItems: [{
     schemaVersion: 1,
     id: 'memory_1',
@@ -142,6 +190,14 @@ beforeEach(() => {
   listMock.mockResolvedValue([persona]);
   getMock.mockResolvedValue(detail);
   rolesMock.mockResolvedValue({ roleDefinitions: [], roleVersions: [detail.roleVersion] });
+  grantAppMock.mockResolvedValue(detail.appGrants[0]);
+  revokeAppMock.mockResolvedValue(undefined);
+  authorizeAppLaunchMock.mockResolvedValue({
+    personaId: 'jim',
+    grantId: 'appgrant_jim',
+    mcpServerName: 'github-jim',
+    uri: 'ui://github/dashboard',
+  });
   window.history.replaceState({}, '', '/personas/jim');
 });
 
@@ -162,4 +218,26 @@ it('exposes the complete Phase 5 desk areas and inspectable revision/memory evid
   expect(screen.getByRole('button', { name: 'Rollback' })).toBeInTheDocument();
 
   await waitFor(() => expect(replaceMock).toHaveBeenCalled());
+});
+
+it('shows exact account identity and launches only through a grant-scoped descriptor', async () => {
+  render(<PersonasDesk initialPersonaId="jim" />);
+  expect(await screen.findByRole('heading', { name: 'Jim' })).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('tab', { name: /Apps/i }));
+  expect(await screen.findByText('Account / MCP config')).toBeInTheDocument();
+  expect(screen.getByText('github-jim')).toBeInTheDocument();
+  expect(screen.getByText('GitHub Dashboard')).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Launch' }));
+  await waitFor(() => expect(authorizeAppLaunchMock).toHaveBeenCalledWith(
+    'jim',
+    'appgrant_jim',
+    'ui://github/dashboard',
+  ));
+  expect(emitLaunchGlobalMcpAppMock).toHaveBeenCalledWith({
+    serverName: 'github-jim',
+    uri: 'ui://github/dashboard',
+  });
+  expect(screen.getByText(/never add tools or permissions/i)).toBeInTheDocument();
 });

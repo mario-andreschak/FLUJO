@@ -14,6 +14,7 @@ import {
   HistoryRounded,
   HubRounded,
   MemoryRounded,
+  OpenInNewRounded,
   PersonAddRounded,
   PushPinRounded,
   RefreshRounded,
@@ -58,6 +59,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useMcpAppsDiscovery } from '@/frontend/components/mcp/useMcpAppsDiscovery';
 import {
   personasService,
   type PersonaBundle,
@@ -65,6 +67,7 @@ import {
   type RolesResponse,
 } from '@/frontend/services/personas';
 import { magicLinkPath } from '@/frontend/utils/magicLink';
+import { emitLaunchGlobalMcpApp } from '@/frontend/utils/quickActions';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import {
   PERSONA_AUTONOMY_LEVELS,
@@ -427,7 +430,7 @@ function PersonaDetailView({
       {area === 'work' && <WorkArea detail={detail} busy={busy} mutate={mutate} />}
       {area === 'memory' && <MemoryArea detail={detail} busy={busy} mutate={mutate} />}
       {area === 'behaviors' && <BehaviorsArea detail={detail} busy={busy} mutate={mutate} />}
-      {area === 'apps' && <AppsArea />}
+      {area === 'apps' && <AppsArea detail={detail} busy={busy} mutate={mutate} />}
       {area === 'activity' && <ActivityArea detail={detail} />}
       {area === 'settings' && <SettingsArea detail={detail} busy={busy} mutate={mutate} />}
       <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}><Button startIcon={<RefreshRounded />} onClick={() => void refresh()} disabled={busy}>{t('personas.refresh')}</Button></Box>
@@ -692,9 +695,163 @@ function BehaviorsArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: 
   }
 }
 
-function AppsArea() {
+function AppsArea({ detail, busy, mutate }: {
+  detail: PersonaDetail;
+  busy: boolean;
+  mutate: (action: () => Promise<unknown>, success?: string) => Promise<void>;
+}) {
   const { t } = useI18n();
-  return <AreaShell title={t('personas.apps.title')} icon={<AppsRounded />}><Stack spacing={2} alignItems="flex-start"><Alert severity="info">{t('personas.apps.description')}</Alert><Button component={Link} href={withWorkspaceUrl('/mcp')} variant="contained" startIcon={<HubRounded />}>{t('personas.apps.open')}</Button></Stack></AreaShell>;
+  const [selectedConfig, setSelectedConfig] = useState('');
+  const [launching, setLaunching] = useState<string | null>(null);
+  const [launchError, setLaunchError] = useState<string | null>(null);
+  const { servers, loading, refreshing, error, refresh } = useMcpAppsDiscovery({ active: true });
+  const grantsByServer = new Map(detail.appGrants.map((grant) => [grant.mcpServerName, grant]));
+  const availableServers = servers.filter((server) => !grantsByServer.has(server.name));
+
+  useEffect(() => {
+    if (selectedConfig && !availableServers.some((server) => server.name === selectedConfig)) {
+      setSelectedConfig('');
+    }
+  }, [availableServers, selectedConfig]);
+
+  const launch = async (grantId: string, uri: string) => {
+    const launchKey = `${grantId}:${uri}`;
+    setLaunching(launchKey);
+    setLaunchError(null);
+    try {
+      const descriptor = await personasService.authorizeAppLaunch(
+        detail.persona.id,
+        grantId,
+        uri,
+      );
+      emitLaunchGlobalMcpApp({ serverName: descriptor.mcpServerName, uri: descriptor.uri });
+    } catch (cause) {
+      setLaunchError(cause instanceof Error ? cause.message : t('personas.apps.launchFailed'));
+    } finally {
+      setLaunching(null);
+    }
+  };
+
+  return (
+    <AreaShell
+      title={t('personas.apps.title')}
+      icon={<AppsRounded />}
+      action={<Button component={Link} href={withWorkspaceUrl('/mcp')} startIcon={<HubRounded />}>{t('personas.apps.manage')}</Button>}
+    >
+      <Stack spacing={2.5}>
+        <Alert severity="info">{t('personas.apps.description')}</Alert>
+        {launchError && <Alert severity="error">{launchError}</Alert>}
+        {error && <Alert severity="warning">{error}</Alert>}
+
+        <Paper variant="outlined" sx={{ p: 2, borderRadius: 3 }}>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ sm: 'center' }}>
+            <TextField
+              select
+              fullWidth
+              size="small"
+              label={t('personas.apps.config')}
+              value={selectedConfig}
+              onChange={(event) => setSelectedConfig(event.target.value)}
+              disabled={loading || refreshing || availableServers.length === 0}
+            >
+              {availableServers.map((server) => (
+                <MenuItem key={server.name} value={server.name}>{server.name}</MenuItem>
+              ))}
+            </TextField>
+            <Button
+              variant="contained"
+              startIcon={<AddRounded />}
+              disabled={busy || !selectedConfig}
+              onClick={() => void mutate(
+                () => personasService.grantApp(detail.persona.id, selectedConfig),
+                t('personas.apps.granted'),
+              ).then(() => setSelectedConfig(''))}
+            >
+              {t('personas.apps.grant')}
+            </Button>
+            <Button startIcon={<RefreshRounded />} disabled={loading || refreshing} onClick={refresh}>
+              {t('personas.refresh')}
+            </Button>
+          </Stack>
+          {!loading && availableServers.length === 0 && (
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 1.25 }}>
+              {t('personas.apps.noEligible')}
+            </Typography>
+          )}
+        </Paper>
+
+        {detail.appGrants.length === 0 ? (
+          <Typography color="text.secondary">{t('personas.apps.empty')}</Typography>
+        ) : (
+          <Stack spacing={2}>
+            {detail.appGrants.map((grant) => {
+              const server = servers.find((candidate) => candidate.name === grant.mcpServerName);
+              return (
+                <Card key={grant.id} variant="outlined" sx={{ borderRadius: 3 }}>
+                  <CardContent>
+                    <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={1.5}>
+                      <Box minWidth={0}>
+                        <Typography variant="overline" color="text.secondary">
+                          {t('personas.apps.account')}
+                        </Typography>
+                        <Typography variant="h6" fontWeight={760} sx={{ overflowWrap: 'anywhere' }}>
+                          {grant.mcpServerName}
+                        </Typography>
+                      </Box>
+                      <Chip color={server && !server.error ? 'success' : 'warning'} label={server && !server.error ? t('personas.apps.available') : t('personas.apps.unavailable')} />
+                    </Stack>
+                    {!server ? (
+                      <Alert severity="warning" sx={{ mt: 2 }}>{t('personas.apps.stale')}</Alert>
+                    ) : server.error ? (
+                      <Alert severity="warning" sx={{ mt: 2 }}>{server.error}</Alert>
+                    ) : server.apps.length === 0 ? (
+                      <Typography color="text.secondary" sx={{ mt: 2 }}>{t('personas.apps.none')}</Typography>
+                    ) : (
+                      <Stack spacing={1} sx={{ mt: 2 }}>
+                        {server.apps.map((app) => {
+                          const launchKey = `${grant.id}:${app.uri}`;
+                          return (
+                            <Paper key={app.uri} variant="outlined" sx={{ p: 1.5, borderRadius: 2.5 }}>
+                              <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={1.5} alignItems={{ sm: 'center' }}>
+                                <Box minWidth={0}>
+                                  <Typography fontWeight={700}>{app.name}</Typography>
+                                  <Typography variant="caption" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>{app.uri}</Typography>
+                                </Box>
+                                <Button
+                                  variant="outlined"
+                                  startIcon={<OpenInNewRounded />}
+                                  disabled={launching !== null}
+                                  onClick={() => void launch(grant.id, app.uri)}
+                                >
+                                  {launching === launchKey ? t('personas.apps.launching') : t('personas.apps.launch')}
+                                </Button>
+                              </Stack>
+                            </Paper>
+                          );
+                        })}
+                      </Stack>
+                    )}
+                  </CardContent>
+                  <CardActions>
+                    <Button
+                      color="error"
+                      disabled={busy}
+                      onClick={() => void mutate(
+                        () => personasService.revokeApp(detail.persona.id, grant.id),
+                        t('personas.apps.revoked'),
+                      )}
+                    >
+                      {t('personas.apps.revoke')}
+                    </Button>
+                  </CardActions>
+                </Card>
+              );
+            })}
+          </Stack>
+        )}
+      </Stack>
+    </AreaShell>
+  );
 }
 
 function ActivityArea({ detail }: { detail: PersonaDetail }) {

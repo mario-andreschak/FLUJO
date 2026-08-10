@@ -304,6 +304,32 @@ export const ActivateBehaviorRevisionInputSchema = z.object({
   expectedActiveRevisionId: EnduringAgentIdSchema,
 }).strict();
 
+/** Mirrors the MCP config route's path-safe name contract without narrowing legacy names. */
+export const McpServerConfigNameSchema = z.string().min(1).max(200).refine(
+  (name) => name !== '.' && name !== '..' && !/[/\\\x00-\x1f]/.test(name),
+  { message: 'Invalid MCP server configuration name.' },
+);
+
+export const PersonaAppGrantSchema = z.object({
+  schemaVersion: z.literal(ENDURING_AGENT_SCHEMA_VERSION),
+  id: EnduringAgentIdSchema,
+  personaId: EnduringAgentIdSchema,
+  mcpServerName: McpServerConfigNameSchema,
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+}).strict().refine(
+  (record) => record.updatedAt >= record.createdAt,
+  { message: 'updatedAt cannot precede createdAt.', path: ['updatedAt'] },
+);
+
+export const CreatePersonaAppGrantInputSchema = z.object({
+  mcpServerName: McpServerConfigNameSchema,
+}).strict();
+
+export const PersonaAppLaunchInputSchema = z.object({
+  uri: z.string().min(1).max(4096).regex(/^ui:\/\//i),
+}).strict();
+
 export const PersonaActivitySourceSchema = z.object({
   kind: z.enum(PERSONA_ACTIVITY_SOURCE_KINDS),
   sourceId: z.string().min(1).max(512).optional(),
@@ -932,6 +958,8 @@ export const CreatePersonaLeaseInputSchema = z.object({
 export const PersonaDeletionCountsSchema = z.object({
   behaviorBindings: z.number().int().nonnegative(),
   behaviorRevisions: z.number().int().nonnegative(),
+  // Additive default preserves already-written deletion tombstones from Phase 1.
+  appGrants: z.number().int().nonnegative().default(0),
   memoryItems: z.number().int().nonnegative(),
   workItems: z.number().int().nonnegative(),
   liveActivities: z.number().int().nonnegative(),

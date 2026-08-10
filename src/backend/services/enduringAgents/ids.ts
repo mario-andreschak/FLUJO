@@ -45,3 +45,12 @@ export function personaDeletionTombstoneId(workspaceId: string, personaId: strin
     personaId,
   });
 }
+
+/** One exact named MCP configuration may be granted to a Persona at most once. */
+export function personaAppGrantId(personaId: string, mcpServerName: string): string {
+  return stableEnduringAgentId('appgrant', {
+    purpose: 'persona-app-grant-v1',
+    personaId,
+    mcpServerName,
+  });
+}

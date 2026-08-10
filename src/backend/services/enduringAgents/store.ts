@@ -5,6 +5,7 @@ import {
   BehaviorRevisionSchema,
   ENDURING_AGENT_SCHEMA_VERSION,
   MemoryItemSchema,
+  PersonaAppGrantSchema,
   PersonaActivitySchema,
   PersonaDeletionTombstoneSchema,
   PersonaLeaseSchema,
@@ -17,6 +18,7 @@ import {
   type BehaviorRevision,
   type MemoryItem,
   type Persona,
+  type PersonaAppGrant,
   type PersonaActivity,
   type PersonaDeletionTombstone,
   type PersonaLease,
@@ -44,7 +46,7 @@ import {
   snapshotBehaviorFlow,
 } from './behaviorRevisions';
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
-import { personaDeletionTombstoneId } from './ids';
+import { personaAppGrantId, personaDeletionTombstoneId } from './ids';
 import {
   UnsupportedEnduringAgentSchemaError,
   migrateAndParseRecord,
@@ -939,6 +941,57 @@ export async function listPersonaWorkItems(personaId: string): Promise<PersonaWo
   return records.filter((record) => record.personaId === personaId);
 }
 
+export function getPersonaAppGrant(id: string): Promise<PersonaAppGrant | null> {
+  return getRecord({
+    collection: ENDURING_AGENT_COLLECTIONS.appGrants,
+    id,
+    recordKind: 'PersonaAppGrant',
+    schema: PersonaAppGrantSchema,
+  });
+}
+
+export async function listPersonaAppGrants(personaId: string): Promise<PersonaAppGrant[]> {
+  assertSafeCollectionId(personaId);
+  const records = await listRecords({
+    collection: ENDURING_AGENT_COLLECTIONS.appGrants,
+    recordKind: 'PersonaAppGrant',
+    schema: PersonaAppGrantSchema,
+    strict: true,
+  });
+  return records.filter((record) => record.personaId === personaId);
+}
+
+/** Persist one exact named config without creating any Flow/tool binding. */
+export function createPersonaAppGrant(value: PersonaAppGrant): Promise<PersonaAppGrant> {
+  const record = parseRecord('PersonaAppGrant', PersonaAppGrantSchema, value);
+  assertSafeCollectionId(record.id);
+  const expectedId = personaAppGrantId(record.personaId, record.mcpServerName);
+  if (record.id !== expectedId) {
+    throw new Error('PersonaAppGrant id does not match its Persona and MCP config identity.');
+  }
+
+  return recordMutation(ENDURING_AGENT_COLLECTIONS.appGrants, record.id, async () => {
+    await requireWritablePersona(record.personaId, `PersonaAppGrant ${JSON.stringify(record.id)}`);
+    const existing = await getPersonaAppGrant(record.id);
+    if (existing) {
+      if (
+        existing.personaId === record.personaId
+        && existing.mcpServerName === record.mcpServerName
+      ) return existing;
+      throw new Error(`PersonaAppGrant ${JSON.stringify(record.id)} already exists.`);
+    }
+    await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.appGrants, record.id, record);
+    return record;
+  });
+}
+
+export function deletePersonaAppGrantRecord(id: string): Promise<void> {
+  assertSafeCollectionId(id);
+  return recordMutation(ENDURING_AGENT_COLLECTIONS.appGrants, id, () => (
+    deleteCollectionItem(ENDURING_AGENT_COLLECTIONS.appGrants, id)
+  ));
+}
+
 async function assertValidWorkItemReferences(record: PersonaWorkItem): Promise<void> {
   await requireWritablePersona(record.personaId, `PersonaWorkItem ${JSON.stringify(record.id)}`);
   if (record.createdByActivityId) {
@@ -1226,6 +1279,8 @@ export interface PersonaBundle {
   behaviorBindings: BehaviorBinding[];
   /** Complete immutable revision history for inspectability and rollback. */
   behaviorRevisions: BehaviorRevision[];
+  /** Direct-device grants only; never merged into Behavior execution authority. */
+  appGrants: PersonaAppGrant[];
   memoryItems: MemoryItem[];
   workItems: PersonaWorkItem[];
   activities: PersonaActivity[];
@@ -1251,6 +1306,7 @@ export async function listPersonaBundle(personaId: string): Promise<PersonaBundl
     roleVersion,
     behaviorBindings,
     behaviorRevisions,
+    appGrants,
     memoryItems,
     workItems,
     activities,
@@ -1260,6 +1316,7 @@ export async function listPersonaBundle(personaId: string): Promise<PersonaBundl
     getRoleVersion(persona.roleVersionId),
     listBehaviorBindings(personaId),
     listBehaviorRevisions(personaId),
+    listPersonaAppGrants(personaId),
     listMemoryItems(personaId),
     listPersonaWorkItems(personaId),
     listPersonaActivities(personaId),
@@ -1293,6 +1350,9 @@ export async function listPersonaBundle(personaId: string): Promise<PersonaBundl
       left.slotKey.localeCompare(right.slotKey)
       || right.revision - left.revision
       || left.id.localeCompare(right.id)
+    )),
+    appGrants: appGrants.sort((left, right) => (
+      left.mcpServerName.localeCompare(right.mcpServerName) || left.id.localeCompare(right.id)
     )),
     memoryItems,
     workItems,

@@ -258,6 +258,38 @@ export interface ActivateBehaviorRevisionInput {
   expectedActiveRevisionId: string;
 }
 
+/**
+ * Optional direct-device authorization for one concrete, workspace-owned MCP
+ * configuration. This record is intentionally independent from Behavior Flow
+ * nodes: it never contributes boundServer, enabledTools, roots, or permissions.
+ */
+export interface PersonaAppGrant {
+  schemaVersion: typeof ENDURING_AGENT_SCHEMA_VERSION;
+  id: string;
+  personaId: string;
+  /** Exact MCP configuration identity, for example `github-jim`. */
+  mcpServerName: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface CreatePersonaAppGrantInput {
+  mcpServerName: string;
+}
+
+export interface PersonaAppLaunchInput {
+  /** MCP Apps resource selected from the granted config's live discovery. */
+  uri: string;
+}
+
+/** One-shot, non-secret descriptor consumed by the existing global Apps host. */
+export interface PersonaAppLaunchDescriptor {
+  personaId: string;
+  grantId: string;
+  mcpServerName: string;
+  uri: string;
+}
+
 export const PERSONA_ACTIVITY_KINDS = [
   'interactive_chat',
   'assignment',
@@ -594,6 +626,7 @@ export type PersonaDeletionStatus = (typeof PERSONA_DELETION_STATUSES)[number];
 export interface PersonaDeletionCounts {
   behaviorBindings: number;
   behaviorRevisions: number;
+  appGrants: number;
   memoryItems: number;
   workItems: number;
   liveActivities: number;
