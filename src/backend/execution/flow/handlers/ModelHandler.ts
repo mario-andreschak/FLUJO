@@ -1189,7 +1189,6 @@ export class ModelHandler {
     // them onto the same live event used by the ordinary tool loop.
     const onToolProgress = emit
       ? (progress: ModelToolProgress) => {
-          if (!acceptLiveProjection || input.executionAuthority?.signal.aborted) return;
           emit({
             type: 'tool:progress',
             toolCallId: progress.toolCallId,
