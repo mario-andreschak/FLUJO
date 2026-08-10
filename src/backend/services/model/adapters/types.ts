@@ -39,6 +39,19 @@ export interface ModelStreamDelta {
 }
 
 /**
+ * Live progress from an MCP tool executed inside a self-orchestrating adapter.
+ * These adapters own their tool loop, so the normal ModelHandler tool-call
+ * path cannot observe the MCP SDK's progress callback directly.
+ */
+export interface ModelToolProgress {
+  toolCallId: string;
+  name: string;
+  progress: number;
+  total?: number;
+  message?: string;
+}
+
+/**
  * Everything an adapter needs to perform a single chat completion. The caller
  * (ModelHandler) is responsible for resolving/decrypting the API key and
  * stripping FLUJO-internal fields (timestamps) from the messages first.
@@ -186,6 +199,11 @@ export interface CompletionInput {
    * partial assistant events. The callback is live-only and is never persisted.
    */
   onModelDelta?: (delta: ModelStreamDelta) => void;
+  /**
+   * Live MCP progress sink for self-orchestrating adapters. Request/response
+   * adapters execute tools in ModelHandler and therefore do not use this hook.
+   */
+  onToolProgress?: (progress: ModelToolProgress) => void;
   /**
    * Captured run resources for oversized PRIOR tool results/args, keyed by the
    * producing `tool_call_id` (issue #168). Self-orchestrating adapters (Claude

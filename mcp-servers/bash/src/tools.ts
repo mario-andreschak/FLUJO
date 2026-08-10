@@ -54,7 +54,14 @@ export const BASH_TERMINAL_APP_URI = 'ui://bash/terminal';
 const log = createLogger('backend/services/mcp/internal/bashTools');
 
 const DEFAULT_TIMEOUT_MS = 60_000;
-const MAX_TIMEOUT_MS = 600_000;
+/**
+ * Foreground commands and `wait` calls may wrap builds, renders, migrations,
+ * and other jobs that take far longer than the historical ten-minute ceiling.
+ * Keep a finite default safety ceiling, aligned with the background-session
+ * lifetime, while allowing deployments to lower or raise it. Passing -1
+ * disables this Bash-side timer; cancellation and shutdown still clean up.
+ */
+const DEFAULT_MAX_TIMEOUT_MS = 12 * 60 * 60_000;
 const MAX_OUTPUT_CHARS = 100_000;
 const MAX_SESSIONS = 25;
 const MAX_TERMINAL_OUTPUT_CHARS = 2_000_000;
@@ -99,6 +106,24 @@ function sessionIdleTimeoutMs(): number {
 
 function sessionMaxLifetimeMs(): number {
   return positiveEnvNumber('FLUJO_BASH_SESSION_MAX_LIFETIME_MS', SESSION_MAX_LIFETIME_MS);
+}
+
+function commandMaxTimeoutMs(): number {
+  return positiveEnvNumber('FLUJO_BASH_COMMAND_MAX_TIMEOUT_MS', DEFAULT_MAX_TIMEOUT_MS);
+}
+
+/** `undefined` means no Bash-side timeout (the explicit timeout=-1 contract). */
+function resolveCommandTimeoutMs(value: unknown): number | undefined {
+  if (value === -1) return undefined;
+  const requested = typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value * 1_000
+    : DEFAULT_TIMEOUT_MS;
+  return Math.min(requested, commandMaxTimeoutMs());
+}
+
+/** Test seam for the public timeout contract; not used by the runtime. */
+export function _resolveCommandTimeoutMsForTests(value: unknown): number | undefined {
+  return resolveCommandTimeoutMs(value);
 }
 
 type ShellKind = 'default' | 'pwsh' | 'bash' | 'cmd';
@@ -1602,6 +1627,9 @@ function createCommandProgressReporter(context?: BashExecutionContext): {
 
   const startedAt = Date.now();
   const maxMessageChars = 4_000;
+  // MCP requires `progress` to increase with every notification. It is a
+  // notification sequence here (not a byte count), because silent-command
+  // heartbeats must advance it too.
   let progress = 0;
   let pending = '';
   let flushTimer: NodeJS.Timeout | undefined;
@@ -1612,7 +1640,7 @@ function createCommandProgressReporter(context?: BashExecutionContext): {
 
   const deliver = (message: string) => {
     if (!message) return;
-    const snapshot = progress;
+    const snapshot = ++progress;
     chain = chain
       .then(() => report({ progress: snapshot, message }))
       .catch((error) => {
@@ -1638,7 +1666,6 @@ function createCommandProgressReporter(context?: BashExecutionContext): {
   return {
     push: (chunk) => {
       if (stopped || !chunk) return;
-      progress += Buffer.byteLength(chunk, 'utf8');
       const remaining = Math.max(0, MAX_OUTPUT_CHARS - forwardedChars);
       if (remaining > 0) {
         const accepted = chunk.slice(0, remaining);
@@ -1792,7 +1819,12 @@ export function bashToolDefinitions(): Tool[] {
           cwd: cwdProp,
           shell: shellProp,
           env: envProp,
-          timeout: { type: 'number', description: 'Timeout in seconds (default 60, max 600). On timeout the whole process tree is killed and elapsedMs/timeoutMs are reported.' },
+          timeout: {
+            type: 'number',
+            description:
+              'Bash-side timeout in seconds (default 60; -1 disables it; positive values are capped at 12 hours by default). '
+              + 'While running, output and 10-second liveness heartbeats are sent as MCP progress. On timeout the whole process tree is killed.',
+          },
           normalizeNewlines: { type: 'boolean', description: 'If true, CRLF/CR in the captured output are normalized to LF.' },
           encoding: encodingProp,
           maxOutputChars: maxOutputCharsProp,
@@ -1839,7 +1871,11 @@ export function bashToolDefinitions(): Tool[] {
         type: 'object',
         properties: {
           sessionId: { type: 'string', description: 'The id returned by start.' },
-          timeout: { type: 'number', description: 'Max seconds to wait (default 60, max 600).' },
+          timeout: {
+            type: 'number',
+            description:
+              'Max seconds to wait (default 60; -1 waits until completion or cancellation; positive values are capped at 12 hours by default).',
+          },
         },
         required: ['sessionId'],
       },
@@ -1977,8 +2013,7 @@ async function runTool(
   const warnings = await scanCommandForExternalPaths(command, cwd, roots);
   const warn = warnings.length ? { warnings } : {};
   const normalize = args.normalizeNewlines === true;
-  const timeoutSec = typeof args.timeout === 'number' && args.timeout > 0 ? args.timeout : DEFAULT_TIMEOUT_MS / 1000;
-  const timeoutMs = Math.min(timeoutSec * 1000, MAX_TIMEOUT_MS);
+  const timeoutMs = resolveCommandTimeoutMs(args.timeout);
   const maxOutputChars = resolveMaxOutputChars(args.maxOutputChars);
   let outputFilePath: string | undefined;
   if (args.outputFile !== undefined) {
@@ -2082,31 +2117,33 @@ async function runTool(
       resolve(result);
     };
 
-    timer = setTimeout(() => {
-      cancelEscalation = killProcessTree(child);
-      const finalOut = maybeNormalize(output, normalize);
-      const hangHints = detectInteractiveHangRisk(command);
-      void finish(textResult({
-        timedOut: true,
-        cwd,
-        requestedShell,
-        shell: effectiveShell,
-        exitCode: null,
-        timeoutMs,
-        elapsedMs: Date.now() - startedAt,
-        killedProcessTree: true,
-        suggestion: `Command exceeded ${timeoutMs / 1000}s and its process tree was killed. `
-          + 'Raise "timeout" (max 600s) or run it via "start" + "wait" for long jobs.',
-        output: `${finalOut}${finalOut ? '\n' : ''}[killed after ${timeoutMs / 1000}s timeout]`,
-        ...outputStats(),
-        ...spoolInfo(),
-        ...(hangHints.length ? { hangHints } : {}),
-        ...dialect,
-        ...substitution,
-        ...auto,
-        ...warn,
-      }, true), true);
-    }, timeoutMs);
+    if (timeoutMs !== undefined) {
+      timer = setTimeout(() => {
+        cancelEscalation = killProcessTree(child);
+        const finalOut = maybeNormalize(output, normalize);
+        const hangHints = detectInteractiveHangRisk(command);
+        void finish(textResult({
+          timedOut: true,
+          cwd,
+          requestedShell,
+          shell: effectiveShell,
+          exitCode: null,
+          timeoutMs,
+          elapsedMs: Date.now() - startedAt,
+          killedProcessTree: true,
+          suggestion: `Command exceeded ${timeoutMs / 1000}s and its process tree was killed. `
+            + `Raise "timeout" (positive values cap at ${commandMaxTimeoutMs() / 1000}s), pass -1, or use "start" + "wait" for a persistent job.`,
+          output: `${finalOut}${finalOut ? '\n' : ''}[killed after ${timeoutMs / 1000}s timeout]`,
+          ...outputStats(),
+          ...spoolInfo(),
+          ...(hangHints.length ? { hangHints } : {}),
+          ...dialect,
+          ...substitution,
+          ...auto,
+          ...warn,
+        }, true), true);
+      }, timeoutMs);
+    }
     child.stdout?.on('data', (d: Buffer) => {
       const chunk = decodeStdout(d);
       append(chunk);
@@ -2351,8 +2388,7 @@ async function waitTool(
     return textResult(snapshot(session, { timedOut: false, cancelled: true }), true);
   }
 
-  const timeoutSec = typeof args.timeout === 'number' && args.timeout > 0 ? args.timeout : DEFAULT_TIMEOUT_MS / 1000;
-  const timeoutMs = Math.min(timeoutSec * 1000, MAX_TIMEOUT_MS);
+  const timeoutMs = resolveCommandTimeoutMs(args.timeout);
   const progress = createCommandProgressReporter(context);
 
   const outcome = await new Promise<'completed' | 'timedOut' | 'cancelled'>((resolve) => {
@@ -2382,7 +2418,9 @@ async function waitTool(
       }
       pollTimer = setTimeout(poll, 100);
     };
-    timeoutTimer = setTimeout(() => void finish('timedOut'), timeoutMs);
+    if (timeoutMs !== undefined) {
+      timeoutTimer = setTimeout(() => void finish('timedOut'), timeoutMs);
+    }
     context?.signal?.addEventListener('abort', onAbort, { once: true });
     poll();
   });

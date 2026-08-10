@@ -524,6 +524,36 @@ describe('CodexAdapter — tool bridging', () => {
     expect(roles).toEqual(['assistant', 'tool', 'assistant']);
   });
 
+  it('forwards MCP progress from a bridged tool to FLUJO live progress', async () => {
+    const onToolProgress = jest.fn();
+    callToolMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const report = args[4] as ((value: { progress: number; total?: number; message?: string }) => void);
+      report({ progress: 7, total: 10, message: 'building' });
+      return { success: true, data: { content: [{ type: 'text', text: 'ok' }] } };
+    });
+    runStreamedMock.mockImplementationOnce(async () => ({
+      events: (async function* () {
+        await capturedBridgeTools[0].handler({ q: 'x' });
+        yield agentMessage('done');
+        yield turnCompleted({ input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 });
+      })(),
+    }));
+
+    await new CodexAdapter().createCompletion(baseInput({
+      tools: [mcpTool],
+      toolNameMap: { mcp_hashed_name: { server: 'my-server', tool: 'list_things' } },
+      onToolProgress,
+    }));
+
+    expect(onToolProgress).toHaveBeenCalledWith({
+      toolCallId: expect.any(String),
+      name: 'my-server__list_things',
+      progress: 7,
+      total: 10,
+      message: 'building',
+    });
+  });
+
   it('preserves native media when oversized text is replaced by a bounded preview', async () => {
     const image = { type: 'image' as const, data: 'BASE64_IMAGE', mimeType: 'image/png' };
     callToolMock.mockResolvedValueOnce({

@@ -26,6 +26,7 @@ import {
   bashCallTool,
   _resetBashSessionsForTests,
   _resetBashShellCacheForTests,
+  _resolveCommandTimeoutMsForTests,
   wrapPowerShellCommand,
   wrapCmdCommand,
 } from '@/backend/services/mcp/internal/bashTools';
@@ -139,6 +140,15 @@ describe('bash tool definitions', () => {
     expect(run?.inputSchema.properties?.shell).toEqual(expect.objectContaining({
       enum: ['default', 'pwsh', 'bash', 'cmd'],
     }));
+    expect(run?.inputSchema.properties?.timeout).toEqual(expect.objectContaining({
+      description: expect.stringContaining('-1 disables it'),
+    }));
+  });
+
+  it('allows multi-hour and explicitly unbounded foreground timeouts', () => {
+    expect(_resolveCommandTimeoutMsForTests(301)).toBe(301_000);
+    expect(_resolveCommandTimeoutMsForTests(3_600)).toBe(3_600_000);
+    expect(_resolveCommandTimeoutMsForTests(-1)).toBeUndefined();
   });
 });
 
@@ -525,6 +535,26 @@ describe('bash shell selection (issues #225, #327)', () => {
       const cancelled = await pending;
       expect(cancelled.isError).toBe(true);
       expect(parse(cancelled).cancelled).toBe(true);
+    });
+  });
+
+  it('emits strictly increasing MCP progress values across a large output burst', async () => {
+    await withResolvedPwsh(async () => {
+      const progress = jest.fn();
+      mockCompletedChild('x'.repeat(9_000));
+      const completed = await bashCallTool(
+        'run',
+        { command: 'stream-large-output', shell: 'pwsh' },
+        undefined,
+        undefined,
+        { onProgress: progress },
+      );
+      expect(completed.isError).toBeUndefined();
+      const values = progress.mock.calls.map(([update]) => update.progress as number);
+      expect(values.length).toBeGreaterThan(1);
+      for (let i = 1; i < values.length; i += 1) {
+        expect(values[i]).toBeGreaterThan(values[i - 1]);
+      }
     });
   });
 

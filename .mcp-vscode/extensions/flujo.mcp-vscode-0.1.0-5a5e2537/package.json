@@ -1,0 +1,40 @@
+{
+  "name": "mcp-vscode",
+  "displayName": "MCP VS Code Bridge",
+  "description": "Synchronizes the embedded OpenVSCode workbench with the MCP server.",
+  "version": "0.1.0",
+  "publisher": "flujo",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.109.0"
+  },
+  "main": "./extension.cjs",
+  "extensionKind": ["workspace"],
+  "activationEvents": ["*"],
+  "capabilities": {
+    "virtualWorkspaces": true,
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "mcp-vscode.createSharedTerminal",
+        "title": "MCP VS Code: Create Shared Terminal"
+      },
+      {
+        "command": "mcp-vscode.showConnectionStatus",
+        "title": "MCP VS Code: Show Connection Status"
+      }
+    ],
+    "terminal": {
+      "profiles": [
+        {
+          "id": "mcp-vscode.shared",
+          "title": "MCP Shared Terminal"
+        }
+      ]
+    }
+  }
+}

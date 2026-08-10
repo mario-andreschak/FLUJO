@@ -290,6 +290,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     onTranscriptMessage,
     consumeSteeringMessages,
     onModelDelta,
+    onToolProgress,
     signal,
     conversationId,
     runId,
@@ -598,7 +599,15 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             originalTool,
             args ?? {},
             timeout ?? DEFAULT_TOOL_CALL_TIMEOUT_SECONDS,
-            undefined,
+            onToolProgress
+              ? (progress) => onToolProgress({
+                  toolCallId: callId,
+                  name: readableName,
+                  progress: progress.progress,
+                  total: progress.total,
+                  message: progress.message,
+                })
+              : undefined,
             callerNodeId,
             abortController.signal,
             'model',

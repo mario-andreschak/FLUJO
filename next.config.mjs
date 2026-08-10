@@ -5,6 +5,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const WORKSPACES_TRACE_IGNORE = '**/workspaces/**';
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -23,6 +24,12 @@ const nextConfig = {
   // Next infer the wrong root and install/resolve deps like typescript in the
   // wrong place, breaking `next build`.
   outputFileTracingRoot: __dirname,
+  // Runtime workspace data can contain Windows junctions such as the legacy
+  // Content.IE5 cache link. It is never a deployable application dependency,
+  // so keep it out of Next's output traces.
+  outputFileTracingExcludes: {
+    '*': [WORKSPACES_TRACE_IGNORE],
+  },
   // CORS for `/api/*` is defense-in-depth secondary to the fail-closed origin
   // guard in `src/middleware.ts` (#142). We do NOT advertise a wildcard
   // `Access-Control-Allow-Origin: *` for the blanket `/api` surface: even if the

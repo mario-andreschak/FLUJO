@@ -734,6 +734,39 @@ describe('ClaudeSubscriptionAdapter — MCP App transcript lifecycle', () => {
     });
   });
 
+  it('forwards MCP progress from an SDK-owned tool loop to FLUJO live progress', async () => {
+    const onToolProgress = jest.fn();
+    callToolMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const report = args[4] as ((value: { progress: number; total?: number; message?: string }) => void);
+      report({ progress: 3, total: 4, message: 'rendering' });
+      return { success: true, data: { content: [{ type: 'text', text: 'ok' }] } };
+    });
+    queryMock.mockImplementation(() => (async function* () {
+      await sdkToolsMock[0].handler({ q: 'x' });
+      yield {
+        type: 'result',
+        subtype: 'success',
+        result: 'done',
+        session_id: 'sess-1',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    })());
+
+    await new ClaudeSubscriptionAdapter().createCompletion(baseInput({
+      tools: [mcpAppTool],
+      toolNameMap: { mcp_hashed_name: { server: 'my-server', tool: 'list_things' } },
+      onToolProgress,
+    }));
+
+    expect(onToolProgress).toHaveBeenCalledWith({
+      toolCallId: expect.any(String),
+      name: 'my-server__list_things',
+      progress: 3,
+      total: 4,
+      message: 'rendering',
+    });
+  });
+
   it('records approval rejection as an MCP App cancellation', async () => {
     queryMock.mockImplementation(({ options }: {
       options: {

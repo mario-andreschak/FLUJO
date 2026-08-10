@@ -63,7 +63,7 @@ import { isMCPResourceToolName, executeMCPResourceTool, LIST_MCP_RESOURCES_TOOL_
 import { isSubflowToolName, executeSubflowToolCall } from './subflowToolInvocation';
 import { executeDetachedSubflowStart, executeTaskCancel, executeTaskGet, SUBFLOW_DETACHED_TOOL_PREFIX } from './subflowDetachedInvocation';
 import type { RunResourceSettings } from '@/shared/types/runResources';
-import type { ModelStreamDelta, ToolResourceMarker } from '@/backend/services/model/adapters/types';
+import type { ModelStreamDelta, ModelToolProgress, ToolResourceMarker } from '@/backend/services/model/adapters/types';
 import type { RecoveryFailureDetails } from '@/shared/types/execution/events';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { mediaTypeFromMime } from '@/shared/types/model/media';
@@ -1184,6 +1184,24 @@ export class ModelHandler {
         }
       : undefined;
 
+    // Claude/Codex own their tool loops inside createCompletion(), so their MCP
+    // progress callbacks cannot pass through processToolCalls below. Project
+    // them onto the same live event used by the ordinary tool loop.
+    const onToolProgress = emit
+      ? (progress: ModelToolProgress) => {
+          if (!acceptLiveProjection || input.executionAuthority?.signal.aborted) return;
+          emit({
+            type: 'tool:progress',
+            toolCallId: progress.toolCallId,
+            name: progress.name,
+            progress: progress.progress,
+            total: progress.total,
+            message: progress.message,
+            node: nodeId ? { nodeId } : undefined,
+          });
+        }
+      : undefined;
+
     // Self-orchestrating SDK adapters own several model/tool turns inside one
     // createCompletion call, so runFlow cannot reach its between-step steering
     // drain while they are active. Let those adapters consume the same inbox at
@@ -1379,6 +1397,7 @@ export class ModelHandler {
       onTranscriptMessage,
       consumeSteeringMessages,
       onModelDelta,
+      onToolProgress,
       shouldAbort,
       conversationId,
       runId,
@@ -1625,6 +1644,7 @@ export class ModelHandler {
       onTranscriptMessage?: (message: FlujoChatMessage) => void;
       consumeSteeringMessages?: () => FlujoChatMessage[];
       onModelDelta?: (delta: ModelStreamDelta) => void;
+      onToolProgress?: (progress: ModelToolProgress) => void;
       /** Polled while the provider call is in flight; true aborts it (Stop). */
       shouldAbort?: () => boolean;
       /** Conversation + node identity, so self-orchestrating adapters can key a
@@ -2103,6 +2123,14 @@ export class ModelHandler {
               opts.onModelDelta!(delta);
             }
           : undefined;
+        const onToolProgress = opts?.onToolProgress
+          ? (progress: ModelToolProgress) => {
+              // A live tool has started; retrying this provider attempt could
+              // duplicate a non-idempotent command even if no result arrived.
+              attemptProducedOutput = true;
+              opts.onToolProgress!(progress);
+            }
+          : undefined;
         const localToolExecutors = opts?.localToolExecutors
           ? Object.fromEntries(
               Object.entries(opts.localToolExecutors).map(([toolName, executor]) => [
@@ -2174,6 +2202,7 @@ export class ModelHandler {
               onTranscriptMessage,
               consumeSteeringMessages: opts?.consumeSteeringMessages,
               onModelDelta,
+              onToolProgress,
               signal: abortController.signal,
               conversationId: opts?.conversationId,
               runId: opts?.runId,

@@ -114,6 +114,14 @@ and a pseudoterminal on macOS/Linux, renders ANSI/VT output with xterm, accepts
 keyboard and pasted input, and negotiates terminal size through app-only tools.
 As with a normal terminal, stdout and stderr share the PTY stream.
 
+Foreground `run` calls stream merged output as MCP progress and send a liveness
+heartbeat every ten seconds while they are silent. FLUJO forwards those updates
+to the live run indicator and uses them to keep a finite client request timeout
+alive. The Bash-side `timeout` defaults to 60 seconds, accepts any positive value
+up to a 12-hour ceiling, and accepts `-1` to run until completion, cancellation,
+or server shutdown. `wait` has the same timeout contract without killing the
+background session when a finite wait expires.
+
 ## System screenshot (internal `flujo` server, #366)
 
 `system_screenshot` captures the host desktop — full virtual screen, a specific display, or a pixel region — using OS-native commands only (PowerShell/`System.Drawing` on Windows, `/usr/sbin/screencapture` on macOS, `grim`/`import`/`spectacle`/`gnome-screenshot` probing on Linux). It is unrelated to the browser server: it captures *whatever is on the machine*, including unrelated windows and applications, and is not a way to verify rendered HTML (use the browser server's `browser_capture_page` for that).
@@ -132,6 +140,7 @@ Relevant variables:
 - `FLUJO_ALLOW_PROTECTED_PATHS=1`: operator override disabling the optional protected-path deny layer.
 - `FLUJO_PROTECTED_PATHS_ENABLED=1`: resolved by FLUJO from the application setting and supplied to filesystem/bash children.
 - `FLUJO_BASH_INHERIT_ENV=1`: explicitly lets bash commands inherit the full FLUJO backend environment. Without it, commands receive only the existing minimal allow-list.
+- `FLUJO_BASH_COMMAND_MAX_TIMEOUT_MS`: positive-value ceiling for foreground `run` and `wait` timeouts (default 12 hours); `timeout: -1` explicitly disables their Bash-side timer.
 - `FLUJO_MCP_DEBUG=1`: enables package debug diagnostics on stderr.
 
 Filesystem resource reads re-check confinement against current roots. The touched-file registry stores at most 200 descriptors and serves current file content with the existing response-size cap.
