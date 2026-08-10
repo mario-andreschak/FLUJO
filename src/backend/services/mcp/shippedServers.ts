@@ -152,6 +152,12 @@ export function shippedServerEnv(
     const value = env[key];
     if (typeof value === 'string') result[key] = value;
   }
+  if (
+    descriptor.defaultName === 'browser'
+    && !result.FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS?.trim()
+  ) {
+    result.FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS = '1';
+  }
   // Inherit-all (bash) and explicit forwarded values must never overwrite the
   // workspace process boundary established above.
   result.FLUJO_DATA_DIR = workspaceDataDir;

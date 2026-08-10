@@ -363,7 +363,7 @@ describe('bundled browser MCP', () => {
       navigation: { classification: 'site', blocked: true, status: 200 },
     });
 
-    delete process.env.FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS;
+    process.env.FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS = '0';
     const policyResult = await browserCallTool(
       'browser_navigate',
       { sessionId: session.id, url: 'http://127.0.0.1:4200/' },
@@ -489,21 +489,29 @@ describe('bundled browser MCP', () => {
     expect(page.reload).toHaveBeenCalled();
   });
 
-  it('rejects unsafe schemes, URL credentials, and private destinations', async () => {
+  it('rejects unsafe schemes and URL credentials', async () => {
     await expect(assertNavigationAllowed('file:///etc/passwd')).rejects.toMatchObject({
       code: 'NAVIGATION_BLOCKED',
     });
     await expect(assertNavigationAllowed('https://user:secret@example.com/')).rejects.toMatchObject({
       code: 'NAVIGATION_BLOCKED',
     });
-    await expect(assertNavigationAllowed('http://127.0.0.1:4200/')).rejects.toMatchObject({
-      code: 'NAVIGATION_BLOCKED',
+  });
+
+  it('allows private destinations by default and supports an explicit opt-out', async () => {
+    await expect(assertNavigationAllowed('http://127.0.0.1:4200/')).resolves.toMatchObject({
+      hostname: '127.0.0.1',
     });
+    for (const setting of ['0', 'false', 'no', 'off']) {
+      process.env.FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS = setting;
+      await expect(assertNavigationAllowed('http://127.0.0.1:4200/')).rejects.toMatchObject({
+        code: 'NAVIGATION_BLOCKED',
+      });
+    }
   });
 
   it('enforces exact configured origins and clamps timeouts', async () => {
     process.env.FLUJO_BROWSER_ALLOWED_ORIGINS = 'https://allowed.example';
-    process.env.FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS = '1';
     await expect(assertNavigationAllowed('https://other.example/path')).rejects.toBeInstanceOf(BrowserMcpError);
     await expect(assertNavigationAllowed('https://allowed.example/path')).resolves.toMatchObject({
       origin: 'https://allowed.example',

@@ -126,6 +126,10 @@ function allowServiceWorkers(mode: BrowserMode): boolean {
   return booleanEnv('FLUJO_BROWSER_ALLOW_SERVICE_WORKERS') ?? mode === 'trusted';
 }
 
+function allowPrivateHosts(): boolean {
+  return booleanEnv('FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS') ?? true;
+}
+
 function browserWindowVisibility(): BrowserWindowVisibility {
   const configured = process.env.FLUJO_BROWSER_WINDOW_VISIBILITY?.trim().toLowerCase();
   if (configured === 'offscreen' || configured === 'minimized') return configured;
@@ -227,7 +231,7 @@ export async function assertNavigationAllowed(input: string): Promise<URL> {
     throw new BrowserMcpError('NAVIGATION_BLOCKED', 'The URL origin is not allowed by browser policy.');
   }
 
-  if (!enabledEnv('FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS')) {
+  if (!allowPrivateHosts()) {
     const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
     if (hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local')) {
       throw new BrowserMcpError('NAVIGATION_BLOCKED', 'Private and local network destinations are blocked.');
@@ -918,7 +922,7 @@ export async function browserDiagnostics(session?: BrowserSession): Promise<Reco
     locale: browserLocale(),
     timezone: browserTimezone(),
     serviceWorkers: allowServiceWorkers(mode) ? 'allow' : 'block',
-    privateHosts: enabledEnv('FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS') ? 'allow' : 'block',
+    privateHosts: allowPrivateHosts() ? 'allow' : 'block',
     allowedOrigins: [...allowedOrigins()],
     ...(session ? { session: publicPageState(session) } : {}),
     ...(fingerprint ? { fingerprint } : {}),
