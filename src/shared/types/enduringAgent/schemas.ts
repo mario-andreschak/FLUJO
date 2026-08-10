@@ -226,6 +226,20 @@ export const CreatePersonaInputSchema = z.object({
   initialMemories: z.array(InitialPersonaMemoryInputSchema).max(100).optional(),
 }).strict();
 
+export const UpdatePersonaInputSchema = z.object({
+  name: NonEmptyText(160).optional(),
+  mission: z.string().trim().max(20_000).nullable().optional(),
+  presentation: z.object({
+    avatarUrl: z.string().trim().max(2048).nullable().optional(),
+    voice: z.string().trim().max(128).nullable().optional(),
+    language: z.string().trim().max(64).nullable().optional(),
+  }).strict().optional(),
+  autonomyLevel: z.enum(PERSONA_AUTONOMY_LEVELS).optional(),
+  interruptionPolicy: z.enum(PERSONA_INTERRUPTION_POLICIES).optional(),
+  lifecycleState: z.enum(['idle', 'sleeping', 'disabled']).optional(),
+  expectedUpdatedAt: TimestampSchema.optional(),
+}).strict();
+
 export const BehaviorRevisionSourceSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('role_template'),
@@ -283,6 +297,11 @@ export const CreateBehaviorBindingInputSchema = z.object({
   personaId: EnduringAgentIdSchema,
   slotKey: BehaviorSlotKeySchema,
   activeRevisionId: EnduringAgentIdSchema,
+}).strict();
+
+export const ActivateBehaviorRevisionInputSchema = z.object({
+  revisionId: EnduringAgentIdSchema,
+  expectedActiveRevisionId: EnduringAgentIdSchema,
 }).strict();
 
 export const PersonaActivitySourceSchema = z.object({

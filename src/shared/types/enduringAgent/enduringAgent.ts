@@ -176,6 +176,23 @@ export interface CreatePersonaInput {
   initialMemories?: InitialPersonaMemoryInput[];
 }
 
+/** User-editable Persona settings. Runtime-owned identity and timestamps stay immutable. */
+export interface UpdatePersonaInput {
+  name?: string;
+  mission?: string | null;
+  presentation?: {
+    avatarUrl?: string | null;
+    voice?: string | null;
+    language?: string | null;
+  };
+  autonomyLevel?: PersonaAutonomyLevel;
+  interruptionPolicy?: PersonaInterruptionPolicy;
+  /** Administrative lifecycle controls never manufacture busy/waiting/error states. */
+  lifecycleState?: Extract<PersonaLifecycleState, 'idle' | 'sleeping' | 'disabled'>;
+  /** Optimistic-concurrency guard used by the inspectability UI. */
+  expectedUpdatedAt?: number;
+}
+
 export type BehaviorRevisionSource =
   | {
       kind: 'role_template';
@@ -233,6 +250,12 @@ export interface CreateBehaviorBindingInput {
   personaId: string;
   slotKey: string;
   activeRevisionId: string;
+}
+
+export interface ActivateBehaviorRevisionInput {
+  revisionId: string;
+  /** Compare-and-swap guard so a stale desk cannot overwrite a newer activation. */
+  expectedActiveRevisionId: string;
 }
 
 export const PERSONA_ACTIVITY_KINDS = [

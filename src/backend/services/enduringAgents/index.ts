@@ -12,6 +12,7 @@ export * from './ids';
 export * from './namespaces';
 export * from './personaDeletion';
 export * from './personaDispatcher';
+export * from './personaAdmin';
 export * from './recordMigrations';
 export * from './runtimeEvents';
 export * from './runtimeObservability';

@@ -987,6 +987,76 @@ export function savePersonaWorkItem(value: PersonaWorkItem): Promise<PersonaWork
   });
 }
 
+export class BehaviorBindingActivationNotFoundError extends Error {
+  constructor(readonly recordKind: 'BehaviorBinding' | 'BehaviorRevision', readonly recordId: string) {
+    super(`${recordKind} ${JSON.stringify(recordId)} was not found.`);
+    this.name = 'BehaviorBindingActivationNotFoundError';
+  }
+}
+
+export class BehaviorBindingActivationConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BehaviorBindingActivationConflictError';
+  }
+}
+
+/**
+ * Atomically move one Persona-owned binding to an existing immutable revision.
+ * This is intentionally compare-and-swap only; callers cannot edit revision
+ * evidence or activate a revision owned by another Persona/slot.
+ */
+export function activateBehaviorBindingRevision(options: {
+  personaId: string;
+  behaviorId: string;
+  revisionId: string;
+  expectedActiveRevisionId: string;
+}): Promise<BehaviorBinding> {
+  assertSafeCollectionId(options.personaId);
+  assertSafeCollectionId(options.behaviorId);
+  assertSafeCollectionId(options.revisionId);
+  assertSafeCollectionId(options.expectedActiveRevisionId);
+
+  return compositeMutation([
+    `enduring-agent:${ENDURING_AGENT_COLLECTIONS.behaviorBindings}/id/${options.behaviorId}`,
+  ], async () => {
+    await requireWritablePersona(
+      options.personaId,
+      `BehaviorBinding ${JSON.stringify(options.behaviorId)} activation`,
+    );
+    const binding = await getBehaviorBinding(options.behaviorId);
+    if (!binding || binding.personaId !== options.personaId) {
+      throw new BehaviorBindingActivationNotFoundError('BehaviorBinding', options.behaviorId);
+    }
+    if (binding.activeRevisionId !== options.expectedActiveRevisionId) {
+      throw new BehaviorBindingActivationConflictError(
+        `BehaviorBinding ${JSON.stringify(binding.id)} changed since it was inspected.`,
+      );
+    }
+
+    const revision = await getBehaviorRevision(options.revisionId);
+    if (!revision) {
+      throw new BehaviorBindingActivationNotFoundError('BehaviorRevision', options.revisionId);
+    }
+    try {
+      assertBindingOwnsRevision(binding, revision);
+    } catch {
+      throw new BehaviorBindingActivationConflictError(
+        `BehaviorRevision ${JSON.stringify(revision.id)} does not belong to this Persona Behavior.`,
+      );
+    }
+    if (binding.activeRevisionId === revision.id) return binding;
+
+    const next = BehaviorBindingSchema.parse({
+      ...binding,
+      activeRevisionId: revision.id,
+      updatedAt: Math.max(Date.now(), binding.updatedAt + 1),
+    });
+    await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.behaviorBindings, next.id, next);
+    return next;
+  });
+}
+
 export function deletePersonaWorkItemRecord(id: string): Promise<void> {
   assertSafeCollectionId(id);
   return recordMutation(ENDURING_AGENT_COLLECTIONS.workItems, id, () => (
@@ -1152,8 +1222,9 @@ export async function listPersonaLeaseRecords(personaId: string): Promise<Person
 
 export interface PersonaBundle {
   persona: Persona;
+  roleVersion: RoleVersion;
   behaviorBindings: BehaviorBinding[];
-  /** Only the immutable revisions currently activated by behaviorBindings. */
+  /** Complete immutable revision history for inspectability and rollback. */
   behaviorRevisions: BehaviorRevision[];
   memoryItems: MemoryItem[];
   workItems: PersonaWorkItem[];
@@ -1177,14 +1248,18 @@ export async function listPersonaBundle(personaId: string): Promise<PersonaBundl
   if (!persona) return null;
 
   const [
+    roleVersion,
     behaviorBindings,
+    behaviorRevisions,
     memoryItems,
     workItems,
     activities,
     mailboxItems,
     lease,
   ] = await Promise.all([
+    getRoleVersion(persona.roleVersionId),
     listBehaviorBindings(personaId),
+    listBehaviorRevisions(personaId),
     listMemoryItems(personaId),
     listPersonaWorkItems(personaId),
     listPersonaActivities(personaId),
@@ -1192,7 +1267,13 @@ export async function listPersonaBundle(personaId: string): Promise<PersonaBundl
     getPersonaLease(personaId),
   ]);
 
-  const behaviorRevisionById = new Map<string, BehaviorRevision>();
+  if (!roleVersion) {
+    throw new Error(
+      `Persona ${JSON.stringify(persona.id)} references missing RoleVersion `
+      + `${JSON.stringify(persona.roleVersionId)} in this workspace.`,
+    );
+  }
+
   await Promise.all(behaviorBindings.map(async (binding) => {
     const revision = await getBehaviorRevision(binding.activeRevisionId);
     if (!revision) {
@@ -1202,14 +1283,17 @@ export async function listPersonaBundle(personaId: string): Promise<PersonaBundl
       );
     }
     assertBindingOwnsRevision(binding, revision);
-    behaviorRevisionById.set(revision.id, revision);
   }));
 
   return {
     persona,
+    roleVersion,
     behaviorBindings,
-    behaviorRevisions: [...behaviorRevisionById.values()]
-      .sort((left, right) => left.id.localeCompare(right.id)),
+    behaviorRevisions: behaviorRevisions.sort((left, right) => (
+      left.slotKey.localeCompare(right.slotKey)
+      || right.revision - left.revision
+      || left.id.localeCompare(right.id)
+    )),
     memoryItems,
     workItems,
     activities,
