@@ -321,7 +321,7 @@ describe('/v1/roles', () => {
     const response = await listRoles(roleRequest as never);
 
     expect(response.status).toBe(200);
-    expect(assertLocalRequestMock).toHaveBeenCalledWith(roleRequest, { strictLoopback: true });
+    expect(assertLocalRequestMock).toHaveBeenCalledWith(roleRequest);
     expect(ensureBuiltInDeveloperRoleMock).toHaveBeenCalledTimes(1);
     expect(await response.json()).toEqual({
       roleDefinitions: [{ id: 'role_builtin_developer' }],

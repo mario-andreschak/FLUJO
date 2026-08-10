@@ -176,7 +176,7 @@ interface CreateConversationPayload {
    *  engine resolves the flow from this snapshot; `flowId` must be the
    *  snapshot's id (quickchat-<id>). */
   flowSnapshot?: Flow;
-  /** Strict-local, non-authoritative target intent for a fresh Persona chat. */
+  /** Non-authoritative target intent for a fresh Persona chat. */
   personaTargetId?: string;
 }
 
@@ -189,10 +189,7 @@ async function GET_handler(request: NextRequest) {
   // this route centrally too; kept inline for the internal control-plane sinks.
   const notLocal = assertLocalRequest(request);
   if (notLocal) return notLocal;
-  const personaControlAllowed = assertLocalRequest(
-    request,
-    { strictLoopback: true },
-  ) === null;
+  const personaControlAllowed = assertLocalRequest(request) === null;
 
   const startTime = Date.now();
   const requestId = `conv-list-${Date.now()}`;
@@ -582,7 +579,7 @@ async function POST_handler(req: NextRequest) {
   }
   const hasPersonaTarget = payload.personaTargetId !== undefined;
   if (hasPersonaTarget) {
-    const personaNotLocal = assertLocalRequest(req, { strictLoopback: true });
+    const personaNotLocal = assertLocalRequest(req);
     if (personaNotLocal) return personaNotLocal;
     if (
       typeof payload.personaTargetId !== 'string'
@@ -620,7 +617,7 @@ async function POST_handler(req: NextRequest) {
         undefined,
       );
     if (isPersonaOwnedConversationState(existingState)) {
-      const personaNotLocal = assertLocalRequest(req, { strictLoopback: true });
+      const personaNotLocal = assertLocalRequest(req);
       if (personaNotLocal) return personaNotLocal;
       return NextResponse.json(
         { error: 'Persona-owned conversations cannot be overwritten by the legacy create route.' },
@@ -818,9 +815,8 @@ async function DELETE_handler(req: NextRequest) {
         if (isPersonaOwnedConversationState(existingState)) {
           if (tombstonedBeforeLock) unmarkConversationDeleted(id);
           // Every Persona marker, including a pending target or anonymized
-          // archive, is lifecycle-owned. Strict loopback is necessary but does
-          // not authorize generic deletion.
-          assertLocalRequest(req, { strictLoopback: true });
+          // archive, is lifecycle-owned. Exposure authorization does not grant
+          // generic deletion rights.
           errors++;
           return;
         }

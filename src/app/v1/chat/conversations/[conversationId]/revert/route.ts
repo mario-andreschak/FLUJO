@@ -83,7 +83,7 @@ async function GET_handler(
     return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
   }
   if (isPersonaOwnedConversationState(state)) {
-    const notLocal = assertLocalRequest(request, { strictLoopback: true });
+    const notLocal = assertLocalRequest(request);
     if (notLocal) return notLocal;
   }
   const target = await resolveTarget(conversationId, messageId);
@@ -105,7 +105,7 @@ async function POST_handler(
   const state = await loadConversationState(conversationId);
   if (!state) return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
   if (isPersonaOwnedConversationState(state)) {
-    const personaNotLocal = assertLocalRequest(request, { strictLoopback: true });
+    const personaNotLocal = assertLocalRequest(request);
     if (personaNotLocal) return personaNotLocal;
     return NextResponse.json(
       { error: 'Persona-owned conversation controls require the Persona dispatcher.' },

@@ -41,7 +41,7 @@ async function GET_handler(
   // Missing state cannot prove that an orphaned event channel is legacy.
   // Persona-owned and ownership-unknown streams are local control-plane only.
   if (!state || isPersonaOwnedConversationState(state)) {
-    const notLocal = assertLocalRequest(request, { strictLoopback: true });
+    const notLocal = assertLocalRequest(request);
     if (notLocal) return notLocal;
   }
 

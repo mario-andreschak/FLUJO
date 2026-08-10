@@ -71,11 +71,12 @@ function parsed(personaTarget?: { personaId: string }) {
   };
 }
 
-function request(host: string) {
+function request(host: string, origin?: string) {
   const headers: Record<string, string> = {
     host,
     'content-type': 'application/json',
   };
+  if (origin) headers.origin = origin;
   if (host !== 'localhost') headers['x-forwarded-for'] = `test-${host}`;
   return new NextRequest(`https://${host}/v1/chat/completions`, {
     method: 'POST',
@@ -84,7 +85,7 @@ function request(host: string) {
   });
 }
 
-describe('Persona control-plane exposure', () => {
+describe('Persona selected-exposure control plane', () => {
   beforeEach(() => {
     process.env.FLUJO_EXPOSURE_MODE = 'public';
     mockParseRequestParameters.mockReset();
@@ -103,15 +104,15 @@ describe('Persona control-plane exposure', () => {
     else process.env.FLUJO_EXPOSURE_MODE = previousExposureMode;
   });
 
-  it('denies remote Persona selection even when public mode allows ordinary chat', async () => {
+  it('allows same-origin Persona selection in public mode and rejects cross-origin callers', async () => {
     mockParseRequestParameters.mockResolvedValueOnce(parsed({ personaId: 'persona_support' }));
     let response = await POST(request('flujo.example.com'));
-    expect(response.status).toBe(403);
-    expect(mockProcessChatCompletion).not.toHaveBeenCalled();
-
-    mockParseRequestParameters.mockResolvedValueOnce(parsed());
-    response = await POST(request('flujo.example.com'));
     expect(response.status).toBe(200);
+    expect(mockProcessChatCompletion).toHaveBeenCalledTimes(1);
+
+    mockParseRequestParameters.mockResolvedValueOnce(parsed({ personaId: 'persona_support' }));
+    response = await POST(request('flujo.example.com', 'https://attacker.example'));
+    expect(response.status).toBe(403);
     expect(mockProcessChatCompletion).toHaveBeenCalledTimes(1);
   });
 
@@ -124,22 +125,22 @@ describe('Persona control-plane exposure', () => {
     expect(mockProcessChatCompletion).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps Persona CRUD on loopback even when the app is publicly exposed', async () => {
+  it('allows Persona CRUD under the selected public exposure policy', async () => {
     let response = await listPersonas(request('flujo.example.com'));
-    expect(response.status).toBe(403);
-    expect(mockListPersonas).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(mockListPersonas).toHaveBeenCalledTimes(1);
 
-    response = await listPersonas(request('localhost'));
+    response = await listPersonas(request('flujo.example.com', 'https://attacker.example'));
     expect(response.status).toBe(403);
-    expect(mockListPersonas).not.toHaveBeenCalled();
+    expect(mockListPersonas).toHaveBeenCalledTimes(1);
 
     process.env.FLUJO_EXPOSURE_MODE = 'localhost';
     response = await listPersonas(request('localhost'));
     expect(response.status).toBe(200);
-    expect(mockListPersonas).toHaveBeenCalledTimes(1);
+    expect(mockListPersonas).toHaveBeenCalledTimes(2);
   });
 
-  it('blocks conversation-id replay before the streaming service can subscribe', async () => {
+  it('applies ownership checks to same-origin Persona replay in public mode', async () => {
     mockLoadConversationState.mockResolvedValue({
       conversationId: 'conversation-1',
       personaAttribution: {
@@ -150,12 +151,7 @@ describe('Persona control-plane exposure', () => {
     });
     mockParseRequestParameters.mockResolvedValue({ ...parsed(), stream: true });
 
-    let response = await POST(request('flujo.example.com'));
-    expect(response.status).toBe(403);
-    expect(mockProcessChatCompletion).not.toHaveBeenCalled();
-
-    process.env.FLUJO_EXPOSURE_MODE = 'localhost';
-    response = await POST(request('localhost'));
+    const response = await POST(request('flujo.example.com'));
     expect(response.status).toBe(409);
     expect(mockProcessChatCompletion).not.toHaveBeenCalled();
   });
@@ -245,7 +241,7 @@ describe('Persona control-plane exposure', () => {
     ['instruction-only', { personaInstructionContext: { personaId: 'persona_support' } }],
     ['null-attribution', { personaAttribution: null }],
     ['empty-target', { personaTargetId: '' }],
-  ])('rejects remote replay of a %s owned conversation before normal Flow dispatch', async (_label, markers) => {
+  ])('fails closed on incomplete %s ownership in public mode', async (_label, markers) => {
     mockLoadConversationState.mockResolvedValue({
       conversationId: 'conversation-1',
       flowId: 'flow-support',
@@ -255,7 +251,7 @@ describe('Persona control-plane exposure', () => {
 
     const response = await POST(request('flujo.example.com'));
 
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(409);
     expect(mockProcessChatCompletion).not.toHaveBeenCalled();
   });
 });

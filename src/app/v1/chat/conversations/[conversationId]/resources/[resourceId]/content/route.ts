@@ -34,7 +34,7 @@ async function GET_handler(
 
   const state = await loadConversationState(conversationId);
   if (!state || isPersonaOwnedConversationState(state)) {
-    const notLocal = assertLocalRequest(request, { strictLoopback: true });
+    const notLocal = assertLocalRequest(request);
     if (notLocal) return notLocal;
   }
 

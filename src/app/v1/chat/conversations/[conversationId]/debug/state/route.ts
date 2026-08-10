@@ -42,7 +42,7 @@ async function GET_handler(
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }
     if (isPersonaOwnedConversationState(sharedState)) {
-      const notLoopback = assertLocalRequest(request, { strictLoopback: true });
+      const notLoopback = assertLocalRequest(request);
       if (notLoopback) return notLoopback;
     }
     return NextResponse.json({

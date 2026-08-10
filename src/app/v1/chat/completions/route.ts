@@ -129,17 +129,16 @@ async function handleRequest(request: NextRequest) {
       ...completionData
     } = parsedData;
 
-    // Persona ids select a durable living actor and therefore belong only to
-    // FLUJO's trusted local control plane. Keep the ordinary OpenAI-compatible
-    // Flow/model surface externally usable exactly as before.
+    // Persona ids select a durable living actor. They follow the same selected
+    // exposure policy as the rest of FLUJO's UI/control surface.
     if (personaTarget) {
-      const notLocal = assertLocalRequest(request, { strictLoopback: true });
+      const notLocal = assertLocalRequest(request);
       if (notLocal) return notLocal;
     }
     if (conversation_id) {
       const existingState = await loadConversationState(conversation_id);
       if (isPersonaOwnedConversationState(existingState)) {
-        const notLocal = assertLocalRequest(request, { strictLoopback: true });
+        const notLocal = assertLocalRequest(request);
         if (notLocal) return notLocal;
       }
       if (existingState?.personaArchived) {

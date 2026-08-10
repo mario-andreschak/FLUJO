@@ -18,7 +18,7 @@ function validIds(personaId: string, memoryId: string): boolean {
 }
 
 async function GET_handler(request: NextRequest, { params }: RouteContext) {
-  const notLocal = assertLocalRequest(request, { strictLoopback: true }); if (notLocal) return notLocal;
+  const notLocal = assertLocalRequest(request); if (notLocal) return notLocal;
   const locked = await assertUnlocked({ openai: true }); if (locked) return locked;
   const { personaId, memoryId } = await params;
   if (!validIds(personaId, memoryId)) return NextResponse.json({ error: 'MemoryItem not found.' }, { status: 404 });
@@ -32,7 +32,7 @@ async function GET_handler(request: NextRequest, { params }: RouteContext) {
 }
 
 async function DELETE_handler(request: NextRequest, { params }: RouteContext) {
-  const notLocal = assertLocalRequest(request, { strictLoopback: true }); if (notLocal) return notLocal;
+  const notLocal = assertLocalRequest(request); if (notLocal) return notLocal;
   const locked = await assertUnlocked({ openai: true }); if (locked) return locked;
   const { personaId, memoryId } = await params;
   if (!validIds(personaId, memoryId)) return NextResponse.json({ error: 'MemoryItem not found.' }, { status: 404 });

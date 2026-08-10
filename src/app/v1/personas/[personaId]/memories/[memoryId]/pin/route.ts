@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic';
 type RouteContext = { params: Promise<{ personaId: string; memoryId: string }> };
 
 async function mutate(request: NextRequest, context: RouteContext, pin: boolean) {
-  const notLocal = assertLocalRequest(request, { strictLoopback: true }); if (notLocal) return notLocal;
+  const notLocal = assertLocalRequest(request); if (notLocal) return notLocal;
   const locked = await assertUnlocked({ openai: true }); if (locked) return locked;
   const { personaId, memoryId } = await context.params;
   if (!EnduringAgentIdSchema.safeParse(personaId).success || !EnduringAgentIdSchema.safeParse(memoryId).success) {

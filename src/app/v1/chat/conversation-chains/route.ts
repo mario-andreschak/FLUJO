@@ -164,10 +164,7 @@ async function GET_handler(request: NextRequest) {
   if (_lock) return _lock;
   const notLocal = assertLocalRequest(request);
   if (notLocal) return notLocal;
-  const personaControlAllowed = assertLocalRequest(
-    request,
-    { strictLoopback: true },
-  ) === null;
+  const personaControlAllowed = assertLocalRequest(request) === null;
 
   const url = new URL(request.url);
   const rawRoot = (url.searchParams.get('root') ?? '').trim();

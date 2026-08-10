@@ -22,7 +22,7 @@ export const dynamic = 'force-dynamic';
 type RouteContext = { params: Promise<{ personaId: string }> };
 
 async function GET_handler(request: NextRequest, { params }: RouteContext) {
-  const notLocal = assertLocalRequest(request, { strictLoopback: true }); if (notLocal) return notLocal;
+  const notLocal = assertLocalRequest(request); if (notLocal) return notLocal;
   const locked = await assertUnlocked({ openai: true }); if (locked) return locked;
   const { personaId } = await params;
   if (!EnduringAgentIdSchema.safeParse(personaId).success) {
@@ -41,7 +41,7 @@ async function GET_handler(request: NextRequest, { params }: RouteContext) {
 }
 
 async function PATCH_handler(request: NextRequest, { params }: RouteContext) {
-  const notLocal = assertLocalRequest(request, { strictLoopback: true }); if (notLocal) return notLocal;
+  const notLocal = assertLocalRequest(request); if (notLocal) return notLocal;
   const locked = await assertUnlocked({ openai: true }); if (locked) return locked;
   const { personaId } = await params;
   if (!EnduringAgentIdSchema.safeParse(personaId).success) {
@@ -58,7 +58,7 @@ async function PATCH_handler(request: NextRequest, { params }: RouteContext) {
 }
 
 async function DELETE_handler(request: NextRequest, { params }: RouteContext) {
-  const notLocal = assertLocalRequest(request, { strictLoopback: true }); if (notLocal) return notLocal;
+  const notLocal = assertLocalRequest(request); if (notLocal) return notLocal;
   const locked = await assertUnlocked({ openai: true }); if (locked) return locked;
   const { personaId } = await params;
   if (!EnduringAgentIdSchema.safeParse(personaId).success) {

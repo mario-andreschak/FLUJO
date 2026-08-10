@@ -77,7 +77,7 @@ describe('global sidebar lifecycle event stream', () => {
     }
   });
 
-  it('rejects callers outside the strict local control plane', async () => {
+  it('rejects callers outside the selected exposure policy', async () => {
     assertLocalRequestMock.mockReturnValueOnce(new Response('forbidden', { status: 403 }));
     const request = {
       nextUrl: new URL('https://flujo.example.com/v1/chat/events?scope=sidebar'),
@@ -88,6 +88,6 @@ describe('global sidebar lifecycle event stream', () => {
     const response = await GET(request);
 
     expect(response.status).toBe(403);
-    expect(assertLocalRequestMock).toHaveBeenCalledWith(request, { strictLoopback: true });
+    expect(assertLocalRequestMock).toHaveBeenCalledWith(request);
   });
 });

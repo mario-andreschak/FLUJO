@@ -161,7 +161,7 @@ describe('events route SSE replay across runs', () => {
     });
 
     expect(response.status).toBe(403);
-    expect(assertLocalRequestMock).toHaveBeenCalledWith(request, { strictLoopback: true });
+    expect(assertLocalRequestMock).toHaveBeenCalledWith(request);
   });
 
   it('clamps a fromSeq=0 replay to the latest run and stays open for the live run', async () => {

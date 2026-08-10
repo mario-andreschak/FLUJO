@@ -70,7 +70,7 @@ describe('Persona run-resource HTTP boundaries', () => {
     const response = await listResources(req, conversationContext);
 
     expect(response.status).toBe(403);
-    expect(assertLocalRequestMock).toHaveBeenCalledWith(req, { strictLoopback: true });
+    expect(assertLocalRequestMock).toHaveBeenCalledWith(req);
     expect(listRunResourcesMock).not.toHaveBeenCalled();
   });
 
@@ -79,7 +79,7 @@ describe('Persona run-resource HTTP boundaries', () => {
     const response = await readResource(req, resourceContext);
 
     expect(response.status).toBe(403);
-    expect(assertLocalRequestMock).toHaveBeenCalledWith(req, { strictLoopback: true });
+    expect(assertLocalRequestMock).toHaveBeenCalledWith(req);
     expect(buildRunResourceUriMock).not.toHaveBeenCalled();
     expect(readRunResourceMock).not.toHaveBeenCalled();
   });
@@ -99,13 +99,13 @@ describe('Persona run-resource HTTP boundaries', () => {
     const listReq = request('/v1/chat/conversations/conversation_persona/resources');
     const listResponse = await listResources(listReq, conversationContext);
     expect(listResponse.status).toBe(403);
-    expect(assertLocalRequestMock).toHaveBeenCalledWith(listReq, { strictLoopback: true });
+    expect(assertLocalRequestMock).toHaveBeenCalledWith(listReq);
     expect(listRunResourcesMock).not.toHaveBeenCalled();
 
     const contentReq = request('/v1/chat/conversations/conversation_persona/resources/resource_1/content');
     const contentResponse = await readResource(contentReq, resourceContext);
     expect(contentResponse.status).toBe(403);
-    expect(assertLocalRequestMock).toHaveBeenCalledWith(contentReq, { strictLoopback: true });
+    expect(assertLocalRequestMock).toHaveBeenCalledWith(contentReq);
     expect(buildRunResourceUriMock).not.toHaveBeenCalled();
     expect(readRunResourceMock).not.toHaveBeenCalled();
   });

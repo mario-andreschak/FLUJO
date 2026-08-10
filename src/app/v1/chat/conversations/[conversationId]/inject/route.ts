@@ -109,7 +109,7 @@ async function POST_handler(
     );
   }
   if (isPersonaOwnedConversationState(sharedState)) {
-    const notLoopback = assertLocalRequest(request, { strictLoopback: true });
+    const notLoopback = assertLocalRequest(request);
     if (notLoopback) return notLoopback;
   }
   if (sharedState.personaArchived) {

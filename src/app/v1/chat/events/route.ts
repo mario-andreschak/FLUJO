@@ -42,9 +42,9 @@ export const dynamic = 'force-dynamic';
  */
 async function GET_handler(request: NextRequest) {
   // Global events do not carry a durable ownership discriminator, so they
-  // cannot be safely filtered by Persona. Keep this process-wide firehose on
-  // the strict local control plane.
-  const notLocal = assertLocalRequest(request, { strictLoopback: true });
+  // follow the app-wide exposure policy rather than attempting Persona-level
+  // filtering here.
+  const notLocal = assertLocalRequest(request);
   if (notLocal) return notLocal;
   const _lock = await assertUnlocked({ openai: true });
   if (_lock) return _lock;

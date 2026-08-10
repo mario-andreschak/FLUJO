@@ -13,7 +13,7 @@ export const dynamic = 'force-dynamic';
 type RouteContext = { params: Promise<{ personaId: string; behaviorId: string }> };
 
 async function POST_handler(request: NextRequest, { params }: RouteContext) {
-  const notLocal = assertLocalRequest(request, { strictLoopback: true }); if (notLocal) return notLocal;
+  const notLocal = assertLocalRequest(request); if (notLocal) return notLocal;
   const locked = await assertUnlocked({ openai: true }); if (locked) return locked;
   const { personaId, behaviorId } = await params;
   if (

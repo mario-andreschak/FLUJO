@@ -28,7 +28,7 @@ async function GET_handler(
   try {
     const state = await loadConversationState(conversationId);
     if (isPersonaOwnedConversationState(state)) {
-      const personaNotLocal = assertLocalRequest(request, { strictLoopback: true });
+      const personaNotLocal = assertLocalRequest(request);
       if (personaNotLocal) return personaNotLocal;
       return NextResponse.json(
         { error: 'Persona-owned recovery requires the Persona dispatcher.' },
@@ -53,7 +53,7 @@ async function POST_handler(
   const { conversationId } = await params;
   const state = await loadConversationState(conversationId);
   if (isPersonaOwnedConversationState(state)) {
-    const personaNotLocal = assertLocalRequest(request, { strictLoopback: true });
+    const personaNotLocal = assertLocalRequest(request);
     if (personaNotLocal) return personaNotLocal;
     return NextResponse.json(
       { error: 'Persona-owned recovery requires the Persona dispatcher.' },
