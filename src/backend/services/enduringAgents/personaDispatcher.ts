@@ -25,6 +25,7 @@ import {
   PERSONA_PRIORITIES,
   PersonaInstructionContextSchema,
   type BehaviorRevision,
+  type MemoryItem,
   type Persona,
   type PersonaActivity,
   type PersonaActivityKind,
@@ -55,6 +56,7 @@ import {
   cancelPersonaMailboxItem,
   claimNextPersonaActivity,
   commitWithPersonaActivityLease,
+  commitPersonaActivityMutation,
   completePersonaActivity,
   completePersonaActivityWithinRuntimeLock,
   listPendingPersonaActivityDeliveries,
@@ -77,6 +79,14 @@ import { canonicalJson } from './behaviorRevisions';
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
 import { stableEnduringAgentId } from './ids';
 import { buildPersonaInstructionContext } from './personaInstructionContext';
+import { getCoreMemory } from './memoryKernel';
+import {
+  MemoryMaintenancePlanSchema,
+  buildMemoryMaintenancePlan,
+  persistMemoryMaintenanceOutput,
+  renderMemoryMaintenancePrompt,
+  type MemoryMaintenancePlan,
+} from './memoryMaintenance';
 import {
   withPersonaRuntimeLock,
   type PersonaRuntimeLock,
@@ -198,6 +208,10 @@ export interface PersonaFlowDispatchRecord {
   behaviorRevisionId?: string;
   /** Frozen trusted identity/mission context for this exact Activity. */
   instructionContext?: PersonaInstructionContext;
+  /** Private, bounded evidence plan for a restricted maintenance Activity. */
+  maintenancePlan?: MemoryMaintenancePlan;
+  /** Frozen from the first-activation Role; zero means no authored maintenance Flow. */
+  memoryCandidateLimit?: number;
   waitingReason?: 'delivery' | 'approval' | 'debug' | 'running' | 'interrupted';
   /** Durable, scoped lifecycle intent. No lease, holder, or fencing data lives here. */
   cancellationRequestedAt?: number;
@@ -232,6 +246,8 @@ export interface SubmitPersonaFlowDispatchInput {
   summary?: string;
   notBefore?: number;
   flowInput: SerializablePersonaFlowRunInput;
+  /** Trusted orchestration only; ordinary callers leave this absent. */
+  maintenancePlan?: MemoryMaintenancePlan;
 }
 
 export interface SubmitPersonaFlowDispatchOptions {
@@ -484,6 +500,8 @@ const PersonaFlowDispatchRecordSchema = z.object({
   activityId: EnduringAgentIdSchema.optional(),
   behaviorRevisionId: EnduringAgentIdSchema.optional(),
   instructionContext: PersonaInstructionContextSchema.optional(),
+  maintenancePlan: MemoryMaintenancePlanSchema.optional(),
+  memoryCandidateLimit: z.number().int().min(0).max(3).optional(),
   waitingReason: z.enum(['delivery', 'approval', 'debug', 'running', 'interrupted']).optional(),
   cancellationRequestedAt: z.number().int().nonnegative().optional(),
   cancellationReason: z.string().trim().min(1).max(512).optional(),
@@ -515,6 +533,17 @@ const PersonaFlowDispatchRecordSchema = z.object({
       code: 'custom',
       message: 'A frozen instruction context must match the dispatch attribution triple.',
       path: ['instructionContext'],
+    });
+  }
+  if (record.maintenancePlan && (
+    record.admission.kind !== 'maintenance'
+    || record.admission.source.kind !== 'maintenance'
+    || record.admission.source.sourceId !== record.maintenancePlan.sourceActivityId
+  )) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'A maintenance evidence plan must match its maintenance Activity source.',
+      path: ['maintenancePlan'],
     });
   }
   if (record.state === 'waiting' && !record.waitingReason) {
@@ -642,8 +671,15 @@ function requestHash(
   personaId: string,
   admission: PersonaFlowDispatchAdmission,
   flowInput: SerializablePersonaFlowRunInput,
+  maintenancePlan?: MemoryMaintenancePlan,
 ): string {
-  return sha256(canonicalJson({ workspaceId, personaId, admission, flowInput }));
+  return sha256(canonicalJson({
+    workspaceId,
+    personaId,
+    admission,
+    flowInput,
+    maintenancePlan: maintenancePlan ?? null,
+  }));
 }
 
 function parseDispatchRecord(id: string, value: unknown, workspaceId: string): PersonaFlowDispatchRecord {
@@ -718,6 +754,7 @@ export interface PersonaFlowDispatcherDependencies {
   getBehaviorRevision: (id: string) => Promise<BehaviorRevision | null>;
   getPersonaActivity: (id: string) => Promise<PersonaActivity | null>;
   getPersonaMailboxItem: (id: string) => Promise<PersonaMailboxItem | null>;
+  getCoreMemory: (personaId: string) => Promise<MemoryItem[]>;
   readConversationLog: typeof readConversationLog;
   runFlow: (input: FlowRunInput) => Promise<FlowRunResult>;
 }
@@ -745,6 +782,7 @@ const DEFAULT_DEPENDENCIES: PersonaFlowDispatcherDependencies = {
   getBehaviorRevision,
   getPersonaActivity,
   getPersonaMailboxItem,
+  getCoreMemory,
   readConversationLog,
   runFlow,
 };
@@ -1178,7 +1216,19 @@ export class PersonaFlowDispatcher {
     const idempotencyDigest = sha256(rawKey);
     const admission = normalizeAdmission(input);
     const flowInput = cloneSerializableFlowInput(input.flowInput);
-    const hash = requestHash(this.workspaceId, input.personaId, admission, flowInput);
+    const maintenancePlan = input.maintenancePlan
+      ? MemoryMaintenancePlanSchema.parse(input.maintenancePlan)
+      : undefined;
+    if (maintenancePlan && input.kind !== 'maintenance') {
+      throw new TypeError('Only a maintenance dispatch may carry a maintenance evidence plan.');
+    }
+    const hash = requestHash(
+      this.workspaceId,
+      input.personaId,
+      admission,
+      flowInput,
+      maintenancePlan,
+    );
     const id = stableEnduringAgentId('dispatch', {
       purpose: 'persona-flow-dispatch-v1',
       workspaceId: this.workspaceId,
@@ -1211,6 +1261,7 @@ export class PersonaFlowDispatcher {
           state: 'queued',
           admission,
           flowInput,
+          ...(maintenancePlan ? { maintenancePlan } : {}),
           createdAt: now,
           updatedAt: now,
         });
@@ -1860,6 +1911,62 @@ export class PersonaFlowDispatcher {
     }) as PersonaFlowDispatchOutcome;
   }
 
+  private async ensurePostActivityMaintenance(
+    source: PersonaFlowDispatchRecord,
+  ): Promise<PersonaFlowDispatchRecord | null> {
+    if (
+      source.state !== 'completed'
+      || source.admission.kind === 'maintenance'
+      || !source.activityId
+      || !source.completedAt
+    ) return null;
+    const candidateLimit = source.memoryCandidateLimit ?? 0;
+    if (candidateLimit === 0) return null;
+    const plan = await this.inWorkspace(() => buildMemoryMaintenancePlan({
+      sourceDispatchId: source.id,
+      sourceActivityId: source.activityId!,
+      sourceKind: source.admission.source.kind,
+      conversationId: source.outcome?.conversationId ?? source.flowInput?.conversationId,
+      fallbackOutput: source.outcome?.outputText,
+      candidateLimit,
+      completedAt: source.completedAt,
+    }));
+    const prompt = renderMemoryMaintenancePrompt(plan);
+    const submission = await this.submit({
+      workspaceId: this.workspaceId,
+      personaId: source.personaId,
+      idempotencyKey: `post-activity-maintenance:${source.id}`,
+      kind: 'maintenance',
+      priority: 'low',
+      source: {
+        kind: 'maintenance',
+        sourceId: source.activityId,
+        idempotencyKey: `post-activity-maintenance:${source.id}`,
+      },
+      behaviorSlotKey: 'maintain_memory',
+      relationKey: `activity:${source.activityId}:maintenance`,
+      summary: `Review completed Activity ${source.activityId} for durable memory candidates.`,
+      flowInput: {
+        source: 'internal',
+        mode: 'conversation',
+        title: 'Post-Activity memory maintenance',
+        requireApproval: false,
+        onApprovalRequired: 'fail',
+        messages: [{
+          id: stableEnduringAgentId('message', {
+            dispatchId: source.id,
+            purpose: 'maintenance-evidence',
+          }),
+          role: 'user',
+          content: prompt,
+          timestamp: source.completedAt,
+        }],
+      },
+      maintenancePlan: plan,
+    }, { startPump: false });
+    return submission.dispatch;
+  }
+
   private async executeClaim(claim: PersonaActivityClaim, control: PumpControl): Promise<boolean> {
     const payloadRef = claim.mailboxItem.payloadRef;
     // MeetingEngine and future Persona runtimes own their own payload formats.
@@ -1925,6 +2032,7 @@ export class PersonaFlowDispatcher {
     }
 
     let instructionContext: PersonaInstructionContext | undefined;
+    let memoryCandidateLimit = record.memoryCandidateLimit;
     try {
       if (record.instructionContext) {
         instructionContext = assertInstructionContextMatchesClaim(record, claim, revision);
@@ -1938,11 +2046,15 @@ export class PersonaFlowDispatcher {
           persona.roleVersionId,
         ));
         if (!roleVersion) throw new Error('Persona-pinned Role version no longer exists.');
+        memoryCandidateLimit = roleVersion.behaviorSlots.some((slot) => slot.key === 'maintain_memory')
+          ? Math.max(0, Math.min(roleVersion.defaults?.memory?.candidateLimitPerActivity ?? 3, 3))
+          : 0;
         instructionContext = buildPersonaInstructionContext({
           persona,
           roleVersion,
           revision,
           activityId: claim.activity.id,
+          coreMemoryItems: await this.inWorkspace(() => this.dependencies.getCoreMemory(persona.id)),
         });
       }
     } catch (error) {
@@ -1990,6 +2102,9 @@ export class PersonaFlowDispatcher {
         instructionContext: latest.instructionContext ?? (
           latest.startedAt === undefined ? instructionContext : undefined
         ),
+        memoryCandidateLimit: latest.memoryCandidateLimit ?? (
+          latest.startedAt === undefined ? memoryCandidateLimit : undefined
+        ),
         error: undefined,
         lastError: undefined,
         startedAt: latest.startedAt ?? Date.now(),
@@ -2031,6 +2146,9 @@ export class PersonaFlowDispatcher {
       commitWhileCurrent: <T>(task: () => Promise<T>) => this.inWorkspace(() => (
         this.dependencies.commitWithPersonaActivityLease(fence, task)
       )),
+      commitPersonaMutation: <T>(task: Parameters<typeof commitPersonaActivityMutation<T>>[1]) => (
+        this.inWorkspace(() => commitPersonaActivityMutation(fence, task))
+      ),
       pollRelatedInputs: () => this.pollRelatedInputs(fence, conversationId),
       acknowledgeRelatedInputs: (messageIds) => this.acknowledgeRelatedInputs(
         fence,
@@ -2250,6 +2368,18 @@ export class PersonaFlowDispatcher {
           ? { personaInstructionContext: structuredClone(instructionContext) }
           : {}),
       }));
+      if (
+        record.maintenancePlan
+        && claim.activity.kind === 'maintenance'
+        && (result.status === 'completed' || result.status === 'capped')
+      ) {
+        await this.inWorkspace(() => persistMemoryMaintenanceOutput({
+          personaId: record.personaId,
+          plan: record.maintenancePlan!,
+          outputText: result.outputText,
+          executionAuthority: authority,
+        }));
+      }
       await heartbeat.stop();
       control.activeAbort = undefined;
       control.activeDispatchId = undefined;
@@ -2364,10 +2494,17 @@ export class PersonaFlowDispatcher {
     }
 
     try {
-      await this.commitTerminal(record, fence, {
+      const terminal = await this.commitTerminal(record, fence, {
         status: 'completed',
         outcome,
       });
+      try {
+        await this.ensurePostActivityMaintenance(terminal);
+      } catch (error) {
+        // The source Activity is already terminal. Startup/drain reconciliation
+        // retries the deterministic maintenance admission without replaying it.
+        log.warn(`Deferred post-Activity maintenance for ${terminal.id}:`, error);
+      }
     } catch {
       await this.saveTerminalError(record, leaseLostDispatchError());
       return false;
@@ -2609,6 +2746,13 @@ export class PersonaFlowDispatcher {
       let waiting = false;
       for (const candidate of records) {
         const reconciled = await this.reconcileRecord(candidate);
+        if (reconciled.state === 'completed') {
+          try {
+            await this.ensurePostActivityMaintenance(reconciled);
+          } catch (error) {
+            log.warn(`Could not reconcile post-Activity maintenance for ${reconciled.id}:`, error);
+          }
+        }
         if (
           reconciled.state === 'waiting'
           && reconciled.waitingReason !== 'delivery'
@@ -2735,6 +2879,16 @@ export class PersonaFlowDispatcher {
         }
       }
       record = await this.reconcileRecord(record);
+      if (record.state === 'completed') {
+        try {
+          const maintenance = await this.ensurePostActivityMaintenance(record);
+          if (maintenance?.state === 'queued' || maintenance?.state === 'running') {
+            personas.add(maintenance.personaId);
+          }
+        } catch (error) {
+          log.warn(`Failed to reconcile maintenance for ${record.id}:`, error);
+        }
+      }
       if (record.state === 'queued' || record.state === 'running') personas.add(record.personaId);
     }
     const pumps = [...personas].map((personaId) => this.pump(personaId));

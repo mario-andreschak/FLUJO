@@ -53,6 +53,9 @@ export interface PersonaInstructionContext {
   personaMission?: string;
   roleName: string;
   roleMission: string;
+  /** Exact curated records frozen for this Activity; contents remain data. */
+  coreMemoryItemIds?: string[];
+  coreMemoryDigest?: string;
   /** Exact trusted system-prompt prefix; never interpolate runtime pills in it. */
   instruction: string;
 }
@@ -349,6 +352,18 @@ export interface CreatePersonaWorkItemInput {
   sourceRefs?: MemorySourceRef[];
 }
 
+export interface UpdatePersonaWorkItemInput {
+  title?: string;
+  description?: string | null;
+  status?: PersonaWorkItemStatus;
+  priority?: PersonaPriority;
+  dependencyIds?: string[];
+  nextAction?: string | null;
+  deadline?: number | null;
+  /** Optional optimistic-concurrency guard for REST and tool callers. */
+  expectedUpdatedAt?: number;
+}
+
 export const MEMORY_KINDS = [
   'episodic',
   'semantic',
@@ -394,6 +409,12 @@ export interface MemorySourceRef {
   messageId?: string;
   uri?: string;
   observedAt?: number;
+  /** Workspace is stamped by the trusted service and never selected by a model. */
+  workspaceId?: string;
+  /** Stable producer identity such as `user`, `tool:<server>/<name>`, or `maintenance`. */
+  producer?: string;
+  /** SHA-256 of the referenced evidence or, when unavailable, its canonical locator. */
+  contentDigest?: string;
 }
 
 export interface MemoryItem {
@@ -411,6 +432,8 @@ export interface MemoryItem {
   validFrom?: number;
   validUntil?: number;
   supersedes?: string[];
+  /** Explicitly retained contradictory evidence; conflicts are never overwritten. */
+  conflictsWith?: string[];
   createdAt: number;
   updatedAt: number;
 }
@@ -429,6 +452,7 @@ export interface CreateMemoryItemInput {
   validFrom?: number;
   validUntil?: number;
   supersedes?: string[];
+  conflictsWith?: string[];
 }
 
 export const PERSONA_MAILBOX_STATUSES = [

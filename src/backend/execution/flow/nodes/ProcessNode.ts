@@ -8,6 +8,7 @@ import { ResourceHandler } from '../handlers/ResourceHandler';
 import { buildRunResourceTools, buildReadResourceTool, READ_RESOURCE_TOOL_NAME, WRITE_RESOURCE_TOOL_NAME } from '../handlers/runResourceTools';
 import { buildQuestionTool, QUESTION_TOOL_NAME } from '../handlers/runQuestionTool';
 import { buildTodoTool, TODO_TOOL_NAME, formatTodoBlock } from '../handlers/todoTool';
+import { buildPersonaTools, isPersonaToolName } from '../handlers/personaTools';
 import {
   appendMeetingParticipantProtocol,
   buildMeetingTools,
@@ -652,6 +653,23 @@ export class ProcessNode extends BaseNode {
     if (node_params?.properties?.enableTodoTool === true && !todoDenied &&
         !availableTools.some((t) => t.name === TODO_TOOL_NAME)) {
       availableTools = [...availableTools, buildTodoTool()];
+    }
+
+    // Phase 4 / issue #415: Persona-owned tools are authored explicitly on the
+    // Process node and appear only under a trusted, lock-capable Persona Activity.
+    // They never widen MCP boundServer/enabledTools and are absent byte-for-byte
+    // from ordinary/persona-less Flow executions.
+    if (sharedState.personaAttribution && sharedState.executionAuthority?.commitPersonaMutation) {
+      const personaTools = buildPersonaTools(node_params?.properties?.personaTools).filter(
+        (tool) => !isWhollyDenied(sharedState.permissionRules ?? [], tool.name),
+      );
+      if (personaTools.length > 0) {
+        const names = new Set(personaTools.map((tool) => tool.name));
+        availableTools = [
+          ...availableTools.filter((tool) => !isPersonaToolName(tool.name) || !names.has(tool.name)),
+          ...personaTools,
+        ];
+      }
     }
 
     // Meeting tools are coordinator-owned capabilities. Replace any colliding

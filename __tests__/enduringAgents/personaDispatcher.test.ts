@@ -117,7 +117,11 @@ interface Harness {
 
 function makeHarness(
   workspaceId: string,
-  options: { autoClaims?: boolean; heartbeatIntervalMs?: number } = {},
+  options: {
+    autoClaims?: boolean;
+    heartbeatIntervalMs?: number;
+    enableMemoryMaintenance?: boolean;
+  } = {},
 ): Harness {
   const personaId = 'persona_test';
   const snapshot = {
@@ -145,11 +149,21 @@ function makeHarness(
     version: 1,
     name: 'Test Role',
     mission: 'Complete assigned work while respecting the authored Behavior.',
-    behaviorSlots: [{
-      key: 'primary',
-      name: 'Primary',
-      flowTemplate: snapshot,
-    }],
+    behaviorSlots: [
+      {
+        key: 'primary',
+        name: 'Primary',
+        flowTemplate: snapshot,
+      },
+      ...(options.enableMemoryMaintenance ? [{
+        key: 'maintain_memory',
+        name: 'Maintain memory',
+        flowTemplate: snapshot,
+      }] : []),
+    ],
+    ...(options.enableMemoryMaintenance
+      ? { defaults: { memory: { candidateLimitPerActivity: 3 } } }
+      : {}),
     createdAt: 1,
   } as RoleVersion;
   let sequence = 0;
@@ -210,7 +224,25 @@ function makeHarness(
 
   const routePersonaMailboxItem = jest.fn(async (value: unknown): Promise<RoutePersonaMailboxResult> => {
     const input = value as Record<string, unknown>;
-    const claim = makeClaim(String(input.payloadRef));
+    const baseClaim = makeClaim(String(input.payloadRef));
+    const claim = input.kind === 'maintenance'
+      ? {
+          ...baseClaim,
+          mailboxItem: {
+            ...baseClaim.mailboxItem,
+            kind: 'maintenance' as const,
+            source: input.source as PersonaActivity['source'],
+            behaviorSlotKey: 'maintain_memory',
+          },
+          activity: {
+            ...baseClaim.activity,
+            kind: 'maintenance' as const,
+            source: input.source as PersonaActivity['source'],
+            behaviorId: 'behavior_maintenance',
+            behaviorRevisionId: 'revision_maintenance',
+          },
+        }
+      : baseClaim;
     routedClaims.push(claim);
     if (options.autoClaims !== false) claims.push(claim);
     const item = { ...claim.mailboxItem, status: 'queued' as const, claimedActivityId: undefined };
@@ -373,13 +405,13 @@ function makeHarness(
   );
   const observeYieldedPersonaActivity = jest.fn(async () => {});
   const getBehaviorRevision = jest.fn(async (id: string) => (
-    id === 'revision_pinned'
+    id === 'revision_pinned' || (id === 'revision_maintenance' && options.enableMemoryMaintenance)
       ? {
           schemaVersion: 1,
-          id: 'revision_pinned',
-          behaviorId: 'behavior_primary',
+          id,
+          behaviorId: id === 'revision_maintenance' ? 'behavior_maintenance' : 'behavior_primary',
           personaId,
-          slotKey: 'primary',
+          slotKey: id === 'revision_maintenance' ? 'maintain_memory' : 'primary',
           revision: 7,
           contentHash: 'b'.repeat(64),
           flowSnapshot: snapshot,
@@ -418,6 +450,7 @@ function makeHarness(
     getBehaviorRevision,
     getPersonaActivity,
     getPersonaMailboxItem,
+    getCoreMemory: jest.fn(async () => []),
     readConversationLog,
     runFlow,
   };
@@ -562,6 +595,40 @@ describe('Persona Flow dispatcher', () => {
 
     expect(submission.dispatch.state).toBe('completed');
     expect(harness.dependencies.runFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs one restricted memory-maintenance Activity after an authored Activity completes', async () => {
+    const harness = makeHarness(workspace('memory-maintenance'), {
+      enableMemoryMaintenance: true,
+    });
+    const submission = await harness.dispatcher.submit(
+      dispatchInput('persona_test', 'memory-maintenance'),
+      { waitForCompletion: true, timeoutMs: 2_000 },
+    );
+
+    expect(submission.dispatch).toMatchObject({ state: 'completed', memoryCandidateLimit: 3 });
+    await waitUntil(() => (harness.dependencies.runFlow as jest.Mock).mock.calls.length === 2);
+    const records = await harness.dispatcher.list('persona_test');
+    const maintenance = records.find((record) => record.admission.kind === 'maintenance');
+    expect(maintenance).toBeDefined();
+    const completedMaintenance = await waitForDispatch(
+      harness.dispatcher,
+      maintenance!.id,
+      (record) => record?.state === 'completed',
+    );
+    expect(completedMaintenance).toMatchObject({
+      state: 'completed',
+      admission: expect.objectContaining({
+        kind: 'maintenance',
+        behaviorSlotKey: 'maintain_memory',
+      }),
+      maintenancePlan: expect.objectContaining({
+        sourceDispatchId: submission.dispatch.id,
+        sourceActivityId: submission.dispatch.activityId,
+        candidateLimit: 3,
+      }),
+    });
+    expect(records.filter((record) => record.admission.kind === 'maintenance')).toHaveLength(1);
   });
 
   it('can persist and route without starting the pump', async () => {

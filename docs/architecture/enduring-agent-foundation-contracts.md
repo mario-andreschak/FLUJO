@@ -1,6 +1,6 @@
 # Enduring-agent foundation contracts
 
-Status: **Accepted; Phase 1 foundation and Phase 2 runtime implemented**
+Status: **Accepted; Phases 1–4 implemented through durable memory and work management**
 
 Decision owner: issue [#415](https://github.com/mario-andreschak/FLUJO/issues/415)
 
@@ -30,6 +30,17 @@ An error-gated Persona remains visibly blocked until the local, confirmation-bou
 runtime-recovery operation is invoked; that operation refuses a live lease, closes
 uncertain orphan work, preserves proven queued/waiting work, and requeues only
 undelivered input.
+Phase 4 adds Persona-owned WorkItem CRUD with dependency/readiness enforcement,
+priorities, deadlines, next actions, and explicit (never automatic) promotion from
+run-scoped todos. The MemoryKernel adds provenance-stamped candidate/active,
+correction, conflict/supersession, forgetting, search, and curated core-memory
+lifecycles. Flow-authored synthetic memory/WorkItem tools execute only under the
+live Persona Activity fence; model writes remain `model_inference` candidates and
+untrusted external content cannot activate. Core memory is frozen into the same
+per-Activity instruction context as identity. After a non-maintenance Activity
+completes, a Role-authored restricted `maintain_memory` Behavior may inspect
+bounded transcript evidence (including existing compaction summaries) and propose
+zero to three candidate memories without recursively scheduling itself.
 The completed Phase 1 service surface also provides a workspace-scoped deletion
 preview and explicit-confirmation operation. It disables admission, cancels live
 Activity state, expires active fencing authority, erases Persona-owned Behaviors,
@@ -61,8 +72,8 @@ execution attribution is safe metadata and never a lease capability. Dependency
 manifests (Behavior publication
 currently rejects Subflow nodes), the complete compatibility matrix, privacy-aware
 configuration export, cross-system archive anonymization beyond the implemented
-Persona-conversation backup/restore guards, memory,
-WorkItem automation, and UI remain gated follow-up work.
+Persona-conversation backup/restore guards, broader WorkItem automation, and the
+remaining UI remain gated follow-up work.
 
 ## Context
 

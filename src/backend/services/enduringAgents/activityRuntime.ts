@@ -1,6 +1,8 @@
 import { createHash } from 'crypto';
 import { z } from 'zod';
 
+import type { PersonaActivityMutationContext } from '@/backend/execution/flow/types';
+
 import {
   BehaviorSlotKeySchema,
   CreatePersonaLeaseInputSchema,
@@ -2023,6 +2025,28 @@ export async function commitWithPersonaActivityLease<T>(
   return withPersonaRuntimeLock(fence.personaId, async (lock) => {
     await requireActiveRunnableLease(lock, fence);
     const result = await task();
+    await lock.assertOwned();
+    return result;
+  });
+}
+
+/**
+ * Execute one Persona-owned domain mutation while the exact Activity fence and
+ * cross-process runtime lock remain current. The capability exposes neither the
+ * holder id nor fencing token to Flow/model code.
+ */
+export async function commitPersonaActivityMutation<T>(
+  value: unknown,
+  task: (context: PersonaActivityMutationContext) => Promise<T>,
+): Promise<T> {
+  const fence = LeaseFenceSchema.parse(value) as PersonaLeaseFence;
+  return withPersonaRuntimeLock(fence.personaId, async (lock) => {
+    const { persona, activity } = await requireActiveRunnableLease(lock, fence);
+    const result = await task({
+      persona,
+      activity,
+      updatePersona: (next) => updatePersonaWithinRuntimeLock(next, lock),
+    });
     await lock.assertOwned();
     return result;
   });

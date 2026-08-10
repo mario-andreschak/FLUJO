@@ -11,6 +11,8 @@ import type { ModelMediaPart } from '@/shared/types/model/media';
 import type { NormalizedChatError } from '@/shared/types/execution/errors';
 import type { MeetingToolAction } from '@/shared/types/meeting';
 import type {
+  Persona,
+  PersonaActivity,
   PersonaAttribution,
   PersonaInstructionContext,
 } from '@/shared/types/enduringAgent';
@@ -211,6 +213,18 @@ export interface ProcessNodeProperties {
      *  visit. The list is re-injected into the system prompt each turn and shown
      *  live in the UI. Off by default (undefined/false = off). */
     enableTodoTool?: boolean;
+    /** Issue #415: explicit native Persona tools authored for this Process. */
+    personaTools?: Array<
+      | 'remember'
+      | 'recall'
+      | 'correct'
+      | 'forget'
+      | 'pin'
+      | 'work_item_create'
+      | 'work_item_update'
+      | 'work_item_complete'
+      | 'work_item_promote_todo'
+    >;
     boundModel?: string;
     allowedTools?: string[];
     mcpNodes?: MCPNodeReference[];
@@ -768,10 +782,25 @@ export interface FlowExecutionAuthority {
     signal: AbortSignal;
     /** Hold the higher-level lease lock across one authoritative durable write. */
     commitWhileCurrent?: <T>(task: () => Promise<T>) => Promise<T>;
+    /**
+     * Persona-only mutation capability. The opaque fence stays in the runtime
+     * closure; callers receive scoped records plus the one whole-Persona update
+     * operation that must share the already-held runtime lock.
+     */
+    commitPersonaMutation?: <T>(
+      task: (context: PersonaActivityMutationContext) => Promise<T>,
+    ) => Promise<T>;
     /** Fetch durable related input only at a transcript-safe runFlow boundary. */
     pollRelatedInputs?: () => Promise<void>;
     /** ACK stable ids only after their messages are durably folded once. */
     acknowledgeRelatedInputs?: (messageIds: readonly string[]) => Promise<void>;
+}
+
+export interface PersonaActivityMutationContext {
+    persona: Persona;
+    /** Absent only for an idle strict-local administrative mutation. */
+    activity?: PersonaActivity;
+    updatePersona: (next: Persona) => Promise<Persona>;
 }
 
 // Shared state (minimized)

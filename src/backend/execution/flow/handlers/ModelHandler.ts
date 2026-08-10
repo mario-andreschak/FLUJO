@@ -58,6 +58,7 @@ import { boundToolResult } from '@/backend/services/runResources/boundToolResult
 import { isRunResourceToolName, executeRunResourceTool, buildReadResourceTool, WRITE_RESOURCE_TOOL_NAME, READ_RESOURCE_TOOL_NAME } from './runResourceTools';
 import { isQuestionToolName, executeQuestionTool, QUESTION_TOOL_NAME } from './runQuestionTool';
 import { isTodoToolName, executeTodoTool, TODO_TOOL_NAME } from './todoTool';
+import { isPersonaToolName, executePersonaTool } from './personaTools';
 import { isMeetingToolName, executeMeetingTool } from './meetingTools';
 import { isMCPResourceToolName, executeMCPResourceTool, LIST_MCP_RESOURCES_TOOL_NAME } from './mcpResourceTools';
 import { isSubflowToolName, executeSubflowToolCall } from './subflowToolInvocation';
@@ -1282,6 +1283,12 @@ export class ModelHandler {
     const hasMCPResourceTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isMCPResourceToolName(t.function.name));
     const hasQuestionTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isQuestionToolName(t.function.name));
     const hasTodoTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isTodoToolName(t.function.name));
+    const personaToolCallNames = conversationId
+      ? (tools ?? [])
+          .filter((t) => t.type === 'function' && isPersonaToolName(t.function.name))
+          .map((t) => t.function.name)
+      : [];
+    const hasPersonaTool = personaToolCallNames.length > 0;
     const meetingToolCallNames = conversationId
       ? (tools ?? [])
           .filter((t) => t.type === 'function' && isMeetingToolName(t.function.name))
@@ -1299,7 +1306,7 @@ export class ModelHandler {
       : [];
     const hasSubflowTool = subflowToolCallNames.length > 0;
     const localToolExecutors: Record<string, (args: Record<string, unknown>) => Promise<unknown>> | undefined =
-      (hasRunResourceTool || hasMCPResourceTool || hasQuestionTool || hasTodoTool || hasMeetingTool || hasSubflowTool)
+      (hasRunResourceTool || hasMCPResourceTool || hasQuestionTool || hasTodoTool || hasPersonaTool || hasMeetingTool || hasSubflowTool)
         ? {
             [WRITE_RESOURCE_TOOL_NAME]: async (args: Record<string, unknown>): Promise<unknown> => {
               const outcome = await executeRunResourceTool(WRITE_RESOURCE_TOOL_NAME, args, {
@@ -1373,6 +1380,21 @@ export class ModelHandler {
         localToolExecutors[toolName] = async (args: Record<string, unknown>): Promise<unknown> => {
           const outcome = await executeSubflowToolCall(toolName, args, { conversationId, emit });
           if (!outcome.success) throw new Error(outcome.error ?? 'call_subflow failed');
+          return outcome.data;
+        };
+      }
+    }
+
+    if (localToolExecutors && hasPersonaTool) {
+      for (const toolName of personaToolCallNames) {
+        if (!isPersonaToolName(toolName)) continue;
+        localToolExecutors[toolName] = async (args: Record<string, unknown>): Promise<unknown> => {
+          const outcome = await executePersonaTool(toolName, args, {
+            conversationId,
+            executionAuthority: input.executionAuthority,
+            personaAttribution: input.personaAttribution,
+          });
+          if (!outcome.success) throw new Error(outcome.error ?? `${toolName} failed`);
           return outcome.data;
         };
       }
@@ -2712,6 +2734,7 @@ export class ModelHandler {
         if (isRunResourceToolName(toolName)) return LOCAL_GROUP;
         if (isQuestionToolName(toolName)) return LOCAL_GROUP;
         if (isTodoToolName(toolName)) return LOCAL_GROUP;
+        if (isPersonaToolName(toolName)) return LOCAL_GROUP;
         if (isMeetingToolName(toolName)) return LOCAL_GROUP;
         if (isSubflowToolName(toolName)) return LOCAL_GROUP;
         const decoded = decodeToolName(toolName, toolNameMap);
@@ -2941,6 +2964,35 @@ export class ModelHandler {
           if (isTodoToolName(name)) {
             emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
             const outcome = await executeTodoTool(args, { conversationId, node, emit });
+            const resultContent = outcome.success
+              ? JSON.stringify(outcome.data)
+              : `Error: ${outcome.error}`;
+            emit?.({
+              type: 'tool:result',
+              toolCallId: id,
+              name,
+              result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
+              isError: !outcome.success,
+            });
+            toolCallMessages.push({
+              id: uuidv4(),
+              role: 'tool',
+              tool_call_id: id,
+              content: resultContent,
+              timestamp: Date.now(),
+            });
+            processedToolCalls.push({ name, args, id, result: resultContent });
+            return;
+          }
+
+          // Issue #415 phase 4: authored, fenced Persona memory/WorkItem tools.
+          if (isPersonaToolName(name)) {
+            emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
+            const outcome = await executePersonaTool(name, args, {
+              conversationId,
+              executionAuthority: input.executionAuthority,
+              personaAttribution: input.personaAttribution,
+            });
             const resultContent = outcome.success
               ? JSON.stringify(outcome.data)
               : `Error: ${outcome.error}`;
@@ -3546,7 +3598,7 @@ export class ModelHandler {
               ? 'handoff' as const
               : isRunResourceToolName(name) || isMCPResourceToolName(name)
                 ? 'resource' as const
-                : isQuestionToolName(name) || isTodoToolName(name) || isMeetingToolName(name) || isSubflowToolName(name)
+                : isQuestionToolName(name) || isTodoToolName(name) || isPersonaToolName(name) || isMeetingToolName(name) || isSubflowToolName(name)
                   ? 'synthetic' as const
                   : decodedForUi
                     ? 'mcp' as const

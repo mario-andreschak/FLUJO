@@ -1,6 +1,9 @@
 import { createHash } from 'crypto';
 
-import type { FlowExecutionAuthority } from '@/backend/execution/flow/types';
+import type {
+  FlowExecutionAuthority,
+  PersonaActivityMutationContext,
+} from '@/backend/execution/flow/types';
 import {
   PersonaBusyError,
   PersonaRuntimeUnavailableError,
@@ -8,6 +11,7 @@ import {
   cancelPersonaMailboxItem,
   claimPersonaMailboxItem,
   commitWithPersonaActivityLease,
+  commitPersonaActivityMutation,
   completePersonaActivity,
   releasePersonaActivityLease,
   renewPersonaActivityLease,
@@ -22,6 +26,7 @@ import {
   getRoleVersion,
 } from '@/backend/services/enduringAgents/store';
 import { buildPersonaInstructionContext } from '@/backend/services/enduringAgents/personaInstructionContext';
+import { getCoreMemory } from '@/backend/services/enduringAgents/memoryKernel';
 import {
   PersonaRuntimeLockTimeoutError,
   withWorkspaceRuntimeLock,
@@ -325,6 +330,7 @@ async function reserveMeetingPersonasWhileCoordinated(
             roleVersion,
             revision,
             activityId: claim.activity.id,
+            coreMemoryItems: await getCoreMemory(persona.id),
           });
         } catch (error) {
           try {
@@ -510,6 +516,20 @@ export function startMeetingPersonaHeartbeat(
           }
           try {
             return await commitWithPersonaActivityLease(reservation.fence, task);
+          } catch (error) {
+            leaseLost = true;
+            abortController.abort(error);
+            throw error;
+          }
+        },
+        commitPersonaMutation: async <T>(
+          task: (context: PersonaActivityMutationContext) => Promise<T>,
+        ): Promise<T> => {
+          if (leaseLost || abortController.signal.aborted) {
+            throw new Error('Meeting Persona execution authority was lost.');
+          }
+          try {
+            return await commitPersonaActivityMutation(reservation.fence, task);
           } catch (error) {
             leaseLost = true;
             abortController.abort(error);

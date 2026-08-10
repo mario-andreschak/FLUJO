@@ -280,6 +280,18 @@ function meetingExecutionAuthority(
         await personaAuthority?.assertCurrent();
         return commit();
       }),
+    ...(personaAuthority?.commitPersonaMutation
+      ? {
+          commitPersonaMutation: <T>(task: Parameters<NonNullable<FlowExecutionAuthority['commitPersonaMutation']>>[0]) => (
+            withControlLock(meetingId, async () => {
+              await assertMeetingOwner();
+              const result = await personaAuthority.commitPersonaMutation!(task);
+              await assertMeetingOwner();
+              return result as T;
+            })
+          ),
+        }
+      : {}),
   };
 }
 

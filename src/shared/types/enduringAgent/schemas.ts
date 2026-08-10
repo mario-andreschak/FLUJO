@@ -93,6 +93,8 @@ export const PersonaInstructionContextSchema = z.object({
   personaMission: z.string().trim().min(1).max(20_000).optional(),
   roleName: NonEmptyText(160),
   roleMission: NonEmptyText(20_000),
+  coreMemoryItemIds: UniqueIdsSchema.optional(),
+  coreMemoryDigest: z.string().regex(SHA256_PATTERN).optional(),
   instruction: z.string().min(1).max(64_000),
 }).strict();
 
@@ -198,6 +200,9 @@ export const MemorySourceRefSchema = z.object({
   messageId: z.string().min(1).max(512).optional(),
   uri: z.string().max(4096).optional(),
   observedAt: TimestampSchema.optional(),
+  workspaceId: z.string().min(1).max(256).optional(),
+  producer: z.string().min(1).max(512).optional(),
+  contentDigest: z.string().regex(SHA256_PATTERN).optional(),
 }).strict();
 
 export const InitialPersonaMemoryInputSchema = z.object({
@@ -523,6 +528,17 @@ export const CreatePersonaWorkItemInputSchema = z.object({
   sourceRefs: z.array(MemorySourceRefSchema).max(100).optional(),
 }).strict();
 
+export const UpdatePersonaWorkItemInputSchema = z.object({
+  title: NonEmptyText(500).optional(),
+  description: z.string().trim().max(100_000).nullable().optional(),
+  status: z.enum(PERSONA_WORK_ITEM_STATUSES).optional(),
+  priority: z.enum(PERSONA_PRIORITIES).optional(),
+  dependencyIds: UniqueIdsSchema.optional(),
+  nextAction: z.string().trim().max(20_000).nullable().optional(),
+  deadline: TimestampSchema.nullable().optional(),
+  expectedUpdatedAt: TimestampSchema.optional(),
+}).strict();
+
 export const MemoryItemSchema = z.object({
   schemaVersion: z.literal(ENDURING_AGENT_SCHEMA_VERSION),
   id: EnduringAgentIdSchema,
@@ -538,6 +554,7 @@ export const MemoryItemSchema = z.object({
   validFrom: TimestampSchema.optional(),
   validUntil: TimestampSchema.optional(),
   supersedes: UniqueIdsSchema.optional(),
+  conflictsWith: UniqueIdsSchema.optional(),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
 }).strict().superRefine((record, ctx) => {
@@ -566,6 +583,13 @@ export const MemoryItemSchema = z.object({
       path: ['supersedes'],
     });
   }
+  if (record.conflictsWith?.includes(record.id)) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'A MemoryItem cannot conflict with itself.',
+      path: ['conflictsWith'],
+    });
+  }
 });
 
 export const CreateMemoryItemInputSchema = z.object({
@@ -582,6 +606,7 @@ export const CreateMemoryItemInputSchema = z.object({
   validFrom: TimestampSchema.optional(),
   validUntil: TimestampSchema.optional(),
   supersedes: UniqueIdsSchema.optional(),
+  conflictsWith: UniqueIdsSchema.optional(),
 }).strict().superRefine((input, ctx) => {
   if (
     input.validFrom !== undefined
@@ -599,6 +624,13 @@ export const CreateMemoryItemInputSchema = z.object({
       code: 'custom',
       message: 'A MemoryItem cannot supersede itself.',
       path: ['supersedes'],
+    });
+  }
+  if (input.id !== undefined && input.conflictsWith?.includes(input.id)) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'A MemoryItem cannot conflict with itself.',
+      path: ['conflictsWith'],
     });
   }
 });

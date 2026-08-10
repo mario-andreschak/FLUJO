@@ -29,6 +29,7 @@ import { createLogger } from '@/utils/logger';
 import { getCurrentWorkspace } from '@/utils/workspace';
 import {
   assertSafeCollectionId,
+  deleteCollectionItem,
   listCollectionItemEntriesStrict,
   listCollectionItems,
   loadCollectionItem,
@@ -938,6 +939,61 @@ export async function listPersonaWorkItems(personaId: string): Promise<PersonaWo
   return records.filter((record) => record.personaId === personaId);
 }
 
+async function assertValidWorkItemReferences(record: PersonaWorkItem): Promise<void> {
+  await requireWritablePersona(record.personaId, `PersonaWorkItem ${JSON.stringify(record.id)}`);
+  if (record.createdByActivityId) {
+    const activity = await getPersonaActivity(record.createdByActivityId);
+    if (!activity || activity.personaId !== record.personaId) {
+      throw new Error(
+        `PersonaWorkItem ${JSON.stringify(record.id)} references a missing or foreign Activity.`,
+      );
+    }
+  }
+  if (record.behaviorRevisionId) {
+    const revision = await getBehaviorRevision(record.behaviorRevisionId);
+    if (!revision || revision.personaId !== record.personaId) {
+      throw new Error(
+        `PersonaWorkItem ${JSON.stringify(record.id)} references a missing or foreign BehaviorRevision.`,
+      );
+    }
+  }
+  for (const dependencyId of record.dependencyIds) {
+    const dependency = await getPersonaWorkItem(dependencyId);
+    if (!dependency || dependency.personaId !== record.personaId) {
+      throw new Error(
+        `PersonaWorkItem ${JSON.stringify(record.id)} references a missing or foreign dependency `
+        + `${JSON.stringify(dependencyId)}.`,
+      );
+    }
+  }
+}
+
+/** Mutable WorkItem persistence. Runtime/API services provide the Persona lock. */
+export function savePersonaWorkItem(value: PersonaWorkItem): Promise<PersonaWorkItem> {
+  const record = parseRecord('PersonaWorkItem', PersonaWorkItemSchema, value);
+  return recordMutation(ENDURING_AGENT_COLLECTIONS.workItems, record.id, async () => {
+    const existing = await getPersonaWorkItem(record.id);
+    if (existing) {
+      if (existing.personaId !== record.personaId || existing.createdAt !== record.createdAt) {
+        throw new Error(`PersonaWorkItem ${JSON.stringify(record.id)} changed immutable ownership.`);
+      }
+      if (record.updatedAt < existing.updatedAt) {
+        throw new Error(`PersonaWorkItem ${JSON.stringify(record.id)} updatedAt moved backwards.`);
+      }
+    }
+    await assertValidWorkItemReferences(record);
+    await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.workItems, record.id, record);
+    return record;
+  });
+}
+
+export function deletePersonaWorkItemRecord(id: string): Promise<void> {
+  assertSafeCollectionId(id);
+  return recordMutation(ENDURING_AGENT_COLLECTIONS.workItems, id, () => (
+    deleteCollectionItem(ENDURING_AGENT_COLLECTIONS.workItems, id)
+  ));
+}
+
 export function getMemoryItem(id: string): Promise<MemoryItem | null> {
   return getRecord({
     collection: ENDURING_AGENT_COLLECTIONS.memoryItems,
@@ -970,6 +1026,41 @@ export function createMemoryItem(record: MemoryItem): Promise<MemoryItem> {
         `MemoryItem ${JSON.stringify(candidate.id)}`,
       );
     },
+  });
+}
+
+async function assertValidMemoryReferences(record: MemoryItem): Promise<void> {
+  await requireWritablePersona(record.personaId, `MemoryItem ${JSON.stringify(record.id)}`);
+  for (const relatedId of [
+    ...(record.supersedes ?? []),
+    ...(record.conflictsWith ?? []),
+  ]) {
+    const related = await getMemoryItem(relatedId);
+    if (!related || related.personaId !== record.personaId) {
+      throw new Error(
+        `MemoryItem ${JSON.stringify(record.id)} references missing or foreign MemoryItem `
+        + `${JSON.stringify(relatedId)}.`,
+      );
+    }
+  }
+}
+
+/** Mutable lifecycle persistence; semantic corrections still create a successor item. */
+export function saveMemoryItem(value: MemoryItem): Promise<MemoryItem> {
+  const record = parseRecord('MemoryItem', MemoryItemSchema, value);
+  return recordMutation(ENDURING_AGENT_COLLECTIONS.memoryItems, record.id, async () => {
+    const existing = await getMemoryItem(record.id);
+    if (existing) {
+      if (existing.personaId !== record.personaId || existing.createdAt !== record.createdAt) {
+        throw new Error(`MemoryItem ${JSON.stringify(record.id)} changed immutable ownership.`);
+      }
+      if (record.updatedAt < existing.updatedAt) {
+        throw new Error(`MemoryItem ${JSON.stringify(record.id)} updatedAt moved backwards.`);
+      }
+    }
+    await assertValidMemoryReferences(record);
+    await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.memoryItems, record.id, record);
+    return record;
   });
 }
 
