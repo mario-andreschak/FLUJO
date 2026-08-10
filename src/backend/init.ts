@@ -8,7 +8,12 @@ import { getSchedulerService } from '@/backend/services/scheduler';
 import { isEncryptionLocked, isUserEncryptionEnabled } from '@/utils/encryption/secure';
 import { createLogger } from '@/utils/logger';
 import { ensureVendoredFlowGenerator } from '@/backend/services/flow/systemFlows';
-import { ensureBuiltInDeveloperRole } from '@/backend/services/enduringAgents';
+import {
+  ensureBuiltInDeveloperRole,
+  inspectAndReconcilePersonaRuntime,
+  listPersonas,
+  startPersonaFlowDispatcher,
+} from '@/backend/services/enduringAgents';
 import { migrateShippedMcpServers } from '@/backend/services/mcp/shippedServerMigration';
 import { sweepOldMcpRemoteTasks } from '@/backend/services/mcp/remoteTaskStore';
 import { resumeRemoteMcpTasks } from '@/backend/services/mcp/remoteTaskResume';
@@ -375,6 +380,23 @@ function startSecretDependentServices(): Promise<void> {
         log.warn('Remote MCP task resume failed at startup:', error)
       );
 
+      // Repair durable Persona runtime projections and resume queued dispatches
+      // only after unlock + MCP startup, so recovered Behavior runs cannot race
+      // unavailable secrets or tool clients. Per-Persona failures stay visible
+      // through the runtime observation returned by GET /v1/personas/:id.
+      try {
+        const personas = await listPersonas();
+        await Promise.all(personas.map((persona) =>
+          inspectAndReconcilePersonaRuntime(persona.id).catch(error => {
+            log.warn(`Persona runtime reconciliation failed for ${persona.id}:`, error);
+            return null;
+          })
+        ));
+        await startPersonaFlowDispatcher();
+      } catch (error) {
+        log.error('Failed to start Persona Flow dispatcher:', error);
+      }
+
       // Arm planned-execution triggers AFTER the MCP sweep so a catch-up or
       // early scheduled run doesn't race servers that are still connecting.
       // start() is idempotent and catches per-execution arming failures.
@@ -417,5 +439,17 @@ export async function onUnlocked(): Promise<void> {
   log.info(
     `Encryption unlocked — starting deferred MCP/scheduler startup for ${getCurrentWorkspace()}`,
   );
+  const servicesAlreadyStarted = Boolean(getMemo('secret'));
   await startSecretDependentServices();
+  // The once-only startup memo may already be settled when a workspace is
+  // locked again and new Persona deliveries are admitted with startPump:false.
+  // Every unlock therefore performs an idempotent durable kick/reconciliation
+  // so those envelopes and scheduler projections cannot remain stranded.
+  if (!servicesAlreadyStarted) return;
+  await startPersonaFlowDispatcher().catch(error => {
+    log.error('Failed to resume Persona Flow dispatcher after unlock:', error);
+  });
+  await getSchedulerService().reconcilePersonaSchedulerProjections(false).catch(error => {
+    log.error('Failed to reconcile Persona scheduler projections after unlock:', error);
+  });
 }

@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
+import { createHash } from 'crypto';
 import { saveItem, loadItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import {
@@ -11,18 +12,64 @@ import {
 } from '@/shared/types/plannedExecution';
 import { createLogger } from '@/utils/logger';
 import { isEncryptionLocked } from '@/utils/encryption/secure';
+import { withPersonaRuntimeLock } from '@/backend/services/enduringAgents/runtimeLock';
 import { DEFAULT_WORKSPACE, getCurrentWorkspace, runWithWorkspace } from '@/utils/workspace';
 import { ArmedTrigger } from './triggers/types';
-import { armSchedule, isCatchUpDue, validateSchedule } from './triggers/schedule';
+import {
+  armSchedule,
+  catchUpOccurrence,
+  isCatchUpDue,
+  validateSchedule,
+} from './triggers/schedule';
 import { armFileWatch } from './triggers/fileWatch';
 import { armMcpPoll } from './triggers/mcpPoll';
 import { intervalMsToCron } from '@/utils/shared/cron';
 import { armUrlWatch } from './triggers/urlWatch';
 import { armFlowEvent } from './triggers/flowEvent';
-import { getFlowRunEventBus, FlowRunFiredBy } from './flowRunEventBus';
-import { appendRunRecord, deleteRunHistory, loadLastRunRecord, loadRunRecords } from './runHistory';
-import { deleteExecutionState, loadExecutionState, saveExecutionState } from './state';
+import {
+  getFlowRunEventBus,
+  FlowRunFiredBy,
+  type FlowRunEvent,
+} from './flowRunEventBus';
+import {
+  appendRunRecord,
+  deleteRunHistory,
+  drainStableTerminalPublications,
+  loadLastRunRecord,
+  loadRunRecords,
+  updateRunRecord,
+  upsertStableRunRecord,
+  type StableRunRecordUpsertResult,
+  type StableTerminalPublicationReceipt,
+} from './runHistory';
+import {
+  listPersonaSchedulerProjections,
+  markPersonaSchedulerProjectionAdmitted,
+  putPersonaSchedulerProjection,
+  removePersonaSchedulerProjection,
+  removePersonaSchedulerProjectionsForExecution,
+  restorePersonaSchedulerExecution,
+  type PersonaSchedulerProjection,
+  withPersonaSchedulerProjectionGuard,
+} from './personaProjection';
+import {
+  advanceLastScheduledFireAt,
+  deleteExecutionState,
+  loadExecutionState,
+  saveExecutionState,
+} from './state';
+import {
+  listDurableFileWatchIntents,
+  putDurableFileWatchIntent,
+  removeDurableFileWatchIntent,
+  removeDurableFileWatchIntentsForExecution,
+  type DurableFileWatchIntent,
+} from './fileWatchOutbox';
 import type { FlowRunResult } from '@/backend/execution/flow/runFlow';
+import {
+  BehaviorSlotKeySchema,
+  EnduringAgentIdSchema,
+} from '@/shared/types/enduringAgent';
 import {
   classifySchedulerSkip,
   createStatisticsEvent,
@@ -35,6 +82,7 @@ const log = createLogger('backend/services/scheduler/index');
 const MAX_STORED_OUTPUT_CHARS = 4096;
 
 const EMPTY_FILE: PlannedExecutionsFile = { version: 1, paused: false, executions: [] };
+const CONFIG_MUTATION_LOCK_ID = 'scheduler_planned_executions';
 
 export interface PlannedExecutionListEntry {
   execution: PlannedExecution;
@@ -49,6 +97,50 @@ interface QueuedFire {
   runId: string;
   /** Resolved with the RunRecord once the queued fire actually runs. */
   resolve: (record: RunRecord) => void;
+}
+
+export interface AdmittedPersonaFire {
+  /** Stable scheduler run id derived from the trusted delivery identity. */
+  runId: string;
+  /** Durable dispatcher envelope id returned after mailbox routing settles. */
+  dispatchId: string;
+  /** Continuation/history work; callers may deliberately leave it in background. */
+  completion: Promise<RunRecord>;
+}
+
+export interface ApprovedPersonaTerminalInput {
+  executionId: string;
+  runId: string;
+  status: 'completed' | 'error';
+  finishedAt: string;
+  outputText?: string;
+  usage?: RunRecord['usage'];
+  error?: string;
+  conversationId: string;
+  firedAt: string;
+  triggerSummary: string;
+  personaAttribution: {
+    personaId: string;
+    activityId: string;
+    behaviorRevisionId: string;
+  };
+  terminalPublication?: {
+    triggerKind: TriggerFirePayload['kind'];
+    chainDepth: number;
+    deliveryId: string;
+    execution: {
+      id: string;
+      generationId?: string;
+      name: string;
+      flowId: string;
+      personaId: string;
+    };
+  };
+}
+
+interface PersonaAdmissionObserver {
+  resolve(value: { runId: string; dispatchId: string }): void;
+  reject(error: unknown): void;
 }
 
 /**
@@ -110,6 +202,10 @@ export class SchedulerService {
   /** Pause state as of the last reconcile (for synchronous status reads). */
   private pausedCache = false;
   private started = false;
+  /** Process-local joins for durable projection reconciliation; disk is source of truth. */
+  private personaProjectionCompletions = new Map<string, Promise<RunRecord>>();
+  /** Joins duplicate live/startup drains of the same durable file batch. */
+  private fileWatchIntentAdmissions = new Map<string, Promise<void>>();
   /**
    * The workspace this scheduler belongs to (#406), captured at construction.
    *
@@ -143,6 +239,11 @@ export class SchedulerService {
     this.started = true;
     log.info('Starting scheduler');
     await this.reconcile();
+    // Subscribers are armed by reconcile before recovery publication, so a
+    // terminal event pending from the prior process cannot be dropped at boot.
+    await this.drainTerminalPublications();
+    await this.reconcileDurableFileWatchIntents(false);
+    await this.reconcilePersonaSchedulerProjections(false);
   }
 
   /**
@@ -196,33 +297,74 @@ export class SchedulerService {
         if (!state.lastScheduledFireAt) {
           // Prime the catch-up baseline so a brand-new schedule never
           // "catches up" a run that was simply never due.
-          await saveExecutionState(execution.id, {
-            ...state,
-            lastScheduledFireAt: new Date().toISOString(),
-          });
+          const baseline = new Date().toISOString();
+          if (execution.personaId) {
+            await advanceLastScheduledFireAt(execution.id, baseline);
+          } else {
+            await saveExecutionState(execution.id, {
+              ...state,
+              lastScheduledFireAt: baseline,
+            });
+          }
         } else if (trigger.catchUp && isCatchUpDue(trigger, state.lastScheduledFireAt)) {
           // One catch-up run, never a replay of every missed occurrence.
-          // Stamp BEFORE firing so a concurrent reconcile can't double-fire.
-          await saveExecutionState(execution.id, {
-            ...state,
-            lastScheduledFireAt: new Date().toISOString(),
-          });
           log.info(`Catch-up run for "${execution.name}" (missed while closed)`);
-          void this.fire(execution, {
+          const occurrence = catchUpOccurrence(trigger, state.lastScheduledFireAt)
+            ?? new Date(state.lastScheduledFireAt);
+          const payload: TriggerFirePayload = {
             kind: 'schedule-catchup',
             summary: 'Schedule (missed while FLUJO was closed — ran once at startup)',
-          });
+            ...(execution.personaId
+              ? { deliveryId: this.sourceDeliveryId(execution, 'schedule', occurrence.toISOString()) }
+              : {}),
+          };
+          if (execution.personaId) {
+            // The baseline moves only after the mailbox durably owns this exact
+            // missed occurrence. A crash before this state write re-admits the
+            // same delivery id and the mailbox deduplicates it.
+            const admitted = await this.admitPersonaFire(execution, payload);
+            await advanceLastScheduledFireAt(execution.id, new Date().toISOString());
+            void admitted.completion.catch((error) =>
+              log.error(`Catch-up continuation failed for ${execution.id}:`, error)
+            );
+          } else {
+            // Preserve the legacy catch-up ordering and fire-and-forget behavior.
+            await saveExecutionState(execution.id, {
+              ...state,
+              lastScheduledFireAt: new Date().toISOString(),
+            });
+            void this.fire(execution, payload);
+          }
         }
         this.armed.set(
           execution.id,
-          armSchedule(trigger, this.bindToWorkspace(() => {
+          armSchedule(trigger, this.bindToWorkspace((occurrence) => {
             void (async () => {
               const current = await loadExecutionState(execution.id);
+              const payload: TriggerFirePayload = {
+                kind: 'schedule',
+                summary: 'Schedule',
+                ...(execution.personaId
+                  ? { deliveryId: this.sourceDeliveryId(
+                    execution,
+                    'schedule',
+                    occurrence.toISOString(),
+                  ) }
+                  : {}),
+              };
+              if (execution.personaId) {
+                const admitted = await this.admitPersonaFire(execution, payload);
+                await advanceLastScheduledFireAt(execution.id, occurrence.toISOString());
+                void admitted.completion.catch((error) =>
+                  log.error(`Scheduled continuation failed for ${execution.id}:`, error)
+                );
+                return;
+              }
               await saveExecutionState(execution.id, {
                 ...current,
                 lastScheduledFireAt: new Date().toISOString(),
               });
-              await this.fire(execution, { kind: 'schedule', summary: 'Schedule' });
+              await this.fire(execution, payload);
             })().catch(error =>
               log.error(`Scheduled fire failed for ${execution.id}:`, error)
             );
@@ -238,16 +380,52 @@ export class SchedulerService {
           execution.id,
           armFileWatch(
             trigger,
-            this.bindToWorkspace(({ events }) => {
+            this.bindToWorkspace(async ({ events, observedAt }) => {
               this.lastTriggerErrors.delete(execution.id);
-              void this.fire(execution, {
+              const payload: TriggerFirePayload = {
                 kind: 'file',
                 summary:
                   events.length === 1
                     ? `File ${events[0].event === 'unlink' ? 'deleted' : events[0].event === 'add' ? 'added' : 'changed'}`
                     : `${events.length} file changes`,
                 context: { watchedPath: trigger.path, events },
-              });
+                ...(execution.personaId
+                  ? {
+                      deliveryId: this.sourceDeliveryId(
+                        execution,
+                        'file',
+                        JSON.stringify({
+                          observedAt,
+                          events: events.map((entry) => ({
+                            event: entry.event,
+                            path: entry.path.replace(/\\/g, '/'),
+                          })),
+                        }),
+                      ),
+                    }
+                  : {}),
+              };
+              if (execution.personaId && payload.deliveryId) {
+                const intent = await putDurableFileWatchIntent({
+                  schemaVersion: 1,
+                  id: `file-intent-${payload.deliveryId}`,
+                  execution: execution as PlannedExecution & { personaId: string },
+                  payload: payload as TriggerFirePayload & { kind: 'file'; deliveryId: string },
+                  createdAt: observedAt,
+                });
+                // The watcher can now release its batch: the journal survives a
+                // crash. Retirement happens only after mailbox admission.
+                void this.admitDurableFileWatchIntent(intent).catch((error) => {
+                  this.lastTriggerErrors.set(
+                    execution.id,
+                    error instanceof Error ? error.message : String(error),
+                  );
+                  log.warn(`File-watch intent ${intent.id} remains pending:`, error);
+                });
+                return;
+              }
+              // Preserve legacy direct-Flow fire-and-forget behavior.
+              void this.fire(execution, payload);
             }),
             this.bindToWorkspace(message => this.lastTriggerErrors.set(execution.id, message))
           )
@@ -293,9 +471,14 @@ export class SchedulerService {
             // change baseline only after a successful run (commit-after-success,
             // issue #75). Keeping the trigger busy for the run's duration also
             // naturally prevents an overlapping poll of the same trigger.
-            onFire: this.bindToWorkspace(async ({ summary, context }) => {
+            onFire: this.bindToWorkspace(async ({ summary, context, deliveryId }) => {
               this.lastTriggerErrors.delete(execution.id);
-              const record = await this.fire(execution, { kind: 'mcp-poll', summary, context });
+              const record = await this.fire(execution, {
+                kind: 'mcp-poll',
+                summary,
+                context,
+                ...(execution.personaId ? { deliveryId } : {}),
+              });
               return { status: record.status };
             }),
             onError: this.bindToWorkspace(message => this.lastTriggerErrors.set(execution.id, message)),
@@ -320,9 +503,14 @@ export class SchedulerService {
             }),
             // Await + report outcome so the baseline hash advances only after a
             // successful run (commit-after-success, issue #75).
-            onFire: this.bindToWorkspace(async ({ summary, context }) => {
+            onFire: this.bindToWorkspace(async ({ summary, context, deliveryId }) => {
               this.lastTriggerErrors.delete(execution.id);
-              const record = await this.fire(execution, { kind: 'url-watch', summary, context });
+              const record = await this.fire(execution, {
+                kind: 'url-watch',
+                summary,
+                context,
+                ...(execution.personaId ? { deliveryId } : {}),
+              });
               return { status: record.status };
             }),
             onError: this.bindToWorkspace(message => this.lastTriggerErrors.set(execution.id, message)),
@@ -335,19 +523,36 @@ export class SchedulerService {
         this.armed.set(
           execution.id,
           armFlowEvent(trigger, {
-            onFire: this.bindToWorkspace(({ summary, context, chainDepth, sourceConversationId }) => {
+            onFire: this.bindToWorkspace(({
+              summary,
+              context,
+              chainDepth,
+              sourceConversationId,
+              deliveryId,
+            }) => {
               this.lastTriggerErrors.delete(execution.id);
-              // Fire-and-forget: the bus listener is synchronous. Any run
-              // outcome is recorded by fire() as a RunRecord. Thread the
-              // upstream run's conversation as the parent (#214) so the produced
-              // run records its lineage for the sidebar's per-run wave tree.
-              void this.fire(execution, {
+              const firePayload: TriggerFirePayload = {
                 kind: 'flow-event',
                 summary,
                 context,
                 chainDepth,
                 parentConversationId: sourceConversationId,
-              }).catch(
+                ...(execution.personaId && deliveryId ? { deliveryId } : {}),
+              };
+              if (execution.personaId) {
+                // Durable bus publication is acknowledged only after the
+                // downstream Persona mailbox owns the event.
+                return this.admitPersonaFire(execution, firePayload).then((admitted) => {
+                  void admitted.completion.catch((error) =>
+                    log.error(`Flow-event continuation failed for ${execution.id}:`, error)
+                  );
+                });
+              }
+              // Fire-and-forget: the bus listener is synchronous. Any run
+              // outcome is recorded by fire() as a RunRecord. Thread the
+              // upstream run's conversation as the parent (#214) so the produced
+              // run records its lineage for the sidebar's per-run wave tree.
+              void this.fire(execution, firePayload).catch(
                 error => log.error(`Flow-event fire failed for ${execution.id}:`, error)
               );
             }),
@@ -391,12 +596,27 @@ export class SchedulerService {
     return {
       version: 1,
       paused: file.paused === true,
-      executions: Array.isArray(file.executions) ? file.executions : [],
+      executions: Array.isArray(file.executions)
+        ? file.executions.map((execution) => ({
+            ...execution,
+            generationId: this.executionGenerationId(execution),
+          }))
+        : [],
     };
   }
 
   private async saveFile(file: PlannedExecutionsFile): Promise<void> {
     await saveItem(StorageKey.PLANNED_EXECUTIONS, file);
+  }
+
+  /** Deterministic compatibility identity for rows persisted before Phase 2. */
+  private executionGenerationId(
+    execution: Pick<PlannedExecution, 'id' | 'createdAt' | 'generationId'>,
+  ): string {
+    return execution.generationId ?? `legacy-${createHash('sha256')
+      .update(`${execution.id}\0${execution.createdAt}`)
+      .digest('hex')
+      .slice(0, 40)}`;
   }
 
   // --- CRUD ----------------------------------------------------------------
@@ -406,8 +626,11 @@ export class SchedulerService {
   }
 
   async setPaused(paused: boolean): Promise<void> {
-    const file = await this.loadFile();
-    await this.saveFile({ ...file, paused });
+    await withPersonaRuntimeLock(CONFIG_MUTATION_LOCK_ID, async (lock) => {
+      const file = await this.loadFile();
+      await lock.assertOwned();
+      await this.saveFile({ ...file, paused });
+    });
     await this.reconcile();
     // Pausing must stop deferred fires too, not just disarm triggers (issue
     // #122): a queued fire would otherwise run a flow while globally paused.
@@ -450,12 +673,14 @@ export class SchedulerService {
    * storage key (planned-execution-state/<id>.json, run history) it derives.
    */
   async create(
-    input: Omit<PlannedExecution, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }
+    input: Omit<PlannedExecution, 'id' | 'generationId' | 'createdAt' | 'updatedAt'> & { id?: string }
   ): Promise<{ execution?: PlannedExecution; error?: string; conflict?: boolean }> {
     const error = this.validateInput(input);
     if (error) {
       return { error };
     }
+    const personaTargetError = await this.validatePersonaTarget(input);
+    if (personaTargetError) return { error: personaTargetError };
     if (input.id !== undefined && !/^[A-Za-z0-9._:-]{1,128}$/.test(input.id)) {
       return {
         error:
@@ -476,58 +701,78 @@ export class SchedulerService {
       folder: input.folder?.trim() || undefined,
       trigger: this.normalizeTrigger(input.trigger),
       id: input.id ?? uuidv4(),
+      generationId: uuidv4(),
       createdAt: now,
       updatedAt: now,
     };
-    const file = await this.loadFile();
-    if (file.executions.some(e => e.id === execution.id)) {
+    const conflict = await withPersonaRuntimeLock(CONFIG_MUTATION_LOCK_ID, async (lock) => {
+      // Re-read inside the cross-process serialization boundary: two creators
+      // for the same id cannot both validate against a stale snapshot.
+      const file = await this.loadFile();
+      if (file.executions.some(e => e.id === execution.id)) return true;
+      await lock.assertOwned();
+      await this.saveFile({ ...file, executions: [...file.executions, execution] });
+      // A deliberate recreation establishes a new generation. Clear the
+      // execution-wide admission fence while retaining old projection-id
+      // tombstones, which continue fencing loaded old continuations.
+      await restorePersonaSchedulerExecution(execution.id);
+      return false;
+    });
+    if (conflict) {
       return {
         error: `A planned execution with id "${execution.id}" already exists`,
         conflict: true,
       };
     }
-    await this.saveFile({ ...file, executions: [...file.executions, execution] });
     await this.reconcile();
     return { execution };
   }
 
   async update(
     id: string,
-    patch: Partial<Omit<PlannedExecution, 'id' | 'createdAt' | 'updatedAt'>>
+    patch: Partial<Omit<PlannedExecution, 'id' | 'generationId' | 'createdAt' | 'updatedAt'>>
   ): Promise<{ execution?: PlannedExecution; error?: string }> {
-    const file = await this.loadFile();
-    const index = file.executions.findIndex(e => e.id === id);
-    if (index < 0) {
-      return { error: `No planned execution with id "${id}"` };
-    }
-    const rawFolder = (patch as { folder?: unknown }).folder;
-    if (
-      Object.prototype.hasOwnProperty.call(patch, 'folder') &&
-      rawFolder !== undefined &&
-      typeof rawFolder !== 'string'
-    ) {
-      return { error: 'Folder must be text' };
-    }
-    const merged: PlannedExecution = {
-      ...file.executions[index],
-      ...patch,
-      // An explicit blank folder clears the assignment. When folder is absent
-      // from the patch, retain the current assignment.
-      ...(Object.prototype.hasOwnProperty.call(patch, 'folder')
-        ? { folder: typeof rawFolder === 'string' ? rawFolder.trim() || undefined : undefined }
-        : {}),
-      ...(patch.trigger ? { trigger: this.normalizeTrigger(patch.trigger) } : {}),
-      id,
-      createdAt: file.executions[index].createdAt,
-      updatedAt: new Date().toISOString(),
-    };
-    const error = this.validateInput(merged);
-    if (error) {
-      return { error };
-    }
-    const executions = [...file.executions];
-    executions[index] = merged;
-    await this.saveFile({ ...file, executions });
+    const mutation = await withPersonaRuntimeLock(CONFIG_MUTATION_LOCK_ID, async (lock) => {
+      const file = await this.loadFile();
+      const index = file.executions.findIndex(e => e.id === id);
+      if (index < 0) {
+        return { error: `No planned execution with id "${id}"` };
+      }
+      const rawFolder = (patch as { folder?: unknown }).folder;
+      if (
+        Object.prototype.hasOwnProperty.call(patch, 'folder')
+        && rawFolder !== undefined
+        && typeof rawFolder !== 'string'
+      ) {
+        return { error: 'Folder must be text' };
+      }
+      const current = file.executions[index];
+      const merged: PlannedExecution = {
+        ...current,
+        ...patch,
+        // An explicit blank folder clears the assignment. When folder is absent
+        // from the patch, retain the current assignment.
+        ...(Object.prototype.hasOwnProperty.call(patch, 'folder')
+          ? { folder: typeof rawFolder === 'string' ? rawFolder.trim() || undefined : undefined }
+          : {}),
+        ...(patch.trigger ? { trigger: this.normalizeTrigger(patch.trigger) } : {}),
+        id,
+        generationId: this.executionGenerationId(current),
+        createdAt: current.createdAt,
+        updatedAt: new Date().toISOString(),
+      };
+      const error = this.validateInput(merged);
+      if (error) return { error };
+      const personaTargetError = await this.validatePersonaTarget(merged);
+      if (personaTargetError) return { error: personaTargetError };
+      const executions = [...file.executions];
+      executions[index] = merged;
+      await lock.assertOwned();
+      await this.saveFile({ ...file, executions });
+      return { execution: merged };
+    });
+    if (!mutation.execution) return mutation;
+    const merged = mutation.execution;
     // Folder changes are organizational metadata only. Avoid re-arming every
     // trigger or cancelling queued work just because a card was moved.
     const runtimeConfigChanged = Object.keys(patch).some(key => key !== 'folder');
@@ -546,14 +791,31 @@ export class SchedulerService {
   }
 
   async delete(id: string): Promise<{ success: boolean; error?: string }> {
-    const file = await this.loadFile();
-    if (!file.executions.some(e => e.id === id)) {
+    const deleted = await withPersonaRuntimeLock(CONFIG_MUTATION_LOCK_ID, async (lock) => {
+      const file = await this.loadFile();
+      const current = file.executions.find(e => e.id === id);
+      if (!current) return false;
+      await lock.assertOwned();
+      await this.saveFile({
+        ...file,
+        executions: file.executions.filter(e => e.id !== id),
+      });
+      // Fence scheduler projections while the config mutation remains
+      // serialized. A same-id create cannot clear the execution fence between
+      // removal and tombstone persistence.
+      await removePersonaSchedulerProjectionsForExecution(
+        id,
+        this.executionGenerationId(current),
+      );
+      await removeDurableFileWatchIntentsForExecution(
+        id,
+        this.executionGenerationId(current),
+      );
+      return true;
+    });
+    if (!deleted) {
       return { success: false, error: `No planned execution with id "${id}"` };
     }
-    await this.saveFile({
-      ...file,
-      executions: file.executions.filter(e => e.id !== id),
-    });
     await this.reconcile();
     this.lastTriggerErrors.delete(id);
     // Cancel deferred fires BEFORE erasing history (issue #122). appendAudit is
@@ -596,6 +858,18 @@ export class SchedulerService {
     }
     if (!input.flowId) {
       return 'A flow is required';
+    }
+    if (input.personaId !== undefined && !EnduringAgentIdSchema.safeParse(input.personaId).success) {
+      return 'Persona id must be a safe 1-64 character identifier';
+    }
+    if (
+      input.behaviorSlotKey !== undefined
+      && !BehaviorSlotKeySchema.safeParse(input.behaviorSlotKey).success
+    ) {
+      return 'Behavior slot must be a safe 1-64 character slot key';
+    }
+    if (input.behaviorSlotKey !== undefined && input.personaId === undefined) {
+      return 'A Behavior slot requires a Persona target';
     }
     if (typeof input.prompt !== 'string') {
       return 'A prompt is required (may be empty)';
@@ -719,6 +993,53 @@ export class SchedulerService {
     }
   }
 
+  /** Validate a trusted Persona target before arming its trigger. */
+  private async validatePersonaTarget(
+    input: Pick<PlannedExecution, 'personaId' | 'behaviorSlotKey'> & { id?: string },
+  ): Promise<string | null> {
+    if (!input.personaId) return null;
+    if (input.id !== undefined && !EnduringAgentIdSchema.safeParse(input.id).success) {
+      return 'A Persona-targeted execution id must be a safe 1-64 character identifier';
+    }
+    try {
+      const {
+        getBehaviorRevision,
+        getPersona,
+        getPersonaDeletionTombstone,
+        listBehaviorBindings,
+      } = await import('@/backend/services/enduringAgents/store');
+      const persona = await getPersona(input.personaId);
+      if (!persona) return `Persona "${input.personaId}" was not found`;
+      if (
+        persona.provisioningState !== 'ready'
+        || await getPersonaDeletionTombstone(input.personaId)
+      ) {
+        return `Persona "${input.personaId}" is not ready to accept work`;
+      }
+      if (persona.lifecycleState === 'disabled') {
+        return `Persona "${input.personaId}" is not accepting work`;
+      }
+      const slotKey = input.behaviorSlotKey ?? 'primary';
+      const binding = (await listBehaviorBindings(input.personaId))
+        .find((candidate) => candidate.slotKey === slotKey);
+      if (!binding) {
+        return `Persona "${input.personaId}" has no active Behavior for slot "${slotKey}"`;
+      }
+      const revision = await getBehaviorRevision(binding.activeRevisionId);
+      if (
+        !revision
+        || revision.personaId !== input.personaId
+        || revision.behaviorId !== binding.id
+        || revision.slotKey !== slotKey
+      ) {
+        return `Persona "${input.personaId}" has an invalid Behavior binding for slot "${slotKey}"`;
+      }
+      return null;
+    } catch (error) {
+      return `Persona target validation failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
   // --- overlap tracking (issue #121) ---------------------------------------
 
   /** True while at least one run for this execution is in flight. */
@@ -831,7 +1152,7 @@ export class SchedulerService {
       const record = this.skippedRecord(fire, reason);
       if (appendAudit) {
         try {
-          await appendRunRecord(id, record);
+          await this.persistFireRecord(fire.execution, fire.payload, record);
         } catch (error) {
           log.warn(`Failed to record cancelled queued fire for ${id}:`, error);
         }
@@ -1068,7 +1389,7 @@ export class SchedulerService {
       const record = this.skippedRecord(fire, reason);
       if (appendAudit) {
         try {
-          await appendRunRecord(id, record);
+          await this.persistFireRecord(fire.execution, fire.payload, record);
         } catch (error) {
           log.warn(`Failed to record cancelled exclusive fire for ${id}:`, error);
         }
@@ -1095,7 +1416,7 @@ export class SchedulerService {
       const record = this.skippedRecord(fire, reason);
       if (appendAudit) {
         try {
-          await appendRunRecord(fire.execution.id, record);
+          await this.persistFireRecord(fire.execution, fire.payload, record);
         } catch (error) {
           log.warn(`Failed to record cancelled exclusive fire for ${fire.execution.id}:`, error);
         }
@@ -1159,13 +1480,146 @@ export class SchedulerService {
     if (!execution) {
       return { error: `No planned execution with id "${id}"` };
     }
-    const record = await this.fire(
-      execution,
-      { kind: 'manual', summary: 'Manual run' },
-      uuidv4(),
-      true
-    );
+    const runId = uuidv4();
+    const record = await this.fire(execution, {
+      kind: 'manual',
+      summary: 'Manual run',
+      ...(execution.personaId ? { deliveryId: `manual-${runId}` } : {}),
+    }, runId, true);
     return { record };
+  }
+
+  /** Terminalize a yielded Persona run through the same durable event outbox. */
+  async completeApprovedPersonaRun(
+    input: ApprovedPersonaTerminalInput,
+  ): Promise<RunRecord | null> {
+    return this.inWorkspace(async () => {
+      const currentExecution = await this.get(input.executionId);
+      const records = await loadRunRecords(input.executionId);
+      let existing = records.find((candidate) => candidate.runId === input.runId);
+      if (!existing && input.terminalPublication) {
+        // Approval metadata is itself a durable recovery receipt. It can
+        // reconstruct a missing pre-terminal row after dispatcher completion,
+        // even if the mutable planned execution was edited in the meantime.
+        existing = {
+          runId: input.runId,
+          executionGenerationId: input.terminalPublication.execution.generationId,
+          conversationId: input.conversationId,
+          firedAt: input.firedAt,
+          status: 'needs_approval',
+          triggerSummary: input.triggerSummary,
+          personaId: input.personaAttribution.personaId,
+          activityId: input.personaAttribution.activityId,
+          behaviorRevisionId: input.personaAttribution.behaviorRevisionId,
+        };
+      }
+      if (!existing) return null;
+      const patch: Partial<RunRecord> = {
+        status: input.status,
+        finishedAt: input.finishedAt,
+        outputText: input.outputText,
+        usage: input.usage,
+        error: input.error,
+        pendingApproval: undefined,
+      };
+      if (!input.terminalPublication) {
+        // Backward compatibility for approvals created before terminal
+        // publication metadata existed, and for legacy non-Persona runs.
+        return updateRunRecord(input.executionId, input.runId, patch);
+      }
+
+      const execution = {
+        ...(currentExecution ?? {}),
+        ...input.terminalPublication.execution,
+        generationId: input.terminalPublication.execution.generationId
+          ?? currentExecution?.generationId,
+        personaId: input.terminalPublication.execution.personaId,
+      } as PlannedExecution & { personaId: string };
+      const record: RunRecord = { ...existing, ...patch, runId: input.runId };
+      const payload: TriggerFirePayload = {
+        kind: input.terminalPublication.triggerKind,
+        summary: existing.triggerSummary,
+        chainDepth: input.terminalPublication.chainDepth,
+        deliveryId: input.terminalPublication.deliveryId,
+      };
+      const event = await this.buildFlowRunEvent(execution, record, payload);
+      const receipt: StableTerminalPublicationReceipt = {
+        id: event.deliveryId!,
+        executionId: execution.id,
+        runId: record.runId,
+        event,
+        record,
+        createdAt: record.finishedAt ?? new Date().toISOString(),
+      };
+      const projectionId = this.personaProjectionId(execution, record.runId);
+      const result = await withPersonaSchedulerProjectionGuard(
+        execution.id,
+        execution.generationId,
+        projectionId,
+        () => upsertStableRunRecord(execution.id, record, receipt),
+      );
+      if (!result) return null;
+      await this.drainTerminalPublications();
+      await removePersonaSchedulerProjection(projectionId);
+      return result.record;
+    });
+  }
+
+  /** Hash a trusted source occurrence/change into a bounded opaque identity. */
+  private sourceDeliveryId(
+    execution: PlannedExecution,
+    kind: string,
+    identity: string,
+  ): string {
+    return `${kind}-${createHash('sha256')
+      .update(`${execution.id}\0${this.executionGenerationId(execution)}\0${kind}\0${identity}`)
+      .digest('hex')}`;
+  }
+
+  private stablePersonaDeliveryId(
+    execution: PlannedExecution,
+    payload: TriggerFirePayload,
+  ): string | undefined {
+    return execution.personaId && payload.deliveryId
+      ? payload.deliveryId
+      : undefined;
+  }
+
+  private effectiveRunId(
+    execution: PlannedExecution,
+    payload: TriggerFirePayload,
+    requested?: string,
+  ): string {
+    if (requested) return requested;
+    const deliveryId = this.stablePersonaDeliveryId(execution, payload);
+    return deliveryId
+      ? `delivery-${createHash('sha256')
+        .update(`${execution.id}\0${this.executionGenerationId(execution)}\0${deliveryId}`)
+        .digest('hex')
+        .slice(0, 48)}`
+      : uuidv4();
+  }
+
+  /**
+   * Legacy/random runs remain append-only. A trusted Persona delivery instead
+   * owns one stable run id, so retries update/reuse that row and report whether
+   * this call performed its first publishable terminal transition.
+   */
+  private async persistFireRecord(
+    execution: PlannedExecution,
+    payload: TriggerFirePayload,
+    record: RunRecord,
+    terminalPublication?: StableTerminalPublicationReceipt,
+  ): Promise<StableRunRecordUpsertResult> {
+    if (this.stablePersonaDeliveryId(execution, payload)) {
+      return upsertStableRunRecord(execution.id, record, terminalPublication);
+    }
+    await appendRunRecord(execution.id, record);
+    return {
+      record,
+      inserted: true,
+      firstTerminalTransition: record.status === 'completed' || record.status === 'error',
+    };
   }
 
   /**
@@ -1180,12 +1634,340 @@ export class SchedulerService {
   fire(
     execution: PlannedExecution,
     payload: TriggerFirePayload,
-    runId: string = uuidv4(),
+    runId?: string,
     bypassOverlap = false
   ): Promise<RunRecord> {
+    const effectiveRunId = this.effectiveRunId(execution, payload, runId);
     return this.inWorkspace(() =>
-      this.fireInternal(execution, payload, runId, bypassOverlap)
+      this.fireInternal(execution, payload, effectiveRunId, bypassOverlap)
     );
+  }
+
+  /**
+   * Start a Persona fire and resolve only after its dispatcher envelope and
+   * mailbox route are durable. Execution/history continues independently.
+   */
+  async admitPersonaFire(
+    execution: PlannedExecution,
+    payload: TriggerFirePayload,
+    runId?: string,
+  ): Promise<AdmittedPersonaFire> {
+    if (!execution.personaId) {
+      throw new TypeError('Durable Persona admission requires a Persona target.');
+    }
+    const effectiveRunId = this.effectiveRunId(execution, payload, runId);
+    let resolveAdmission!: (value: { runId: string; dispatchId: string }) => void;
+    let rejectAdmission!: (error: unknown) => void;
+    const admission = new Promise<{ runId: string; dispatchId: string }>((resolve, reject) => {
+      resolveAdmission = resolve;
+      rejectAdmission = reject;
+    });
+    const completion = this.inWorkspace(() => this.fireInternal(
+      execution,
+      payload,
+      effectiveRunId,
+      false,
+      { resolve: resolveAdmission, reject: rejectAdmission },
+    ));
+    void completion.catch(rejectAdmission);
+    const admitted = await admission;
+    return { ...admitted, completion };
+  }
+
+  private admitDurableFileWatchIntent(intent: DurableFileWatchIntent): Promise<void> {
+    const existing = this.fileWatchIntentAdmissions.get(intent.id);
+    if (existing) return existing;
+    const admission = this.inWorkspace(async () => {
+      const current = await this.get(intent.execution.id);
+      if (
+        !current
+        || this.executionGenerationId(current)
+          !== this.executionGenerationId(intent.execution)
+      ) {
+        // This is a pre-admission source receipt. Unlike an admitted scheduler
+        // projection, an explicitly deleted/recreated generation does not own
+        // the old filesystem event.
+        await removeDurableFileWatchIntent(intent.id);
+        return;
+      }
+      const admitted = await this.admitPersonaFire(intent.execution, intent.payload);
+      await removeDurableFileWatchIntent(intent.id);
+      void admitted.completion.catch((error) =>
+        log.error(`File-watch continuation failed for ${intent.execution.id}:`, error)
+      );
+    });
+    this.fileWatchIntentAdmissions.set(intent.id, admission);
+    void admission.finally(() => {
+      if (this.fileWatchIntentAdmissions.get(intent.id) === admission) {
+        this.fileWatchIntentAdmissions.delete(intent.id);
+      }
+    }).catch(() => { /* admission error belongs to the live/startup caller */ });
+    return admission;
+  }
+
+  async reconcileDurableFileWatchIntents(waitForAdmission = true): Promise<void> {
+    const admissions = (await listDurableFileWatchIntents())
+      .map((intent) => this.admitDurableFileWatchIntent(intent));
+    if (waitForAdmission) {
+      await Promise.all(admissions);
+    } else {
+      for (const admission of admissions) {
+        void admission.catch((error) =>
+          log.warn('Durable file-watch intent remains pending:', error)
+        );
+      }
+    }
+  }
+
+  private personaProjectionId(execution: PlannedExecution, runId: string): string {
+    return `projection-${createHash('sha256')
+      .update(`${execution.id}\0${this.executionGenerationId(execution)}\0${runId}`)
+      .digest('hex')
+      .slice(0, 48)}`;
+  }
+
+  private continuePersonaSchedulerProjection(
+    execution: PlannedExecution & { personaId: string },
+    projection: PersonaSchedulerProjection,
+    initialDispatch: import('@/backend/services/enduringAgents/personaDispatcher').PersonaFlowDispatchRecord,
+  ): Promise<RunRecord> {
+    const existing = this.personaProjectionCompletions.get(projection.id);
+    if (existing) return existing;
+    const continuation = this.inWorkspace(async () => {
+      const { getPersonaFlowDispatch } = await import(
+        '@/backend/services/enduringAgents/personaDispatcher'
+      );
+      let dispatch = initialDispatch;
+      while (
+        dispatch.state === 'queued'
+        || dispatch.state === 'running'
+        || (
+          dispatch.state === 'waiting'
+          && (dispatch.waitingReason === 'delivery' || dispatch.waitingReason === 'interrupted')
+        )
+      ) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 50));
+        const current = await getPersonaFlowDispatch(dispatch.id);
+        if (!current) throw new Error(`Persona dispatch ${dispatch.id} disappeared.`);
+        dispatch = current;
+      }
+
+      const payload = projection.payload as TriggerFirePayload;
+      let record = this.recordFromPersonaDispatch(execution, dispatch, {
+        runId: projection.runId,
+        conversationId: projection.conversationId,
+        firedAt: projection.firedAt,
+        payload,
+      });
+      if (dispatch.state === 'waiting' && dispatch.waitingReason === 'approval') {
+        record = await this.registerPersonaPendingApproval(execution, record, payload);
+      }
+      record = await this.finishFireRecord(execution, payload, record, projection.id);
+      if (
+        dispatch.state === 'completed'
+        || dispatch.state === 'error'
+        || dispatch.state === 'cancelled'
+      ) {
+        await removePersonaSchedulerProjection(projection.id);
+      }
+      return record;
+    });
+    this.personaProjectionCompletions.set(projection.id, continuation);
+    void continuation.finally(() => {
+      if (this.personaProjectionCompletions.get(projection.id) === continuation) {
+        this.personaProjectionCompletions.delete(projection.id);
+      }
+    }).catch(() => { /* completion error belongs to the caller/reconciler */ });
+    return continuation;
+  }
+
+  /**
+   * Re-submit and project every write-ahead Persona scheduler intent. Exact
+   * dispatcher idempotency plus stable history upsert make this safe alongside
+   * a still-live continuation in this or another process.
+   */
+  async reconcilePersonaSchedulerProjections(waitForCompletion = true): Promise<void> {
+    const projections = await listPersonaSchedulerProjections();
+    const continuations: Promise<RunRecord>[] = [];
+    for (const projection of projections) {
+      try {
+        const current = await this.get(projection.execution.id);
+        // The projection pins the execution/Persona provenance at admission.
+        // Mutable config edits cannot orphan already-admitted mailbox work.
+        const execution = {
+          ...(current ?? {}),
+          ...projection.execution,
+          personaId: projection.execution.personaId!,
+        } as PlannedExecution & { personaId: string };
+        const { submitPersonaFlowDispatch } = await import(
+          '@/backend/services/enduringAgents/personaDispatcher'
+        );
+        const submission = await submitPersonaFlowDispatch(projection.submission, {
+          startPump: !(await isEncryptionLocked()),
+        });
+        const admitted = await markPersonaSchedulerProjectionAdmitted(
+          projection.id,
+          submission.dispatch.id,
+        );
+        const continuation = this.continuePersonaSchedulerProjection(
+          execution,
+          admitted,
+          submission.dispatch,
+        );
+        if (waitForCompletion) continuations.push(continuation);
+        else void continuation.catch((error) => {
+          log.warn(`Persona scheduler projection ${projection.id} remains pending:`, error);
+        });
+      } catch (error) {
+        log.warn(`Failed to reconcile Persona scheduler projection ${projection.id}:`, error);
+        if (waitForCompletion) throw error;
+      }
+    }
+    if (waitForCompletion) await Promise.all(continuations);
+  }
+
+  private async firePersonaInternal(
+    execution: PlannedExecution & { personaId: string },
+    payload: TriggerFirePayload,
+    runId: string,
+    firedAt: string,
+    admissionObserver?: PersonaAdmissionObserver,
+  ): Promise<RunRecord> {
+    const stableDelivery = this.stablePersonaDeliveryId(execution, payload);
+    const generationId = this.executionGenerationId(execution);
+    const conversationId = stableDelivery
+      ? `conversation-${createHash('sha256')
+        .update(`${execution.id}\0${generationId}\0${stableDelivery}`)
+        .digest('hex')
+        .slice(0, 48)}`
+      : uuidv4();
+    this.recordSchedulerFire(execution, runId, 'fired', conversationId);
+    let admissionSettled = false;
+    try {
+      log.info(`Durably admitting "${execution.name}" (${payload.kind})`);
+      const history = await loadRunRecords(execution.id);
+      const previousRun = history.length > 0 ? history[history.length - 1] : null;
+      const runInfo = stableDelivery
+        ? {
+            executionName: execution.name,
+            trigger: payload.kind,
+            deliveryId: stableDelivery,
+          }
+        : {
+            executionName: execution.name,
+            trigger: payload.kind,
+            now: firedAt,
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            lastRun: previousRun
+              ? { at: previousRun.firedAt, status: previousRun.status }
+              : null,
+            nextPlannedRun: this.getStatus(execution).nextRun ?? null,
+          };
+      const approvalPolicy = execution.approvalPolicy ?? 'auto';
+      const mode: 'conversation' | 'ephemeral' =
+        execution.saveConversations || approvalPolicy === 'pause'
+          ? 'conversation'
+          : 'ephemeral';
+      const flowInput = {
+        prompt: this.composePrompt(execution.prompt, payload, runInfo),
+        mode,
+        conversationId,
+        runId,
+        source: 'schedule',
+        plannedExecutionId: execution.id,
+        plannedExecutionName: execution.name,
+        parentRunId: payload.parentConversationId,
+        chainDepth: payload.chainDepth ?? 0,
+        requireApproval: approvalPolicy !== 'auto',
+        onApprovalRequired: approvalPolicy,
+        debug: false,
+        userTurn: true,
+      } as const;
+
+      const scheduled = payload.kind === 'manual'
+        || payload.kind === 'schedule'
+        || payload.kind === 'schedule-catchup';
+      const submissionInput = {
+        personaId: execution.personaId,
+        idempotencyKey: `planned:${execution.id}:${generationId}:${payload.deliveryId ?? runId}`,
+        kind: scheduled ? 'scheduled' : 'triggered',
+        source: {
+          kind: scheduled ? 'schedule' : 'trigger',
+          sourceId: `${execution.id}:${generationId}`,
+        },
+        ...(execution.behaviorSlotKey
+          ? { behaviorSlotKey: execution.behaviorSlotKey }
+          : {}),
+        relationKey: `planned-execution:${execution.id}:${generationId}`,
+        summary: `${execution.name}: ${payload.summary}`.slice(0, 20_000),
+        flowInput,
+      } as const;
+      const projectionId = this.personaProjectionId(execution, runId);
+      const projection = await putPersonaSchedulerProjection({
+        schemaVersion: 1,
+        id: projectionId,
+        execution: {
+          id: execution.id,
+          generationId,
+          name: execution.name,
+          flowId: execution.flowId,
+          personaId: execution.personaId,
+        },
+        payload: {
+          kind: payload.kind,
+          summary: payload.summary,
+          chainDepth: payload.chainDepth,
+          parentConversationId: payload.parentConversationId,
+          deliveryId: payload.deliveryId,
+        },
+        submission: submissionInput,
+        runId,
+        conversationId,
+        firedAt,
+        createdAt: firedAt,
+        updatedAt: firedAt,
+      });
+
+      const { submitPersonaFlowDispatch } = await import(
+        '@/backend/services/enduringAgents/personaDispatcher'
+      );
+      const encryptionLocked = await isEncryptionLocked();
+      const submission = await submitPersonaFlowDispatch(projection.submission, {
+        // Admission and mailbox routing remain durable while USER encryption is
+        // locked, but the dispatcher must not claim/execute until the ordinary
+        // post-unlock startup reconciliation pumps queued envelopes.
+        startPump: !encryptionLocked,
+      });
+      const admittedProjection = await markPersonaSchedulerProjectionAdmitted(
+        projection.id,
+        submission.dispatch.id,
+      );
+      admissionSettled = true;
+      admissionObserver?.resolve({ runId, dispatchId: submission.dispatch.id });
+      return this.continuePersonaSchedulerProjection(
+        execution,
+        admittedProjection,
+        submission.dispatch,
+      );
+    } catch (error) {
+      if (!admissionSettled) admissionObserver?.reject(error);
+      // The write-ahead projection remains pending. Startup/reconcile retries
+      // its exact idempotent dispatcher submission; never poison the stable run
+      // with a pre-admission terminal error.
+      log.error(`Persona admission/continuation failed for "${execution.name}":`, error);
+      if (admissionObserver) throw error;
+        const retryable: RunRecord = {
+          runId,
+          executionGenerationId: generationId,
+        conversationId,
+        firedAt,
+        finishedAt: new Date().toISOString(),
+        status: 'skipped',
+        triggerSummary: payload.summary,
+        error: 'Persona work remains durably pending scheduler projection',
+      };
+      return retryable;
+    }
   }
 
   private async fireInternal(
@@ -1196,9 +1978,24 @@ export class SchedulerService {
      * Skip the overlap policy entirely and start immediately (issue #121).
      * Used by manual runNow — an explicit user action is never skipped/queued.
      */
-    bypassOverlap = false
+    bypassOverlap = false,
+    admissionObserver?: PersonaAdmissionObserver,
   ): Promise<RunRecord> {
     const firedAt = new Date().toISOString();
+    const stablePersonaDelivery = this.stablePersonaDeliveryId(execution, payload);
+
+    // Persona concurrency and ordering are owned by the durable mailbox. Admit
+    // before touching every process-local encryption/overlap/exclusive/running
+    // gate so a crash or a busy local scheduler cannot drop trusted work.
+    if (execution.personaId) {
+      return this.firePersonaInternal(
+        execution as PlannedExecution & { personaId: string },
+        payload,
+        runId,
+        firedAt,
+        admissionObserver,
+      );
+    }
 
     // Locked USER encryption: the flow would resolve ${global:...} bindings and
     // decrypt model API keys against a DEK that isn't in memory. Never run it —
@@ -1220,9 +2017,9 @@ export class SchedulerService {
         error: 'encryption locked',
       };
       this.recordSchedulerSkip(execution, runId, record.error!);
-      await appendRunRecord(execution.id, record);
+      const persisted = await this.persistFireRecord(execution, payload, record);
       log.info(`Skipped fire for "${execution.name}" — encryption locked`);
-      return record;
+      return persisted.record;
     }
 
     // Exclusive-mode gating (issue #171): a scheduler-GLOBAL mutual-exclusion
@@ -1250,9 +2047,9 @@ export class SchedulerService {
                 error: `Exclusive wait queue full (cap ${SchedulerService.MAX_QUEUE_DEPTH}) — fire dropped`,
               };
               this.recordSchedulerSkip(execution, runId, record.error!);
-              await appendRunRecord(execution.id, record);
+              const persisted = await this.persistFireRecord(execution, payload, record);
               log.warn(`Exclusive wait queue full for "${execution.name}" — dropped fire`);
-              return record;
+              return persisted.record;
             }
             log.info(
               `Exclusive "${execution.name}" waiting for scheduler to idle (depth ${depth + 1})`
@@ -1282,9 +2079,9 @@ export class SchedulerService {
             error: 'Skipped — an exclusive execution holds the scheduler lock',
           };
           this.recordSchedulerSkip(execution, runId, record.error!);
-          await appendRunRecord(execution.id, record);
+          const persisted = await this.persistFireRecord(execution, payload, record);
           log.info(`Skipped non-exclusive fire for "${execution.name}" — exclusive lock held`);
-          return record;
+          return persisted.record;
         }
         if (behavior === 'error') {
           const record: RunRecord = {
@@ -1296,9 +2093,9 @@ export class SchedulerService {
             triggerSummary: payload.summary,
             error: 'Rejected — an exclusive execution holds the scheduler lock',
           };
-          await appendRunRecord(execution.id, record);
+          const persisted = await this.persistFireRecord(execution, payload, record);
           log.info(`Rejected non-exclusive fire for "${execution.name}" — exclusive lock held`);
-          return record;
+          return persisted.record;
         }
         // behavior === 'queue': defer until the exclusive lock releases.
         const depth = this.blockedByExclusive.length;
@@ -1313,9 +2110,9 @@ export class SchedulerService {
             error: `Exclusive-block queue full (cap ${SchedulerService.MAX_QUEUE_DEPTH}) — fire dropped`,
           };
           this.recordSchedulerSkip(execution, runId, record.error!);
-          await appendRunRecord(execution.id, record);
+          const persisted = await this.persistFireRecord(execution, payload, record);
           log.warn(`Exclusive-block queue full for "${execution.name}" — dropped fire`);
-          return record;
+          return persisted.record;
         }
         log.info(
           `Deferred non-exclusive fire for "${execution.name}" — exclusive lock held (depth ${depth + 1})`
@@ -1331,6 +2128,24 @@ export class SchedulerService {
     // a previous run for THIS execution is still in flight. Defaults to 'skip'
     // (historical behavior). The encryption-locked guard above always wins.
     const strategy: OverlapStrategy = execution.overlapStrategy ?? 'skip';
+    if (
+      !bypassOverlap
+      && stablePersonaDelivery
+      && this.running.get(execution.id)?.has(runId)
+    ) {
+      // This is a retry of the SAME trusted delivery, not independent overlap.
+      // The original fire owns the eventual history/event transition; returning
+      // a process-local acknowledgement here avoids a duplicate skip/error row.
+      return {
+        runId,
+        conversationId: '',
+        firedAt,
+        finishedAt: firedAt,
+        status: 'skipped',
+        triggerSummary: payload.summary,
+        error: 'Stable delivery is already in progress',
+      };
+    }
     if (!bypassOverlap && this.isRunning(execution.id)) {
       if (strategy === 'skip') {
         const record: RunRecord = {
@@ -1344,9 +2159,9 @@ export class SchedulerService {
           error: 'Previous run still in progress',
         };
         this.recordSchedulerSkip(execution, runId, record.error!);
-        await appendRunRecord(execution.id, record);
+        const persisted = await this.persistFireRecord(execution, payload, record);
         log.info(`Skipped overlapping fire for "${execution.name}"`);
-        return record;
+        return persisted.record;
       }
       if (strategy === 'error') {
         const record: RunRecord = {
@@ -1358,9 +2173,9 @@ export class SchedulerService {
           triggerSummary: payload.summary,
           error: 'Overlapping run rejected (overlapStrategy=error)',
         };
-        await appendRunRecord(execution.id, record);
+        const persisted = await this.persistFireRecord(execution, payload, record);
         log.info(`Rejected overlapping fire for "${execution.name}" (overlapStrategy=error)`);
-        return record;
+        return persisted.record;
       }
       if (strategy === 'queue') {
         const depth = this.queued.get(execution.id)?.length ?? 0;
@@ -1375,9 +2190,9 @@ export class SchedulerService {
             error: `Overlap queue full (cap ${SchedulerService.MAX_QUEUE_DEPTH}) — fire dropped`,
           };
           this.recordSchedulerSkip(execution, runId, record.error!);
-          await appendRunRecord(execution.id, record);
+          const persisted = await this.persistFireRecord(execution, payload, record);
           log.warn(`Overlap queue full for "${execution.name}" — dropped fire`);
-          return record;
+          return persisted.record;
         }
         log.info(`Queued overlapping fire for "${execution.name}" (depth ${depth + 1})`);
         // Resolve when the queued fire actually runs (drainQueue reuses fire()).
@@ -1394,7 +2209,12 @@ export class SchedulerService {
     }
 
     this.addRunning(execution.id, runId, firedAt);
-    const conversationId = uuidv4();
+    const conversationId = stablePersonaDelivery
+      ? `conversation-${createHash('sha256')
+        .update(`${execution.id}\0${this.executionGenerationId(execution)}\0${stablePersonaDelivery}`)
+        .digest('hex')
+        .slice(0, 48)}`
+      : uuidv4();
     this.recordSchedulerFire(execution, runId, 'fired', conversationId);
     let record: RunRecord;
     try {
@@ -1404,16 +2224,25 @@ export class SchedulerService {
       // current record, so lastRun is genuinely the previous one.
       const history = await loadRunRecords(execution.id);
       const previousRun = history.length > 0 ? history[history.length - 1] : null;
-      const runInfo = {
-        executionName: execution.name,
-        trigger: payload.kind,
-        now: firedAt,
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        lastRun: previousRun
-          ? { at: previousRun.firedAt, status: previousRun.status }
-          : null,
-        nextPlannedRun: this.getStatus(execution).nextRun ?? null,
-      };
+      // A trusted delivery id means this may be a transport retry. Keep the
+      // serialized Persona dispatch request identical across retries; mutable
+      // clock/history metadata remains available in the scheduler RunRecord.
+      const runInfo = stablePersonaDelivery
+        ? {
+            executionName: execution.name,
+            trigger: payload.kind,
+            deliveryId: stablePersonaDelivery,
+          }
+        : {
+            executionName: execution.name,
+            trigger: payload.kind,
+            now: firedAt,
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            lastRun: previousRun
+              ? { at: previousRun.firedAt, status: previousRun.status }
+              : null,
+            nextPlannedRun: this.getStatus(execution).nextRun ?? null,
+          };
       // Headless approval policy (#115): a scheduled run has no interactive
       // approver. 'auto' (default) keeps the legacy silent auto-run; 'fail'/
       // 'pause' send tools to the approval gate (requireApproval), and the
@@ -1424,11 +2253,7 @@ export class SchedulerService {
       const requireApproval = approvalPolicy !== 'auto';
       const mode: 'conversation' | 'ephemeral' =
         execution.saveConversations || approvalPolicy === 'pause' ? 'conversation' : 'ephemeral';
-      // Lazy import keeps the execution stack out of module-load paths and
-      // mirrors SubflowNode's approach to the engine's import cycles.
-      const { runFlow } = await import('@/backend/execution/flow/runFlow');
-      const result = await runFlow({
-        flowId: execution.flowId,
+      const flowInput = {
         prompt: this.composePrompt(execution.prompt, payload, runInfo),
         mode,
         conversationId,
@@ -1456,13 +2281,75 @@ export class SchedulerService {
         // Fresh user turn: routes from the Start node and runs preflight
         // flow validation.
         userTurn: true,
-      });
-      record = await this.recordFromResult(execution, result, {
-        runId,
-        conversationId,
-        firedAt,
-        payload,
-      });
+      } as const;
+
+      if (execution.personaId) {
+        // Persona work is admitted durably before execution. The dispatcher
+        // resolves the immutable Behavior snapshot only after it owns the
+        // Activity lease; the mutable planned-execution flowId is provenance
+        // only on this branch.
+        const {
+          getPersonaFlowDispatch,
+          submitPersonaFlowDispatch,
+        } = await import('@/backend/services/enduringAgents/personaDispatcher');
+        const scheduled = payload.kind === 'manual'
+          || payload.kind === 'schedule'
+          || payload.kind === 'schedule-catchup';
+        const submission = await submitPersonaFlowDispatch({
+          personaId: execution.personaId,
+          idempotencyKey: `planned:${execution.id}:${payload.deliveryId ?? runId}`,
+          kind: scheduled ? 'scheduled' : 'triggered',
+          source: {
+            kind: scheduled ? 'schedule' : 'trigger',
+            sourceId: execution.id,
+          },
+          ...(execution.behaviorSlotKey
+            ? { behaviorSlotKey: execution.behaviorSlotKey }
+            : {}),
+          relationKey: `planned-execution:${execution.id}`,
+          summary: `${execution.name}: ${payload.summary}`.slice(0, 20_000),
+          flowInput,
+        });
+        let dispatch = submission.dispatch;
+        // A waiting state is a deliberate approval/debug yield. Return it to
+        // run history instead of waiting forever for a future resume request.
+        while (
+          dispatch.state === 'queued'
+          || dispatch.state === 'running'
+          || (
+            dispatch.state === 'waiting'
+            && (dispatch.waitingReason === 'delivery' || dispatch.waitingReason === 'interrupted')
+          )
+        ) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 50));
+          const current = await getPersonaFlowDispatch(dispatch.id);
+          if (!current) throw new Error(`Persona dispatch ${dispatch.id} disappeared.`);
+          dispatch = current;
+        }
+        record = this.recordFromPersonaDispatch(execution, dispatch, {
+          runId,
+          conversationId,
+          firedAt,
+          payload,
+        });
+        if (dispatch.state === 'waiting' && dispatch.waitingReason === 'approval') {
+          record = await this.registerPersonaPendingApproval(execution, record, payload);
+        }
+      } else {
+        // Lazy import keeps the execution stack out of module-load paths and
+        // mirrors SubflowNode's approach to the engine's import cycles.
+        const { runFlow } = await import('@/backend/execution/flow/runFlow');
+        const result = await runFlow({
+          flowId: execution.flowId,
+          ...flowInput,
+        });
+        record = await this.recordFromResult(execution, result, {
+          runId,
+          conversationId,
+          firedAt,
+          payload,
+        });
+      }
     } catch (error) {
       record = {
         runId,
@@ -1490,22 +2377,7 @@ export class SchedulerService {
       // Start the next queued fire (if any) now that this run has ended.
       this.drainQueue(execution.id);
     }
-    // If the execution was hard-deleted while this run was in flight (issue
-    // #122), do NOT appendRunRecord (it would recreate the just-erased
-    // planned-execution-runs/<id>.json) nor publish a terminal event for a
-    // ghost execution. The scheduler has no cancellation handle for a live
-    // runFlow, so suppressing its side effects is the minimal safe fix.
-    if ((await this.get(execution.id)) === null) {
-      log.info(`Dropping run record for deleted execution ${execution.id}`);
-      return record;
-    }
-    await appendRunRecord(execution.id, record);
-    // Broadcast terminal runs so `flow-event` triggers can react (issue #116).
-    // Skips (overlap/encryption-lock) return earlier and never reach here.
-    if (record.status === 'completed' || record.status === 'error') {
-      await this.publishFlowRunEvent(execution, record, payload);
-    }
-    return record;
+    return this.finishFireRecord(execution, payload, record);
   }
 
   /**
@@ -1554,7 +2426,7 @@ export class SchedulerService {
       // Only a 'pause' run is resumable (its state is persisted); register it in
       // the durable approval inbox so /api/approvals can list + resolve it.
       if (isPause) {
-        await this.registerPendingApproval(execution, record, pendingToolCalls);
+        await this.registerPendingApproval(execution, record, pendingToolCalls, payload);
       }
       return record;
     }
@@ -1577,17 +2449,105 @@ export class SchedulerService {
     };
   }
 
+  /** Map a capability-free durable Persona dispatch onto scheduler history. */
+  private recordFromPersonaDispatch(
+    execution: PlannedExecution,
+    dispatch: import('@/backend/services/enduringAgents/personaDispatcher').PersonaFlowDispatchRecord,
+    meta: { runId: string; conversationId: string; firedAt: string; payload: TriggerFirePayload },
+  ): RunRecord {
+    const outcome = dispatch.outcome;
+    const awaitingApproval = dispatch.state === 'waiting'
+      && dispatch.waitingReason === 'approval';
+    const pausedDebug = dispatch.state === 'waiting'
+      && dispatch.waitingReason === 'debug';
+    const yielded = awaitingApproval || pausedDebug;
+    const completed = dispatch.state === 'completed' && outcome?.status === 'completed';
+    const capped = dispatch.state === 'completed' && outcome?.status === 'capped';
+    return {
+      runId: outcome?.runId ?? meta.runId,
+      executionGenerationId: this.executionGenerationId(execution),
+      conversationId: outcome?.conversationId ?? meta.conversationId,
+      firedAt: meta.firedAt,
+      finishedAt: new Date().toISOString(),
+      status: yielded
+        ? 'needs_approval'
+        : completed
+          ? 'completed'
+          : capped
+            ? 'capped'
+            : 'error',
+      triggerSummary: meta.payload.summary,
+      outputText: this.truncateOutput(outcome?.outputText ?? ''),
+      error: yielded
+        ? pausedDebug
+          ? 'Paused in debugger'
+          : 'Awaiting tool approval'
+        : completed || capped
+          ? undefined
+          : dispatch.state === 'waiting'
+            ? dispatch.waitingReason === 'running'
+              ? 'Run ended with status "running"'
+              : `Persona dispatch is waiting (${dispatch.waitingReason ?? 'unknown reason'})`
+          : dispatch.error?.message
+            ?? `Persona dispatch ended with state "${dispatch.state}"`,
+      personaId: dispatch.personaId,
+      activityId: dispatch.activityId,
+      behaviorRevisionId: dispatch.behaviorRevisionId,
+    };
+  }
+
+  /**
+   * A Persona dispatch deliberately stops polling when its Activity yields for
+   * approval. Recover the persisted call metadata (ids + names only), enrich
+   * the scheduler row, and place it in the same durable inbox as legacy paused
+   * runs so the existing approval route can resume the pinned Activity.
+   */
+  private async registerPersonaPendingApproval(
+    execution: PlannedExecution,
+    record: RunRecord,
+    payload: TriggerFirePayload,
+  ): Promise<RunRecord> {
+    let pendingToolCalls: Array<{ id: string; name: string }> = [];
+    try {
+      const { loadConversationState } = await import('@/backend/execution/flow/loadConversationState');
+      const state = await loadConversationState(record.conversationId);
+      pendingToolCalls = (state?.pendingToolCalls ?? []).map((toolCall) => ({
+        id: toolCall.id,
+        name: toolCall.type === 'function'
+          ? toolCall.function.name
+          : String(toolCall.type),
+      }));
+    } catch (error) {
+      // The Activity remains durably resumable even if metadata recovery is
+      // temporarily unavailable; keep the inbox registration best-effort.
+      log.warn(`Failed to load Persona approval metadata for "${execution.name}":`, error);
+    }
+
+    const enriched: RunRecord = {
+      ...record,
+      pendingApproval: {
+        tool: pendingToolCalls[0]?.name,
+        toolCallId: pendingToolCalls[0]?.id,
+        pendingToolCalls: pendingToolCalls.length > 0 ? pendingToolCalls : undefined,
+      },
+    };
+    await this.registerPendingApproval(execution, enriched, pendingToolCalls, payload);
+    return enriched;
+  }
+
   /**
    * Write a durable approval-inbox entry for a paused headless run (#115), so
    * GET /api/approvals can surface it and POST /api/approvals/:id can resolve it
-   * even across a process restart. Best-effort and never throws — an inbox
-   * write problem must not fail the run (the paused SharedState is the source of
-   * truth for the resume regardless).
+   * even across a process restart. Legacy registration remains best-effort.
+   * Persona registration is part of projecting a durable mailbox dispatch, so
+   * a write failure rejects the continuation and leaves the projection journal
+   * available for startup/retry reconciliation.
    */
   private async registerPendingApproval(
     execution: PlannedExecution,
     record: RunRecord,
-    pendingToolCalls: Array<{ id: string; name: string }>
+    pendingToolCalls: Array<{ id: string; name: string }>,
+    payload: TriggerFirePayload,
   ): Promise<void> {
     try {
       let flowName: string | undefined;
@@ -1608,52 +2568,131 @@ export class SchedulerService {
         triggerSummary: record.triggerSummary,
         pendingToolCalls,
         createdAt: record.firedAt,
+        ...(execution.personaId && payload.deliveryId
+          ? {
+              terminalPublication: {
+                triggerKind: payload.kind,
+                chainDepth: payload.chainDepth ?? 0,
+                deliveryId: payload.deliveryId,
+                execution: {
+                  id: execution.id,
+                  generationId: this.executionGenerationId(execution),
+                  name: execution.name,
+                  flowId: execution.flowId,
+                  personaId: execution.personaId,
+                },
+              },
+            }
+          : {}),
       });
     } catch (error) {
       log.warn(`Failed to register pending approval for "${execution.name}":`, error);
+      if (execution.personaId) throw error;
     }
   }
 
   /**
-   * Publish a terminal FlowRunEvent onto the process-global bus (issue #116).
-   * Every scheduler-fired run flows through here, carrying the truncated output
-   * and an event-chain depth so downstream `flow-event` triggers can match,
-   * chain their prompt, and enforce loop safety. Best-effort and never throws:
-   * an unresolvable flow name or a listener problem must not fail the run.
+   * Persist an outcome and publish its terminal event. Stable Persona
+   * deliveries use the write-ahead outbox; legacy runs retain the historical
+   * append-then-process-local-bus path byte for byte.
    */
-  private async publishFlowRunEvent(
+  private async finishFireRecord(
     execution: PlannedExecution,
-    record: RunRecord,
-    payload: TriggerFirePayload
-  ): Promise<void> {
+    payload: TriggerFirePayload,
+    candidate: RunRecord,
+    admittedProjectionId?: string,
+  ): Promise<RunRecord> {
+    const terminal = candidate.status === 'completed' || candidate.status === 'error';
+    const stable = Boolean(this.stablePersonaDeliveryId(execution, payload));
+    const event = terminal ? await this.buildFlowRunEvent(execution, candidate, payload) : undefined;
+    const receipt: StableTerminalPublicationReceipt | undefined = stable && event
+      ? {
+          id: event.deliveryId!,
+          executionId: execution.id,
+          runId: candidate.runId,
+          event,
+          record: candidate,
+          createdAt: candidate.finishedAt ?? new Date().toISOString(),
+        }
+      : undefined;
+    // Only the history/outbox mutation belongs inside the deletion fence. Bus
+    // publication happens after releasing it because an acknowledged event may
+    // durably admit another Persona projection using the same lock.
+    const persisted = admittedProjectionId
+      ? await withPersonaSchedulerProjectionGuard(
+          execution.id,
+          execution.generationId,
+          admittedProjectionId,
+          () => this.persistFireRecord(execution, payload, candidate, receipt),
+        )
+      : await withPersonaRuntimeLock(CONFIG_MUTATION_LOCK_ID, async () => {
+          // Linearize the legacy existence check with create/update/delete.
+          // If delete won, no later history-lock acquisition may resurrect the
+          // cleared per-execution file.
+          if ((await this.get(execution.id)) === null) return null;
+          return this.persistFireRecord(execution, payload, candidate, receipt);
+        });
+    if (!persisted) {
+      // delete() won the tombstone race. Its lock-scoped projection removal is
+      // authoritative, so this pinned continuation cannot resurrect history.
+      return candidate;
+    }
+    const record = persisted.record;
+
+    if (stable) {
+      // Drain even when this retry found an already-terminal row: a prior
+      // process may have died after persisting the receipt/row but before bus
+      // publication or acknowledgement.
+      await this.drainTerminalPublications();
+    } else if (terminal && persisted.firstTerminalTransition) {
+      // Legacy process-local publication semantics remain unchanged.
+      getFlowRunEventBus().publish(event!);
+    }
+    return record;
+  }
+
+  private async drainTerminalPublications(): Promise<void> {
     try {
-      let flowName: string | undefined;
-      try {
-        const { flowService } = await import('@/backend/services/flow');
-        flowName = (await flowService.getFlow(execution.flowId))?.name ?? undefined;
-      } catch (error) {
-        log.debug(`Could not resolve flow name for run event (${execution.flowId}):`, error);
-      }
-      // schedule-catchup is a schedule for downstream purposes; every other kind
-      // is already a valid FlowRunFiredBy.
-      const firedBy: FlowRunFiredBy =
-        payload.kind === 'schedule-catchup' ? 'schedule' : payload.kind;
-      getFlowRunEventBus().publish({
-        flowId: execution.flowId,
-        flowName,
-        executionId: execution.id,
-        runId: record.runId,
-        conversationId: record.conversationId,
-        status: record.status === 'completed' ? 'completed' : 'error',
-        outputText: record.outputText,
-        error: record.error,
-        firedBy,
-        chainDepth: payload.chainDepth ?? 0,
-        timestamp: record.finishedAt ?? new Date().toISOString(),
+      await drainStableTerminalPublications((event) => {
+        return getFlowRunEventBus().publishDurably(event);
       });
     } catch (error) {
-      log.warn(`Failed to publish flow-run event for "${execution.name}":`, error);
+      // The receipt remains pending. Startup or the next stable terminal retry
+      // replays it with the same deliveryId.
+      log.warn('Failed to drain scheduler terminal publication outbox:', error);
     }
+  }
+
+  private async buildFlowRunEvent(
+    execution: PlannedExecution,
+    record: RunRecord,
+    payload: TriggerFirePayload,
+  ): Promise<FlowRunEvent> {
+    let flowName: string | undefined;
+    try {
+      const { flowService } = await import('@/backend/services/flow');
+      flowName = (await flowService.getFlow(execution.flowId))?.name ?? undefined;
+    } catch (error) {
+      log.debug(`Could not resolve flow name for run event (${execution.flowId}):`, error);
+    }
+    const firedBy: FlowRunFiredBy =
+      payload.kind === 'schedule-catchup' ? 'schedule' : payload.kind;
+    return {
+      flowId: execution.flowId,
+      flowName,
+      executionId: execution.id,
+      runId: record.runId,
+      conversationId: record.conversationId,
+      status: record.status === 'completed' ? 'completed' : 'error',
+      outputText: record.outputText,
+      error: record.error,
+      firedBy,
+      chainDepth: payload.chainDepth ?? 0,
+      timestamp: record.finishedAt ?? new Date().toISOString(),
+      deliveryId: `terminal-${createHash('sha256')
+        .update(`${execution.id}\0${record.runId}`)
+        .digest('hex')}`,
+    };
   }
 
   private composePrompt(

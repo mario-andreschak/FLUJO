@@ -5,6 +5,7 @@ import { SharedState, SignalNodeParams } from '../types';
 import { resolveRunVars } from '@/utils/shared/resolveRunVars';
 import { getFlowRunEventBus, FlowRunFiredBy } from '@/backend/services/scheduler/flowRunEventBus';
 import { FEATURES } from '@/config/features';
+import { assertFlowExecutionCurrent } from '../executionAuthority';
 
 const log = createLogger('backend/flow/execution/nodes/SignalNode');
 
@@ -87,6 +88,11 @@ export class SignalNode extends BaseNode {
         const payload = resolveRunVars(prepResult.payloadTemplate ?? '', sharedState.variables);
         const firedBy: FlowRunFiredBy =
           sharedState.source === 'schedule' ? 'schedule' : sharedState.source === 'api' ? 'api' : 'chat';
+        // A signal is intentionally fire-and-forget, but it is still an
+        // externally visible side effect. Resolve everything first, then check
+        // the Persona lease / meeting generation at the last possible boundary
+        // so a recovered successor never receives an event from the stale run.
+        await assertFlowExecutionCurrent(sharedState);
         getFlowRunEventBus().publish({
           kind: 'signal',
           topic,

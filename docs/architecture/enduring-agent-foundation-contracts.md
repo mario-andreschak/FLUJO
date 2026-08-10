@@ -1,6 +1,6 @@
 # Enduring-agent foundation contracts
 
-Status: **Accepted; Phase 1 foundation and Phase 2A runtime implemented**
+Status: **Accepted; Phase 1 foundation and Phase 2 runtime implemented**
 
 Decision owner: issue [#415](https://github.com/mario-andreschak/FLUJO/issues/415)
 
@@ -8,11 +8,28 @@ Implementation note: the first `codex/enduring-agents` foundation slice adds the
 versioned records, workspace-scoped stores, built-in Developer Role, deterministic
 Persona factory, local inspection/creation APIs, and initial immutable legacy
 fixtures. It is not the complete epic or a release-complete Persona runtime.
-The follow-up Phase 2A slice adds hashed/idempotent mailbox admission, deterministic
-eligible ordering, immutable Behavior resolution at Activity start, durable lease
-acquisition history, exclusive local-filesystem lease fencing, renewal, graceful
-yield, completion, expiry handling, and crash-prefix reconciliation. Expired work
-with unknown external side effects is failed rather than replayed automatically.
+Phase 2 adds hashed/idempotent mailbox admission, deterministic eligible ordering,
+policy-controlled queue/steer/coalesce/interruption routing, immutable Behavior
+resolution at Activity start, durable lease acquisition history, exclusive
+local-filesystem lease fencing, renewal, graceful yield, completion, expiry
+handling, and crash-prefix reconciliation. The durable dispatcher and meeting
+reservation coordinator carry the fence through Flow execution, check it
+immediately before model/tool side effects, and attach only safe
+Persona/Activity/Behavior attribution to persisted run state. Conversation
+snapshots, summaries, and append-only transcript events commit while the same
+fence remains current, so a late provider response cannot survive lease loss.
+Persona-aware chat,
+planned executions, triggers, and webhooks enter through the dispatcher;
+Persona-less requests retain their existing execution paths. Meetings reserve
+Personas through the same mailbox in deterministic order for their full lifetime,
+and startup reconciliation resumes queued work after unlock. Redacted monotonic
+runtime events and the Persona inspection bundle expose lifecycle, stuck/error,
+expiry, and recovery state without leaking lease capabilities. Expired work with
+unknown external side effects is failed rather than replayed automatically.
+An error-gated Persona remains visibly blocked until the local, confirmation-bound
+runtime-recovery operation is invoked; that operation refuses a live lease, closes
+uncertain orphan work, preserves proven queued/waiting work, and requeues only
+undelivered input.
 The completed Phase 1 service surface also provides a workspace-scoped deletion
 preview and explicit-confirmation operation. It disables admission, cancels live
 Activity state, expires active fencing authority, erases Persona-owned Behaviors,
@@ -32,12 +49,20 @@ local multi-process deployment boundary, not
 a distributed database transaction or cross-host consensus lock. Independent
 Node `worker_threads` isolates are outside this lock's deployment boundary; use
 separate OS worker processes so process birth and death remain authoritative.
-Chat/meeting/schedule/trigger routing,
-steering/coalescing/interruption,
-cross-system attribution, dependency manifests (Behavior publication currently
-rejects Subflow nodes), the complete compatibility matrix, privacy-aware
-backup/restore, configuration export, cross-system archive anonymization, and UI
-remain gated follow-up work.
+Public Persona selection and broad user-facing cross-system attribution remain a
+Phase 3 concern. Phase 2 accepts explicit Persona targeting only while FLUJO is in
+its `localhost` exposure mode, where the launcher binds Next to `127.0.0.1`, and
+also requires loopback Host/Origin headers with no proxy forwarding headers.
+Network/public or reverse-proxied exposure cannot select,
+inspect, mutate, resume, cancel, or administratively recover Persona work, even if
+a remote client spoofs `Host: localhost`; external webhooks can reach a Persona
+only through a trusted target saved locally on the planned execution. Persisted
+execution attribution is safe metadata and never a lease capability. Dependency
+manifests (Behavior publication
+currently rejects Subflow nodes), the complete compatibility matrix, privacy-aware
+configuration export, cross-system archive anonymization beyond the implemented
+Persona-conversation backup/restore guards, memory,
+WorkItem automation, and UI remain gated follow-up work.
 
 ## Context
 
@@ -48,9 +73,10 @@ continuity across work. Adding that actor without explicit boundaries would risk
 turning identity into ambient authority, binding long-lived Personas to prunable
 Flow history, or retrospectively changing legacy executions.
 
-This record establishes the contracts that later phases of #415 MUST implement.
-It deliberately does not add storage, runtime behavior, or migration code. The
-persisted domain names are independent of UI labels: the UI may eventually call a
+This record establishes the contracts implemented incrementally by #415. The
+implementation status above is descriptive; the requirements below remain the
+normative compatibility and safety boundary. Persisted domain names are
+independent of UI labels: the UI may eventually call a
 Persona an “Agent” or a Flow a “Behavior” without changing these contracts.
 
 The words **MUST**, **MUST NOT**, **SHOULD**, and **MAY** below are normative.
@@ -116,10 +142,9 @@ remain, are replaced, or need review.
 
 ### Persona mailbox, lease, and fencing contract
 
-Phase 2A implements the local mailbox/Activity/lease kernel in this section; the
-external routing and orchestration integrations remain later work. Each Persona has
-a durable mailbox and **at most one valid Activity lease**. A lease contains, at
-minimum:
+Phase 2 implements the local mailbox/Activity/lease kernel and its trusted routing
+and orchestration integrations in this section. Each Persona has a durable mailbox
+and **at most one valid Activity lease**. A lease contains, at minimum:
 
 ```text
 workspaceId, personaId, activityId, leaseId, holderId,
@@ -327,9 +352,11 @@ Phase 1 implements the native Persona-owned portion of this contract through
 inspected workspace state. Deletion is idempotent, workspace-scoped, revokes
 runtime authority before erasure, never cascades to Role or MCP configuration,
 and retains only the selected minimal tombstone plus backup-policy disclosure.
-Cross-system records gain concrete anonymization adapters when Persona
-attribution is added in Phase 3; the deletion manifest already declares that
-policy rather than silently treating those future records as a cascade.
+Phase 2 stamps safe Persona attribution on the execution records described
+above, but does not make Persona deletion a destructive cross-system cascade.
+Concrete anonymization adapters for retained cross-system archives remain a
+Phase 3 concern; the deletion manifest declares that policy explicitly rather
+than silently erasing, orphaning, or claiming to anonymize those records.
 
 Deleting or exporting a Persona is a privacy-sensitive workflow, not a generic
 cascade or a raw workspace dump.
@@ -398,7 +425,7 @@ are untrusted data even when their transport is authenticated.
 
 ## Deferred by this record
 
-- Lease mutation/runtime details and any future indexed storage-engine layout.
+- Distributed/cross-host lease backends and any future indexed storage-engine layout.
 - Shared Behavior instances across Personas or cross-workspace living Personas.
 - Logical account-slot substitution for shared Behaviors.
 - Direct Persona app/device grants and rich Persona UI.

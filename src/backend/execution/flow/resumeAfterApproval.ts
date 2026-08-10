@@ -132,6 +132,8 @@ export async function applyApprovalDecision(
               mcpNodes: sharedState.currentMCPNodes,
               permissionRules: sharedState.permissionRules,
               savedPermissionRules: sharedState.savedPermissionRules,
+              signal: sharedState.executionAuthority?.signal,
+              beforeToolDispatch: sharedState.executionAuthority?.assertCurrent,
             });
             if (autoResult.success) {
               const msgs = autoResult.value.toolCallMessages.map(m => ({
@@ -175,6 +177,8 @@ export async function applyApprovalDecision(
       toolCalls: [toolCallToProcess],
       toolNameMap: sharedState.toolNameMap,
       mcpNodes: sharedState.currentMCPNodes, // Issue #239: native resource tools
+      signal: sharedState.executionAuthority?.signal,
+      beforeToolDispatch: sharedState.executionAuthority?.assertCurrent,
     });
 
     if (!toolProcessingResult.success) {

@@ -10,11 +10,22 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
+
+jest.mock('@/backend/execution/flow/loadConversationState', () => ({
+  loadConversationState: jest.fn(),
+}));
+
+jest.mock('@/backend/services/enduringAgents/personaDispatcher', () => ({
+  listPersonaFlowDispatches: jest.fn(),
+}));
+
 import {
   internalListResources,
   internalListResourceTemplates,
   internalReadResource,
 } from '@/backend/services/mcp/internalResources';
+import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
+import { listPersonaFlowDispatches } from '@/backend/services/enduringAgents/personaDispatcher';
 import {
   writeRunResource,
   readRunResource,
@@ -27,6 +38,11 @@ import type { ExecutionEvent } from '@/shared/types/execution/events';
 let tmpDir: string;
 let previousDir: string;
 let entry: RunResourceEntry;
+let personaEntry: RunResourceEntry;
+let ephemeralPersonaEntry: RunResourceEntry;
+
+const loadConversationStateMock = loadConversationState as jest.Mock;
+const listPersonaFlowDispatchesMock = listPersonaFlowDispatches as jest.Mock;
 
 beforeAll(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-intres-'));
@@ -39,6 +55,38 @@ beforeAll(async () => {
     data: { text: '# summary' },
     producedBy: { source: 'tool-result', server: 'srv', toolName: 'analyze', toolCallId: 'c1', nodeId: 'n1' },
   }) as RunResourceEntry;
+  personaEntry = await writeRunResource({
+    conversationId: 'conv-persona',
+    name: 'private-summary',
+    mimeType: 'text/plain',
+    kind: 'text',
+    data: { text: 'private Persona output' },
+    producedBy: { source: 'capture', nodeId: 'private-node' },
+  }) as RunResourceEntry;
+  ephemeralPersonaEntry = await writeRunResource({
+    conversationId: 'conv-persona-ephemeral',
+    name: 'ephemeral-private-summary',
+    mimeType: 'text/plain',
+    kind: 'text',
+    data: { text: 'private ephemeral Persona output' },
+    producedBy: { source: 'capture', nodeId: 'ephemeral-private-node' },
+  }) as RunResourceEntry;
+});
+
+beforeEach(() => {
+  listPersonaFlowDispatchesMock.mockReset().mockResolvedValue([]);
+  loadConversationStateMock.mockImplementation(async (conversationId: string) =>
+    conversationId === 'conv-persona'
+      ? {
+          conversationId,
+          personaAttribution: {
+            personaId: 'persona-1',
+            activityId: 'activity-1',
+            behaviorRevisionId: 'revision-1',
+          },
+        }
+      : undefined,
+  );
 });
 
 afterAll(async () => {
@@ -61,6 +109,25 @@ describe('internalListResources', () => {
     const result = await internalListResources('not-a-real-cursor');
     expect(result.resources).toEqual([]);
     expect(result.error).toContain('cursor');
+  });
+
+  it('filters Persona-owned resources before returning MCP list entries', async () => {
+    const result = await internalListResources();
+    expect(result.error).toBeUndefined();
+    expect(result.resources.some((resource) => resource.uri === entry.uri)).toBe(true);
+    expect(result.resources.some((resource) => resource.uri === personaEntry.uri)).toBe(false);
+  });
+
+  it('uses one lazy durable-dispatch scan to filter ephemeral Persona resources', async () => {
+    listPersonaFlowDispatchesMock.mockResolvedValue([{
+      flowInput: { conversationId: 'conv-persona-ephemeral' },
+    }]);
+
+    const result = await internalListResources();
+
+    expect(result.error).toBeUndefined();
+    expect(result.resources.some((resource) => resource.uri === ephemeralPersonaEntry.uri)).toBe(false);
+    expect(listPersonaFlowDispatchesMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -108,5 +175,39 @@ describe('internalReadResource', () => {
     const foreign = await internalReadResource('file:///etc/passwd');
     expect(foreign.success).toBe(false);
     expect(foreign.statusCode).toBe(400);
+  });
+
+  it('rejects Persona-owned payloads before lineage or event side effects', async () => {
+    const events: ExecutionEvent[] = [];
+    const unsubscribe = executionEventBus.subscribe('conv-persona', (event) => events.push(event));
+    try {
+      const before = await readRunResource(personaEntry.uri);
+      expect(before?.entry.readBy).toEqual([]);
+
+      const result = await internalReadResource(personaEntry.uri);
+      expect(result).toMatchObject({ success: false, statusCode: 403 });
+      expect(result.error).toContain('Persona');
+
+      const after = await readRunResource(personaEntry.uri);
+      expect(after?.entry.readBy).toEqual([]);
+      expect(events.filter((event) => event.type === 'resource:read')).toEqual([]);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it('rejects an ephemeral Persona resource owned by a durable dispatch outcome', async () => {
+    listPersonaFlowDispatchesMock.mockResolvedValue([{
+      outcome: { conversationId: 'conv-persona-ephemeral' },
+    }]);
+    const before = await readRunResource(ephemeralPersonaEntry.uri);
+    expect(before?.entry.readBy).toEqual([]);
+
+    const result = await internalReadResource(ephemeralPersonaEntry.uri);
+
+    expect(result).toMatchObject({ success: false, statusCode: 403 });
+    const after = await readRunResource(ephemeralPersonaEntry.uri);
+    expect(after?.entry.readBy).toEqual([]);
+    expect(listPersonaFlowDispatchesMock).toHaveBeenCalledTimes(1);
   });
 });

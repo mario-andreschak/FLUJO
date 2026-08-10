@@ -4,6 +4,7 @@ import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { getSchedulerService } from '@/backend/services/scheduler';
 import { json } from '../_helpers';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 
 const log = createLogger('app/api/planned-executions/[id]/route');
 
@@ -23,6 +24,10 @@ async function GET_handler(
     const execution = await getSchedulerService().get(id);
     if (!execution) {
       return json({ error: `No planned execution with id "${id}"` }, 404);
+    }
+    if (execution.personaId) {
+      const notLocal = assertLocalRequest(request, { strictLoopback: true });
+      if (notLocal) return notLocal;
     }
     return json(execution, 200);
   } catch (error) {
@@ -45,7 +50,18 @@ async function PATCH_handler(
   try {
     const { id } = await params;
     const patch = await request.json();
-    const result = await getSchedulerService().update(id, patch);
+    const scheduler = getSchedulerService();
+    const existing = await scheduler.get(id);
+    if (
+      existing?.personaId
+      || (patch && typeof patch === 'object' && (
+        'personaId' in patch || 'behaviorSlotKey' in patch
+      ))
+    ) {
+      const notLocal = assertLocalRequest(request, { strictLoopback: true });
+      if (notLocal) return notLocal;
+    }
+    const result = await scheduler.update(id, patch);
     if (result.error || !result.execution) {
       const missing = result.error?.startsWith('No planned execution');
       return json({ error: result.error ?? 'Failed to update' }, missing ? 404 : 400);
@@ -70,7 +86,13 @@ async function DELETE_handler(
 
   try {
     const { id } = await params;
-    const result = await getSchedulerService().delete(id);
+    const scheduler = getSchedulerService();
+    const existing = await scheduler.get(id);
+    if (existing?.personaId) {
+      const notLocal = assertLocalRequest(request, { strictLoopback: true });
+      if (notLocal) return notLocal;
+    }
+    const result = await scheduler.delete(id);
     if (!result.success) {
       return json({ error: result.error ?? 'Failed to delete' }, 404);
     }

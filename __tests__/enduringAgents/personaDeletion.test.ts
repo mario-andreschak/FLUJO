@@ -3,12 +3,14 @@ import path from 'path';
 
 import {
   PersonaDeletionConflictError,
+  appendPersonaRuntimeEvent,
   assertPersonaActivityLease,
   claimNextPersonaActivity,
   createPersonaFromRole,
   deletePersona,
   enqueuePersonaMailboxItem,
   previewPersonaDeletion,
+  readPersonaRuntimeEvents,
 } from '@/backend/services/enduringAgents';
 import {
   getPersona,
@@ -166,6 +168,7 @@ describe('Persona deletion policy', () => {
       expect(await listPersonaActivities(personaId)).toEqual([]);
       expect(await listPersonaMailboxItems(personaId)).toEqual([]);
       expect(await listPersonaLeaseRecords(personaId)).toEqual([]);
+      expect(await readPersonaRuntimeEvents(personaId)).toEqual([]);
       expect(await inspectPersonaHome(personaId)).toEqual({
         exists: false,
         fileCount: 0,
@@ -183,6 +186,12 @@ describe('Persona deletion policy', () => {
       })).rejects.toThrow();
       await expect(createPersonaFromRole({ id: personaId, name: 'Jim' }))
         .rejects.toThrow(/deleted and cannot be recreated/i);
+      await expect(appendPersonaRuntimeEvent(personaId, {
+        eventId: 'activity:late',
+        type: 'activity:completed',
+        activityId: 'activity_late',
+      })).rejects.toThrow(/runtime events are closed/i);
+      expect(await readPersonaRuntimeEvents(personaId)).toEqual([]);
       expect((await inspectPersonaHome(personaId)).exists).toBe(false);
 
       // Exact retries are idempotent after a crash or lost HTTP response.

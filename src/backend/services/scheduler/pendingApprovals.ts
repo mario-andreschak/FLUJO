@@ -2,6 +2,8 @@ import { saveItem, loadItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
 import { bindToCurrentWorkspace, getCurrentWorkspace } from '@/utils/workspace';
+import type { TriggerFirePayload } from '@/shared/types/plannedExecution';
+import { withPersonaRuntimeLock } from '@/backend/services/enduringAgents/runtimeLock';
 
 const log = createLogger('backend/services/scheduler/pendingApprovals');
 
@@ -34,11 +36,31 @@ export interface PendingApprovalEntry {
   /** Tool call id + name only — never arguments. */
   pendingToolCalls: Array<{ id: string; name: string }>;
   createdAt: string;
+  /** Durable marker that an approval decision already resumed this Activity. */
+  resumeDispatchId?: string;
+  resumeRequestedAt?: string;
+  /**
+   * Stable scheduler terminal-publication identity retained across an approval
+   * yield. Present only for Persona deliveries admitted through the mailbox.
+   */
+  terminalPublication?: {
+    triggerKind: TriggerFirePayload['kind'];
+    chainDepth: number;
+    deliveryId: string;
+    execution: {
+      id: string;
+      generationId?: string;
+      name: string;
+      flowId: string;
+      personaId: string;
+    };
+  };
 }
 
 type PendingApprovalsFile = Record<string, PendingApprovalEntry>;
 
 const KEY = StorageKey.PENDING_APPROVALS;
+const LOCK_ID = 'scheduler_pending_approvals';
 
 /** Serializes read-modify-write mutations so concurrent pauses/resolves can't
  *  clobber each other's entries. */
@@ -69,9 +91,23 @@ export async function getPendingApproval(
 export async function putPendingApproval(entry: PendingApprovalEntry): Promise<void> {
   const workspace = getCurrentWorkspace();
   const write = bindToCurrentWorkspace(async () => {
-    const file = await loadAll();
-    file[entry.approvalId] = entry;
-    await saveItem(KEY, file);
+    await withPersonaRuntimeLock(LOCK_ID, async (lock) => {
+      const file = await loadAll();
+      const existing = file[entry.approvalId];
+      if (
+        existing
+        && (
+          existing.conversationId !== entry.conversationId
+          || existing.plannedExecutionId !== entry.plannedExecutionId
+          || existing.runId !== entry.runId
+        )
+      ) {
+        throw new Error(`Pending approval ${entry.approvalId} conflicts with another run.`);
+      }
+      file[entry.approvalId] = entry;
+      await lock.assertOwned();
+      await saveItem(KEY, file);
+    });
   });
   const run = (writeChains.get(workspace) ?? Promise.resolve())
     .catch(() => { /* prior write's error surfaced to its own caller */ })
@@ -87,11 +123,14 @@ export async function putPendingApproval(entry: PendingApprovalEntry): Promise<v
 export async function removePendingApproval(approvalId: string): Promise<void> {
   const workspace = getCurrentWorkspace();
   const write = bindToCurrentWorkspace(async () => {
-    const file = await loadAll();
-    if (approvalId in file) {
-      delete file[approvalId];
-      await saveItem(KEY, file);
-    }
+    await withPersonaRuntimeLock(LOCK_ID, async (lock) => {
+      const file = await loadAll();
+      if (approvalId in file) {
+        delete file[approvalId];
+        await lock.assertOwned();
+        await saveItem(KEY, file);
+      }
+    });
   });
   const run = (writeChains.get(workspace) ?? Promise.resolve())
     .catch(() => { /* prior write's error surfaced to its own caller */ })

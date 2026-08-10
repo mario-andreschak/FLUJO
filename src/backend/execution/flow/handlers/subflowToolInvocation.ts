@@ -239,6 +239,8 @@ export async function executeSubflowToolCall(
       chainDepth: sharedState.chainDepth,
       parentRunId: sharedState.conversationId,
       plannedExecutionId: sharedState.plannedExecutionId,
+      personaAttribution: sharedState.personaAttribution,
+      executionAuthority: sharedState.executionAuthority,
       // Tool-mode invocations attach no durable invocation record (v1 is
       // non-resumable), so this stays ephemeral regardless of the target
       // node's own `saveConversation` setting.

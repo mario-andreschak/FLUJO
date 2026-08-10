@@ -24,8 +24,12 @@ jest.mock('@/backend/services/mcp', () => ({
 }));
 
 const schedulerDeleteMock = jest.fn();
+const schedulerGetMock = jest.fn();
 jest.mock('@/backend/services/scheduler', () => ({
-  getSchedulerService: () => ({ delete: (...a: unknown[]) => schedulerDeleteMock(...a) }),
+  getSchedulerService: () => ({
+    delete: (...a: unknown[]) => schedulerDeleteMock(...a),
+    get: (...a: unknown[]) => schedulerGetMock(...a),
+  }),
 }));
 
 // In-memory storage for the install ledger.
@@ -35,7 +39,10 @@ jest.mock('@/utils/storage/backend', () => ({
   saveItem: jest.fn(async (key: string, value: unknown) => { store.set(key, value); }),
 }));
 
-import { uninstallPackage } from '@/backend/services/packages/installPackage';
+import {
+  inspectPackageUninstall,
+  uninstallPackage,
+} from '@/backend/services/packages/installPackage';
 
 const LEDGER_KEY = 'package_installs';
 
@@ -68,6 +75,7 @@ beforeEach(() => {
   deleteModelMock.mockResolvedValue({ success: true });
   deleteServerConfigMock.mockResolvedValue({ success: true });
   schedulerDeleteMock.mockResolvedValue({ success: true });
+  schedulerGetMock.mockResolvedValue(null);
 });
 
 describe('uninstallPackage — happy path', () => {
@@ -91,6 +99,49 @@ describe('uninstallPackage — happy path', () => {
 
     // Ledger entry is gone.
     expect((store.get(LEDGER_KEY) as Record<string, unknown>)['my-pkg']).toBeUndefined();
+  });
+});
+
+describe('uninstallPackage — Persona control-plane boundary', () => {
+  it('preflights Persona plans and denies direct service deletion all-or-none', async () => {
+    store.set(LEDGER_KEY, recordWithProvenance());
+    schedulerGetMock.mockResolvedValue({
+      id: 'pkg-my-pkg-nightly',
+      personaId: 'persona_support',
+      behaviorSlotKey: 'primary',
+    });
+
+    await expect(inspectPackageUninstall('my-pkg')).resolves.toEqual({
+      exists: true,
+      requiresPersonaControl: true,
+    });
+    const summary = await uninstallPackage('my-pkg');
+
+    expect(summary).toMatchObject({ ok: false, hasErrors: true });
+    expect(summary.errors).toEqual([
+      expect.objectContaining({ kind: 'plannedExecution', id: 'protected' }),
+    ]);
+    expect(schedulerDeleteMock).not.toHaveBeenCalled();
+    expect(deleteFlowMock).not.toHaveBeenCalled();
+    expect(deleteServerConfigMock).not.toHaveBeenCalled();
+    expect(deleteModelMock).not.toHaveBeenCalled();
+    expect((store.get(LEDGER_KEY) as Record<string, unknown>)['my-pkg']).toBeDefined();
+  });
+
+  it('allows the same uninstall only after strict-loopback authorization', async () => {
+    store.set(LEDGER_KEY, recordWithProvenance());
+    schedulerGetMock.mockResolvedValue({
+      id: 'pkg-my-pkg-nightly',
+      personaId: 'persona_support',
+    });
+
+    const summary = await uninstallPackage('my-pkg', {
+      allowPersonaPlannedExecutions: true,
+    });
+
+    expect(summary.ok).toBe(true);
+    expect(schedulerDeleteMock).toHaveBeenCalledWith('pkg-my-pkg-nightly');
+    expect(deleteFlowMock).toHaveBeenCalled();
   });
 });
 

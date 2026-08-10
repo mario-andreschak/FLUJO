@@ -13,6 +13,10 @@ export const ENDURING_AGENT_COLLECTIONS = Object.freeze({
   workItems: 'persona-work-items',
   memoryItems: 'persona-memories',
   mailboxItems: 'persona-mailbox',
+  /** Private, strict-versioned Flow inputs referenced by Persona mailbox items. */
+  flowDispatches: 'persona-flow-dispatches',
+  /** Private transactional outbox for explicit runtime-recovery observations. */
+  runtimeRecoveryReceipts: 'persona-runtime-recovery-receipts',
   leaseHistory: 'persona-lease-history',
   leases: 'persona-leases',
   deletionTombstones: 'persona-deletion-tombstones',

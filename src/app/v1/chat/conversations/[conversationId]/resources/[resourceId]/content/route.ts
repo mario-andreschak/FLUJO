@@ -5,6 +5,8 @@ import {
   buildRunResourceUri,
   readRunResource,
 } from '@/backend/services/runResources';
+import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 
 /**
  * Browser-facing payload endpoint for persisted model/tool media.
@@ -14,7 +16,7 @@ import {
  * consume it without putting base64 in conversation JSON.
  */
 async function GET_handler(
-  _request: NextRequest,
+  request: NextRequest,
   {
     params,
   }: {
@@ -27,6 +29,12 @@ async function GET_handler(
   const { conversationId, resourceId } = await params;
   if (!conversationId || !resourceId) {
     return NextResponse.json({ error: 'Missing resource identifier' }, { status: 400 });
+  }
+
+  const state = await loadConversationState(conversationId);
+  if (!state || state.personaAttribution) {
+    const notLocal = assertLocalRequest(request, { strictLoopback: true });
+    if (notLocal) return notLocal;
   }
 
   try {

@@ -48,6 +48,10 @@ import { resolveRunVars } from '@/utils/shared/resolveRunVars';
 import { resolveNonSecretGlobalVars } from '@/backend/utils/resolveGlobalVars';
 import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { resolveKvNodeRefs, captureKvValue, type KvFlowContext } from '../resolveKvNodeRefs';
+import {
+  commitFlowDurableMutation,
+  rethrowFlowExecutionAuthorityError,
+} from '../executionAuthority';
 import { withMcpAppModelContext } from '@/backend/mcpApps/modelContext';
 import type { DecodedTool } from '../handlers/toolNamespace';
 import OpenAI from 'openai';
@@ -398,11 +402,13 @@ export class ProcessNode extends BaseNode {
       // Tier 3: announce each resource pill the renderer resolves as a live
       // resource:read event, attributed to this node. The renderer itself
       // stays state-agnostic — it just calls back.
-      onResourceRead: (info) => sharedState.emit?.({
-        type: 'resource:read',
-        node: { nodeId },
-        source: 'pill',
-        ...info,
+      onResourceRead: (info) => commitFlowDurableMutation(sharedState, async () => {
+        sharedState.emit?.({
+          type: 'resource:read',
+          node: { nodeId },
+          source: 'pill',
+          ...info,
+        });
       }),
     });
 
@@ -412,7 +418,8 @@ export class ProcessNode extends BaseNode {
       resolveRunVars(renderedPrompt, sharedState.variables),
       sharedState.ephemeral ? undefined : sharedState.conversationId,
       sharedState.emit,
-      { nodeId }
+      { nodeId },
+      sharedState,
     );
 
     // Resolve configuration globals at execution time. The prompt-safe resolver
@@ -429,7 +436,12 @@ export class ProcessNode extends BaseNode {
       if (kvCtx) return kvCtx;
       let folder: string | undefined;
       try { folder = (await flowService.getFlow(flowId))?.folder; } catch { /* best effort */ }
-      kvCtx = { flowId, folder };
+      kvCtx = {
+        flowId,
+        folder,
+        executionAuthority: sharedState.executionAuthority,
+        personaAttribution: sharedState.personaAttribution,
+      };
       return kvCtx;
     };
     if (completePrompt.includes('${kv:')) {
@@ -445,6 +457,8 @@ export class ProcessNode extends BaseNode {
         resourceNodes,
         conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
         emit: sharedState.emit,
+        executionAuthority: sharedState.executionAuthority,
+        personaAttribution: sharedState.personaAttribution,
       });
       completePrompt += resourceBlock;
     }
@@ -653,6 +667,8 @@ export class ProcessNode extends BaseNode {
     permissionRules: sharedState.permissionRules,
     savedPermissionRules: sharedState.savedPermissionRules,
     meetingToolsEnabled: Boolean(sharedState.meetingParticipant && sharedState.meetingTurn),
+    executionAuthority: sharedState.executionAuthority,
+    personaAttribution: sharedState.personaAttribution,
     // Issue #258: carry the resolved unattended flag so execCore can pass it to
     // the model call (the synthetic `question` tool degrades in unattended runs).
     unattended: sharedState.unattended,
@@ -787,11 +803,13 @@ export class ProcessNode extends BaseNode {
         let content = await promptRenderer.resolveChatMessageReferences(
           message.content,
           mcpNodes,
-          (info) => sharedState.emit?.({
-            type: 'resource:read',
-            node: { nodeId },
-            source: 'pill',
-            ...info,
+          (info) => commitFlowDurableMutation(sharedState, async () => {
+            sharedState.emit?.({
+              type: 'resource:read',
+              node: { nodeId },
+              source: 'pill',
+              ...info,
+            });
           }),
         );
         content = await resolveRunResourceRefs(
@@ -799,6 +817,7 @@ export class ProcessNode extends BaseNode {
           sharedState.ephemeral ? undefined : sharedState.conversationId,
           sharedState.emit,
           { nodeId },
+          sharedState,
         );
         return content === message.content
           ? message
@@ -825,7 +844,8 @@ export class ProcessNode extends BaseNode {
             resolveRunVars(isolatedPrompt, sharedState.variables),
             sharedState.ephemeral ? undefined : sharedState.conversationId,
             sharedState.emit,
-            { nodeId }
+            { nodeId },
+            sharedState,
           )
         : isolatedPrompt;
       if (typeof resolvedIsolatedPrompt === 'string') {
@@ -1081,8 +1101,11 @@ export class ProcessNode extends BaseNode {
       let modelResult;
       let usedToolFreeFallback = false;
       try {
-        const callModelWithTools = (attemptTools: OpenAI.ChatCompletionFunctionTool[] | undefined) =>
-          ModelHandler.callModel({
+        const callModelWithTools = async (
+          attemptTools: OpenAI.ChatCompletionFunctionTool[] | undefined,
+        ) => {
+          await prepResult.executionAuthority?.assertCurrent();
+          const result = await ModelHandler.callModel({
             modelId: prepResult.boundModel,
             prompt: prepResult.currentPrompt,
             messages: prepResult.messages,
@@ -1143,7 +1166,18 @@ export class ProcessNode extends BaseNode {
             meetingToolsEnabled: prepResult.meetingToolsEnabled,
             mcpNodes: node_params?.properties?.mcpNodes, // Issue #239: for native resource tools
             unattended: prepResult.unattended, // Issue #258: degrade the question tool in unattended runs
+            beforeToolDispatch: prepResult.executionAuthority?.assertCurrent,
+            beforeModelDispatch: prepResult.executionAuthority?.assertCurrent,
+            executionAuthority: prepResult.executionAuthority,
+            personaAttribution: prepResult.personaAttribution,
+            signal: prepResult.executionAuthority?.signal,
           });
+          // Provider abort is cooperative. A response can arrive after the
+          // Persona heartbeat/fence was lost, so reject it before any message,
+          // event, node, or conversation projection observes the stale result.
+          await prepResult.executionAuthority?.assertCurrent();
+          return result;
+        };
 
         // Provider catalogues can tell us before the request that a model lacks
         // tool support. Strip only handoff-only plumbing when routing remains
@@ -1279,6 +1313,9 @@ export class ProcessNode extends BaseNode {
 
       return execResult;
     } catch (error) {
+    // If this error raced a higher-level lease loss, authority failure wins and
+    // escapes instead of being converted into a persistable Process-node error.
+    await prepResult.executionAuthority?.assertCurrent();
     // For critical tool errors or model errors, we want to rethrow them
     // to abort the flow execution
     if (error && typeof error === 'object' &&
@@ -1550,20 +1587,26 @@ export class ProcessNode extends BaseNode {
     // Tier 4 (persistent kv): also save this node's output to a PERSISTENT
     // cross-run key with `captureKv: "NAME"` (scope-prefixable as folder/flow/
     // global). Unlike captureVariable/captureResource (run-scoped), this survives
-    // across runs so a scheduled pulse can carry a counter/cursor forward. Never
-    // breaks the run: a cap refusal or bad name logs and moves on.
+    // across runs so a scheduled pulse can carry a counter/cursor forward. A cap
+    // refusal or bad name logs and moves on; execution-fence loss fails closed.
     const captureKv = node_params?.properties?.captureKv?.trim();
     if (execResult.success && captureKv) {
       try {
         let folder: string | undefined;
         try { folder = (await flowService.getFlow(sharedState.flowId))?.folder; } catch { /* best effort */ }
-        const res = await captureKvValue(captureKv, execResult.content ?? '', { flowId: sharedState.flowId, folder });
+        const res = await captureKvValue(captureKv, execResult.content ?? '', {
+          flowId: sharedState.flowId,
+          folder,
+          executionAuthority: sharedState.executionAuthority,
+          personaAttribution: sharedState.personaAttribution,
+        });
         if ('skipped' in res) {
           log.warn('captureKv skipped', { captureKv, reason: res.skipped });
         } else {
           log.info('Captured node output into persistent kv', { captureKv, nodeId: node_params?.id });
         }
       } catch (error) {
+        rethrowFlowExecutionAuthorityError(error);
         log.error('captureKv failed; continuing run', error);
       }
     }

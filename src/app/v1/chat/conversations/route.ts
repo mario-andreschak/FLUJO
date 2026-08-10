@@ -6,7 +6,12 @@ import path from 'path';
 import { createLogger } from '@/utils/logger';
 import { SharedState } from '@/backend/execution/flow/types';
 import { Flow } from '@/shared/types/flow';
-import { saveCollectionItem, assertSafeCollectionId, deleteCollectionItem } from '@/utils/storage/backend';
+import {
+  saveCollectionItem,
+  assertSafeCollectionId,
+  deleteCollectionItem,
+  loadCollectionItem,
+} from '@/utils/storage/backend';
 import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
@@ -45,7 +50,12 @@ type ConversationListItem = FrontendConversationListItem;
 // replace, so a content change always moves the mtime). Conversation ids/file
 // names are only unique within a workspace; a process-wide filename-only cache
 // can otherwise return one workspace's title/status/flow metadata in another.
-const listSummaryCache = new Map<string, { mtimeMs: number; size: number; item: ConversationListItem }>();
+type CachedConversationListItem = ConversationListItem & { personaOwned?: true };
+const listSummaryCache = new Map<string, {
+  mtimeMs: number;
+  size: number;
+  item: CachedConversationListItem;
+}>();
 
 const listSummaryCachePrefix = () => workspaceCacheKey('conversation-list-summary');
 const listSummaryCacheKey = (file: string) => workspaceCacheKey('conversation-list-summary', file);
@@ -169,6 +179,10 @@ async function GET_handler(request: NextRequest) {
   // this route centrally too; kept inline for the internal control-plane sinks.
   const notLocal = assertLocalRequest(request);
   if (notLocal) return notLocal;
+  const personaControlAllowed = assertLocalRequest(
+    request,
+    { strictLoopback: true },
+  ) === null;
 
   const startTime = Date.now();
   const requestId = `conv-list-${Date.now()}`;
@@ -228,7 +242,13 @@ async function GET_handler(request: NextRequest) {
     // The dashboard only needs to know whether saved chats exist. Avoid reading
     // and projecting every conversation file for that lightweight status check.
     if (presenceOnly) {
-      return NextResponse.json({ count: jsonFiles.length });
+      if (personaControlAllowed) return NextResponse.json({ count: jsonFiles.length });
+      const summaries = await listConversationSummaries();
+      const count = summaries.filter((summary) => (
+        !summary.personaOwned
+        && !FlowExecutor.conversationStates.get(summary.id)?.personaAttribution
+      )).length;
+      return NextResponse.json({ count });
     }
 
     // The paged sidebar reads tiny durable summary sidecars instead of parsing
@@ -242,14 +262,19 @@ async function GET_handler(request: NextRequest) {
         ? new Map((await flowService.loadFlows()).map((flow) => [flow.id, flow.name]))
         : new Map<string, string>();
       let visible = summaries
+        .filter((summary) => personaControlAllowed || (
+          !summary.personaOwned
+          && !FlowExecutor.conversationStates.get(summary.id)?.personaAttribution
+        ))
         .map((summary): ConversationListItem => {
           const live = FlowExecutor.conversationStates.get(summary.id);
           let status = live?.status ?? summary.status;
           if (status === 'running' && executionEventBus.currentSeq(summary.id) === 0) {
             status = 'error';
           }
+          const { personaOwned: _personaOwned, ...safeSummary } = summary;
           return {
-            ...summary,
+            ...safeSummary,
             title: live?.title ?? summary.title,
             flowId: live?.flowId ?? summary.flowId,
             status,
@@ -289,7 +314,7 @@ async function GET_handler(request: NextRequest) {
         const stats = await fs.stat(filePath);
         const summaryCacheKey = listSummaryCacheKey(file);
         const cached = listSummaryCache.get(summaryCacheKey);
-        let base: ConversationListItem;
+        let base: CachedConversationListItem;
         // Content search always needs the parsed body, so it bypasses the
         // summary-only cache-hit fast path (it still repopulates the cache).
         let parsedState: SharedState | undefined;
@@ -307,12 +332,15 @@ async function GET_handler(request: NextRequest) {
             : await fs.readFile(filePath, 'utf-8');
           const state = JSON.parse(fileContent) as SharedState;
           parsedState = state;
+          if (!personaControlAllowed && state.personaAttribution) return null;
           // On the first sidebar load after a process restart, convert a running
           // record owned by the prior process into a durable interrupted state.
-          await reconcileInterruptedRecovery(
-            `conversations/${state.conversationId || conversationIdFromFile}` as StorageKey,
-            state,
-          );
+          if (!state.personaAttribution) {
+            await reconcileInterruptedRecovery(
+              `conversations/${state.conversationId || conversationIdFromFile}` as StorageKey,
+              state,
+            );
+          }
 
           // Ensure ID consistency if possible
           if (state.conversationId && state.conversationId !== conversationIdFromFile) {
@@ -343,6 +371,7 @@ async function GET_handler(request: NextRequest) {
             // Absent on legacy conversations => they render as roots.
             parentConversationId: state.parentConversationId ?? null,
             rootConversationId: state.rootConversationId ?? null,
+            ...(state.personaAttribution ? { personaOwned: true as const } : {}),
           };
           listSummaryCache.set(summaryCacheKey, { mtimeMs: stats.mtimeMs, size: stats.size, item: base });
         }
@@ -360,6 +389,9 @@ async function GET_handler(request: NextRequest) {
         // terminal status until the next persist. Memory is never staler than
         // disk here: every disk write comes from this same object.
         const live = FlowExecutor.conversationStates.get(base.id);
+        if (!personaControlAllowed && (base.personaOwned || live?.personaAttribution)) {
+          return null;
+        }
         let status = live?.status ?? base.status;
         const title = live?.title ?? base.title;
         const updatedAt = live?.updatedAt ?? base.updatedAt;
@@ -381,7 +413,8 @@ async function GET_handler(request: NextRequest) {
           status = 'error';
         }
 
-        return { ...base, title, updatedAt, lastUserMessageAt, status, source, plannedExecutionId };
+        const { personaOwned: _personaOwned, ...safeBase } = base;
+        return { ...safeBase, title, updatedAt, lastUserMessageAt, status, source, plannedExecutionId };
       } catch (parseError) {
         if (request.signal.aborted || (parseError as { name?: string })?.name === 'AbortError') {
           return null;
@@ -521,6 +554,20 @@ async function POST_handler(req: NextRequest) {
 
 
   const conversationId = payload.id;
+  const existingState = FlowExecutor.conversationStates.get(conversationId)
+    ?? await loadCollectionItem<SharedState | undefined>(
+      'conversations',
+      conversationId,
+      undefined,
+    );
+  if (existingState?.personaAttribution) {
+    const personaNotLocal = assertLocalRequest(req, { strictLoopback: true });
+    if (personaNotLocal) return personaNotLocal;
+    return NextResponse.json(
+      { error: 'Persona-owned conversations cannot be overwritten by the legacy create route.' },
+      { status: 409 },
+    );
+  }
   // Explicitly creating a conversation under an id clears any deleted-id
   // tombstone (which would otherwise silently block its persistence).
   unmarkConversationDeleted(conversationId);
@@ -636,6 +683,12 @@ async function DELETE_handler(req: NextRequest) {
     if (typeof rawId !== 'string' || !SAFE_ID.test(rawId)) { errors++; return; }
     const id = rawId;
     try {
+      const existingState = FlowExecutor.conversationStates.get(id)
+        ?? await loadCollectionItem<SharedState | undefined>('conversations', id, undefined);
+      if (existingState?.personaAttribution) {
+        errors++;
+        return;
+      }
       // Tombstone first so an in-flight run can't resurrect the files (matches
       // the per-item DELETE ordering in [conversationId]/route.ts).
       markConversationDeleted(id);

@@ -5,12 +5,14 @@ import {
   ToolCallInfo,
   MCPNodeReference,
   CodexSessionMetadata,
+  FlowExecutionAuthority,
 } from '../types';
 import { FlujoChatMessage } from '@/shared/types/chat'; // Correct import path
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
 import { PermissionRule, SavedPermissionRule } from '@/shared/types/permissions';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import type { VisualCompactionDiagnostic } from '@/shared/types/visualArchive';
+import type { PersonaAttribution } from '@/shared/types/enduringAgent';
 
 // Input for model call
 export interface ModelCallInput {
@@ -81,6 +83,16 @@ export interface ModelCallInput {
    *  localToolExecutor so a self-orchestrating adapter degrades it to a
    *  tool-error instead of blocking for an answer that will never come. */
   unattended?: boolean;
+  /** Runtime-only fence assertion for self-orchestrating adapter tool calls. */
+  beforeToolDispatch?: () => Promise<void>;
+  /** Runtime-only fence assertion immediately before each provider attempt. */
+  beforeModelDispatch?: () => Promise<void>;
+  /** Runtime-only authority used to fence durable resource/lineage mutations. */
+  executionAuthority?: FlowExecutionAuthority;
+  /** Safe actor attribution; attributed writes fail closed without authority. */
+  personaAttribution?: PersonaAttribution;
+  /** Higher-level cancellation (for example Persona lease loss). */
+  signal?: AbortSignal;
 }
 
 // Result of model call
@@ -177,6 +189,16 @@ export interface ToolCallProcessingInput {
    * answer that will never come.
    */
   unattended?: boolean;
+  /**
+   * Checked immediately before each local or external tool dispatch. Persona
+   * orchestration uses this to reject a stale fencing token after interruption,
+   * expiry, or recovery.
+   */
+  beforeToolDispatch?: () => Promise<void>;
+  /** Runtime-only authority used to fence durable resource/lineage mutations. */
+  executionAuthority?: FlowExecutionAuthority;
+  /** Safe actor attribution; attributed writes fail closed without authority. */
+  personaAttribution?: PersonaAttribution;
 }
 
 // Tool call processing result

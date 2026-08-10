@@ -15,15 +15,26 @@
 
 const callToolMock = jest.fn();
 const loadServerConfigsMock = jest.fn();
+const writeRunResourceMock = jest.fn();
+const getRunResourceSettingsMock = jest.fn();
 jest.mock('@/backend/services/mcp', () => ({
   mcpService: {
     callTool: (...args: unknown[]) => callToolMock(...args),
     loadServerConfigs: (...args: unknown[]) => loadServerConfigsMock(...args),
   },
 }));
+jest.mock('@/backend/services/runResources', () => {
+  const actual = jest.requireActual('@/backend/services/runResources');
+  return {
+    ...actual,
+    writeRunResource: (...args: unknown[]) => writeRunResourceMock(...args),
+    getRunResourceSettings: (...args: unknown[]) => getRunResourceSettingsMock(...args),
+  };
+});
 
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import OpenAI from 'openai';
+import type { FlowExecutionAuthority } from '@/backend/execution/flow/types';
 
 const toolCall = (id: string, name: string, args: object): OpenAI.ChatCompletionMessageFunctionToolCall => ({
   id,
@@ -46,6 +57,16 @@ beforeEach(() => {
   callToolMock.mockReset();
   loadServerConfigsMock.mockReset();
   loadServerConfigsMock.mockResolvedValue([]); // no per-server caps unless a test sets them
+  writeRunResourceMock.mockReset().mockResolvedValue({ skipped: 'size-cap' });
+  getRunResourceSettingsMock.mockReset().mockResolvedValue({
+    autoCaptureEnabled: true,
+    textThresholdChars: 32,
+    maxResourceBytes: 10 * 1024 * 1024,
+    maxConversationBytes: 20 * 1024 * 1024,
+    replaceLargeTextWithStub: false,
+    toolResultMaxBytes: 1024,
+    toolResultMaxLines: 200,
+  });
 });
 
 describe('ModelHandler.processToolCalls concurrency (issue #252)', () => {
@@ -206,5 +227,98 @@ describe('ModelHandler.processToolCalls concurrency (issue #252)', () => {
       'model',
       undefined,
     );
+  });
+
+  it('fails the whole batch when execution authority is lost before a call starts', async () => {
+    const authorityError = new Error('Persona lease fence is no longer current');
+    const beforeToolDispatch = jest.fn(async () => {
+      throw authorityError;
+    });
+
+    const result = await ModelHandler.processToolCalls({
+      toolCalls: [toolCall('call1', 'mcp_a_1', {})],
+      toolNameMap,
+      beforeToolDispatch,
+    });
+
+    expect(result.success).toBe(false);
+    expect(callToolMock).not.toHaveBeenCalled();
+    expect(beforeToolDispatch).toHaveBeenCalledTimes(1);
+    if (!result.success) {
+      expect(result.error.message).toContain('Persona lease fence is no longer current');
+    }
+  });
+
+  it('rechecks execution authority at the final MCP side-effect boundary', async () => {
+    const beforeToolDispatch = jest
+      .fn<Promise<void>, []>()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('Persona lease expired during preparation'));
+
+    const result = await ModelHandler.processToolCalls({
+      toolCalls: [toolCall('call1', 'mcp_a_1', {})],
+      toolNameMap,
+      beforeToolDispatch,
+    });
+
+    expect(result.success).toBe(false);
+    expect(beforeToolDispatch).toHaveBeenCalledTimes(2);
+    expect(callToolMock).not.toHaveBeenCalled();
+    if (!result.success) {
+      expect(result.error.message).toContain('Persona lease expired during preparation');
+    }
+  });
+
+  it('drops a delayed tool result before resource, lineage, or result-event projection when the lease is lost', async () => {
+    let releaseTool!: () => void;
+    const toolGate = new Promise<void>((resolve) => { releaseTool = resolve; });
+    let toolStarted!: () => void;
+    const started = new Promise<void>((resolve) => { toolStarted = resolve; });
+    callToolMock.mockImplementationOnce(async () => {
+      toolStarted();
+      await toolGate;
+      return {
+        success: true,
+        data: { content: [{ type: 'text', text: 'durable payload '.repeat(200) }] },
+      };
+    });
+
+    let current = true;
+    const authorityError = new Error('Persona lease replaced while MCP tool was running');
+    const assertCurrent = jest.fn(async () => {
+      if (!current) throw authorityError;
+    });
+    const commitWhileCurrent = jest.fn(async <T>(task: () => Promise<T>): Promise<T> => {
+      if (!current) throw authorityError;
+      return task();
+    }) as unknown as jest.MockedFunction<NonNullable<FlowExecutionAuthority['commitWhileCurrent']>>;
+    const emit = jest.fn();
+
+    const pending = ModelHandler.processToolCalls({
+      toolCalls: [toolCall('late-call', 'mcp_a_1', {})],
+      toolNameMap,
+      conversationId: 'persona-conversation',
+      emit,
+      beforeToolDispatch: assertCurrent,
+      executionAuthority: {
+        assertCurrent,
+        commitWhileCurrent,
+        signal: new AbortController().signal,
+      },
+      personaAttribution: { personaId: 'persona-1', activityId: 'activity-1' },
+    });
+
+    await started;
+    current = false;
+    releaseTool();
+    const result = await pending;
+
+    expect(result.success).toBe(false);
+    expect(writeRunResourceMock).not.toHaveBeenCalled();
+    expect(commitWhileCurrent).not.toHaveBeenCalled();
+    expect(emit.mock.calls.map(([event]) => event.type)).toEqual(['tool:call']);
+    if (!result.success) {
+      expect(result.error.message).toContain('Flow execution authority was lost');
+    }
   });
 });

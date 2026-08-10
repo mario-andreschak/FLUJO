@@ -6,6 +6,7 @@ import {
   getMeeting,
   listMeetingSummaries,
   listMeetings,
+  sanitizeMeetingForApi,
   saveMeeting,
 } from '@/backend/services/meetings/store';
 import { appendMeetingEvent, readMeetingEvents } from '@/backend/services/meetings/eventLog';
@@ -80,6 +81,96 @@ describe('meeting snapshot store', () => {
     expect(() => createMeetingRecord(input({
       policy: { maxRounds: 0 },
     }))).toThrow(/maxRounds/i);
+  });
+
+  it('accepts mixed Flow and Persona participants with exactly one target each', () => {
+    const record = createMeetingRecord(input({
+      participants: [
+        { id: 'legacy', name: 'Legacy', flowId: 'flow-a' },
+        {
+          id: 'living',
+          name: 'Living',
+          personaId: 'persona_living',
+          behaviorSlotKey: 'council',
+        },
+      ],
+    }));
+
+    expect(record.participants).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'legacy', flowId: 'flow-a' }),
+      expect.objectContaining({
+        id: 'living',
+        personaId: 'persona_living',
+        behaviorSlotKey: 'council',
+      }),
+    ]));
+    expect(record.participants.find((participant) => participant.id === 'legacy'))
+      .not.toHaveProperty('personaId');
+    expect(record.participants.find((participant) => participant.id === 'living'))
+      .not.toHaveProperty('flowId');
+  });
+
+  it('strips durable reservation owners and attempt identities from API records', () => {
+    const record = createMeetingRecord(input());
+    record.personaReservationGeneration = 4;
+    record.personaReservationIntent = {
+      generation: 4,
+      attemptId: 'private_attempt',
+      ownerId: 'private_owner',
+      state: 'running',
+      createdAt: 10,
+      updatedAt: 11,
+      expiresAt: 30_011,
+    };
+
+    const serialized = JSON.stringify(sanitizeMeetingForApi(record));
+
+    expect(serialized).not.toContain('private_attempt');
+    expect(serialized).not.toContain('private_owner');
+    expect(serialized).not.toContain('personaReservationIntent');
+    expect(serialized).not.toContain('personaReservationGeneration');
+  });
+
+  it('atomically persists an additive Persona Behavior revision pin at creation', async () => {
+    const creation = input({
+      participants: [
+        { id: 'legacy', name: 'Legacy', flowId: 'flow-a' },
+        { id: 'living', name: 'Living', personaId: 'persona_living' },
+      ],
+    });
+    createdIds.push(creation.id!);
+
+    const created = await createMeeting(
+      creation,
+      new Map([['persona_living', 'revision_living']]),
+    );
+
+    expect(created.participants.find((participant) => participant.id === 'living'))
+      .toMatchObject({ behaviorRevisionId: 'revision_living' });
+    expect(created.participants.find((participant) => participant.id === 'legacy'))
+      .not.toHaveProperty('behaviorRevisionId');
+    expect(await getMeeting(created.id)).toEqual(created);
+  });
+
+  it('rejects missing, ambiguous, and duplicate Persona targets', () => {
+    expect(() => createMeetingRecord(input({
+      participants: [
+        { id: 'ambiguous', name: 'Ambiguous', flowId: 'flow-a', personaId: 'persona_a' },
+        { id: 'legacy', name: 'Legacy', flowId: 'flow-b' },
+      ],
+    }))).toThrow(/exactly one Flow or Persona/i);
+    expect(() => createMeetingRecord(input({
+      participants: [
+        { id: 'missing', name: 'Missing' },
+        { id: 'legacy', name: 'Legacy', flowId: 'flow-b' },
+      ],
+    }))).toThrow(/exactly one Flow or Persona/i);
+    expect(() => createMeetingRecord(input({
+      participants: [
+        { id: 'first', name: 'First', personaId: 'persona_same' },
+        { id: 'second', name: 'Second', personaId: 'persona_same' },
+      ],
+    }))).toThrow(/Duplicate Persona participant/i);
   });
 
   it('creates, updates, lists, summarizes, and fully deletes a meeting', async () => {

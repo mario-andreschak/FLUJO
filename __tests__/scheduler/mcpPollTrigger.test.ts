@@ -357,6 +357,7 @@ describe('armMcpPoll', () => {
     jest.advanceTimersByTime(TICK_MS);
     await flush();
     expect(deps.onFire).toHaveBeenCalledTimes(1);
+    const failedDeliveryId = (deps.onFire as jest.Mock).mock.calls[0][0].deliveryId;
     expect(getState().lastHash).toBe(hashResult({ v: 1 })); // still the primed baseline
     expect(getState().pendingFailures).toBe(1);
 
@@ -364,6 +365,7 @@ describe('armMcpPoll', () => {
     jest.advanceTimersByTime(TICK_MS);
     await flush();
     expect(deps.onFire).toHaveBeenCalledTimes(2);
+    expect((deps.onFire as jest.Mock).mock.calls[1][0].deliveryId).not.toBe(failedDeliveryId);
     expect(getState().lastHash).toBe(hashResult({ v: 2 })); // committed after success
     expect(getState().pendingFailures).toBe(0);
 

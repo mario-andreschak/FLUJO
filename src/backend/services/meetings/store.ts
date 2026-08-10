@@ -7,6 +7,10 @@ import type {
   MeetingSummary,
 } from '@/shared/types/meeting';
 import {
+  BehaviorSlotKeySchema,
+  EnduringAgentIdSchema,
+} from '@/shared/types/enduringAgent';
+import {
   DEFAULT_MEETING_POLICY,
   MEETING_SCHEMA_VERSION,
 } from '@/shared/types/meeting';
@@ -99,23 +103,43 @@ function normalizeParticipants(
     );
   }
 
-  const participants = input.participants.map((candidate, index): MeetingParticipant => ({
-    id: candidate.id === undefined
-      ? randomUUID()
-      : requireSafeId(candidate.id, `participants[${index}].id`),
-    name: requireNonEmpty(candidate.name, `participants[${index}].name`, 80),
-    flowId: requireSafeId(candidate.flowId, `participants[${index}].flowId`),
-    conversationId: candidate.conversationId === undefined
-      ? randomUUID()
-      : requireSafeId(candidate.conversationId, `participants[${index}].conversationId`),
-    role: candidate.role ?? 'participant',
-    status: 'idle',
-    lastDeliveredSeq: -1,
-  }));
+  const participants = input.participants.map((candidate, index): MeetingParticipant => {
+    const hasFlow = typeof candidate.flowId === 'string' && candidate.flowId.length > 0;
+    const hasPersona = typeof candidate.personaId === 'string' && candidate.personaId.length > 0;
+    if (hasFlow === hasPersona) {
+      throw new Error(`participants[${index}] must target exactly one Flow or Persona`);
+    }
+    if (candidate.behaviorSlotKey !== undefined && !hasPersona) {
+      throw new Error(`participants[${index}].behaviorSlotKey requires a Persona target`);
+    }
+    const personaId = hasPersona
+      ? EnduringAgentIdSchema.parse(candidate.personaId)
+      : undefined;
+    const behaviorSlotKey = candidate.behaviorSlotKey === undefined
+      ? undefined
+      : BehaviorSlotKeySchema.parse(candidate.behaviorSlotKey);
+    return {
+      id: candidate.id === undefined
+        ? randomUUID()
+        : requireSafeId(candidate.id, `participants[${index}].id`),
+      name: requireNonEmpty(candidate.name, `participants[${index}].name`, 80),
+      ...(hasFlow
+        ? { flowId: requireSafeId(candidate.flowId!, `participants[${index}].flowId`) }
+        : { personaId }),
+      ...(behaviorSlotKey ? { behaviorSlotKey } : {}),
+      conversationId: candidate.conversationId === undefined
+        ? randomUUID()
+        : requireSafeId(candidate.conversationId, `participants[${index}].conversationId`),
+      role: candidate.role ?? 'participant',
+      status: 'idle',
+      lastDeliveredSeq: -1,
+    };
+  });
 
   const participantIds = new Set<string>();
   const conversationIds = new Set<string>();
   const names = new Set<string>();
+  const personaIds = new Set<string>();
   for (const participant of participants) {
     if (!['participant', 'moderator'].includes(participant.role)) {
       throw new Error(`Unsupported role for participant ${participant.id}`);
@@ -129,6 +153,12 @@ function normalizeParticipants(
     participantIds.add(participant.id);
     conversationIds.add(participant.conversationId);
     names.add(foldedName);
+    if (participant.personaId) {
+      if (personaIds.has(participant.personaId)) {
+        throw new Error(`Duplicate Persona participant: ${participant.personaId}`);
+      }
+      personaIds.add(participant.personaId);
+    }
   }
 
   const roleModerators = participants.filter((participant) => participant.role === 'moderator');
@@ -203,9 +233,31 @@ function assertMeetingRecord(record: MeetingRecord): void {
   }
   const ids = new Set<string>();
   const conversationIds = new Set<string>();
+  const personaIds = new Set<string>();
   for (const participant of record.participants) {
     requireSafeId(participant.id, 'participant id');
-    requireSafeId(participant.flowId, 'participant flow id');
+    const hasFlow = typeof participant.flowId === 'string' && participant.flowId.length > 0;
+    const hasPersona = typeof participant.personaId === 'string' && participant.personaId.length > 0;
+    if (hasFlow === hasPersona) {
+      throw new Error(`Participant ${participant.id} must target exactly one Flow or Persona`);
+    }
+    if (hasFlow) requireSafeId(participant.flowId!, 'participant flow id');
+    if (hasPersona) {
+      EnduringAgentIdSchema.parse(participant.personaId);
+      if (personaIds.has(participant.personaId!)) {
+        throw new Error(`Duplicate Persona participant: ${participant.personaId}`);
+      }
+      personaIds.add(participant.personaId!);
+    }
+    if (participant.behaviorSlotKey !== undefined) {
+      if (!hasPersona) throw new Error('A participant Behavior slot requires a Persona target');
+      BehaviorSlotKeySchema.parse(participant.behaviorSlotKey);
+    }
+    if (participant.activityId !== undefined) EnduringAgentIdSchema.parse(participant.activityId);
+    if (participant.behaviorRevisionId !== undefined) {
+      if (!hasPersona) throw new Error('A participant Behavior revision pin requires a Persona target');
+      EnduringAgentIdSchema.parse(participant.behaviorRevisionId);
+    }
     requireSafeId(participant.conversationId, 'participant conversation id');
     requireNonEmpty(participant.name, 'participant name', 80);
     if (ids.has(participant.id)) throw new Error(`Duplicate participant id: ${participant.id}`);
@@ -224,6 +276,42 @@ function assertMeetingRecord(record: MeetingRecord): void {
   }
   if (!Number.isSafeInteger(record.lastEventSeq) || record.lastEventSeq < -1) {
     throw new Error('lastEventSeq must be -1 or a non-negative integer');
+  }
+  if (
+    record.personaReservationGeneration !== undefined
+    && (
+      !Number.isSafeInteger(record.personaReservationGeneration)
+      || record.personaReservationGeneration < 1
+    )
+  ) {
+    throw new Error('personaReservationGeneration must be a positive safe integer');
+  }
+  const intent = record.personaReservationIntent;
+  if (intent) {
+    if (
+      !Number.isSafeInteger(intent.generation)
+      || intent.generation < 1
+      || intent.generation !== record.personaReservationGeneration
+    ) {
+      throw new Error('Persona reservation intent generation must match the meeting generation');
+    }
+    requireNonEmpty(intent.attemptId, 'Persona reservation intent attemptId', 160);
+    requireNonEmpty(intent.ownerId, 'Persona reservation intent ownerId', 160);
+    if (intent.state !== 'reserving' && intent.state !== 'running') {
+      throw new Error('Unsupported Persona reservation intent state');
+    }
+    for (const [label, timestamp] of [
+      ['createdAt', intent.createdAt],
+      ['updatedAt', intent.updatedAt],
+      ['expiresAt', intent.expiresAt],
+    ] as const) {
+      if (!Number.isSafeInteger(timestamp) || timestamp < 0) {
+        throw new Error(`Persona reservation intent ${label} must be a non-negative safe integer`);
+      }
+    }
+    if (intent.updatedAt < intent.createdAt || intent.expiresAt <= intent.updatedAt) {
+      throw new Error('Persona reservation intent timestamps are inconsistent');
+    }
   }
 }
 
@@ -249,8 +337,33 @@ export function summarizeMeeting(meeting: MeetingRecord): MeetingSummary {
   };
 }
 
-export async function createMeeting(input: CreateMeetingInput): Promise<MeetingRecord> {
+/** Remove internal owner/fencing metadata before serializing a meeting to an API client. */
+export function sanitizeMeetingForApi(meeting: MeetingRecord): MeetingRecord {
+  const {
+    personaReservationGeneration: _generation,
+    personaReservationIntent: _intent,
+    ...visible
+  } = meeting;
+  return structuredClone(visible) as MeetingRecord;
+}
+
+export async function createMeeting(
+  input: CreateMeetingInput,
+  personaBehaviorRevisionPins: ReadonlyMap<string, string> = new Map(),
+): Promise<MeetingRecord> {
   const record = createMeetingRecord(input);
+  const pinnedPersonaIds = new Set<string>();
+  for (const participant of record.participants) {
+    if (!participant.personaId) continue;
+    const revisionId = personaBehaviorRevisionPins.get(participant.personaId);
+    if (!revisionId) continue;
+    participant.behaviorRevisionId = EnduringAgentIdSchema.parse(revisionId);
+    pinnedPersonaIds.add(participant.personaId);
+  }
+  if (pinnedPersonaIds.size !== personaBehaviorRevisionPins.size) {
+    throw new Error('A meeting Behavior revision pin must reference a Persona participant');
+  }
+  assertMeetingRecord(record);
   const existing = await loadCollectionItem<MeetingRecord | null>(
     MEETINGS_COLLECTION,
     record.id,

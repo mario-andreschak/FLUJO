@@ -3,8 +3,15 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { processChatCompletion } from './chatCompletionService';
-import { parseRequestParameters, _logRequestDetails, ChatCompletionRequest } from './requestParser'; // Import ChatCompletionRequest
+import {
+  InvalidPersonaChatMetadataError,
+  parseRequestParameters,
+  _logRequestDetails,
+  ChatCompletionRequest,
+} from './requestParser'; // Import ChatCompletionRequest
 import { UnsupportedOpenAIToolTypeError } from '@/shared/types/openai';
+import { assertLocalRequest } from '@/utils/http/localRequest';
+import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 
 const log = createLogger('app/v1/chat/completions/route');
 
@@ -112,7 +119,42 @@ async function handleRequest(request: NextRequest) {
     // parseRequestParameters now returns ParsedChatCompletionRequest which includes flujo and requireApproval
     const parsedData = await parseRequestParameters(request);
     // Destructure all flags, including flujodebug
-    const { flujo, conversation_id, requireApproval, flujodebug, ...completionData } = parsedData;
+    const {
+      flujo,
+      conversation_id,
+      requireApproval,
+      flujodebug,
+      personaTarget,
+      ...completionData
+    } = parsedData;
+
+    // Persona ids select a durable living actor and therefore belong only to
+    // FLUJO's trusted local control plane. Keep the ordinary OpenAI-compatible
+    // Flow/model surface externally usable exactly as before.
+    if (personaTarget) {
+      const notLocal = assertLocalRequest(request, { strictLoopback: true });
+      if (notLocal) return notLocal;
+    }
+    if (conversation_id) {
+      const existingState = await loadConversationState(conversation_id);
+      if (existingState?.personaAttribution) {
+        const notLocal = assertLocalRequest(request, { strictLoopback: true });
+        if (notLocal) return notLocal;
+        if (
+          !personaTarget
+          || personaTarget.personaId !== existingState.personaAttribution.personaId
+        ) {
+          return NextResponse.json({
+            error: {
+              message: 'Persona-owned conversations require matching Persona routing metadata.',
+              type: 'invalid_request_error',
+              code: 'persona_conversation_requires_target',
+              param: 'metadata.personaId',
+            },
+          }, { status: 409, headers: corsHeaders });
+        }
+      }
+    }
 
     // Truncated payload dump for VERBOSE only. Built lazily (thunk): the map
     // walks every message (and multipart image parts), which is O(history) per
@@ -159,7 +201,8 @@ async function handleRequest(request: NextRequest) {
       flujo,
       conversation_id,
       requireApproval,
-      flujodebug // Log the new flag
+      flujodebug,
+      personaTargeted: Boolean(personaTarget),
     });
 
     // Pass all flags to processChatCompletion
@@ -170,7 +213,8 @@ async function handleRequest(request: NextRequest) {
       flujodebug, // Pass the new flag
       conversation_id,
       false, // continueDebug: only the debug "Continue" control sets this
-      true // userTurn: a fresh user-initiated turn → re-sync debugMode to flujodebug
+      true, // userTurn: a fresh user-initiated turn → re-sync debugMode to flujodebug
+      personaTarget,
     );
 
     const duration = Date.now() - startTime;
@@ -194,6 +238,7 @@ async function handleRequest(request: NextRequest) {
   } catch (error) {
     const duration = Date.now() - startTime;
     const unsupportedTool = error instanceof UnsupportedOpenAIToolTypeError;
+    const invalidPersonaMetadata = error instanceof InvalidPersonaChatMetadataError;
     log.error('Error handling request', {
       requestId,
       error: error instanceof Error ? {
@@ -209,13 +254,17 @@ async function handleRequest(request: NextRequest) {
       {
         error: {
           message: error instanceof Error ? error.message : 'Failed to process chat completion',
-          type: unsupportedTool ? 'invalid_request_error' : 'internal_error',
-          code: unsupportedTool ? error.code : 'internal_error',
+          type: unsupportedTool || invalidPersonaMetadata ? 'invalid_request_error' : 'internal_error',
+          code: unsupportedTool
+            ? error.code
+            : invalidPersonaMetadata
+              ? error.code
+              : 'internal_error',
           param: null
         }
       },
       { 
-        status: unsupportedTool ? 400 : 500,
+        status: unsupportedTool || invalidPersonaMetadata ? 400 : 500,
         headers: corsHeaders
       }
     );

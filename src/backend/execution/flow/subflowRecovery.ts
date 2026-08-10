@@ -167,6 +167,14 @@ async function resumeReadyParent(parent: SharedState, invocation: SubflowInvocat
     });
     return;
   }
+  if (parent.personaAttribution) {
+    log.warn('Refusing to resume a Persona-owned parent outside its dispatcher', {
+      parentConversationId: parentId,
+      invocationId: invocation.id,
+      personaId: parent.personaAttribution.personaId,
+    });
+    return;
+  }
 
   const leases = resumeLeases();
   const leaseKey = workspaceCacheKey(invocation.id);
@@ -403,6 +411,9 @@ async function runRecoveryConversation(state: SharedState): Promise<SubflowRunOu
     if (current.status === 'running') throw new Error('Conversation is already running.');
     if (current.source === 'meeting') {
       throw new Error('Meeting participant recovery must be coordinated by MeetingEngine.');
+    }
+    if (current.personaAttribution) {
+      throw new Error('Persona-owned recovery must be coordinated by the Persona dispatcher.');
     }
     if (current.recovery?.manualActionRequired) {
       throw new Error(current.recovery.sideEffectWarning || 'Manual review is required before this conversation can be retried.');

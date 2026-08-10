@@ -40,6 +40,10 @@ async function GET_handler(
     if (!sharedState) {
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }
+    if (sharedState.personaAttribution) {
+      const notLoopback = assertLocalRequest(request, { strictLoopback: true });
+      if (notLoopback) return notLoopback;
+    }
     return NextResponse.json({
       status: sharedState.status ?? 'completed',
       breakpoints: sharedState.breakpoints ?? [],

@@ -1,5 +1,10 @@
 import { getExposureMode, inferLegacyExposureMode } from '@/utils/http/exposureMode';
-import { isLocalRequest, isRequestHostAllowed } from '@/utils/http/localRequest';
+import {
+  assertLocalRequest,
+  isLocalRequest,
+  isLoopbackRequest,
+  isRequestHostAllowed,
+} from '@/utils/http/localRequest';
 
 const KEYS = [
   'FLUJO_EXPOSURE_MODE',
@@ -49,6 +54,55 @@ describe('single network exposure mode', () => {
     expect(isLocalRequest('flujo.example.com', null)).toBe(true);
     expect(isLocalRequest('flujo.example.com', 'https://flujo.example.com')).toBe(true);
     expect(isLocalRequest('flujo.example.com', 'https://attacker.example')).toBe(false);
+  });
+
+  it('keeps strict control-plane requests loopback-only in public mode', () => {
+    process.env.FLUJO_EXPOSURE_MODE = 'public';
+
+    expect(isLoopbackRequest('localhost:4200', null)).toBe(true);
+    expect(isLoopbackRequest('[::1]:4200', 'http://localhost:4200')).toBe(true);
+    expect(isLoopbackRequest('flujo.example.com', null)).toBe(false);
+    expect(isLoopbackRequest('flujo.example.com', 'https://flujo.example.com')).toBe(false);
+    expect(assertLocalRequest(
+      new Request('https://flujo.example.com/v1/personas', {
+        headers: { host: 'flujo.example.com' },
+      }),
+      { strictLoopback: true },
+    )?.status).toBe(403);
+    expect(assertLocalRequest(
+      new Request('http://localhost:4200/v1/personas', {
+        headers: { host: 'localhost:4200' },
+      }),
+      { strictLoopback: true },
+    )?.status).toBe(403);
+
+    process.env.FLUJO_EXPOSURE_MODE = 'localhost';
+    expect(assertLocalRequest(
+      new Request('http://localhost:4200/v1/personas', {
+        headers: { host: 'localhost:4200' },
+      }),
+      { strictLoopback: true },
+    )).toBeNull();
+    expect(assertLocalRequest(
+      new Request('http://[::1]:4200/v1/personas', {
+        headers: { host: '[::1]:4200', origin: 'http://[::1]:4200' },
+      }),
+      { strictLoopback: true },
+    )).toBeNull();
+    expect(assertLocalRequest(
+      new Request('http://localhost:4200/v1/personas', {
+        headers: { host: 'localhost:4200', 'x-forwarded-for': '203.0.113.7' },
+      }),
+      { strictLoopback: true },
+    )?.status).toBe(403);
+    for (const malformedHost of ['[::1]evil', 'localhost:4200@evil', 'localhost:99999']) {
+      expect(assertLocalRequest(
+        new Request('http://localhost:4200/v1/personas', {
+          headers: { host: malformedHost },
+        }),
+        { strictLoopback: true },
+      )?.status).toBe(403);
+    }
   });
 
   it('uses legacy host/sandbox variables only as migration inputs', () => {

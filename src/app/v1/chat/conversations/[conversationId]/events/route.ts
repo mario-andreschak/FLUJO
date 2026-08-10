@@ -5,6 +5,8 @@ import { createLogger } from '@/utils/logger';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { readConversationLog } from '@/backend/execution/flow/conversationLog';
 import { ExecutionEvent } from '@/shared/types/execution/events';
+import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/events/route');
 
@@ -32,6 +34,14 @@ async function GET_handler(
   const { conversationId } = await params;
   if (!conversationId) {
     return new Response('Missing conversationId', { status: 400 });
+  }
+
+  const state = await loadConversationState(conversationId);
+  // Missing state cannot prove that an orphaned event channel is legacy.
+  // Persona-owned and ownership-unknown streams are local control-plane only.
+  if (!state || state.personaAttribution) {
+    const notLocal = assertLocalRequest(request, { strictLoopback: true });
+    if (notLocal) return notLocal;
   }
 
   // Replay position: explicit ?fromSeq= wins; otherwise honor the browser's

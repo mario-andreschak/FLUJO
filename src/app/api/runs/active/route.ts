@@ -4,6 +4,7 @@ import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import type { FlowInvocationSource } from '@/backend/execution/flow/types';
 import { flowService } from '@/backend/services/flow';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 
 const log = createLogger('app/api/runs/active/route');
 
@@ -45,7 +46,7 @@ function json(body: unknown, status = 200): Response {
  * origin. It NEVER returns prompt text, messages, resolved variables, or any
  * decrypted binding.
  */
-async function GET_handler(_request: Request) {
+async function GET_handler(request: Request) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -72,8 +73,13 @@ async function GET_handler(_request: Request) {
     };
 
     const active: ActiveRun[] = [];
+    let personaControlDenied: Response | null | undefined;
     for (const state of FlowExecutor.conversationStates.values()) {
       if (!state || !ACTIVE_STATUSES.has(state.status ?? '')) continue;
+      if (state.personaAttribution) {
+        personaControlDenied ??= assertLocalRequest(request, { strictLoopback: true });
+        if (personaControlDenied) continue;
+      }
       active.push({
         conversationId: state.conversationId,
         flowId: state.flowId,

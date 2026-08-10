@@ -19,8 +19,44 @@ import { ChatCompletionRequest } from '@/app/v1/chat/completions/requestParser';
 import { flowService } from '@/backend/services/flow/index';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import OpenAI from 'openai';
+import {
+  resumePersonaFlowDispatch,
+  type PersonaFlowDispatchRecord,
+} from '@/backend/services/enduringAgents/personaDispatcher';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/respond/route');
+
+async function personaResumeResponse(
+  dispatch: PersonaFlowDispatchRecord,
+  conversationId: string,
+) {
+  const state = await loadConversationState(conversationId);
+  if (dispatch.state === 'error' || dispatch.state === 'cancelled') {
+    return NextResponse.json({
+      error: dispatch.error?.message ?? (dispatch.state === 'cancelled'
+        ? 'Persona execution was cancelled.'
+        : 'Persona execution failed.'),
+      code: dispatch.error?.code ?? `persona_dispatch_${dispatch.state}`,
+      dispatch_id: dispatch.id,
+    }, { status: dispatch.state === 'cancelled' ? 409 : 500 });
+  }
+  if (state?.status === 'paused_debug') {
+    return NextResponse.json({
+      status: 'paused_debug',
+      conversation_id: conversationId,
+      debugState: state,
+      dispatch_id: dispatch.id,
+    });
+  }
+  return NextResponse.json({
+    status: state?.status ?? dispatch.outcome?.status ?? dispatch.state,
+    conversation_id: conversationId,
+    pendingToolCalls: state?.pendingToolCalls,
+    messages: state?.messages,
+    updatedAt: state?.updatedAt,
+    dispatch_id: dispatch.id,
+  }, { status: dispatch.state === 'queued' || dispatch.state === 'running' ? 202 : 200 });
+}
 
 type RespondRequestBody =
   | { action: 'approve' | 'reject'; toolCallId: string; always?: boolean; feedback?: string }
@@ -70,6 +106,16 @@ async function POST_handler(
   } catch (error) {
     log.warn('Invalid request body', { requestId, error: error instanceof Error ? error.message : error });
     return NextResponse.json({ error: 'Invalid request body', details: error instanceof Error ? error.message : 'Unknown error' }, { status: 400 });
+  }
+
+  // Resolve the owning state before touching any process-local control
+  // registry. Question/elicitation/approval resolution and tool cancellation
+  // can steer a live Persona Activity even though they do not write the
+  // snapshot themselves, so the trusted boundary must precede those effects.
+  const responseState = await loadConversationState(conversationId);
+  if (responseState?.personaAttribution) {
+    const notLoopback = assertLocalRequest(request, { strictLoopback: true });
+    if (notLoopback) return notLoopback;
   }
 
   // --- Cancel ONE in-flight tool call (issue #357) ---
@@ -133,7 +179,8 @@ async function POST_handler(
     const storageKey = `conversations/${conversationId}` as StorageKey;
 
     // 1. Load state (prefer memory, fallback to storage)
-    const sharedState: SharedState | undefined = await loadConversationState(conversationId);
+    const sharedState: SharedState | undefined = responseState
+      ?? await loadConversationState(conversationId);
 
     // 2. Validate state
     if (!sharedState) {
@@ -144,6 +191,66 @@ async function POST_handler(
     if (sharedState.status !== 'awaiting_tool_approval' || !sharedState.pendingToolCalls) {
       log.warn(`Conversation is not awaiting tool approval`, { requestId, conversationId, status: sharedState.status });
       return NextResponse.json({ error: 'Conversation is not awaiting tool approval' }, { status: 400 });
+    }
+
+    // Persona-owned conversations are continuations of the Activity pinned in
+    // persisted attribution. Apply the side-effecting decision only after the
+    // dispatcher reacquires that exact Activity and supplies fresh authority.
+    if (sharedState.personaAttribution) {
+      const notLoopback = assertLocalRequest(request, { strictLoopback: true });
+      if (notLoopback) return notLoopback;
+      const { personaId, activityId, behaviorRevisionId } = sharedState.personaAttribution;
+      if (!activityId || !behaviorRevisionId) {
+        return NextResponse.json({
+          error: 'Persona conversation attribution is incomplete; refusing an unfenced resume.',
+        }, { status: 409 });
+      }
+      if (!sharedState.pendingToolCalls.some((toolCall) => toolCall.id === toolCallId)) {
+        return NextResponse.json({ error: `Pending tool call with ID ${toolCallId} not found` }, { status: 404 });
+      }
+      const always = (requestBody as {
+        action: 'approve' | 'reject';
+        toolCallId: string;
+        always?: boolean;
+      }).always;
+      const dispatch = await resumePersonaFlowDispatch({
+        personaId,
+        activityId,
+        behaviorRevisionId,
+        conversationId,
+        reason: 'approval',
+        flowInputPatch: {
+          messages: sharedState.messages,
+          requireApproval: sharedState.requireApproval ?? true,
+          debug: sharedState.debugMode ?? false,
+          continueDebug: false,
+          userTurn: false,
+        },
+        prepare: async ({ installExecutionAuthority }) => {
+          installExecutionAuthority(sharedState);
+          const decision = await applyApprovalDecision(
+            sharedState,
+            toolCallId,
+            action,
+            always,
+            feedback,
+          );
+          if (decision.outcome === 'tool_not_found') {
+            throw new Error(`Pending tool call with ID ${toolCallId} disappeared during resume.`);
+          }
+          sharedState.lastResponse = undefined;
+          sharedState.lastError = undefined;
+          sharedState.errorEventEmitted = false;
+          FlowExecutor.conversationStates.set(conversationId, sharedState);
+          await persistConversationState(storageKey, sharedState);
+          await appendRawForState(
+            sharedState,
+            decision.appendedMessages.map((message) => ({ type: 'message', message })),
+          );
+          return sharedState.status === 'awaiting_tool_approval' ? 'yield' : 'resume';
+        },
+      });
+      return personaResumeResponse(dispatch, conversationId);
     }
 
     // 3/4. Apply the decision (execute-or-reject the tool, drain the batch,

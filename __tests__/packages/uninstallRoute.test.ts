@@ -8,9 +8,11 @@ import type { NextRequest } from 'next/server';
 
 const uninstallPackageMock = jest.fn();
 const listInstalledPackagesMock = jest.fn();
+const inspectPackageUninstallMock = jest.fn();
 jest.mock('@/backend/services/packages/installPackage', () => ({
   uninstallPackage: (...a: unknown[]) => uninstallPackageMock(...a),
   listInstalledPackages: (...a: unknown[]) => listInstalledPackagesMock(...a),
+  inspectPackageUninstall: (...a: unknown[]) => inspectPackageUninstallMock(...a),
 }));
 
 // The store is unlocked in these tests (default encryption mode).
@@ -22,6 +24,7 @@ import { POST } from '@/app/api/packages/uninstall/route';
 import { GET as installedGet } from '@/app/api/packages/installed/route';
 
 const summary = { packageName: 'my-pkg', ok: true, hasErrors: false, removed: [], skipped: [], errors: [] };
+const previousExposureMode = process.env.FLUJO_EXPOSURE_MODE;
 
 const post = (body: unknown, headers: Record<string, string> = { host: 'localhost:4200' }) => {
   const request = new Request('http://localhost:4200/api/packages/uninstall', {
@@ -34,8 +37,15 @@ const post = (body: unknown, headers: Record<string, string> = { host: 'localhos
 
 beforeEach(() => {
   jest.clearAllMocks();
+  process.env.FLUJO_EXPOSURE_MODE = 'localhost';
   uninstallPackageMock.mockResolvedValue(summary);
+  inspectPackageUninstallMock.mockResolvedValue({ exists: true, requiresPersonaControl: false });
   listInstalledPackagesMock.mockResolvedValue([{ packageName: 'my-pkg', version: '1.0.0', installedAt: 'now', entityCounts: { flows: 0, models: 0, servers: 0, plannedExecutions: 0 } }]);
+});
+
+afterAll(() => {
+  if (previousExposureMode === undefined) delete process.env.FLUJO_EXPOSURE_MODE;
+  else process.env.FLUJO_EXPOSURE_MODE = previousExposureMode;
 });
 
 describe('POST /api/packages/uninstall', () => {
@@ -43,7 +53,9 @@ describe('POST /api/packages/uninstall', () => {
     const res = await post({ packageName: 'my-pkg' });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual(summary);
-    expect(uninstallPackageMock).toHaveBeenCalledWith('my-pkg');
+    expect(uninstallPackageMock).toHaveBeenCalledWith('my-pkg', {
+      allowPersonaPlannedExecutions: false,
+    });
   });
 
   it('rejects a cross-origin (DNS-rebinding) request with 403 and never uninstalls', async () => {
@@ -65,7 +77,7 @@ describe('POST /api/packages/uninstall', () => {
   });
 
   it('returns 404 for a package with no install record', async () => {
-    listInstalledPackagesMock.mockResolvedValue([]);
+    inspectPackageUninstallMock.mockResolvedValue({ exists: false, requiresPersonaControl: false });
     const res = await post({ packageName: 'ghost' });
     expect(res.status).toBe(404);
     expect(uninstallPackageMock).not.toHaveBeenCalled();
@@ -76,6 +88,44 @@ describe('POST /api/packages/uninstall', () => {
     const res = await post({ packageName: 'my-pkg' });
     expect(res.status).toBe(200);
     expect((await res.json()).hasErrors).toBe(true);
+  });
+
+  it('denies Persona-aware uninstall while the app is publicly exposed', async () => {
+    process.env.FLUJO_EXPOSURE_MODE = 'public';
+    inspectPackageUninstallMock.mockResolvedValue({ exists: true, requiresPersonaControl: true });
+
+    const res = await post(
+      { packageName: 'my-pkg' },
+      { host: 'flujo.example.com' },
+    );
+
+    expect(res.status).toBe(403);
+    expect(uninstallPackageMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps legacy package uninstall available in public mode', async () => {
+    process.env.FLUJO_EXPOSURE_MODE = 'public';
+
+    const res = await post(
+      { packageName: 'my-pkg' },
+      { host: 'flujo.example.com' },
+    );
+
+    expect(res.status).toBe(200);
+    expect(uninstallPackageMock).toHaveBeenCalledWith('my-pkg', {
+      allowPersonaPlannedExecutions: false,
+    });
+  });
+
+  it('authorizes Persona-aware uninstall from strict loopback only', async () => {
+    inspectPackageUninstallMock.mockResolvedValue({ exists: true, requiresPersonaControl: true });
+
+    const res = await post({ packageName: 'my-pkg' });
+
+    expect(res.status).toBe(200);
+    expect(uninstallPackageMock).toHaveBeenCalledWith('my-pkg', {
+      allowPersonaPlannedExecutions: true,
+    });
   });
 });
 

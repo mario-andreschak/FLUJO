@@ -138,7 +138,10 @@ export type PackagedTrigger =
  * `flowId` expressed as a package-internal flow reference and the webhook token
  * (and similar per-instance state) excluded.
  */
-export type PackagedPlannedExecution = Omit<PlannedExecution, 'trigger'> & {
+export type PackagedPlannedExecution = Omit<
+  PlannedExecution,
+  'trigger' | 'personaId' | 'behaviorSlotKey'
+> & {
   trigger: PackagedTrigger;
 };
 

@@ -13,7 +13,7 @@
  * Like the other chat tests, the engine (FlowExecutor) is stubbed with a tiny
  * start->process->finish state machine, so there is no network/model call.
  */
-import type { SharedState } from '@/backend/execution/flow/types';
+import type { FlowExecutionAuthority, SharedState } from '@/backend/execution/flow/types';
 import { IMPLICIT_SUBFLOW_RETURN_ACTION } from '@/backend/execution/flow/types';
 
 const START = '077cfac0-start';
@@ -98,6 +98,7 @@ import { runFlow as runFlowWithContext, type FlowRunInput } from '@/backend/exec
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { validateFlowForRun } from '@/backend/execution/flow/validateFlowForRun';
 import { flowService } from '@/backend/services/flow/index';
+import { getFlowRunEventBus, type FlowEvent } from '@/backend/services/scheduler/flowRunEventBus';
 
 const runFlow = (input: Omit<FlowRunInput, 'source'>) =>
   runFlowWithContext({ ...input, source: 'api' });
@@ -555,6 +556,217 @@ describe('persistConversationState chokepoint (ephemeral policy)', () => {
 
     await persistConversationState('conversations/parent-1', base);
     expect(persistedStates.length).toBe(1);
+  });
+
+  it('does not write a Persona snapshot when its commit fence is no longer current', async () => {
+    const leaseLost = new Error('Persona lease is no longer current');
+    const commitWhileCurrent = jest.fn(async () => {
+      throw leaseLost;
+    });
+    const state = {
+      trackingInfo: { executionId: 'x', startTime: 1, nodeExecutionTracker: [] },
+      messages: [],
+      flowId: FLOW_ID,
+      conversationId: 'stale-persona-snapshot',
+      personaAttribution: {
+        personaId: 'persona-1',
+        activityId: 'activity-1',
+        behaviorRevisionId: 'behavior-revision-1',
+      },
+      title: 't',
+      createdAt: 1,
+      updatedAt: 1,
+      executionAuthority: {
+        assertCurrent: jest.fn(async () => undefined),
+        signal: new AbortController().signal,
+        commitWhileCurrent,
+      },
+    } as unknown as SharedState;
+
+    await expect(persistConversationState(
+      'conversations/stale-persona-snapshot',
+      state,
+    )).rejects.toBe(leaseLost);
+    expect(commitWhileCurrent).toHaveBeenCalledTimes(1);
+    expect(persistedStates).toEqual([]);
+  });
+
+  it('fails closed when a persisted Persona snapshot has attribution but no live authority', async () => {
+    const state = {
+      trackingInfo: { executionId: 'x', startTime: 1, nodeExecutionTracker: [] },
+      messages: [],
+      flowId: FLOW_ID,
+      conversationId: 'unfenced-persona-snapshot',
+      personaAttribution: {
+        personaId: 'persona-1',
+        activityId: 'activity-1',
+        behaviorRevisionId: 'behavior-revision-1',
+      },
+      title: 't',
+      createdAt: 1,
+      updatedAt: 1,
+    } as unknown as SharedState;
+
+    await expect(persistConversationState(
+      'conversations/unfenced-persona-snapshot',
+      state,
+    )).rejects.toThrow('requires current execution authority');
+    expect(persistedStates).toEqual([]);
+  });
+});
+
+describe('Persona execution authority', () => {
+  it('rejects attributed execution when no Activity fence was supplied', async () => {
+    await expect(runFlow({
+      flowId: FLOW_ID,
+      prompt: 'unsafe Persona run',
+      mode: 'conversation',
+      conversationId: 'persona-unfenced',
+      personaAttribution: {
+        personaId: 'persona-1',
+        activityId: 'activity-1',
+        behaviorRevisionId: 'behavior-revision-1',
+      },
+    })).rejects.toThrow('require execution authority');
+  });
+
+  it('persists safe attribution but never the execution capability', async () => {
+    const controller = new AbortController();
+    const assertCurrent = jest.fn(async () => undefined);
+
+    const result = await runFlow({
+      flowId: FLOW_ID,
+      prompt: 'fenced Persona run',
+      mode: 'conversation',
+      conversationId: 'persona-fenced',
+      personaAttribution: {
+        personaId: 'persona-1',
+        activityId: 'activity-1',
+        behaviorRevisionId: 'behavior-revision-1',
+      },
+      executionAuthority: { assertCurrent, signal: controller.signal },
+    });
+
+    expect(result.status).toBe('completed');
+    expect(assertCurrent).toHaveBeenCalled();
+    const persisted = persistedStates[persistedStates.length - 1] as SharedState & {
+      executionAuthority?: unknown;
+    };
+    expect(persisted.personaAttribution).toEqual({
+      personaId: 'persona-1',
+      activityId: 'activity-1',
+      behaviorRevisionId: 'behavior-revision-1',
+    });
+    expect(persisted.executionAuthority).toBeUndefined();
+  });
+
+  it('suppresses a stale terminal flow event after delayed flow lookup while the successor publishes', async () => {
+    (global as unknown as { __flujo_flow_run_event_bus?: unknown }).__flujo_flow_run_event_bus = undefined;
+    const events: FlowEvent[] = [];
+    const unsubscribe = getFlowRunEventBus().subscribe((event) => events.push(event));
+    const getFlowMock = flowService.getFlow as jest.Mock;
+    const executeStepMock = FlowExecutor.executeStep as jest.Mock;
+    const previousGetFlow = getFlowMock.getMockImplementation()!;
+    const previousExecuteStep = executeStepMock.getMockImplementation()!;
+    let executionFinished = false;
+    let terminalLookupCount = 0;
+    let announceTerminalLookup!: () => void;
+    const terminalLookupStarted = new Promise<void>((resolve) => {
+      announceTerminalLookup = resolve;
+    });
+    let releaseStaleLookup!: (flow: { id: string; name: string; nodes: never[]; edges: never[] }) => void;
+    const staleLookup = new Promise<{ id: string; name: string; nodes: never[]; edges: never[] }>((resolve) => {
+      releaseStaleLookup = resolve;
+    });
+    const flow = { id: FLOW_ID, name: 'TestFlow', nodes: [] as never[], edges: [] as never[] };
+    let currentGeneration = 1;
+    const authorityFor = (generation: number): FlowExecutionAuthority => {
+      const assertCurrent = jest.fn(async () => {
+        if (currentGeneration !== generation) {
+          throw new Error(`generation ${generation} lost terminal publication authority`);
+        }
+      });
+      const commitWhileCurrent = jest.fn(async (task: () => Promise<unknown>) => {
+        await assertCurrent();
+        return task();
+      }) as unknown as NonNullable<FlowExecutionAuthority['commitWhileCurrent']>;
+      return {
+        assertCurrent,
+        signal: new AbortController().signal,
+        commitWhileCurrent,
+      };
+    };
+    const attribution = {
+      personaId: 'persona-terminal',
+      activityId: 'activity-old',
+      behaviorRevisionId: 'revision-1',
+    };
+
+    getFlowMock.mockImplementation(async () => {
+      if (executionFinished && terminalLookupCount++ === 0) {
+        announceTerminalLookup();
+        return staleLookup;
+      }
+      return flow;
+    });
+    executeStepMock.mockImplementation(async (sharedState: SharedState) => {
+      const nodeId = sharedState.currentNodeId ?? START;
+      sharedState.currentNodeId = nodeId;
+      if (nodeId === START) {
+        return { sharedState, action: `${START}->${PROCESS}` };
+      }
+      sharedState.lastResponse = 'generation-safe result';
+      sharedState.messages.push({
+        role: 'assistant',
+        content: 'generation-safe result',
+        id: `assistant-${currentGeneration}`,
+        timestamp: currentGeneration,
+        processNodeId: PROCESS,
+      });
+      executionFinished = true;
+      return { sharedState, action: 'FINAL_RESPONSE' };
+    });
+
+    try {
+      const staleRun = runFlow({
+        flowId: FLOW_ID,
+        prompt: 'old generation',
+        mode: 'ephemeral',
+        conversationId: 'persona-terminal-old',
+        personaAttribution: attribution,
+        executionAuthority: authorityFor(1),
+      });
+      await terminalLookupStarted;
+      currentGeneration = 2;
+      releaseStaleLookup(flow);
+      await staleRun;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(events).toEqual([]);
+
+      executionFinished = false;
+      await runFlow({
+        flowId: FLOW_ID,
+        prompt: 'successor generation',
+        mode: 'ephemeral',
+        conversationId: 'persona-terminal-successor',
+        personaAttribution: { ...attribution, activityId: 'activity-successor' },
+        executionAuthority: authorityFor(2),
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        flowId: FLOW_ID,
+        conversationId: 'persona-terminal-successor',
+        status: 'completed',
+        outputText: 'generation-safe result',
+      });
+    } finally {
+      unsubscribe();
+      getFlowMock.mockImplementation(previousGetFlow);
+      executeStepMock.mockImplementation(previousExecuteStep);
+    }
   });
 });
 

@@ -59,6 +59,17 @@ async function loadFromDurableStorage(conversationId: string): Promise<SharedSta
     const state = await loadItemBackend<SharedState>(storageKey, undefined as any);
     if (state) {
       log.debug('Loaded state from storage', { conversationId });
+      // Persona snapshots deliberately omit their runtime capability. A read or
+      // legacy control route may inspect that durable projection, but it must
+      // never replay logs, classify interruption, repair tools, or persist a
+      // replacement snapshot without first reacquiring the owning Activity.
+      // The Persona dispatcher installs authority before runFlow performs these
+      // recovery steps.
+      if (state.personaAttribution && !state.executionAuthority) {
+        FlowExecutor.conversationStates.set(conversationId, state);
+        noteWrite(conversationId, state);
+        return state;
+      }
       // Per-step durability lives in the append-only log; the snapshot is only
       // written at run boundaries. Fold in anything the snapshot missed.
       await recoverMessagesFromLog(state);

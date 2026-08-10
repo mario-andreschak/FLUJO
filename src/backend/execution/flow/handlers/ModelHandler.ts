@@ -75,6 +75,13 @@ import {
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { appendRawForState } from '@/backend/execution/flow/conversationLog';
+import {
+  assertFlowExecutionCurrent,
+  commitFlowDurableMutation,
+  isFlowExecutionAuthorityError,
+  rethrowFlowExecutionAuthorityError,
+  type FlowDurableMutationContext,
+} from '@/backend/execution/flow/executionAuthority';
 import { registerPendingApproval, listPendingToolCalls } from '@/backend/execution/flow/toolApprovalRegistry';
 import { upsertMessageById } from '@/backend/execution/flow/conversationMessages';
 import { loadItem } from '@/utils/storage/backend';
@@ -132,6 +139,7 @@ async function persistModelMedia(
   parts: ModelMediaPart[],
   conversationId?: string,
   nodeId?: string,
+  durableContext: FlowDurableMutationContext = {},
 ): Promise<ModelMediaPart[]> {
   const deduped = parts.filter((part, index, all) => {
     const key = `${part.type}|${part.url ?? ''}|${part.data ?? ''}|${part.mimeType ?? ''}`;
@@ -154,29 +162,32 @@ async function persistModelMedia(
     if (!data) return { ...part, mimeType };
 
     try {
-      const written = await writeRunResource({
-        conversationId,
-        name: part.name,
-        mimeType,
-        kind: mediaResourceKind({ ...part, mimeType }),
-        data: { base64: data },
-        producedBy: { source: 'model-output', nodeId },
+      return await commitFlowDurableMutation(durableContext, async () => {
+        const written = await writeRunResource({
+          conversationId,
+          name: part.name,
+          mimeType,
+          kind: mediaResourceKind({ ...part, mimeType }),
+          data: { base64: data },
+          producedBy: { source: 'model-output', nodeId },
+        });
+        if ('skipped' in written) return { ...part, mimeType };
+        const localPath = await getRunResourceLocalPath(written.uri);
+        return {
+          type: mediaTypeFromMime(mimeType),
+          mimeType,
+          ...(part.name ? { name: part.name } : {}),
+          ...(part.transcript ? { transcript: part.transcript } : {}),
+          resourceUri: written.uri,
+          ...(localPath ? { localPath } : {}),
+          url:
+            `/v1/chat/conversations/${encodeURIComponent(conversationId)}` +
+            `/resources/${encodeURIComponent(written.id)}/content` +
+            `?workspace=${encodeURIComponent(getCurrentWorkspace())}`,
+        };
       });
-      if ('skipped' in written) return { ...part, mimeType };
-      const localPath = await getRunResourceLocalPath(written.uri);
-      return {
-        type: mediaTypeFromMime(mimeType),
-        mimeType,
-        ...(part.name ? { name: part.name } : {}),
-        ...(part.transcript ? { transcript: part.transcript } : {}),
-        resourceUri: written.uri,
-        ...(localPath ? { localPath } : {}),
-        url:
-          `/v1/chat/conversations/${encodeURIComponent(conversationId)}` +
-          `/resources/${encodeURIComponent(written.id)}/content` +
-          `?workspace=${encodeURIComponent(getCurrentWorkspace())}`,
-      };
     } catch (error) {
+      rethrowFlowExecutionAuthorityError(error);
       log.warn('Failed to persist direct model media; keeping it inline', {
         conversationId,
         nodeId,
@@ -471,6 +482,7 @@ export class ModelHandler {
     model: { id: string; adapter?: string; contextWindow?: number; compactionThreshold?: number },
     effectiveMaxTokens: number | undefined,
     nodeCompaction?: { compactionMode?: 'auto' | 'off'; compactionKeepTokens?: number },
+    durableContext: FlowDurableMutationContext = {},
   ): Promise<{ summaryMessage: FlujoChatMessage; removedIds: string[] } | null> {
     try {
       // Self-orchestrating adapters manage their own session/wire; excluded.
@@ -528,22 +540,27 @@ export class ModelHandler {
         // and the summary history is a throwaway slice).
         const res = await ModelHandler.generateCompletion(model.id, '', callMessages, undefined, {
           maxTokens: Math.min(effectiveMaxTokens ?? 4000, 4000),
+          beforeModelDispatch: durableContext.executionAuthority?.assertCurrent,
+          durableContext,
         });
+        await assertFlowExecutionCurrent(durableContext);
         return res.success ? (res.value.content ?? '') : '';
       };
 
       const writeAnchor = async (text: string): Promise<string | undefined> => {
         try {
-          const written = await writeRunResource({
-            conversationId,
-            name: 'compaction-anchor',
-            mimeType: 'application/json',
-            kind: 'text',
-            data: { text },
-            producedBy: { source: 'tool-result', nodeId },
-          });
+          const written = await commitFlowDurableMutation(durableContext, () => writeRunResource({
+              conversationId,
+              name: 'compaction-anchor',
+              mimeType: 'application/json',
+              kind: 'text',
+              data: { text },
+              producedBy: { source: 'tool-result', nodeId },
+            }),
+          );
           return 'skipped' in written ? undefined : written.uri;
-        } catch {
+        } catch (error) {
+          rethrowFlowExecutionAuthorityError(error);
           return undefined;
         }
       };
@@ -556,6 +573,11 @@ export class ModelHandler {
       );
       if (!result) return null;
 
+      // A summarizer/provider can return after its generation was replaced.
+      // Reject that output before it mutates either the live projection or the
+      // resource/log/snapshot stores.
+      await assertFlowExecutionCurrent(durableContext);
+
       // Persist: swap the history head in SharedState and reconcile the log so the
       // summary head + removals are durable and auditable, then snapshot.
       state.messages = result.newMessages;
@@ -566,11 +588,13 @@ export class ModelHandler {
         const { persistConversationState } = await import('@/backend/execution/flow/persistConversationState');
         await persistConversationState(`conversations/${conversationId}` as StorageKey, state);
       } catch (persistError) {
+        rethrowFlowExecutionAuthorityError(persistError);
         log.warn('Compaction persisted-history reconcile/persist failed; continuing', { conversationId, persistError });
       }
 
       return { summaryMessage: result.summaryMessage, removedIds: result.removedIds };
     } catch (error) {
+      rethrowFlowExecutionAuthorityError(error);
       log.warn('Summarizing-compaction pre-flight failed; falling back to existing behaviour', { conversationId, error });
       return null;
     }
@@ -880,7 +904,8 @@ export class ModelHandler {
     conversationId: string,
     apiMessages: OpenAI.ChatCompletionMessageParam[],
     existing: Map<string, ToolResourceMarker> | undefined,
-    nodeId?: string
+    nodeId?: string,
+    durableContext: FlowDurableMutationContext = {},
   ): Promise<Map<string, ToolResourceMarker> | undefined> {
     let markers: Map<string, ToolResourceMarker> | undefined = existing ? new Map(existing) : undefined;
     for (const msg of apiMessages) {
@@ -888,14 +913,16 @@ export class ModelHandler {
       if (msg.content.length <= ModelHandler.OVERFLOW_TOOL_RESULT_HEAD_CHARS) continue;
       const callId = msg.tool_call_id;
       if (markers?.get(callId)?.result?.uri) continue; // already recoverable
+      const content = msg.content;
       try {
-        const written = await writeRunResource({
-          conversationId,
-          mimeType: 'text/plain',
-          kind: 'text',
-          data: { text: msg.content },
-          producedBy: { source: 'tool-result', nodeId, toolCallId: callId },
-        });
+        const written = await commitFlowDurableMutation(durableContext, () => writeRunResource({
+            conversationId,
+            mimeType: 'text/plain',
+            kind: 'text',
+            data: { text: content },
+            producedBy: { source: 'tool-result', nodeId, toolCallId: callId },
+          }),
+        );
         if ('skipped' in written) {
           log.warn(`Emergency capture of oversized tool result skipped (${written.skipped}); it will be lossily truncated`);
           continue;
@@ -905,6 +932,7 @@ export class ModelHandler {
         slot.result = written;
         markers.set(callId, slot);
       } catch (error) {
+        rethrowFlowExecutionAuthorityError(error);
         log.warn('Emergency capture of oversized tool result failed; it will be lossily truncated', error);
       }
     }
@@ -1025,6 +1053,10 @@ export class ModelHandler {
   static async callModel(input: ModelCallInput): Promise<Result<ModelCallResult>> {
     // Remove iteration parameters as they are no longer handled here
     const { modelId, prompt, messages, wireMessages, tools, nodeName, nodeId, toolNameMap, maxTurns, maxTokens, compactionMode, compactionKeepTokens, onFinalWire, conversationId, runId, codexSession, onCodexSessionChange, requireToolApproval, mcpNodes } = input; // Added nodeId
+    const durableContext: FlowDurableMutationContext = {
+      executionAuthority: input.executionAuthority,
+      personaAttribution: input.personaAttribution,
+    };
 
     // Fetch model information for display name (and the model's own maxTurns / maxTokens caps)
     let modelDisplayName = '';
@@ -1147,17 +1179,43 @@ export class ModelHandler {
     // persisted copy dedupe in the UI. Emitting also keeps the frontend's
     // "no activity" timer reset while background tool calls are in flight.
     const liveMessageIds = new Set<string>();
+    let acceptLiveProjection = true;
+    let liveProjectionFailure: unknown;
+    let liveProjectionChain: Promise<void> = Promise.resolve();
+    const enqueueLiveProjection = (task: () => Promise<void>): void => {
+      liveProjectionChain = liveProjectionChain.then(async () => {
+        if (liveProjectionFailure) return;
+        try {
+          await task();
+        } catch (error) {
+          liveProjectionFailure = error;
+        }
+      });
+    };
+    const finishLiveProjection = async (): Promise<void> => {
+      // Close the callback gate before draining: an adapter that resolves and
+      // then invokes a late callback cannot append to a newer generation.
+      acceptLiveProjection = false;
+      await liveProjectionChain;
+      if (liveProjectionFailure) throw liveProjectionFailure;
+    };
+    const flushLiveProjection = async (): Promise<void> => {
+      await liveProjectionChain;
+      if (liveProjectionFailure) throw liveProjectionFailure;
+    };
     const onTranscriptMessage = emit
       ? (message: FlujoChatMessage) => {
-          // A native partial draft with this id is now durable and must survive
-          // a later failure in the same self-orchestrating run.
-          liveMessageIds.delete(message.id);
+          if (!acceptLiveProjection || input.executionAuthority?.signal.aborted) return;
           const withNode: FlujoChatMessage = nodeId ? { ...message, processNodeId: nodeId } : message;
-          emit({ type: 'message', message: withNode, node: nodeId ? { nodeId } : undefined });
-          // Also fold it into the live shared state and persist immediately, so a
-          // failure mid-loop (before the normal end-of-run save) doesn't discard
-          // tool calls/results that already executed (e.g. SAP objects, tickets).
-          if (conversationId) ModelHandler.persistStreamedMessage(conversationId, withNode);
+          enqueueLiveProjection(() => commitFlowDurableMutation(durableContext, async () => {
+            // A native partial draft with this id is now durable and must survive
+            // a later failure in the same self-orchestrating run.
+            liveMessageIds.delete(message.id);
+            emit({ type: 'message', message: withNode, node: nodeId ? { nodeId } : undefined });
+            // Fold under the SAME authority as the event.  The bus append is
+            // independently fenced by conversationLog when it reaches disk.
+            if (conversationId) ModelHandler.persistStreamedMessage(conversationId, withNode);
+          }));
         }
       : undefined;
 
@@ -1165,6 +1223,7 @@ export class ModelHandler {
     // failed attempt can explicitly retract its transient UI drafts.
     const onModelDelta = emit
       ? (delta: ModelStreamDelta) => {
+          if (!acceptLiveProjection || input.executionAuthority?.signal.aborted) return;
           liveMessageIds.add(delta.messageId);
           emit({
             type: 'model:delta',
@@ -1205,8 +1264,11 @@ export class ModelHandler {
     // conversation's isCancelled flag (own or an ancestor's, for subflow
     // children); generateCompletion polls this and aborts the call mid-stream
     // instead of letting the current model turn run to completion.
-    const shouldAbort = conversationId
-      ? () => ModelHandler.isConversationCancelled(conversationId)
+    const shouldAbort = conversationId || input.signal
+      ? () => Boolean(
+          input.signal?.aborted
+          || (conversationId && ModelHandler.isConversationCancelled(conversationId))
+        )
       : undefined;
 
     // Run-resource tools (issue #161): self-orchestrating adapters (Claude
@@ -1244,6 +1306,7 @@ export class ModelHandler {
                 conversationId,
                 node: runResourceNode,
                 emit,
+                ...durableContext,
               });
               if (!outcome.success) throw new Error(outcome.error ?? 'write_resource failed');
               return outcome.data;
@@ -1257,6 +1320,7 @@ export class ModelHandler {
                 node: runResourceNode,
                 emit,
                 mcpNodes: mcpNodes ?? [],
+                ...durableContext,
               });
               if (!outcome.success) throw new Error(outcome.error ?? 'read_resource failed');
               return outcome.data;
@@ -1268,6 +1332,7 @@ export class ModelHandler {
                 node: runResourceNode,
                 emit,
                 mcpNodes: mcpNodes ?? [],
+                ...durableContext,
               });
               if (!outcome.success) throw new Error(outcome.error ?? 'list_mcp_resources failed');
               return outcome.data;
@@ -1352,6 +1417,7 @@ export class ModelHandler {
         { id: modelId, adapter: modelAdapter, contextWindow: modelContextWindow, compactionThreshold: modelCompactionThreshold },
         effectiveMaxTokens,
         { compactionMode, compactionKeepTokens },
+        durableContext,
       );
       if (compaction) {
         const removed = new Set(compaction.removedIds);
@@ -1389,6 +1455,10 @@ export class ModelHandler {
       runResourceMarkers,
       sessionResume,
       onFinalWire,
+      beforeToolDispatch: input.beforeToolDispatch,
+      beforeModelDispatch: input.beforeModelDispatch ?? input.executionAuthority?.assertCurrent,
+      durableContext,
+      flushTranscriptProjection: flushLiveProjection,
       // Issue #400: project the handler's bounded session-limit wait onto the
       // existing recovery:retry execution event, so the chat shows a live
       // countdown (and keeps Stop working) instead of a terminal error while
@@ -1404,6 +1474,13 @@ export class ModelHandler {
         });
       },
     });
+
+    await finishLiveProjection();
+
+    // Provider abort is cooperative and SDK callbacks can resolve after a lease
+    // or meeting generation was replaced.  No returned media/message/resource
+    // projection may observe that stale result.
+    await assertFlowExecutionCurrent(durableContext);
 
     if (!response.success) {
       for (const messageId of liveMessageIds) {
@@ -1426,7 +1503,7 @@ export class ModelHandler {
     const rawResponseMedia = modelResponse.media?.length
       ? modelResponse.media
       : extractAssistantMedia(modelResponse.fullResponse?.choices?.[0]?.message);
-    const responseMedia = await persistModelMedia(rawResponseMedia, conversationId, nodeId);
+    const responseMedia = await persistModelMedia(rawResponseMedia, conversationId, nodeId, durableContext);
     // Start from the (possibly compacted) send view, not the raw input: when
     // summarizing compaction (issue #248) ran pre-flight, `effectiveMessages`
     // carries the anchored summary head in place of the summarized older turns,
@@ -1484,7 +1561,7 @@ export class ModelHandler {
         const msg = transcript[idx];
         const isLast = idx === transcript.length - 1;
         const transcriptMedia = msg.media?.length
-          ? await persistModelMedia(msg.media, conversationId, nodeId)
+          ? await persistModelMedia(msg.media, conversationId, nodeId, durableContext)
           : undefined;
         finalMessages.push({
           ...msg,
@@ -1656,6 +1733,14 @@ export class ModelHandler {
         maxAttempts: number;
         failure: RecoveryFailureDetails;
       }) => void;
+      /** Runtime-only Persona/activity fence assertion before tool side effects. */
+      beforeToolDispatch?: () => Promise<void>;
+      /** Runtime-only fence assertion immediately before every provider attempt. */
+      beforeModelDispatch?: () => Promise<void>;
+      /** Authority context for resource/lineage writes performed in this call. */
+      durableContext?: FlowDurableMutationContext;
+      /** Drain authority-gated self-orchestrating transcript callbacks. */
+      flushTranscriptProjection?: () => Promise<void>;
     }
   ): Promise<Result<ModelCallResult>> {
     log.debug('Preparing provider completion', {
@@ -1741,7 +1826,10 @@ export class ModelHandler {
       // clean conversation. See ~/.claude/plans/execution-core-v2.md.
       const messagesWithMaterializedMedia = await Promise.all(messages.map(async (message) => {
         if (!message.media?.length) return message;
-        const media = await materializeRunResourceMediaPaths(message.media);
+        const media = await materializeRunResourceMediaPaths(
+          message.media,
+          <T>(task: () => Promise<T>) => commitFlowDurableMutation(opts?.durableContext ?? {}, task),
+        );
         return media === message.media ? message : { ...message, media };
       }));
       let apiMessages: OpenAI.ChatCompletionMessageParam[] = filterUnsupportedMediaInputs(
@@ -1779,6 +1867,7 @@ export class ModelHandler {
         conversationId: opts?.conversationId,
         nodeId: opts?.nodeId,
         config: visualConfig,
+        durableContext: opts?.durableContext,
       });
       apiMessages = visual.messages;
       const visualDiagnostic = visual.diagnostic;
@@ -2108,8 +2197,11 @@ export class ModelHandler {
               Object.entries(opts.localToolExecutors).map(([toolName, executor]) => [
                 toolName,
                 async (args: Record<string, unknown>): Promise<unknown> => {
+                  await opts.beforeToolDispatch?.();
                   attemptProducedOutput = true;
-                  return executor(args);
+                  const result = await executor(args);
+                  await assertFlowExecutionCurrent(opts.durableContext ?? {});
+                  return result;
                 },
               ])
             )
@@ -2145,6 +2237,8 @@ export class ModelHandler {
                 {
                   strictOpenAiAudioFormats:
                     model.adapter === 'openai' || model.adapter === 'openai-responses',
+                  commitDurableMutation: <T>(task: () => Promise<T>) =>
+                    commitFlowDurableMutation(opts?.durableContext ?? {}, task),
                 },
               );
               const input = {
@@ -2175,6 +2269,10 @@ export class ModelHandler {
               consumeSteeringMessages: opts?.consumeSteeringMessages,
               onModelDelta,
               signal: abortController.signal,
+              beforeToolDispatch: opts?.beforeToolDispatch,
+              afterToolDispatch: () => assertFlowExecutionCurrent(opts?.durableContext ?? {}),
+              commitDurableMutation: <T>(task: () => Promise<T>) =>
+                commitFlowDurableMutation(opts?.durableContext ?? {}, task),
               conversationId: opts?.conversationId,
               runId: opts?.runId,
               nodeId: opts?.nodeId,
@@ -2192,6 +2290,11 @@ export class ModelHandler {
               }),
               promptCacheMode,
               };
+              // All provider-side preflight (model/key/settings/tool shaping,
+              // compaction, media hydration) is complete.  Check the current
+              // lease/generation at the final dispatch boundary for EVERY
+              // attempt, including bounded retries and summary calls.
+              await opts?.beforeModelDispatch?.();
               return opts?.onModelDelta && adapter.createStreamCompletion
                 ? adapter.createStreamCompletion(input)
                 : adapter.createCompletion(input);
@@ -2203,12 +2306,14 @@ export class ModelHandler {
                 async () => {
                   const prev = getLoadedModel(ollamaRootForUnload);
                   if (prev && prev !== model.name) {
+                    await opts?.beforeModelDispatch?.();
                     log.info(
                       `[ModelHandler] Auto-unloading Ollama model "${prev}" to free VRAM for "${model.name}" on ${ollamaRootForUnload}`
                     );
                     await unloadModel(ollamaRootForUnload, prev);
                   }
                   const res = await issueCompletion();
+                  await assertFlowExecutionCurrent(opts?.durableContext ?? {});
                   setLoadedModel(ollamaRootForUnload, model.name);
                   return res;
                 }
@@ -2356,6 +2461,7 @@ export class ModelHandler {
           // the same attempt is not in this set and remains durable. User-driven
           // cancellation has its own partial-run semantics, so leave it intact.
           if (model.adapter === 'claude-cli' && !abortController.signal.aborted) {
+            await opts?.flushTranscriptProjection?.();
             await ModelHandler.removeFailedStreamedAssistantProse(opts?.conversationId, streamedAssistantProseIds);
           }
           return ModelHandler.shapeCompletionError(error, modelId, abortController.signal.aborted);
@@ -2494,11 +2600,13 @@ export class ModelHandler {
         const beforeChars = JSON.stringify(apiMessages).length;
         let refitMarkers = opts?.runResourceMarkers;
         if (opts?.conversationId) {
+          await assertFlowExecutionCurrent(opts.durableContext ?? {});
           refitMarkers = await ModelHandler.captureOversizedToolResultsForRefit(
             opts.conversationId,
             apiMessages,
             refitMarkers,
-            opts?.nodeId
+            opts?.nodeId,
+            opts?.durableContext,
           );
         }
         const refitMessages = compactForWire(apiMessages, {
@@ -2546,6 +2654,10 @@ export class ModelHandler {
     input: ToolCallProcessingInput
   ): Promise<Result<ToolCallProcessingResult>> {
     const { toolCalls, toolNameMap, emit, conversationId, runId, node, signal, mcpNodes } = input;
+    const durableContext: FlowDurableMutationContext = {
+      executionAuthority: input.executionAuthority,
+      personaAttribution: input.personaAttribution,
+    };
 
     log.debug('Processing tool-call batch', { count: toolCalls?.length ?? 0 });
 
@@ -2633,9 +2745,20 @@ export class ModelHandler {
         const toolCallMessages: FlujoChatMessage[] = [];
         const processedToolCalls: ProcessedToolCall[] = [];
         const toolStartedAt = Date.now();
+        // When the final authority check rejects, preserve that failure as a
+        // run-level stop. The broad per-tool catch below intentionally turns
+        // ordinary tool failures into transcript messages, but a stale Persona
+        // worker must never be allowed to hand that failure back to the model
+        // and continue executing.
+        let executionAuthorityFailure: unknown;
         // Stable identity for this LOGICAL tool invocation, so a duplicate
         // observation of the same call is deduplicated during aggregation.
         const toolInvocationId = newStatisticsInvocationId();
+
+        // Keep the authority assertion outside the per-tool error-to-message
+        // conversion below. A stale Persona fence is a run-level stop, not a
+        // recoverable tool error the model may reason past.
+        await input.beforeToolDispatch?.();
 
         try {
           // Cancellation check BEFORE starting this call (issue #109/#252): once
@@ -2713,16 +2836,20 @@ export class ModelHandler {
               node,
               emit,
               mcpNodes: mcpNodes ?? [],
+              ...durableContext,
             });
+            await assertFlowExecutionCurrent(durableContext);
             const resultContent = outcome.success
               ? JSON.stringify(outcome.data)
               : `Error: ${outcome.error}`;
-            emit?.({
-              type: 'tool:result',
-              toolCallId: id,
-              name,
-              result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
-              isError: !outcome.success,
+            await commitFlowDurableMutation(durableContext, async () => {
+              emit?.({
+                type: 'tool:result',
+                toolCallId: id,
+                name,
+                result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
+                isError: !outcome.success,
+              });
             });
             toolCallMessages.push({
               id: uuidv4(),
@@ -2741,16 +2868,25 @@ export class ModelHandler {
           // wired (ProcessNode.prep), so this branch is inert for other flows.
           if (isRunResourceToolName(name)) {
             emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
-            const outcome = await executeRunResourceTool(name, args, { conversationId, node, emit, mcpNodes: mcpNodes ?? [] });
+            const outcome = await executeRunResourceTool(name, args, {
+              conversationId,
+              node,
+              emit,
+              mcpNodes: mcpNodes ?? [],
+              ...durableContext,
+            });
+            await assertFlowExecutionCurrent(durableContext);
             const resultContent = outcome.success
               ? JSON.stringify(outcome.data)
               : `Error: ${outcome.error}`;
-            emit?.({
-              type: 'tool:result',
-              toolCallId: id,
-              name,
-              result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
-              isError: !outcome.success,
+            await commitFlowDurableMutation(durableContext, async () => {
+              emit?.({
+                type: 'tool:result',
+                toolCallId: id,
+                name,
+                result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
+                isError: !outcome.success,
+              });
             });
             toolCallMessages.push({
               id: uuidv4(),
@@ -3015,34 +3151,37 @@ export class ModelHandler {
             argsString.length >= runResourceSettings.textThresholdChars
           ) {
             try {
-              const writtenArgs = await writeRunResource({
-                conversationId,
-                mimeType: 'application/json',
-                kind: 'text',
-                data: { text: argsString },
-                producedBy: {
-                  source: 'tool-args',
-                  payloadRole: 'tool-arguments',
-                  nodeId: node?.nodeId,
-                  server: serverName,
-                  toolName,
-                  toolCallId: id,
-                },
-              });
-              if (!('skipped' in writtenArgs)) {
-                emit?.({
-                  type: 'resource:write',
-                  node,
-                  server: 'flujo',
-                  uri: writtenArgs.uri,
-                  name: writtenArgs.name,
-                  mimeType: writtenArgs.mimeType,
-                  size: writtenArgs.size,
-                  source: 'tool-args',
-                  toolCallId: id,
+              await commitFlowDurableMutation(durableContext, async () => {
+                const writtenArgs = await writeRunResource({
+                  conversationId,
+                  mimeType: 'application/json',
+                  kind: 'text',
+                  data: { text: argsString },
+                  producedBy: {
+                    source: 'tool-args',
+                    payloadRole: 'tool-arguments',
+                    nodeId: node?.nodeId,
+                    server: serverName,
+                    toolName,
+                    toolCallId: id,
+                  },
                 });
-              }
+                if (!('skipped' in writtenArgs)) {
+                  emit?.({
+                    type: 'resource:write',
+                    node,
+                    server: 'flujo',
+                    uri: writtenArgs.uri,
+                    name: writtenArgs.name,
+                    mimeType: writtenArgs.mimeType,
+                    size: writtenArgs.size,
+                    source: 'tool-args',
+                    toolCallId: id,
+                  });
+                }
+              });
             } catch (error) {
+              rethrowFlowExecutionAuthorityError(error);
               log.error('Tool-args capture failed; continuing with the call', {
                 errorClass: classifyStatisticsError(error),
               });
@@ -3070,6 +3209,15 @@ export class ModelHandler {
           const callSignal = combineAbortSignals(signal, perCallController?.signal);
           let result: Awaited<ReturnType<typeof mcpService.callTool>>;
           try {
+            // Approval, resource capture, or queueing above may have taken long
+            // enough for the lease to expire. Re-check at the final side-effect
+            // boundary, immediately before MCP dispatch.
+            try {
+              await input.beforeToolDispatch?.();
+            } catch (error) {
+              executionAuthorityFailure = error;
+              throw error;
+            }
             result = await mcpService.callTool(
               serverName,
               toolName,
@@ -3088,6 +3236,10 @@ export class ModelHandler {
               'model',
               runOwnerScope,
             );
+            // The MCP abort is cooperative.  A result may arrive after the
+            // Persona lease/meeting generation was replaced; reject it before
+            // statistics, resource capture, lineage, or result events observe it.
+            await assertFlowExecutionCurrent(durableContext);
           } finally {
             if (cancelScope) releaseToolCall(cancelScope, id);
           }
@@ -3110,34 +3262,38 @@ export class ModelHandler {
           if (result.success && conversationId && runResourceSettings) {
             try {
               if (runResourceSettings.autoCaptureEnabled) {
-                const outcome = await captureToolResult({
-                  conversationId,
-                  server: serverName,
-                  toolName,
-                  toolCallId: id,
-                  nodeId: node?.nodeId,
-                  result: result.data as CallToolResult,
-                  settings: runResourceSettings,
+                const outcome = await commitFlowDurableMutation(durableContext, async () => {
+                  const captured = await captureToolResult({
+                    conversationId,
+                    server: serverName,
+                    toolName,
+                    toolCallId: id,
+                    nodeId: node?.nodeId,
+                    result: result.data as CallToolResult,
+                    settings: runResourceSettings,
+                  });
+                  for (const entry of captured.captured) {
+                    emit?.({
+                      type: 'resource:write',
+                      node,
+                      server: 'flujo',
+                      uri: entry.uri,
+                      name: entry.name,
+                      mimeType: entry.mimeType,
+                      size: entry.size,
+                      source: 'tool-result',
+                      toolCallId: id,
+                    });
+                  }
+                  return captured;
                 });
                 effectiveData = outcome.result;
                 // Keep compatibility with old/mocked CaptureOutcome values while
                 // the new media field rolls through every call site.
                 capturedMedia = outcome.media ?? [];
-                for (const entry of outcome.captured) {
-                  emit?.({
-                    type: 'resource:write',
-                    node,
-                    server: 'flujo',
-                    uri: entry.uri,
-                    name: entry.name,
-                    mimeType: entry.mimeType,
-                    size: entry.size,
-                    source: 'tool-result',
-                    toolCallId: id,
-                  });
-                }
               }
             } catch (error) {
+              rethrowFlowExecutionAuthorityError(error);
               log.error('Run-resource auto-capture failed; keeping original tool result', {
                 errorClass: classifyStatisticsError(error),
               });
@@ -3192,33 +3348,36 @@ export class ModelHandler {
             }
             if (!overBytes && !overLines) {
               try {
-                const writtenResult = await writeRunResource({
-                  conversationId,
-                  mimeType: 'application/json',
-                  kind: 'text',
-                  data: { text: resultContent },
-                  producedBy: {
-                    source: 'tool-result',
-                    payloadRole: 'tool-message',
-                    nodeId: node?.nodeId,
-                    server: serverName,
-                    toolName,
-                    toolCallId: id,
-                  },
-                });
-                if (!('skipped' in writtenResult)) {
-                  emit?.({
-                    type: 'resource:write',
-                    node,
-                    server: 'flujo',
-                    uri: writtenResult.uri,
-                    mimeType: writtenResult.mimeType,
-                    size: writtenResult.size,
-                    source: 'tool-result',
-                    toolCallId: id,
+                await commitFlowDurableMutation(durableContext, async () => {
+                  const writtenResult = await writeRunResource({
+                    conversationId,
+                    mimeType: 'application/json',
+                    kind: 'text',
+                    data: { text: resultContent },
+                    producedBy: {
+                      source: 'tool-result',
+                      payloadRole: 'tool-message',
+                      nodeId: node?.nodeId,
+                      server: serverName,
+                      toolName,
+                      toolCallId: id,
+                    },
                   });
-                }
+                  if (!('skipped' in writtenResult)) {
+                    emit?.({
+                      type: 'resource:write',
+                      node,
+                      server: 'flujo',
+                      uri: writtenResult.uri,
+                      mimeType: writtenResult.mimeType,
+                      size: writtenResult.size,
+                      source: 'tool-result',
+                      toolCallId: id,
+                    });
+                  }
+                });
               } catch (error) {
+                rethrowFlowExecutionAuthorityError(error);
                 log.error('Tool-result display capture failed; keeping inline result', {
                   errorClass: classifyStatisticsError(error),
                 });
@@ -3234,31 +3393,35 @@ export class ModelHandler {
           // only the remaining text form is bounded. Never breaks the run.
           if (result.success && conversationId && runResourceSettings) {
             try {
-              const bounded = await boundToolResult({
-                conversationId,
-                toolCallId: id,
-                server: serverName,
-                toolName,
-                nodeId: node?.nodeId,
-                content: resultContent,
-                settings: runResourceSettings,
-              });
+              const bounded = await commitFlowDurableMutation(durableContext, () => boundToolResult({
+                  conversationId,
+                  toolCallId: id,
+                  server: serverName,
+                  toolName,
+                  nodeId: node?.nodeId,
+                  content: resultContent,
+                  settings: runResourceSettings,
+                }),
+              );
               if (bounded.spilled) {
                 resultContent = bounded.content;
                 if (bounded.uri) {
-                  emit?.({
-                    type: 'resource:write',
-                    node,
-                    server: 'flujo',
-                    uri: bounded.uri,
-                    mimeType: 'text/plain',
-                    size: bounded.bytes,
-                    source: 'tool-result',
-                    toolCallId: id,
+                  await commitFlowDurableMutation(durableContext, async () => {
+                    emit?.({
+                      type: 'resource:write',
+                      node,
+                      server: 'flujo',
+                      uri: bounded.uri!,
+                      mimeType: 'text/plain',
+                      size: bounded.bytes,
+                      source: 'tool-result',
+                      toolCallId: id,
+                    });
                   });
                 }
               }
             } catch (error) {
+              rethrowFlowExecutionAuthorityError(error);
               log.error('boundToolResult failed; keeping full tool result', {
                 errorClass: classifyStatisticsError(error),
               });
@@ -3267,12 +3430,14 @@ export class ModelHandler {
 
           // The full result reaches the conversation as the tool message below;
           // the event carries a preview so the log stays light.
-          emit?.({
-            type: 'tool:result',
-            toolCallId: id,
-            name,
-            result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
-            isError: !result.success
+          await commitFlowDurableMutation(durableContext, async () => {
+            emit?.({
+              type: 'tool:result',
+              toolCallId: id,
+              name,
+              result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
+              isError: !result.success
+            });
           });
 
           // MCP Apps (#97): if the server linked this tool to a `ui://` UI
@@ -3323,6 +3488,7 @@ export class ModelHandler {
             result: resultContent
           });
         } catch (error) {
+          if (error === executionAuthorityFailure || isFlowExecutionAuthorityError(error)) throw error;
           const errorMessage = `Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
           emit?.({ type: 'tool:result', toolCallId: id, name, result: errorMessage, isError: true });
           const wasCancelled =

@@ -155,6 +155,46 @@ describe('collectFlowReferences', () => {
 });
 
 describe('security backstops', () => {
+  it('rejects workspace-local Persona targets in packaged planned executions', () => {
+    const pkg: any = {
+      schemaVersion: 1,
+      id: 'x',
+      name: 'x',
+      version: '1.0.0',
+      secrets: [],
+      models: [],
+      mcpServers: [],
+      flows: [{ flow: { id: 'f', name: 'f', nodes: [], edges: [] } }],
+      plannedExecutions: [{
+        id: 'pe',
+        name: 'pe',
+        enabled: false,
+        flowId: 'f',
+        prompt: '',
+        trigger: { type: 'schedule', cron: '0 0 * * *' },
+        personaId: 'persona_support',
+        behaviorSlotKey: 'primary',
+      }],
+    };
+
+    const res = validatePackage(pkg);
+    expect(res.success).toBe(false);
+    expect(res.errors!.join(' ')).toMatch(/personaId|behaviorSlotKey/);
+  });
+
+  it('refuses to serialize a Persona-targeted planned execution', () => {
+    const targeted: PlannedExecution = {
+      ...plannedWebhook,
+      personaId: 'persona_support',
+      behaviorSlotKey: 'primary',
+    };
+
+    expect(() => serializePackage({
+      ...baseInput,
+      plannedExecutions: [targeted],
+    })).toThrow(/Persona-targeted planned executions cannot be packaged/);
+  });
+
   it('rejects an encrypted: blob anywhere in the manifest', () => {
     const pkg: any = {
       schemaVersion: 1,

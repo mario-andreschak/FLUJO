@@ -169,6 +169,9 @@ export class CodexAdapter implements CompletionAdapter {
       consumeSteeringMessages,
       onModelDelta,
       signal,
+      beforeToolDispatch,
+      afterToolDispatch,
+      commitDurableMutation,
       conversationId,
       runId,
       nodeId,
@@ -310,6 +313,7 @@ export class CodexAdapter implements CompletionAdapter {
             description,
             inputSchema,
             handler: async (args) => {
+              await beforeToolDispatch?.();
               const toolStartedAt = Date.now();
               handoffCalls.push({ name: fnName, args: args ?? {} });
               if (runId) {
@@ -355,6 +359,7 @@ export class CodexAdapter implements CompletionAdapter {
               await streamToolCall({ id: callId, name: fnName, argsJson });
               const denied = await gate(callId, fnName, args ?? {});
               if (denied) return denied;
+              await beforeToolDispatch?.();
               log.debug('Codex local tool call', { tool: fnName });
               const toolStartedAt = Date.now();
               let resultContent: string;
@@ -362,6 +367,7 @@ export class CodexAdapter implements CompletionAdapter {
               try {
                 resultContent = JSON.stringify(await localExec(args ?? {}));
               } catch (err) {
+                if ((err as { code?: unknown })?.code === 'flow_execution_authority_lost') throw err;
                 resultContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
                 isError = true;
               }
@@ -424,6 +430,7 @@ export class CodexAdapter implements CompletionAdapter {
               },
             );
             if (denied) return denied;
+            await beforeToolDispatch?.();
             log.debug('Codex tool call', { server, tool: originalTool, exposedAs: readableName });
             const toolStartedAt = Date.now();
             const result = await mcpService.callTool(
@@ -441,6 +448,7 @@ export class CodexAdapter implements CompletionAdapter {
               // never released when the run ended.
               ownerScopeForRun({ runId, conversationId }),
             );
+            await afterToolDispatch?.();
             if (runId) {
               const cancelled = Boolean(abortController.signal.aborted || toolCancellationReason(result));
               recordStatisticsEvent(createStatisticsEvent({
@@ -469,26 +477,32 @@ export class CodexAdapter implements CompletionAdapter {
               // bypasses ModelHandler's processToolCalls, so bound here or the
               // guarantee silently wouldn't apply on Codex runs.
               if (conversationId) {
-                try {
-                  const settings = await getRunResourceSettings();
-                  const bounded = await boundToolResult({
-                    conversationId,
-                    toolCallId: callId,
-                    server,
-                    toolName: originalTool,
-                    nodeId: callerNodeId,
-                    content: resultContent,
-                    settings,
-                  });
-                  if (bounded.spilled) {
-                    resultContent = bounded.content;
-                    callResult = {
-                      ...callResult,
-                      content: [...mediaItems, { type: 'text', text: bounded.content }],
-                    };
+                const bound = async () => {
+                  try {
+                    const settings = await getRunResourceSettings();
+                    return await boundToolResult({
+                      conversationId,
+                      toolCallId: callId,
+                      server,
+                      toolName: originalTool,
+                      nodeId: callerNodeId,
+                      content: resultContent,
+                      settings,
+                    });
+                  } catch (err) {
+                    log.warn('boundToolResult failed on Codex path; keeping full result', err);
+                    return null;
                   }
-                } catch (err) {
-                  log.warn('boundToolResult failed on Codex path; keeping full result', err);
+                };
+                const bounded = commitDurableMutation
+                  ? await commitDurableMutation(bound)
+                  : await bound();
+                if (bounded?.spilled) {
+                  resultContent = bounded.content;
+                  callResult = {
+                    ...callResult,
+                    content: [...mediaItems, { type: 'text', text: bounded.content }],
+                  };
                 }
               }
             } else {

@@ -10,6 +10,7 @@ import type { VisualCompactionDiagnostic } from '@/shared/types/visualArchive';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import type { NormalizedChatError } from '@/shared/types/execution/errors';
 import type { MeetingToolAction } from '@/shared/types/meeting';
+import type { PersonaAttribution } from '@/shared/types/enduringAgent';
 
 // --- Custom Chat Message Type is now imported from shared/types/chat.ts ---
 
@@ -753,8 +754,30 @@ export interface CodexSessionMetadata {
     updatedAt: number;
 }
 
+/**
+ * Runtime-only authority owned by a higher-level orchestrator (currently the
+ * Persona Activity dispatcher). The opaque lease/fencing capability stays in
+ * the closure behind `assertCurrent`; it must never be serialized into a
+ * conversation, prompt, Flow variable, log, or API response.
+ */
+export interface FlowExecutionAuthority {
+    assertCurrent: () => Promise<void>;
+    signal: AbortSignal;
+    /** Hold the higher-level lease lock across one authoritative durable write. */
+    commitWhileCurrent?: <T>(task: () => Promise<T>) => Promise<T>;
+    /** Fetch durable related input only at a transcript-safe runFlow boundary. */
+    pollRelatedInputs?: () => Promise<void>;
+    /** ACK stable ids only after their messages are durably folded once. */
+    acknowledgeRelatedInputs?: (messageIds: readonly string[]) => Promise<void>;
+}
+
 // Shared state (minimized)
 export interface SharedState {
+    /**
+     * Runtime-only execution fence. `persistConversationState` strips this
+     * field and asserts it immediately before every attributed state write.
+     */
+    executionAuthority?: FlowExecutionAuthority;
     /**
      * Present only for a top-level participant conversation driven by the
      * MeetingEngine. The process-node prompt and synthetic meeting controls use
@@ -1172,6 +1195,13 @@ export interface SharedState {
     source?: FlowInvocationSource;
 
     /**
+     * Safe persisted attribution stamped by the trusted Persona dispatcher.
+     * It identifies the leased Activity and immutable Behavior revision but
+     * never contains holder ids, lease ids, or fencing capabilities.
+     */
+    personaAttribution?: PersonaAttribution;
+
+    /**
      * For scheduler-originated runs (source === 'schedule'): the planned
      * execution id that fired this run (issue #113). Unset otherwise.
      */
@@ -1334,6 +1364,10 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     /** Durable Codex session for this node and a state-owned replacement hook. */
     codexSession?: CodexSessionMetadata;
     onCodexSessionChange?: (session: CodexSessionMetadata | undefined) => void;
+    /** Runtime-only guard checked before provider and tool dispatch. */
+    executionAuthority?: FlowExecutionAuthority;
+    /** Safe actor attribution paired with executionAuthority for fail-closed writes. */
+    personaAttribution?: PersonaAttribution;
 }
 
 // FinishNode prep result
@@ -1378,6 +1412,10 @@ export interface SubflowNodePrepResult extends BasePrepResult {
      *  wave membership instead of falling into the "Ad-hoc" bucket. Undefined for
      *  ad-hoc parent runs (no wave), which keeps the child ad-hoc too. */
     plannedExecutionId?: string;
+    /** Safe actor attribution inherited by a structural child run. */
+    personaAttribution?: PersonaAttribution;
+    /** Runtime-only Persona lease authority inherited by a structural child. */
+    executionAuthority?: FlowExecutionAuthority;
     /** Whether the child run's events are folded into the parent conversation
      *  (outputMode 'steps', the default) or hidden ('final-only'). */
     showSteps: boolean;

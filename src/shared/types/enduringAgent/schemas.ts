@@ -17,6 +17,9 @@ import {
   PERSONA_INTERRUPTION_POLICIES,
   PERSONA_LEASE_STATUSES,
   PERSONA_LIFECYCLE_STATES,
+  PERSONA_MAILBOX_DELIVERY_STATUSES,
+  PERSONA_MAILBOX_RELATED_ACTIONS,
+  PERSONA_MAILBOX_ROUTING_DECISIONS,
   PERSONA_MAILBOX_STATUSES,
   PERSONA_PRIORITIES,
   PERSONA_WORK_ITEM_STATUSES,
@@ -282,6 +285,8 @@ export const PersonaActivitySchema = z.object({
   resourceRefs: z.array(NonEmptyText(4096)).max(1_000).optional(),
   outcomeRef: z.string().max(4096).optional(),
   error: z.string().max(20_000).optional(),
+  interruptionRequestedAt: TimestampSchema.optional(),
+  interruptionRequestedByMailboxItemId: EnduringAgentIdSchema.optional(),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
   startedAt: TimestampSchema.optional(),
@@ -383,6 +388,36 @@ export const PersonaActivitySchema = z.object({
       code: 'custom',
       message: 'An errored Activity requires an error message.',
       path: ['error'],
+    });
+  }
+  if (
+    (record.interruptionRequestedAt === undefined)
+    !== (record.interruptionRequestedByMailboxItemId === undefined)
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'An Activity interruption request requires both timestamp and mailbox item id.',
+      path: ['interruptionRequestedAt'],
+    });
+  }
+  if (
+    record.interruptionRequestedAt !== undefined
+    && record.interruptionRequestedAt < (record.startedAt ?? record.createdAt)
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'interruptionRequestedAt cannot precede the Activity start.',
+      path: ['interruptionRequestedAt'],
+    });
+  }
+  if (
+    record.interruptionRequestedAt !== undefined
+    && record.interruptionRequestedAt > record.updatedAt
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'interruptionRequestedAt cannot follow updatedAt.',
+      path: ['interruptionRequestedAt'],
     });
   }
 });
@@ -562,6 +597,12 @@ export const PersonaMailboxItemSchema = z.object({
   source: PersonaActivitySourceSchema,
   behaviorSlotKey: BehaviorSlotKeySchema.optional(),
   relationKey: z.string().trim().max(512).optional(),
+  relatedAction: z.enum(PERSONA_MAILBOX_RELATED_ACTIONS).optional(),
+  routingDecision: z.enum(PERSONA_MAILBOX_ROUTING_DECISIONS).optional(),
+  targetActivityId: EnduringAgentIdSchema.optional(),
+  deliveryStatus: z.enum(PERSONA_MAILBOX_DELIVERY_STATUSES).optional(),
+  deliveredAt: TimestampSchema.optional(),
+  interruptedActivityId: EnduringAgentIdSchema.optional(),
   summary: z.string().trim().max(20_000).optional(),
   payloadRef: z.string().trim().max(4096).optional(),
   notBefore: TimestampSchema.optional(),
@@ -645,6 +686,98 @@ export const PersonaMailboxItemSchema = z.object({
       path: ['coalescedIntoId'],
     });
   }
+  if (record.relatedAction !== undefined && !record.relationKey?.trim()) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'A related mailbox action requires a nonempty relationKey.',
+      path: ['relationKey'],
+    });
+  }
+  const relatedDelivery = record.routingDecision === 'steer'
+    || record.routingDecision === 'coalesce';
+  if (relatedDelivery) {
+    if (record.status !== 'coalesced') {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'A steered/coalesced delivery must use coalesced mailbox status.',
+        path: ['status'],
+      });
+    }
+    if (!record.targetActivityId) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'A steered/coalesced delivery requires targetActivityId.',
+        path: ['targetActivityId'],
+      });
+    }
+    if (!record.deliveryStatus) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'A steered/coalesced delivery requires deliveryStatus.',
+        path: ['deliveryStatus'],
+      });
+    }
+    if (record.relatedAction !== record.routingDecision) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'The persisted related action must match its routing decision.',
+        path: ['relatedAction'],
+      });
+    }
+  } else if (
+    record.targetActivityId !== undefined
+    || record.deliveryStatus !== undefined
+    || record.deliveredAt !== undefined
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Only a steered/coalesced delivery may carry delivery state.',
+      path: ['deliveryStatus'],
+    });
+  }
+  if (record.deliveryStatus === 'pending' && record.deliveredAt !== undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'A pending mailbox delivery cannot have deliveredAt.',
+      path: ['deliveredAt'],
+    });
+  }
+  if (record.deliveryStatus === 'delivered' && record.deliveredAt === undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'A delivered mailbox item requires deliveredAt.',
+      path: ['deliveredAt'],
+    });
+  }
+  if (record.deliveredAt !== undefined && record.deliveredAt > record.updatedAt) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'deliveredAt cannot follow updatedAt.',
+      path: ['deliveredAt'],
+    });
+  }
+  if (record.routingDecision === 'interrupt') {
+    if (!record.interruptedActivityId) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'An interrupt-routed mailbox item requires interruptedActivityId.',
+        path: ['interruptedActivityId'],
+      });
+    }
+    if (record.priority !== 'urgent') {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Only urgent mailbox work may request an interruption.',
+        path: ['priority'],
+      });
+    }
+  } else if (record.interruptedActivityId !== undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Only an interrupt-routed mailbox item may identify an interrupted Activity.',
+      path: ['interruptedActivityId'],
+    });
+  }
 });
 
 export const CreatePersonaMailboxItemInputSchema = z.object({
@@ -655,10 +788,19 @@ export const CreatePersonaMailboxItemInputSchema = z.object({
   source: PersonaActivitySourceSchema,
   behaviorSlotKey: BehaviorSlotKeySchema.optional(),
   relationKey: z.string().trim().max(512).optional(),
+  relatedAction: z.enum(PERSONA_MAILBOX_RELATED_ACTIONS).optional(),
   summary: z.string().trim().max(20_000).optional(),
   payloadRef: z.string().trim().max(4096).optional(),
   notBefore: TimestampSchema.optional(),
-}).strict();
+}).strict().superRefine((record, ctx) => {
+  if (record.relatedAction !== undefined && !record.relationKey?.trim()) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'A related mailbox action requires a nonempty relationKey.',
+      path: ['relationKey'],
+    });
+  }
+});
 
 export const PersonaLeaseSchema = z.object({
   schemaVersion: z.literal(ENDURING_AGENT_SCHEMA_VERSION),

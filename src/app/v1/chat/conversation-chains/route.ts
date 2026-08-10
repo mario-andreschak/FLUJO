@@ -163,6 +163,10 @@ async function GET_handler(request: NextRequest) {
   if (_lock) return _lock;
   const notLocal = assertLocalRequest(request);
   if (notLocal) return notLocal;
+  const personaControlAllowed = assertLocalRequest(
+    request,
+    { strictLoopback: true },
+  ) === null;
 
   const url = new URL(request.url);
   const rawRoot = (url.searchParams.get('root') ?? '').trim();
@@ -185,7 +189,13 @@ async function GET_handler(request: NextRequest) {
   }
 
   try {
-    const summaries = await listConversationSummaries();
+    const summaries = (await listConversationSummaries()).filter((summary) => (
+      personaControlAllowed
+      || (
+        !summary.personaOwned
+        && !FlowExecutor.conversationStates.get(summary.id)?.personaAttribution
+      )
+    ));
     const resolved = summaries.map(resolveConversation);
     const byId = new Map(resolved.map((item) => [item.id, item]));
 

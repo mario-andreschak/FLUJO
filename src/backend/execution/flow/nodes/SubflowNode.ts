@@ -20,6 +20,10 @@ import { resolveRunVars } from '@/utils/shared/resolveRunVars';
 import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { resolveKvNodeRefs, captureKvValue } from '../resolveKvNodeRefs';
 import {
+  commitFlowDurableMutation,
+  rethrowFlowExecutionAuthorityError,
+} from '../executionAuthority';
+import {
   copyRunResourceToConversation,
   getRunResourceLocalPath,
   writeRunResource,
@@ -163,47 +167,50 @@ async function promoteSubflowMedia(
   return Promise.all(media.map(async (part) => {
     if (!part.resourceUri?.startsWith('flujo://run/')) return part;
     try {
-      const copied = await copyRunResourceToConversation({
-        uri: part.resourceUri,
-        conversationId: sharedState.conversationId!,
-        producedBy: {
-          source: 'capture',
-          nodeId: node_params?.id,
-          nodeName: node_params?.properties?.name,
-        },
-      });
-      if (!copied || 'skipped' in copied) {
-        log.warn('Subflow media promotion skipped; retaining child resource URI', {
-          uri: part.resourceUri,
-          reason: copied && 'skipped' in copied ? copied.skipped : 'missing-source',
+      return await commitFlowDurableMutation(sharedState, async () => {
+        const copied = await copyRunResourceToConversation({
+          uri: part.resourceUri!,
+          conversationId: sharedState.conversationId!,
+          producedBy: {
+            source: 'capture',
+            nodeId: node_params?.id,
+            nodeName: node_params?.properties?.name,
+          },
         });
-        return part;
-      }
-      sharedState.emit?.({
-        type: 'resource:write',
-        node: nodeRef,
-        server: 'flujo',
-        uri: copied.uri,
-        name: copied.name,
-        mimeType: copied.mimeType,
-        size: copied.size,
-        source: 'capture',
+        if (!copied || 'skipped' in copied) {
+          log.warn('Subflow media promotion skipped; retaining child resource URI', {
+            uri: part.resourceUri,
+            reason: copied && 'skipped' in copied ? copied.skipped : 'missing-source',
+          });
+          return part;
+        }
+        sharedState.emit?.({
+          type: 'resource:write',
+          node: nodeRef,
+          server: 'flujo',
+          uri: copied.uri,
+          name: copied.name,
+          mimeType: copied.mimeType,
+          size: copied.size,
+          source: 'capture',
+        });
+        const localPath = await getRunResourceLocalPath(copied.uri);
+        // Never leak the source conversation's path after promotion. A stale path
+        // can point at a grandchild artifact even though resourceUri now names the
+        // parent-owned copy.
+        const { localPath: _sourceLocalPath, ...rest } = part;
+        return {
+          ...rest,
+          resourceUri: copied.uri,
+          ...(localPath ? { localPath } : {}),
+          url:
+            `/v1/chat/conversations/${encodeURIComponent(copied.conversationId)}`
+            + `/resources/${encodeURIComponent(copied.id)}/content`
+            + `?workspace=${encodeURIComponent(getCurrentWorkspace())}`,
+        };
       });
-      const localPath = await getRunResourceLocalPath(copied.uri);
-      // Never leak the source conversation's path after promotion. A stale path
-      // can point at a grandchild artifact even though resourceUri now names the
-      // parent-owned copy.
-      const { localPath: _sourceLocalPath, ...rest } = part;
-      return {
-        ...rest,
-        resourceUri: copied.uri,
-        ...(localPath ? { localPath } : {}),
-        url:
-          `/v1/chat/conversations/${encodeURIComponent(copied.conversationId)}`
-          + `/resources/${encodeURIComponent(copied.id)}/content`
-          + `?workspace=${encodeURIComponent(getCurrentWorkspace())}`,
-      };
     } catch (error) {
+      rethrowFlowExecutionAuthorityError(error);
       log.error('Subflow media promotion failed; retaining child resource URI', error);
       return part;
     }
@@ -416,6 +423,7 @@ async function resolveSubflowTemplate(
     sharedState.ephemeral ? undefined : sharedState.conversationId,
     sharedState.emit,
     nodeId ? { nodeId, nodeType: 'subflow' } : undefined,
+    sharedState,
   );
   if (resolved.includes('${kv:')) {
     let folder: string | undefined;
@@ -423,7 +431,12 @@ async function resolveSubflowTemplate(
       const { flowService } = await import('@/backend/services/flow/index');
       folder = (await flowService.getFlow(sharedState.flowId))?.folder;
     } catch { /* best effort */ }
-    resolved = await resolveKvNodeRefs(resolved, { flowId: sharedState.flowId, folder });
+    resolved = await resolveKvNodeRefs(resolved, {
+      flowId: sharedState.flowId,
+      folder,
+      executionAuthority: sharedState.executionAuthority,
+      personaAttribution: sharedState.personaAttribution,
+    });
   }
   return resolved;
 }
@@ -632,6 +645,11 @@ export class SubflowNode extends BaseNode {
       // parent's wave membership instead of being bucketed as "Ad-hoc". Absent
       // for an ad-hoc parent (no wave), which correctly keeps the child ad-hoc.
       plannedExecutionId: sharedState.plannedExecutionId,
+      // Structural children remain part of the same leased Activity. Carry the
+      // safe attribution for audit and the runtime-only fence for every child
+      // model/tool/write boundary.
+      personaAttribution: sharedState.personaAttribution,
+      executionAuthority: sharedState.executionAuthority,
       showSteps,
       persistConversation,
       // The engine attaches the run's emit to sharedState for the duration of
@@ -951,6 +969,8 @@ export class SubflowNode extends BaseNode {
       chainDepth: prepResult.chainDepth,
       parentRunId: prepResult.parentRunId,
       ...(prepResult.plannedExecutionId ? { plannedExecutionId: prepResult.plannedExecutionId } : {}),
+      ...(prepResult.personaAttribution ? { personaAttribution: prepResult.personaAttribution } : {}),
+      ...(prepResult.executionAuthority ? { executionAuthority: prepResult.executionAuthority } : {}),
       ...(childEmit ? { emit: childEmit } : {}),
     });
 
@@ -1132,41 +1152,45 @@ export class SubflowNode extends BaseNode {
     const captureResource = node_params?.properties?.captureResource?.trim();
     if (captureResource && sharedState.conversationId && !sharedState.ephemeral) {
       try {
-        const written = await writeRunResource({
-          conversationId: sharedState.conversationId,
-          name: captureResource,
-          mimeType: 'text/markdown',
-          kind: 'text',
-          data: { text: resultText },
-          producedBy: {
-            source: 'capture',
-            nodeId: node_params?.id,
-            nodeName: node_params?.properties?.name,
-          },
-        });
-        if ('skipped' in written) {
-          log.warn('captureResource skipped by store cap', { captureResource, reason: written.skipped });
-        } else {
-          sharedState.emit?.({
-            type: 'resource:write',
-            node: { nodeId: node_params?.id ?? 'unknown', nodeName: node_params?.properties?.name, nodeType: 'subflow' },
-            server: 'flujo',
-            uri: written.uri,
+        await commitFlowDurableMutation(sharedState, async () => {
+          const written = await writeRunResource({
+            conversationId: sharedState.conversationId!,
             name: captureResource,
-            mimeType: written.mimeType,
-            size: written.size,
-            source: 'capture',
+            mimeType: 'text/markdown',
+            kind: 'text',
+            data: { text: resultText },
+            producedBy: {
+              source: 'capture',
+              nodeId: node_params?.id,
+              nodeName: node_params?.properties?.name,
+            },
           });
-          log.info('Captured subflow output into run resource', { captureResource, uri: written.uri, nodeId: node_params?.id });
-        }
+          if ('skipped' in written) {
+            log.warn('captureResource skipped by store cap', { captureResource, reason: written.skipped });
+          } else {
+            sharedState.emit?.({
+              type: 'resource:write',
+              node: { nodeId: node_params?.id ?? 'unknown', nodeName: node_params?.properties?.name, nodeType: 'subflow' },
+              server: 'flujo',
+              uri: written.uri,
+              name: captureResource,
+              mimeType: written.mimeType,
+              size: written.size,
+              source: 'capture',
+            });
+            log.info('Captured subflow output into run resource', { captureResource, uri: written.uri, nodeId: node_params?.id });
+          }
+        });
       } catch (error) {
+        rethrowFlowExecutionAuthorityError(error);
         log.error('captureResource failed; continuing run', error);
       }
     }
 
     // Tier 4 (persistent kv): also save the folded output to a PERSISTENT
     // cross-run key with `captureKv: "NAME"` (scope-prefixable). Survives across
-    // runs, unlike captureVariable/captureResource. Scope keys off the parent flow.
+    // runs, unlike captureVariable/captureResource. Scope keys off the parent
+    // flow; execution-fence loss is the one capture failure that aborts the run.
     const captureKv = node_params?.properties?.captureKv?.trim();
     if (captureKv) {
       try {
@@ -1175,13 +1199,19 @@ export class SubflowNode extends BaseNode {
           const { flowService } = await import('@/backend/services/flow/index');
           folder = (await flowService.getFlow(sharedState.flowId))?.folder;
         } catch { /* best effort */ }
-        const res = await captureKvValue(captureKv, resultText, { flowId: sharedState.flowId, folder });
+        const res = await captureKvValue(captureKv, resultText, {
+          flowId: sharedState.flowId,
+          folder,
+          executionAuthority: sharedState.executionAuthority,
+          personaAttribution: sharedState.personaAttribution,
+        });
         if ('skipped' in res) {
           log.warn('captureKv skipped', { captureKv, reason: res.skipped });
         } else {
           log.info('Captured subflow output into persistent kv', { captureKv, nodeId: node_params?.id });
         }
       } catch (error) {
+        rethrowFlowExecutionAuthorityError(error);
         log.error('captureKv failed; continuing run', error);
       }
     }
@@ -1422,6 +1452,8 @@ export async function runSubflowLanes(
             ...(prepResult.nodeId ? { parentNodeId: prepResult.nodeId } : {}),
           },
           ...(prepResult.plannedExecutionId ? { plannedExecutionId: prepResult.plannedExecutionId } : {}),
+          ...(prepResult.personaAttribution ? { personaAttribution: prepResult.personaAttribution } : {}),
+          ...(prepResult.executionAuthority ? { executionAuthority: prepResult.executionAuthority } : {}),
           ...(emit ? { emit } : {}),
         });
         const cancelled = Boolean(

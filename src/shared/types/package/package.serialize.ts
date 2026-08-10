@@ -112,6 +112,12 @@ function clone<T>(value: T): T {
 
 /** Strip the webhook token (and any per-instance secret state) from a planned execution. */
 function packPlannedExecution(pe: PlannedExecution): PackagedPlannedExecution {
+  if (
+    Object.prototype.hasOwnProperty.call(pe, 'personaId')
+    || Object.prototype.hasOwnProperty.call(pe, 'behaviorSlotKey')
+  ) {
+    throw new Error('Persona-targeted planned executions cannot be packaged.');
+  }
   const copy = clone(pe) as PlannedExecution;
   if (copy.trigger && copy.trigger.type === 'webhook') {
     // Remove the shared secret entirely — never packaged.

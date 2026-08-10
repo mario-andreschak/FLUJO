@@ -21,7 +21,7 @@ export interface PromptRenderOptions {
    * resource:read event, while design-time renders (the prompt-renderer API
    * route) pass nothing and stay silent.
    */
-  onResourceRead?: (info: { server: string; uri: string; mimeType?: string; size?: number }) => void;
+  onResourceRead?: (info: { server: string; uri: string; mimeType?: string; size?: number }) => void | Promise<void>;
 }
 
 export class PromptRenderer {
@@ -470,7 +470,7 @@ export class PromptRenderer {
             const text = this.formatResourceContents(result.data);
             try {
               const first = (result.data as { contents?: Array<{ mimeType?: string; text?: string; blob?: string }> })?.contents?.[0];
-              onResourceRead?.({
+              await onResourceRead?.({
                 server: serverName,
                 uri,
                 mimeType: first?.mimeType,
@@ -478,7 +478,12 @@ export class PromptRenderer {
                   : typeof first?.blob === 'string' ? Math.floor(first.blob.length * 3 / 4)
                   : undefined,
               });
-            } catch { /* observers must never break rendering */ }
+            } catch (error) {
+              // Ordinary design-time observers remain best-effort.  A tagged
+              // execution-fence failure is a run-level stop and must not be
+              // swallowed after a remote resource read returns late.
+              if ((error as { code?: unknown })?.code === 'flow_execution_authority_lost') throw error;
+            }
             return `\n[Resource ${uri} (from ${serverName})]:\n${text}\n`;
           }
           log.warn(`Failed to read resource ${uri} from ${serverName}: ${result.error}`);
@@ -488,6 +493,7 @@ export class PromptRenderer {
         }
         log.warn(`Server not connected for resource read: ${serverName}`);
       } catch (error) {
+        if ((error as { code?: unknown })?.code === 'flow_execution_authority_lost') throw error;
         log.warn(`Error resolving resource pill (attempt ${retryCount + 1}): ${uri}`, error);
       }
       await this.delay(Math.pow(2, retryCount + 1) * 100);

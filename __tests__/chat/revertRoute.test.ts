@@ -1,8 +1,12 @@
 import type { NextRequest } from 'next/server';
 
 const assertUnlockedMock = jest.fn(async () => undefined);
+const assertLocalRequestMock = jest.fn((_request?: unknown, _options?: unknown): Response | null => null);
 jest.mock('@/utils/encryption/lockGate', () => ({
   assertUnlocked: (...args: unknown[]) => assertUnlockedMock(...(args as [])),
+}));
+jest.mock('@/utils/http/localRequest', () => ({
+  assertLocalRequest: (request: unknown, options?: unknown) => assertLocalRequestMock(request, options),
 }));
 
 jest.mock('@/config/features', () => ({
@@ -68,6 +72,7 @@ function preview(messageId: string) {
 
 beforeEach(() => {
   assertUnlockedMock.mockClear();
+  assertLocalRequestMock.mockReset().mockReturnValue(null);
   readConversationLogMock.mockReset();
   projectMessagesMock.mockReset();
   loadConversationStateMock.mockReset();
@@ -79,6 +84,24 @@ beforeEach(() => {
 });
 
 describe('conversation revert route', () => {
+  it('guards Persona previews before reading the event log or worktree', async () => {
+    loadConversationStateMock.mockResolvedValue({
+      conversationId: CONVERSATION_ID,
+      personaAttribution: {
+        personaId: 'persona_1',
+        activityId: 'activity_1',
+        behaviorRevisionId: 'revision_1',
+      },
+    });
+    assertLocalRequestMock.mockReturnValueOnce(new Response('forbidden', { status: 403 }));
+
+    const response = await preview('m1');
+
+    expect(response.status).toBe(403);
+    expect(readConversationLogMock).not.toHaveBeenCalled();
+    expect(diffMock).not.toHaveBeenCalled();
+  });
+
   it('aggregates trusted changed-file events after the selected message boundary', async () => {
     readConversationLogMock.mockResolvedValue([
       message('m1'),

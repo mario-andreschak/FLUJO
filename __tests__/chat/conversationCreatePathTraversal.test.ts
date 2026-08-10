@@ -85,4 +85,37 @@ describe('POST /v1/chat/conversations path-traversal guard (issue #126)', () => 
     // And nothing leaked to the db root.
     expect(await exists(path.join(dbDir, 'encryption_key.json'))).toBe(false);
   });
+
+  it('cannot overwrite an existing Persona conversation and strip its attribution', async () => {
+    const id = 'persona-conversation';
+    const conversationDir = path.join(dbDir, 'conversations');
+    await fs.mkdir(conversationDir, { recursive: true });
+    const original = {
+      conversationId: id,
+      title: 'Persona work',
+      flowId: 'pinned-flow',
+      messages: [],
+      trackingInfo: { executionId: 'persona-run', startTime: 1, nodeExecutionTracker: [] },
+      personaAttribution: {
+        personaId: 'persona-1',
+        activityId: 'activity-1',
+        behaviorRevisionId: 'revision-1',
+      },
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const conversationPath = path.join(conversationDir, `${id}.json`);
+    await fs.writeFile(conversationPath, JSON.stringify(original), 'utf-8');
+
+    const response = await POST(makeReq({
+      id,
+      title: 'Overwrite',
+      flowId: 'mutable-flow',
+      createdAt: 2,
+      updatedAt: 2,
+    }));
+
+    expect(response.status).toBe(409);
+    expect(JSON.parse(await fs.readFile(conversationPath, 'utf-8'))).toEqual(original);
+  });
 });

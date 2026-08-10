@@ -7,5 +7,8 @@ export * from './factory';
 export * from './ids';
 export * from './namespaces';
 export * from './personaDeletion';
+export * from './personaDispatcher';
 export * from './recordMigrations';
+export * from './runtimeEvents';
+export * from './runtimeObservability';
 export * from './store';

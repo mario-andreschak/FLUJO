@@ -1,6 +1,8 @@
 const listPersonasMock = jest.fn();
 const createPersonaFromRoleMock = jest.fn();
 const listPersonaBundleMock = jest.fn();
+const inspectPersonaRuntimeMock = jest.fn();
+const recoverPersonaRuntimeMock = jest.fn();
 const previewPersonaDeletionMock = jest.fn();
 const deletePersonaMock = jest.fn();
 const ensureBuiltInDeveloperRoleMock = jest.fn();
@@ -18,14 +20,24 @@ jest.mock('@/backend/services/enduringAgents', () => {
   }
   class PersonaDeletionNotFoundError extends Error {}
   class PersonaDeletionConflictError extends Error {}
+  class PersonaRuntimeCorruptionError extends Error {}
+  class PersonaRuntimeNotFoundError extends Error {}
+  class PersonaRuntimeRecoveryConflictError extends Error {}
+  class PersonaRuntimeUnavailableError extends Error {}
   return {
     PersonaFactoryConflictError,
     RoleVersionNotFoundError,
     PersonaDeletionNotFoundError,
     PersonaDeletionConflictError,
+    PersonaRuntimeCorruptionError,
+    PersonaRuntimeNotFoundError,
+    PersonaRuntimeRecoveryConflictError,
+    PersonaRuntimeUnavailableError,
     listPersonas: (...args: unknown[]) => listPersonasMock(...args),
     createPersonaFromRole: (...args: unknown[]) => createPersonaFromRoleMock(...args),
     listPersonaRuntimeBundle: (...args: unknown[]) => listPersonaBundleMock(...args),
+    inspectAndReconcilePersonaRuntime: (...args: unknown[]) => inspectPersonaRuntimeMock(...args),
+    recoverPersonaRuntime: (...args: unknown[]) => recoverPersonaRuntimeMock(...args),
     previewPersonaDeletion: (...args: unknown[]) => previewPersonaDeletionMock(...args),
     deletePersona: (...args: unknown[]) => deletePersonaMock(...args),
     ensureBuiltInDeveloperRole: (...args: unknown[]) => ensureBuiltInDeveloperRoleMock(...args),
@@ -58,6 +70,7 @@ import {
 import { GET as listPersonas, POST as createPersona } from '@/app/v1/personas/route';
 import { DELETE as deletePersonaRoute, GET as getPersona } from '@/app/v1/personas/[personaId]/route';
 import { GET as previewPersonaDeletionRoute } from '@/app/v1/personas/[personaId]/deletion-preview/route';
+import { POST as recoverPersonaRuntimeRoute } from '@/app/v1/personas/[personaId]/runtime-recovery/route';
 import { GET as listRoles } from '@/app/v1/roles/route';
 
 const request = (path: string, init?: RequestInit) =>
@@ -71,6 +84,15 @@ beforeEach(() => {
   listPersonasMock.mockResolvedValue([]);
   listRoleDefinitionsMock.mockResolvedValue([]);
   listRoleVersionsMock.mockResolvedValue([]);
+  inspectPersonaRuntimeMock.mockResolvedValue({ projection: { stuck: false }, recentEvents: [] });
+  recoverPersonaRuntimeMock.mockResolvedValue({
+    personaId: 'jim',
+    changed: true,
+    lifecycleState: 'idle',
+    closedActivityIds: [],
+    rejectedMailboxItemIds: [],
+    requeuedMailboxItemIds: [],
+  });
 });
 
 describe('/v1/personas', () => {
@@ -142,7 +164,11 @@ describe('/v1/personas/[personaId]', () => {
       { params: Promise.resolve({ personaId: 'jim' }) } as never,
     );
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual(bundle);
+    expect(await response.json()).toEqual({
+      ...bundle,
+      runtime: { projection: { stuck: false }, recentEvents: [] },
+    });
+    expect(inspectPersonaRuntimeMock).toHaveBeenCalledWith('jim');
 
     listPersonaBundleMock.mockResolvedValueOnce(null);
     response = await getPersona(
@@ -198,6 +224,48 @@ describe('/v1/personas/[personaId]', () => {
   });
 });
 
+describe('/v1/personas/[personaId]/runtime-recovery', () => {
+  it('requires local access and exact confirmation before an audited recovery', async () => {
+    assertLocalRequestMock.mockReturnValueOnce(new Response('forbidden', { status: 403 }));
+    let response = await recoverPersonaRuntimeRoute(
+      request('/v1/personas/jim/runtime-recovery', {
+        method: 'POST',
+        body: JSON.stringify({ confirmation: 'RECOVER' }),
+      }) as never,
+      { params: Promise.resolve({ personaId: 'jim' }) } as never,
+    );
+    expect(response.status).toBe(403);
+    expect(recoverPersonaRuntimeMock).not.toHaveBeenCalled();
+
+    recoverPersonaRuntimeMock.mockRejectedValueOnce(new ZodError([]));
+    response = await recoverPersonaRuntimeRoute(
+      request('/v1/personas/jim/runtime-recovery', {
+        method: 'POST',
+        body: JSON.stringify({ confirmation: 'WRONG' }),
+      }) as never,
+      { params: Promise.resolve({ personaId: 'jim' }) } as never,
+    );
+    expect(response.status).toBe(400);
+
+    response = await recoverPersonaRuntimeRoute(
+      request('/v1/personas/jim/runtime-recovery', {
+        method: 'POST',
+        body: JSON.stringify({ confirmation: 'RECOVER' }),
+      }) as never,
+      { params: Promise.resolve({ personaId: 'jim' }) } as never,
+    );
+    expect(response.status).toBe(200);
+    expect(recoverPersonaRuntimeMock).toHaveBeenLastCalledWith({
+      personaId: 'jim',
+      confirmation: 'RECOVER',
+    });
+    expect(await response.json()).toMatchObject({
+      recovery: { changed: true, lifecycleState: 'idle' },
+      runtime: { projection: { stuck: false } },
+    });
+  });
+});
+
 describe('/v1/personas/[personaId]/deletion-preview', () => {
   it('returns the privacy manifest before deletion', async () => {
     const preview = { personaId: 'jim', previewToken: 'b'.repeat(64), counts: {} };
@@ -215,9 +283,11 @@ describe('/v1/roles', () => {
   it('seeds Developer v1 before listing workspace Role records', async () => {
     listRoleDefinitionsMock.mockResolvedValue([{ id: 'role_builtin_developer' }]);
     listRoleVersionsMock.mockResolvedValue([{ id: 'rolever_builtin_developer_v1' }]);
-    const response = await listRoles(request('/v1/roles') as never);
+    const roleRequest = request('/v1/roles');
+    const response = await listRoles(roleRequest as never);
 
     expect(response.status).toBe(200);
+    expect(assertLocalRequestMock).toHaveBeenCalledWith(roleRequest, { strictLoopback: true });
     expect(ensureBuiltInDeveloperRoleMock).toHaveBeenCalledTimes(1);
     expect(await response.json()).toEqual({
       roleDefinitions: [{ id: 'role_builtin_developer' }],

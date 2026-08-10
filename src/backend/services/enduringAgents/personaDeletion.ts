@@ -14,12 +14,18 @@ import {
 import { deleteCollectionItem } from '@/utils/storage/backend';
 import { getCurrentWorkspace } from '@/utils/workspace';
 
-import { quiescePersonaForDeletionWithinRuntimeLock } from './activityRuntime';
+import {
+  deletePersonaRuntimeRecoveryReceipt,
+  listPersonaRuntimeRecoveryReceipts,
+  quiescePersonaForDeletionWithinRuntimeLock,
+} from './activityRuntime';
 import { canonicalJson } from './behaviorRevisions';
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
 import { personaDeletionTombstoneId } from './ids';
 import { deletePersonaHome, inspectPersonaHome } from './namespaces';
+import { listPersonaFlowDispatches } from './personaDispatcher';
 import { withPersonaRuntimeLock } from './runtimeLock';
+import { deletePersonaRuntimeEvents } from './runtimeEvents';
 import {
   getPersona,
   getPersonaDeletionTombstone,
@@ -81,6 +87,8 @@ async function buildPreview(personaId: string): Promise<PersonaDeletionPreview> 
     workItems,
     activities,
     mailboxItems,
+    flowDispatches,
+    runtimeRecoveryReceipts,
     lease,
     leaseRecords,
     home,
@@ -91,6 +99,8 @@ async function buildPreview(personaId: string): Promise<PersonaDeletionPreview> 
     listPersonaWorkItems(personaId),
     listPersonaActivities(personaId),
     listPersonaMailboxItems(personaId),
+    listPersonaFlowDispatches(personaId),
+    listPersonaRuntimeRecoveryReceipts(personaId),
     getPersonaLease(personaId),
     listPersonaLeaseRecords(personaId),
     inspectPersonaHome(personaId),
@@ -128,6 +138,12 @@ async function buildPreview(personaId: string): Promise<PersonaDeletionPreview> 
     workItems: workItems.map((item) => [item.id, item.updatedAt, item.status]),
     activities: activities.map((item) => [item.id, item.updatedAt, item.status]),
     mailboxItems: mailboxItems.map((item) => [item.id, item.updatedAt, item.status]),
+    flowDispatches: flowDispatches.map((item) => [item.id, item.updatedAt, item.state]),
+    runtimeRecoveryReceipts: runtimeRecoveryReceipts.map((item) => [
+      item.id,
+      item.updatedAt,
+      item.result.lifecycleState,
+    ]),
     lease: lease ? [lease.id, lease.fencingToken, lease.renewedAt, lease.status] : null,
     leaseRecords: leaseRecords.map((item) => [item.id, item.fencingToken, item.status]),
     home,
@@ -170,6 +186,8 @@ async function erasePersonaOwnedState(personaId: string): Promise<void> {
     workItems,
     activities,
     mailboxItems,
+    flowDispatches,
+    runtimeRecoveryReceipts,
     leaseRecords,
   ] = await Promise.all([
     listBehaviorBindings(personaId),
@@ -178,6 +196,8 @@ async function erasePersonaOwnedState(personaId: string): Promise<void> {
     listPersonaWorkItems(personaId),
     listPersonaActivities(personaId),
     listPersonaMailboxItems(personaId),
+    listPersonaFlowDispatches(personaId),
+    listPersonaRuntimeRecoveryReceipts(personaId),
     listPersonaLeaseRecords(personaId),
   ]);
 
@@ -209,11 +229,17 @@ async function erasePersonaOwnedState(personaId: string): Promise<void> {
       ENDURING_AGENT_COLLECTIONS.mailboxItems,
       item.id,
     )),
+    ...flowDispatches.map((item) => deleteCollectionItem(
+      ENDURING_AGENT_COLLECTIONS.flowDispatches,
+      item.id,
+    )),
+    ...runtimeRecoveryReceipts.map((item) => deletePersonaRuntimeRecoveryReceipt(item.id)),
     ...leaseRecords.map((item) => deleteCollectionItem(
       ENDURING_AGENT_COLLECTIONS.leaseHistory,
       item.id,
     )),
     deleteCollectionItem(ENDURING_AGENT_COLLECTIONS.leases, personaId),
+    deletePersonaRuntimeEvents(personaId),
     deletePersonaHome(personaId),
   ]);
 }

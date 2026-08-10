@@ -817,6 +817,16 @@ export async function resolvePackageSelection(selection: PackageSelection): Prom
   entities: PackageEntities;
 }> {
   const entities = await loadPackageableEntities();
+  const requestedExecutionIds = new Set(selection.plannedExecutionIds ?? []);
+  if (entities.plannedExecutions.some((execution) => (
+    requestedExecutionIds.has(execution.id) && Boolean(execution.personaId)
+  ))) {
+    // Package workflows are portable legacy-Flow workflows. Refuse at the
+    // shared selection choke point so resolve, secret scanning/model passes,
+    // manifest building and publishing helpers cannot inspect or serialize a
+    // workspace-local Persona target.
+    throw new Error('Persona-targeted planned executions cannot be packaged.');
+  }
   const resolved = resolveDependencies(selection, entities);
   return { resolved, entities };
 }

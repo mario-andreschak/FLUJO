@@ -225,6 +225,37 @@ describe('armFlowEvent', () => {
     }
   });
 
+  it('does not consume cooldown when durable downstream admission rejects', async () => {
+    const deps = makeDeps();
+    deps.onFire
+      .mockRejectedValueOnce(new Error('downstream mailbox unavailable'))
+      .mockResolvedValueOnce(undefined);
+    const trigger = armFlowEvent({
+      type: 'flow-event',
+      source: { flowId: 'flow-A' },
+      on: ['completed'],
+      minIntervalMs: 60_000,
+    }, deps);
+    const event: FlowRunEvent = {
+      flowId: 'flow-A',
+      flowName: 'Flow A',
+      executionId: 'exec-A',
+      runId: 'run-durable-replay',
+      conversationId: 'conv-durable-replay',
+      status: 'completed',
+      firedBy: 'schedule',
+      chainDepth: 0,
+      timestamp: new Date().toISOString(),
+      deliveryId: 'terminal-durable-replay',
+    };
+
+    await expect(getFlowRunEventBus().publishDurably(event))
+      .rejects.toThrow('downstream mailbox unavailable');
+    await expect(getFlowRunEventBus().publishDurably(event)).resolves.toBeUndefined();
+    expect(deps.onFire).toHaveBeenCalledTimes(2);
+    trigger.dispose();
+  });
+
   it('stops firing after dispose', () => {
     const deps = makeDeps();
     const trigger = armFlowEvent(

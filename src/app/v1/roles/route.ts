@@ -14,7 +14,7 @@ const log = createLogger('app/v1/roles/route');
 export const dynamic = 'force-dynamic';
 
 async function GET_handler(request: NextRequest) {
-  const notLocal = assertLocalRequest(request); if (notLocal) return notLocal;
+  const notLocal = assertLocalRequest(request, { strictLoopback: true }); if (notLocal) return notLocal;
   const locked = await assertUnlocked({ openai: true }); if (locked) return locked;
   try {
     await ensureBuiltInDeveloperRole();
@@ -30,4 +30,3 @@ async function GET_handler(request: NextRequest) {
 }
 
 export const GET = withWorkspaceRoute(GET_handler);
-

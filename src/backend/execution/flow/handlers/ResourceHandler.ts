@@ -1,6 +1,12 @@
 import { createLogger } from '@/utils/logger';
 import { mcpService } from '@/backend/services/mcp';
 import { findRunResourceByName, readRunResource } from '@/backend/services/runResources';
+import {
+  assertFlowExecutionCurrent,
+  commitFlowDurableMutation,
+  rethrowFlowExecutionAuthorityError,
+  type FlowDurableMutationContext,
+} from '@/backend/execution/flow/executionAuthority';
 import { ResourceNodeReference } from '../types';
 import { EmitFn } from '@/shared/types/execution/events';
 
@@ -70,7 +76,7 @@ export class ResourceHandler {
      *  Absent (ephemeral/legacy) ⇒ run artifacts render a note. */
     conversationId?: string;
     emit?: EmitFn;
-  }): Promise<string> {
+  } & FlowDurableMutationContext): Promise<string> {
     const consumed = (input.resourceNodes ?? []).filter((r) => r.role === 'consume');
     if (consumed.length === 0) return '';
 
@@ -95,22 +101,27 @@ export class ResourceHandler {
             sections.push(`### ${label}\n(run artifact "${runName}" has not been produced yet)\n`);
             continue;
           }
-          const read = await readRunResource(entry.uri, { at: Date.now(), source: 'node', nodeId: ref.id });
+          const read = await commitFlowDurableMutation(input, async () => {
+            const result = await readRunResource(entry.uri, { at: Date.now(), source: 'node', nodeId: ref.id });
+            if (result) {
+              input.emit?.({
+                type: 'resource:read',
+                node: { nodeId: ref.id, nodeName: props.name, nodeType: 'resource' },
+                server: 'flujo',
+                uri: entry.uri,
+                name: runName,
+                mimeType: entry.mimeType,
+                size: entry.size,
+                source: 'node',
+              });
+            }
+            return result;
+          });
           if (!read) {
             sections.push(`### ${label}\n(run artifact "${runName}" could not be read)\n`);
             continue;
           }
           sections.push(renderContents(label, entry.uri, read.contents as ResourceContentsLike));
-          input.emit?.({
-            type: 'resource:read',
-            node: { nodeId: ref.id, nodeName: props.name, nodeType: 'resource' },
-            server: 'flujo',
-            uri: entry.uri,
-            name: runName,
-            mimeType: entry.mimeType,
-            size: entry.size,
-            source: 'node',
-          });
         } else {
           const server = props.boundServer;
           const uri = props.uri;
@@ -119,6 +130,7 @@ export class ResourceHandler {
             continue;
           }
           const result = await mcpService.readResource(server, uri);
+          await assertFlowExecutionCurrent(input);
           if (!result.success || !result.data) {
             sections.push(`### ${label}\n(resource ${uri} on ${server} could not be read: ${result.error ?? 'unknown error'})\n`);
             continue;
@@ -132,20 +144,23 @@ export class ResourceHandler {
           subscribeBestEffort(server, uri);
           sections.push(renderContents(label, `${uri} from ${server}`, result.data as ResourceContentsLike));
           const first = (result.data as ResourceContentsLike).contents?.[0];
-          input.emit?.({
-            type: 'resource:read',
-            node: { nodeId: ref.id, nodeName: props.name, nodeType: 'resource' },
-            server,
-            uri,
-            name: props.name,
-            mimeType: first?.mimeType ?? props.mimeType,
-            size: typeof first?.text === 'string' ? first.text.length
-              : typeof first?.blob === 'string' ? Math.floor(first.blob.length * 3 / 4)
-              : undefined,
-            source: 'node',
+          await commitFlowDurableMutation(input, async () => {
+            input.emit?.({
+              type: 'resource:read',
+              node: { nodeId: ref.id, nodeName: props.name, nodeType: 'resource' },
+              server,
+              uri,
+              name: props.name,
+              mimeType: first?.mimeType ?? props.mimeType,
+              size: typeof first?.text === 'string' ? first.text.length
+                : typeof first?.blob === 'string' ? Math.floor(first.blob.length * 3 / 4)
+                : undefined,
+              source: 'node',
+            });
           });
         }
       } catch (error) {
+        rethrowFlowExecutionAuthorityError(error);
         log.error(`Failed to read resource node ${ref.id}; injecting a note`, error);
         sections.push(`### ${label}\n(resource is currently unavailable)\n`);
       }

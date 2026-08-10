@@ -48,6 +48,14 @@ async function PUT_handler(
     if (!sharedState) {
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }
+    if (sharedState.personaAttribution) {
+      const personaNotLocal = assertLocalRequest(request, { strictLoopback: true });
+      if (personaNotLocal) return personaNotLocal;
+      return NextResponse.json(
+        { error: 'Persona-owned conversation controls require the Persona dispatcher.' },
+        { status: 409 },
+      );
+    }
 
     sharedState.breakpoints = breakpoints;
     FlowExecutor.conversationStates.set(conversationId, sharedState);

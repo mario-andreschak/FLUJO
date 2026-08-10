@@ -5,6 +5,7 @@ import { createLogger } from '@/utils/logger';
 import { getSchedulerService } from '@/backend/services/scheduler';
 import { ensureBackendInitialized } from '@/backend/init';
 import { json } from './_helpers';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 
 const log = createLogger('app/api/planned-executions/route');
 
@@ -13,15 +14,31 @@ const log = createLogger('app/api/planned-executions/route');
  * List all planned executions with live trigger status and last run.
  * Response: { paused, executions: [{ execution, status, lastRun }] }
  */
-async function GET_handler(_request: Request) {
+async function GET_handler(request: Request) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
   try {
+    const scheduler = getSchedulerService();
+    // Inspect persisted targets before backend initialization: initialization
+    // may reconcile and arm triggers, which is itself a Persona control-plane
+    // action. Public callers retain the legacy list but never see or arm
+    // Persona-targeted work through this route.
+    const preflight = await scheduler.list();
+    const hasPersonaTargets = preflight.some(entry => Boolean(entry.execution.personaId));
+    if (hasPersonaTargets) {
+      const notLocal = assertLocalRequest(request, { strictLoopback: true });
+      if (notLocal) {
+        const paused = await scheduler.isPaused();
+        return json({
+          paused,
+          executions: preflight.filter(entry => !entry.execution.personaId),
+        }, 200);
+      }
+    }
     // Make sure the scheduler singleton is booted (idempotent) so the status
     // fields reflect reality even if this route is hit right after startup.
     await ensureBackendInitialized().catch(() => { /* surfaced at startup */ });
-    const scheduler = getSchedulerService();
     const [paused, executions] = await Promise.all([
       scheduler.isPaused(),
       scheduler.list(),
@@ -44,6 +61,10 @@ async function POST_handler(request: NextRequest) {
 
   try {
     const body = await request.json();
+    if (body && typeof body === 'object' && 'personaId' in body) {
+      const notLocal = assertLocalRequest(request, { strictLoopback: true });
+      if (notLocal) return notLocal;
+    }
     const result = await getSchedulerService().create(body);
     if (result.error || !result.execution) {
       // A client-supplied id that collides with an existing execution is a
@@ -73,7 +94,13 @@ async function PATCH_handler(request: NextRequest) {
     if (typeof body?.paused !== 'boolean') {
       return json({ error: '"paused" (boolean) is required' }, 400);
     }
-    await getSchedulerService().setPaused(body.paused);
+    const scheduler = getSchedulerService();
+    const entries = await scheduler.list();
+    if (entries.some(entry => Boolean(entry.execution.personaId))) {
+      const notLocal = assertLocalRequest(request, { strictLoopback: true });
+      if (notLocal) return notLocal;
+    }
+    await scheduler.setPaused(body.paused);
     return json({ paused: body.paused }, 200);
   } catch (error) {
     log.error('Error handling PATCH request', error);

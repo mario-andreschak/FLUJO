@@ -16,7 +16,7 @@ const log = createLogger('app/v1/personas/route');
 export const dynamic = 'force-dynamic';
 
 async function GET_handler(request: NextRequest) {
-  const notLocal = assertLocalRequest(request); if (notLocal) return notLocal;
+  const notLocal = assertLocalRequest(request, { strictLoopback: true }); if (notLocal) return notLocal;
   const locked = await assertUnlocked({ openai: true }); if (locked) return locked;
   try {
     return NextResponse.json(await listPersonas());
@@ -27,7 +27,7 @@ async function GET_handler(request: NextRequest) {
 }
 
 async function POST_handler(request: NextRequest) {
-  const notLocal = assertLocalRequest(request); if (notLocal) return notLocal;
+  const notLocal = assertLocalRequest(request, { strictLoopback: true }); if (notLocal) return notLocal;
   const locked = await assertUnlocked({ openai: true }); if (locked) return locked;
   const body = await request.json().catch(() => null);
   try {

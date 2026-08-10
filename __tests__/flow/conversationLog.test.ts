@@ -162,6 +162,46 @@ describe('conversation log store', () => {
     expect(await hasConversationLog('conv-store-raw-eph')).toBe(false);
   });
 
+  it('does not append authoritative transcript events after a Persona commit fence is lost', async () => {
+    const convId = 'conv-store-stale-persona';
+    const state = makeState(convId);
+    state.personaAttribution = {
+      personaId: 'persona-1',
+      activityId: 'activity-1',
+      behaviorRevisionId: 'behavior-revision-1',
+    };
+    const leaseLost = new Error('Persona lease is no longer current');
+    const commitWhileCurrent = jest.fn(async () => {
+      throw leaseLost;
+    });
+    state.executionAuthority = {
+      assertCurrent: jest.fn(async () => undefined),
+      signal: new AbortController().signal,
+      commitWhileCurrent,
+    };
+
+    await expect(appendRawForState(state, [
+      { type: 'message', message: msg('late-model-response', 'assistant') },
+    ])).rejects.toBe(leaseLost);
+    expect(commitWhileCurrent).toHaveBeenCalledTimes(1);
+    expect(await readConversationLog(convId)).toBeUndefined();
+  });
+
+  it('fails closed when Persona attribution is loaded without its runtime capability', async () => {
+    const convId = 'conv-store-unfenced-persona';
+    const state = makeState(convId);
+    state.personaAttribution = {
+      personaId: 'persona-1',
+      activityId: 'activity-1',
+      behaviorRevisionId: 'behavior-revision-1',
+    };
+
+    await expect(appendRawForState(state, [
+      { type: 'message', message: msg('unfenced-response', 'assistant') },
+    ])).rejects.toThrow('requires current execution authority');
+    expect(await readConversationLog(convId)).toBeUndefined();
+  });
+
   it('tolerates a truncated tail line (crash mid-append)', async () => {
     const convId = 'conv-store-truncated';
     const state = makeState(convId);

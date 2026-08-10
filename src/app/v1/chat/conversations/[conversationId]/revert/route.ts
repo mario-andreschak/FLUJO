@@ -77,8 +77,13 @@ async function GET_handler(
   const { conversationId } = await params;
   const messageId = request.nextUrl.searchParams.get('messageId');
   if (!messageId) return NextResponse.json({ error: 'messageId is required' }, { status: 400 });
-  if (!(await loadConversationState(conversationId))) {
+  const state = await loadConversationState(conversationId);
+  if (!state) {
     return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+  }
+  if (state.personaAttribution) {
+    const notLocal = assertLocalRequest(request, { strictLoopback: true });
+    if (notLocal) return notLocal;
   }
   const target = await resolveTarget(conversationId, messageId);
   if (!target) return NextResponse.json({ error: 'No revertable changes for this message' }, { status: 404 });
@@ -98,6 +103,14 @@ async function POST_handler(
   const { conversationId } = await params;
   const state = await loadConversationState(conversationId);
   if (!state) return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+  if (state.personaAttribution) {
+    const personaNotLocal = assertLocalRequest(request, { strictLoopback: true });
+    if (personaNotLocal) return personaNotLocal;
+    return NextResponse.json(
+      { error: 'Persona-owned conversation controls require the Persona dispatcher.' },
+      { status: 409 },
+    );
+  }
   const body = await request.json().catch(() => ({})) as {
     messageId?: string;
     previewId?: string;

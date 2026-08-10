@@ -93,7 +93,8 @@ export class StaticNode extends BaseNode {
           resolveRunVars(value ?? '', sharedState.variables),
           sharedState.ephemeral ? undefined : sharedState.conversationId,
           sharedState.emit,
-          { nodeId }
+          { nodeId },
+          sharedState,
         );
 
       const messages: FlujoChatMessage[] = [];

@@ -8,6 +8,26 @@ import { withWorkspaceRoute } from '@/app/api/_workspace';
 
 const log = createLogger('app/api/storage/route');
 
+// These files are authoritative state machines, not generic preferences. Raw
+// replacement would bypass scheduler target validation, Persona admission,
+// run-history invariants, approval lifecycle checks, and Persona conversation
+// ownership. They are accessible only through their dedicated typed
+// services/routes (or the preflighted backup/restore workflow).
+const RESERVED_INTERNAL_KEYS = new Set<StorageKey>([
+  StorageKey.PLANNED_EXECUTIONS,
+  StorageKey.PENDING_APPROVALS,
+  StorageKey.PACKAGE_INSTALLS,
+  StorageKey.CHAT_HISTORY,
+]);
+
+function isGenericStorageKey(key: string | null | undefined): key is StorageKey {
+  return Boolean(
+    key
+    && Object.values(StorageKey).includes(key as StorageKey)
+    && !RESERVED_INTERNAL_KEYS.has(key as StorageKey),
+  );
+}
+
 async function GET_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
@@ -21,7 +41,7 @@ async function GET_handler(request: NextRequest) {
   
   log.debug(`Request parameters [${requestId}]`, { key, defaultValue });
 
-  if (!key || !Object.values(StorageKey).includes(key as StorageKey)) {
+  if (!isGenericStorageKey(key)) {
     log.error(`Invalid storage key: ${key} [${requestId}]`);
     return NextResponse.json({ error: 'Invalid storage key' }, { status: 400 });
   }
@@ -48,7 +68,7 @@ async function POST_handler(request: NextRequest) {
     const { key, value } = await request.json();
     log.debug(`Request body [${requestId}]`, { key });
 
-    if (!key || !Object.values(StorageKey).includes(key as StorageKey)) {
+    if (!isGenericStorageKey(key)) {
       log.error(`Invalid storage key: ${key} [${requestId}]`);
       return NextResponse.json({ error: 'Invalid storage key' }, { status: 400 });
     }
@@ -75,7 +95,7 @@ async function DELETE_handler(request: NextRequest) {
   
   log.debug(`Request parameters [${requestId}]`, { key });
 
-  if (!key || !Object.values(StorageKey).includes(key as StorageKey)) {
+  if (!isGenericStorageKey(key)) {
     log.error(`Invalid storage key: ${key} [${requestId}]`);
     return NextResponse.json({ error: 'Invalid storage key' }, { status: 400 });
   }

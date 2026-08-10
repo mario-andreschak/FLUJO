@@ -10,6 +10,8 @@ const log = createLogger('backend/services/scheduler/triggers/fileWatch');
 /** A burst of file events batched into one fire. */
 export interface FileWatchFire {
   events: Array<{ event: FileWatchEvent; path: string }>;
+  /** First observation time for this debounced batch. */
+  observedAt: string;
 }
 
 const DEFAULT_DEBOUNCE_MS = 2000;
@@ -55,7 +57,7 @@ export function globToRegExp(glob: string): RegExp {
  */
 export function armFileWatch(
   config: FileWatchTriggerConfig,
-  onFire: (payload: FileWatchFire) => void,
+  onFire: (payload: FileWatchFire) => void | Promise<void>,
   onError: (message: string) => void
 ): ArmedTrigger {
   const debounceMs = config.debounceMs ?? DEFAULT_DEBOUNCE_MS;
@@ -77,22 +79,50 @@ export function armFileWatch(
   }
 
   let pending: Array<{ event: FileWatchEvent; path: string }> = [];
+  let observedAt: string | null = null;
   let overflowed = false;
+  let nextPending: Array<{ event: FileWatchEvent; path: string }> = [];
+  let nextObservedAt: string | null = null;
+  let nextOverflowed = false;
+  let flushing = false;
   let timer: NodeJS.Timeout | null = null;
   let disposed = false;
 
-  const flush = () => {
+  const scheduleFlush = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => { void flush(); }, debounceMs);
+    timer.unref?.();
+  };
+
+  const flush = async () => {
     timer = null;
-    if (disposed || pending.length === 0) {
+    if (disposed || flushing || pending.length === 0) {
       return;
     }
-    const events = pending;
+    flushing = true;
+    const events = [...pending];
+    const batchObservedAt = observedAt ?? new Date().toISOString();
     if (overflowed) {
       log.info(`File-watch batch overflowed; reporting first ${MAX_BATCHED_EVENTS} events`);
     }
-    pending = [];
-    overflowed = false;
-    onFire({ events });
+    try {
+      // Persona callers persist a durable batch intent here. Do not release the
+      // process-local batch until that write has completed successfully.
+      await onFire({ events, observedAt: batchObservedAt });
+      pending = nextPending;
+      observedAt = nextObservedAt;
+      overflowed = nextOverflowed;
+      nextPending = [];
+      nextObservedAt = null;
+      nextOverflowed = false;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log.warn(`Failed to persist file-watch batch for ${root}: ${message}`);
+      onError(message);
+    } finally {
+      flushing = false;
+      if (!disposed && pending.length > 0) scheduleFlush();
+    }
   };
 
   const watcher = watch(root, {
@@ -119,16 +149,17 @@ export function armFileWatch(
         return;
       }
     }
-    if (pending.length >= MAX_BATCHED_EVENTS) {
-      overflowed = true;
+    const target = flushing ? nextPending : pending;
+    if (target.length >= MAX_BATCHED_EVENTS) {
+      if (flushing) nextOverflowed = true;
+      else overflowed = true;
     } else {
-      pending.push({ event, path: filePath });
+      const now = new Date().toISOString();
+      if (flushing) nextObservedAt ??= now;
+      else observedAt ??= now;
+      target.push({ event, path: filePath });
     }
-    if (timer) {
-      clearTimeout(timer);
-    }
-    timer = setTimeout(flush, debounceMs);
-    timer.unref?.();
+    scheduleFlush();
   });
 
   watcher.on('error', (error) => {
@@ -145,6 +176,9 @@ export function armFileWatch(
         timer = null;
       }
       pending = [];
+      observedAt = null;
+      nextPending = [];
+      nextObservedAt = null;
       void watcher.close().catch(error =>
         log.warn(`Failed to close watcher for ${root}:`, error)
       );

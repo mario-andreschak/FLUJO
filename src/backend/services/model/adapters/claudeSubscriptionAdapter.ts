@@ -291,6 +291,9 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     consumeSteeringMessages,
     onModelDelta,
     signal,
+    beforeToolDispatch,
+    afterToolDispatch,
+    commitDurableMutation,
     conversationId,
     runId,
     nodeId,
@@ -500,6 +503,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           );
           // Keep the exact name so FLUJO's `handoff_to_<nodeId>` routing matches.
           return tool(fnName, description, schemaShape, async (args: Record<string, unknown>): Promise<CallToolResult> => {
+            await beforeToolDispatch?.();
             // Spawn-with-brief (issue #156): EVERY handoff call counts — a model
             // splitting work calls the same spawn tool once per brief, and
             // dropping the extras silently discarded its work.
@@ -547,9 +551,13 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             const toolStartedAt = Date.now();
             let resultContent: string;
             let isError = false;
+            // A lost Persona fence is a run-level cancellation, not a local
+            // tool error that can be fed back to the model and reasoned past.
+            await beforeToolDispatch?.();
             try {
               resultContent = JSON.stringify(await localExec(args ?? {}));
             } catch (err) {
+              if ((err as { code?: unknown })?.code === 'flow_execution_authority_lost') throw err;
               resultContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
               isError = true;
             }
@@ -593,6 +601,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           const toolStartedAt = Date.now();
           // Same timeout policy as the OpenAI-path tool loop: the MCP node's
           // toolTimeout (seconds, -1 = none), defaulting to 5 minutes.
+          await beforeToolDispatch?.();
           const result = await mcpService.callTool(
             server,
             originalTool,
@@ -606,6 +615,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             // Codex paths, so run-owned Bash sessions are releasable here too.
             ownerScopeForRun({ runId, conversationId }),
           );
+          await afterToolDispatch?.();
           if (runId) {
             const cancelled = Boolean(abortController.signal.aborted || toolCancellationReason(result));
             recordStatisticsEvent(createStatisticsEvent({
@@ -642,31 +652,37 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             // silently not apply on Claude-subscription runs. Spill oversized
             // results to a run resource and show a head+tail preview instead.
             if (conversationId) {
-              try {
-                const settings = await getRunResourceSettings();
-                const bounded = await boundToolResult({
-                  conversationId,
-                  toolCallId: callId,
-                  server,
-                  toolName: originalTool,
-                  nodeId: callerNodeId,
-                  content: resultContent,
-                  settings,
-                });
-                if (bounded.spilled) {
-                  resultContent = bounded.content;
-                  // callResult is what the SDK feeds the MODEL, so it must be
-                  // bounded too (not just the recorded transcript) or the model
-                  // still sees the full result on this path. Media blocks are
-                  // re-attached verbatim: the text was too big, the picture was
-                  // never the problem.
-                  callResult = {
-                    ...callResult,
-                    content: [...mediaItems, { type: 'text', text: bounded.content }],
-                  };
+              const bound = async () => {
+                try {
+                  const settings = await getRunResourceSettings();
+                  return await boundToolResult({
+                    conversationId,
+                    toolCallId: callId,
+                    server,
+                    toolName: originalTool,
+                    nodeId: callerNodeId,
+                    content: resultContent,
+                    settings,
+                  });
+                } catch (err) {
+                  log.warn('boundToolResult failed on subscription path; keeping full result', err);
+                  return null;
                 }
-              } catch (err) {
-                log.warn('boundToolResult failed on subscription path; keeping full result', err);
+              };
+              const bounded = commitDurableMutation
+                ? await commitDurableMutation(bound)
+                : await bound();
+              if (bounded?.spilled) {
+                resultContent = bounded.content;
+                // callResult is what the SDK feeds the MODEL, so it must be
+                // bounded too (not just the recorded transcript) or the model
+                // still sees the full result on this path. Media blocks are
+                // re-attached verbatim: the text was too big, the picture was
+                // never the problem.
+                callResult = {
+                  ...callResult,
+                  content: [...mediaItems, { type: 'text', text: bounded.content }],
+                };
               }
             }
           } else {

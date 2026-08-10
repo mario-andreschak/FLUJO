@@ -198,6 +198,38 @@ describe('pre-Persona persistence compatibility', () => {
     expectPersonaLess(reloaded);
   });
 
+  it('loads a Persona projection without running unfenced replay or recovery', async () => {
+    const conversationLog = jest.requireMock('@/backend/execution/flow/conversationLog') as {
+      recoverMessagesFromLog: jest.Mock;
+      repairDanglingToolCalls: jest.Mock;
+    };
+    const recoveryCheckpoint = jest.requireMock('@/backend/execution/flow/recoveryCheckpoint') as {
+      reconcileInterruptedRecovery: jest.Mock;
+    };
+    conversationLog.recoverMessagesFromLog.mockClear();
+    conversationLog.repairDanglingToolCalls.mockClear();
+    recoveryCheckpoint.reconcileInterruptedRecovery.mockClear();
+
+    const state = {
+      ...jsonRoundTrip(legacySharedStateFixture),
+      conversationId: 'persona-conversation',
+      status: 'running',
+      personaAttribution: {
+        personaId: 'persona-1',
+        activityId: 'activity-1',
+        behaviorRevisionId: 'revision-1',
+      },
+    } as unknown as SharedState;
+    mockPersistenceStore.set('conversations/persona-conversation', jsonRoundTrip(state));
+
+    const loaded = await loadConversationState('persona-conversation');
+
+    expect(loaded).toEqual(state);
+    expect(conversationLog.recoverMessagesFromLog).not.toHaveBeenCalled();
+    expect(conversationLog.repairDanglingToolCalls).not.toHaveBeenCalled();
+    expect(recoveryCheckpoint.reconcileInterruptedRecovery).not.toHaveBeenCalled();
+  });
+
   it('validates and round-trips a legacy MeetingRecord through the meeting store', async () => {
     const fixture = jsonRoundTrip(legacyMeetingFixture) as unknown as MeetingRecord;
     const key = collectionKey('meetings', fixture.id);

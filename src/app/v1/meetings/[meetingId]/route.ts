@@ -3,21 +3,28 @@ import { NextResponse } from 'next/server';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { meetingEngine } from '@/backend/execution/meeting';
 import { readMeetingEvents } from '@/backend/services/meetings/eventLog';
-import { saveMeeting } from '@/backend/services/meetings/store';
+import { getMeeting, sanitizeMeetingForApi, saveMeeting } from '@/backend/services/meetings/store';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('app/v1/meetings/[meetingId]/route');
 export const dynamic = 'force-dynamic';
 
 async function GET_handler(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ meetingId: string }> },
 ) {
   const locked = await assertUnlocked({ openai: true });
   if (locked) return locked;
   const { meetingId } = await params;
   try {
+    const stored = await getMeeting(meetingId);
+    if (!stored) return NextResponse.json({ error: 'Meeting not found.' }, { status: 404 });
+    if (stored.participants.some((participant) => participant.personaId)) {
+      const notLocal = assertLocalRequest(request, { strictLoopback: true });
+      if (notLocal) return notLocal;
+    }
     let meeting = await meetingEngine.reconcileInterrupted(meetingId);
     if (!meeting) return NextResponse.json({ error: 'Meeting not found.' }, { status: 404 });
     const events = await readMeetingEvents(meetingId);
@@ -50,7 +57,7 @@ async function GET_handler(
       }
       meeting = await saveMeeting(meeting);
     }
-    return NextResponse.json({ meeting, events });
+    return NextResponse.json({ meeting: sanitizeMeetingForApi(meeting), events });
   } catch (error) {
     log.error('Failed to load meeting', { meetingId, error });
     const invalid = error instanceof Error && /unsafe|invalid/i.test(error.message);

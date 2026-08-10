@@ -263,6 +263,9 @@ export interface PersonaActivity {
   resourceRefs?: string[];
   outcomeRef?: string;
   error?: string;
+  /** Durable cooperative-interruption request; the current holder yields explicitly. */
+  interruptionRequestedAt?: number;
+  interruptionRequestedByMailboxItemId?: string;
   createdAt: number;
   updatedAt: number;
   startedAt?: number;
@@ -412,6 +415,23 @@ export const PERSONA_MAILBOX_STATUSES = [
 ] as const;
 export type PersonaMailboxStatus = (typeof PERSONA_MAILBOX_STATUSES)[number];
 
+export const PERSONA_MAILBOX_RELATED_ACTIONS = ['steer', 'coalesce'] as const;
+export type PersonaMailboxRelatedAction =
+  (typeof PERSONA_MAILBOX_RELATED_ACTIONS)[number];
+
+export const PERSONA_MAILBOX_ROUTING_DECISIONS = [
+  'queue',
+  'steer',
+  'coalesce',
+  'interrupt',
+] as const;
+export type PersonaMailboxRoutingDecision =
+  (typeof PERSONA_MAILBOX_ROUTING_DECISIONS)[number];
+
+export const PERSONA_MAILBOX_DELIVERY_STATUSES = ['pending', 'delivered'] as const;
+export type PersonaMailboxDeliveryStatus =
+  (typeof PERSONA_MAILBOX_DELIVERY_STATUSES)[number];
+
 export interface PersonaMailboxItem {
   schemaVersion: typeof ENDURING_AGENT_SCHEMA_VERSION;
   id: string;
@@ -427,6 +447,17 @@ export interface PersonaMailboxItem {
   /** Trusted Role slot selected when the item is admitted to the mailbox. */
   behaviorSlotKey?: string;
   relationKey?: string;
+  /** Adapter-requested related-work behavior; persisted for idempotency comparison. */
+  relatedAction?: PersonaMailboxRelatedAction;
+  /** Trusted routing outcome selected atomically by the Persona runtime. */
+  routingDecision?: PersonaMailboxRoutingDecision;
+  /** Existing Activity which receives a steering/coalesced delivery. */
+  targetActivityId?: string;
+  /** Delivery acknowledgement for steering/coalesced inputs. */
+  deliveryStatus?: PersonaMailboxDeliveryStatus;
+  deliveredAt?: number;
+  /** Activity asked to yield before this queued urgent item may run. */
+  interruptedActivityId?: string;
   summary?: string;
   payloadRef?: string;
   notBefore?: number;
@@ -446,6 +477,7 @@ export interface CreatePersonaMailboxItemInput {
   source: PersonaActivitySource;
   behaviorSlotKey?: string;
   relationKey?: string;
+  relatedAction?: PersonaMailboxRelatedAction;
   summary?: string;
   payloadRef?: string;
   notBefore?: number;

@@ -127,7 +127,9 @@ async function GET_handler(
         sharedState = await loadItemBackend<SharedState>(storageKey, undefined as any);
         if (sharedState) {
           stateSource = 'storage';
-          await reconcileInterruptedRecovery(storageKey, sharedState);
+          if (!sharedState.personaAttribution) {
+            await reconcileInterruptedRecovery(storageKey, sharedState);
+          }
           log.debug(`Found conversation state in storage`, { requestId, conversationId });
           // Optional: Add to in-memory map if loaded from storage?
           // FlowExecutor.conversationStates.set(conversationId, sharedState);
@@ -142,6 +144,10 @@ async function GET_handler(
 
     // 3. Handle based on whether state was found
     if (sharedState) {
+      if (sharedState.personaAttribution) {
+        const notLoopback = assertLocalRequest(request, { strictLoopback: true });
+        if (notLoopback) return notLoopback;
+      }
       // --- Resolve the displayed messages ---
       // Preferred source: the append-only conversation log's projection
       // (execution-core v2 Phase 3) — it carries attribution/depth (nested
@@ -316,6 +322,14 @@ async function PATCH_handler(
       log.warn(`Conversation state not found for PATCH`, { requestId, conversationId });
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }
+    if (existingState.personaAttribution) {
+      const personaNotLocal = assertLocalRequest(request, { strictLoopback: true });
+      if (personaNotLocal) return personaNotLocal;
+      return NextResponse.json(
+        { error: 'Persona-owned conversation controls require the Persona dispatcher.' },
+        { status: 409 },
+      );
+    }
 
     // 2. Update the state. Settings-only changes (e.g. toggling requireApproval,
     // or renaming — issue #134) must NOT bump updatedAt — otherwise flipping a
@@ -400,6 +414,19 @@ async function DELETE_handler(
   }
 
   try {
+    const existingState = FlowExecutor.conversationStates.get(conversationId)
+      ?? await loadItemBackend<SharedState>(
+        `conversations/${conversationId}` as StorageKey,
+        undefined as any,
+      );
+    if (existingState?.personaAttribution) {
+      const personaNotLocal = assertLocalRequest(request, { strictLoopback: true });
+      if (personaNotLocal) return personaNotLocal;
+      return NextResponse.json(
+        { error: 'Persona-owned conversations must be deleted through the Persona lifecycle.' },
+        { status: 409 },
+      );
+    }
     // Tombstone FIRST: from here on, the persistence chokepoint and the
     // conversation-log tap refuse this id, so an in-flight run can no longer
     // re-write ("resurrect") the files we are about to remove. Rolled back in

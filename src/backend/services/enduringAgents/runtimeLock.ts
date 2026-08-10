@@ -884,3 +884,24 @@ export function withPersonaRuntimeLock<T>(
     }
   });
 }
+
+/**
+ * Filesystem-backed workspace coordinator for non-Persona state machines.
+ * The leading dot is intentionally outside the safe Persona-id grammar, so a
+ * user-created Persona can never alias one of these physical lock files.
+ */
+export function withWorkspaceRuntimeLock<T>(
+  lockName: string,
+  task: (lock: PersonaRuntimeLock) => Promise<T>,
+): Promise<T> {
+  assertSafeCollectionId(lockName);
+  const physicalLockId = `.${lockName}`;
+  return runInWriteChain(`workspace-runtime/${lockName}`, async () => {
+    const acquired = await acquireFilesystemLock(physicalLockId);
+    try {
+      return await task(acquired.lock);
+    } finally {
+      await acquired.release();
+    }
+  });
+}
