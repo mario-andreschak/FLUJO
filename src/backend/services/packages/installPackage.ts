@@ -61,6 +61,7 @@ import { getSchedulerService } from '@/backend/services/scheduler';
 import type { Model } from '@/shared/types/model';
 import type { ModelAdapter, ModelProvider } from '@/shared/types/model/provider';
 import type { Flow } from '@/shared/types/flow';
+import { isPersonaControlledPlannedExecution } from '@/shared/types/plannedExecution';
 import type { MCPServerConfig, EnvVarValue, MCPHeaderValue } from '@/shared/types/mcp';
 import { remapFlowModelBindings } from '@/utils/shared/flowModelReplacement';
 
@@ -439,10 +440,7 @@ function manifestContainsPersonaTarget(value: unknown): boolean {
     Boolean(execution)
     && typeof execution === 'object'
     && !Array.isArray(execution)
-    && (
-      Object.prototype.hasOwnProperty.call(execution, 'personaId')
-      || Object.prototype.hasOwnProperty.call(execution, 'behaviorSlotKey')
-    )
+    && isPersonaControlledPlannedExecution(execution)
   ));
 }
 
@@ -452,7 +450,7 @@ async function hasProtectedExecutionCollision(
   const scheduler = getSchedulerService();
   for (const execution of manifest.plannedExecutions ?? []) {
     const existing = await scheduler.get(deterministicExecutionId(manifest.name, execution.name));
-    if (existing?.personaId) return true;
+    if (isPersonaControlledPlannedExecution(existing)) return true;
   }
   return false;
 }
@@ -1003,7 +1001,7 @@ async function protectedPlannedExecutionsForUninstall(
   const scheduler = getSchedulerService();
   const protectedIds: string[] = [];
   for (const id of plannedExecutionIdsRemovedByUninstall(record)) {
-    if ((await scheduler.get(id))?.personaId) protectedIds.push(id);
+    if (isPersonaControlledPlannedExecution(await scheduler.get(id))) protectedIds.push(id);
   }
   return protectedIds;
 }
@@ -2159,7 +2157,7 @@ async function installPlannedExecution(
 
   // Re-check at the mutation boundary to close a concurrent retarget between
   // the all-or-none orchestrator preflight and this create/update.
-  if ((await scheduler.get(id))?.personaId) {
+  if (isPersonaControlledPlannedExecution(await scheduler.get(id))) {
     const error = 'Package install conflicts with a protected workspace execution.';
     summary.ok = false;
     summary.errors.push(error);

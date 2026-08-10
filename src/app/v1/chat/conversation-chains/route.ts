@@ -27,6 +27,7 @@ import path from 'path';
 import { createLogger } from '@/utils/logger';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { listConversationSummaries } from '@/backend/execution/flow/conversationSummaryStore';
 import type { ConversationSummary } from '@/backend/execution/flow/conversationSummaryStore';
@@ -193,7 +194,7 @@ async function GET_handler(request: NextRequest) {
       personaControlAllowed
       || (
         !summary.personaOwned
-        && !FlowExecutor.conversationStates.get(summary.id)?.personaAttribution
+        && !isPersonaOwnedConversationState(FlowExecutor.conversationStates.get(summary.id))
       )
     ));
     const resolved = summaries.map(resolveConversation);

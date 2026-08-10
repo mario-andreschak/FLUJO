@@ -3,6 +3,7 @@ import type { ModelMediaPart } from './model/media';
 
 /** Persisted schema version for the first multi-agent meeting runtime. */
 export const MEETING_SCHEMA_VERSION = 1 as const;
+export const ARCHIVED_MEETING_PARTICIPANT_NAME = 'Archived participant' as const;
 
 export type MeetingStatus =
   | 'draft'
@@ -37,6 +38,14 @@ export interface MeetingParticipant {
   flowId?: string;
   /** Trusted Persona target. Absence means intentionally Persona-less. */
   personaId?: string;
+  /**
+   * Nonidentifying tombstone for a participant whose Persona attribution was
+   * erased. Archived participants are retained as meeting evidence but cannot
+   * be scheduled for another turn.
+  */
+  personaArchived?: true;
+  /** Permanent runtime fence when a deleted Persona id remains as evidence. */
+  personaRetired?: true;
   /** Optional Role Behavior slot used when reserving the Persona. */
   behaviorSlotKey?: string;
   /** Safe attribution for the currently owned meeting Activity lease. */

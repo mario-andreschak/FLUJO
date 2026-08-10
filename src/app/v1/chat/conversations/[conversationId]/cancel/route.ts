@@ -15,6 +15,7 @@ import { repairDanglingToolCalls, appendRawForState } from '@/backend/execution/
 import { clearSteeringInbox } from '@/backend/execution/flow/steeringInbox';
 import { commitRecoveryTransition } from '@/backend/execution/flow/recoveryCheckpoint';
 import { cancelPersonaFlowDispatch } from '@/backend/services/enduringAgents/personaDispatcher';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/cancel/route');
 
@@ -68,9 +69,23 @@ async function POST_handler(
       return NextResponse.json({ success: true, message: 'Conversation not found, assumed cancelled.' });
     }
 
-    if (sharedState.personaAttribution) {
+    if (isPersonaOwnedConversationState(sharedState)) {
       const notLoopback = assertLocalRequest(request, { strictLoopback: true });
       if (notLoopback) return notLoopback;
+    }
+    if (sharedState.personaArchived) {
+      return NextResponse.json(
+        { error: 'An anonymized Persona archive cannot be cancelled or resumed.' },
+        { status: 409 },
+      );
+    }
+    if (isPersonaOwnedConversationState(sharedState) && !sharedState.personaAttribution) {
+      return NextResponse.json({
+        error: 'Persona conversation attribution is incomplete; refusing an unfenced cancellation.',
+      }, { status: 409 });
+    }
+
+    if (sharedState.personaAttribution) {
       const { personaId, activityId, behaviorRevisionId } = sharedState.personaAttribution;
       if (!activityId || !behaviorRevisionId) {
         return NextResponse.json({

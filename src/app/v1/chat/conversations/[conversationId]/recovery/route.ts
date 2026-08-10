@@ -8,6 +8,7 @@ import {
   type SubflowRecoveryScope,
 } from '@/backend/execution/flow/subflowRecovery';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 
 const SCOPES = new Set<SubflowRecoveryScope>(['branch', 'siblings', 'deepest']);
 
@@ -26,7 +27,7 @@ async function GET_handler(
   const { conversationId } = await params;
   try {
     const state = await loadConversationState(conversationId);
-    if (state?.personaAttribution) {
+    if (isPersonaOwnedConversationState(state)) {
       const personaNotLocal = assertLocalRequest(request, { strictLoopback: true });
       if (personaNotLocal) return personaNotLocal;
       return NextResponse.json(
@@ -51,7 +52,7 @@ async function POST_handler(
   if (denied) return denied;
   const { conversationId } = await params;
   const state = await loadConversationState(conversationId);
-  if (state?.personaAttribution) {
+  if (isPersonaOwnedConversationState(state)) {
     const personaNotLocal = assertLocalRequest(request, { strictLoopback: true });
     if (personaNotLocal) return personaNotLocal;
     return NextResponse.json(

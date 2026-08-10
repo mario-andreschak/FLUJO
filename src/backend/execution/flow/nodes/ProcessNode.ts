@@ -61,6 +61,30 @@ import { v4 as uuidv4 } from 'uuid'; // Import uuid
 const log = createLogger('backend/flow/execution/nodes/ProcessNode');
 
 /**
+ * Layer the dispatcher-frozen identity prefix ahead of the authored prompt.
+ * The root-flow check is the non-inheritance boundary: structural children may
+ * retain safe causal attribution and the shared Activity fence, but they never
+ * receive the Persona identity/mission instructions.
+ */
+export function prependTrustedPersonaInstructionContext(
+  prompt: string,
+  sharedState: Pick<SharedState, 'flowId' | 'personaAttribution' | 'personaInstructionContext'>,
+): string {
+  const context = sharedState.personaInstructionContext;
+  if (!context || context.rootFlowId !== sharedState.flowId) return prompt;
+  const attribution = sharedState.personaAttribution;
+  if (
+    !attribution
+    || attribution.personaId !== context.personaId
+    || attribution.activityId !== context.activityId
+    || attribution.behaviorRevisionId !== context.behaviorRevisionId
+  ) {
+    throw new Error('Trusted Persona instruction context does not match runtime attribution.');
+  }
+  return prompt ? `${context.instruction}\n\n${prompt}` : context.instruction;
+}
+
+/**
  * Providers report unsupported tool use through several shapes: an OpenAI SDK
  * APIError, an OpenRouter in-band error object, or FLUJO's normalized model
  * error. Match only explicit tool-capability failures so authentication,
@@ -156,7 +180,8 @@ export class ProcessNode extends BaseNode {
     // Subflow target's `invocationMode` can be read while partitioning targets.
     let flowNodesById: Map<string, FlowNode> | null = null;
     try {
-      const flow = await flowService.getFlow(sharedState.flowId);
+      const flow = sharedState.flowSnapshot
+        ?? await flowService.getFlow(sharedState.flowId);
       if (flow) {
         flowNodesById = new Map(flow.nodes.map(n => [n.id, n]));
       }
@@ -396,6 +421,7 @@ export class ProcessNode extends BaseNode {
     const renderedPrompt = await promptRenderer.renderPrompt(flowId, nodeId, {
       renderMode: 'rendered',
       includeConversationHistory: false,
+      flowSnapshot: sharedState.flowSnapshot,
       excludeModelPrompt,
       excludeStartNodePrompt,
       excludeSystemPrompt,
@@ -435,7 +461,10 @@ export class ProcessNode extends BaseNode {
     const kvContext = async (): Promise<KvFlowContext> => {
       if (kvCtx) return kvCtx;
       let folder: string | undefined;
-      try { folder = (await flowService.getFlow(flowId))?.folder; } catch { /* best effort */ }
+      try {
+        const flow = sharedState.flowSnapshot ?? await flowService.getFlow(flowId);
+        folder = flow?.folder;
+      } catch { /* best effort */ }
       kvCtx = {
         flowId,
         folder,
@@ -462,6 +491,14 @@ export class ProcessNode extends BaseNode {
       });
       completePrompt += resourceBlock;
     }
+
+    // Persona identity/mission is a trusted, already-rendered prefix. Apply it
+    // after every authored pill/resource substitution so Persona text cannot
+    // trigger runtime interpolation, but PREPEND it so the existing authored
+    // `# YOUR OPERATIONAL INSTRUCTION` remains later and more specific. This
+    // only changes prompt text; tool definitions continue to come exclusively
+    // from the immutable Flow graph below.
+    completePrompt = prependTrustedPersonaInstructionContext(completePrompt, sharedState);
 
     // Meeting participants receive a fixed protocol before the prompt is frozen
     // below. Live roster/round data stays in user inbox messages, so this system
@@ -500,11 +537,19 @@ export class ProcessNode extends BaseNode {
     // since the rules are idempotent).
     {
       let flowLevelRules: PermissionRule[] = [];
-      try {
-        const flowForPermissions = await flowService.getFlow(flowId);
-        flowLevelRules = flowForPermissions?.permissionRules ?? [];
-      } catch (err) {
-        log.warn('Could not load flow for permission rules', { err });
+      if (sharedState.flowSnapshot) {
+        // Snapshot-backed runs (including Persona Behavior revisions) must use
+        // the exact policy captured with the graph. Their private flow id may
+        // not exist in the mutable Flow store, and a same-id saved Flow may
+        // have changed since this Activity was pinned.
+        flowLevelRules = sharedState.flowSnapshot.permissionRules ?? [];
+      } else {
+        try {
+          const flowForPermissions = await flowService.getFlow(flowId);
+          flowLevelRules = flowForPermissions?.permissionRules ?? [];
+        } catch (err) {
+          log.warn('Could not load flow for permission rules', { err });
+        }
       }
 
       // Desugar autoApprove from each bound MCP server's config:
@@ -777,7 +822,8 @@ export class ProcessNode extends BaseNode {
     let wireBase = prepResult.messages;
     if (!preserveFullHistoryForClaudeResume) {
       try {
-        const flow = await flowService.getFlow(flowId);
+        const flow = sharedState.flowSnapshot
+          ?? await flowService.getFlow(flowId);
         const collapsedNodeIds = new Set(
           (flow?.nodes ?? [])
             .filter((n) => n.type === 'process' && n.data?.properties?.outputMode === 'latest-message')
@@ -1593,7 +1639,11 @@ export class ProcessNode extends BaseNode {
     if (execResult.success && captureKv) {
       try {
         let folder: string | undefined;
-        try { folder = (await flowService.getFlow(sharedState.flowId))?.folder; } catch { /* best effort */ }
+        try {
+          const flow = sharedState.flowSnapshot
+            ?? await flowService.getFlow(sharedState.flowId);
+          folder = flow?.folder;
+        } catch { /* best effort */ }
         const res = await captureKvValue(captureKv, execResult.content ?? '', {
           flowId: sharedState.flowId,
           folder,

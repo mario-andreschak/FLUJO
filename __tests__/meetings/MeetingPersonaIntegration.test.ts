@@ -4,6 +4,7 @@ const runFlowMock = jest.fn();
 const loadConversationStateMock = jest.fn();
 const getFlowMock = jest.fn();
 const getPersonaMock = jest.fn();
+const getPersonaDeletionTombstoneMock = jest.fn();
 const listBindingsMock = jest.fn();
 const getRevisionMock = jest.fn();
 const reserveMock = jest.fn();
@@ -37,6 +38,7 @@ jest.mock('@/backend/services/runResources', () => ({
 
 jest.mock('@/backend/services/enduringAgents/store', () => ({
   getPersona: (...args: unknown[]) => getPersonaMock(...args),
+  getPersonaDeletionTombstone: (...args: unknown[]) => getPersonaDeletionTombstoneMock(...args),
   listBehaviorBindings: (...args: unknown[]) => listBindingsMock(...args),
   getBehaviorRevision: (...args: unknown[]) => getRevisionMock(...args),
 }));
@@ -59,11 +61,15 @@ import {
   createMeeting as createMeetingSnapshot,
   deleteMeeting,
   getMeeting,
+  anonymizeMeetingPersonaAttribution,
+  retireMeetingPersonaParticipants,
   saveMeeting,
 } from '@/backend/services/meetings/store';
 import { readMeetingEvents } from '@/backend/services/meetings/eventLog';
 import type { FlujoChatMessage } from '@/shared/types/chat';
+import { ARCHIVED_MEETING_PARTICIPANT_NAME } from '@/shared/types/meeting';
 import type { FlowRunInput } from '@/backend/execution/flow/runFlow';
+import { buildPersonaInstructionContext } from '@/backend/services/enduringAgents/personaInstructionContext';
 
 const meetingIds: string[] = [];
 const authorityAbort = new AbortController();
@@ -91,6 +97,7 @@ function behaviorRevision(id = 'revision_pinned') {
     personaId: 'persona_council',
     slotKey: 'primary',
     revision: 2,
+    contentHash: 'b'.repeat(64),
     flowSnapshot: flow('flow_pinned_snapshot'),
     source: { kind: 'role_version', roleVersionId: 'role_persona' },
     createdAt: 1,
@@ -99,6 +106,7 @@ function behaviorRevision(id = 'revision_pinned') {
 
 function personaReservation(meetingId: string, participantId: string) {
   const revision = behaviorRevision();
+  const activityId = 'activity_meeting';
   return {
     meetingId,
     attemptId: 'attempt-0-0',
@@ -108,7 +116,7 @@ function personaReservation(meetingId: string, participantId: string) {
     claim: {
       mailboxItem: { id: 'mailbox_meeting' },
       activity: {
-        id: 'activity_meeting',
+        id: activityId,
         personaId: 'persona_council',
         behaviorRevisionId: revision.id,
       },
@@ -123,6 +131,22 @@ function personaReservation(meetingId: string, participantId: string) {
       fencingToken: 1,
     },
     revision,
+    instructionContext: buildPersonaInstructionContext({
+      persona: {
+        id: 'persona_council',
+        name: 'Living Persona',
+        mission: 'Protect the council decision.',
+        roleVersionId: 'role_council',
+      } as any,
+      roleVersion: {
+        id: 'role_council',
+        name: 'Council Member',
+        mission: 'Deliberate according to the pinned Behavior.',
+        behaviorSlots: [{ key: 'primary' }],
+      } as any,
+      revision: revision as any,
+      activityId,
+    }),
   };
 }
 
@@ -201,6 +225,7 @@ beforeEach(() => {
     provisioningState: 'ready',
     lifecycleState: 'idle',
   });
+  getPersonaDeletionTombstoneMock.mockReset().mockResolvedValue(null);
   listBindingsMock.mockReset().mockResolvedValue([{
     id: 'behavior_persona',
     personaId: 'persona_council',
@@ -234,7 +259,7 @@ afterEach(async () => {
 });
 
 describe('MeetingEngine Persona integration', () => {
-  it('runs a mixed legacy/Persona barrier with the pinned snapshot, authority, and attribution', async () => {
+  it('runs a mixed barrier with the pinned Persona prompt context while leaving the legacy Flow unchanged', async () => {
     const meeting = await createMixedMeeting();
     expect(meeting.participants.find((participant) => participant.id === 'living'))
       .toMatchObject({ behaviorRevisionId: 'revision_pinned' });
@@ -259,7 +284,18 @@ describe('MeetingEngine Persona integration', () => {
         activityId: 'activity_meeting',
         behaviorRevisionId: 'revision_pinned',
       },
+      personaInstructionContext: {
+        personaId: 'persona_council',
+        activityId: 'activity_meeting',
+        behaviorRevisionId: 'revision_pinned',
+        personaName: 'Living Persona',
+        roleName: 'Council Member',
+      },
     });
+    expect(personaInput.personaInstructionContext?.instruction)
+      .toContain('# TRUSTED PERSONA CONTEXT');
+    expect(personaInput.personaInstructionContext?.instruction)
+      .toContain('Protect the council decision.');
     expect(personaInput.flowId).toBeUndefined();
     expect(legacyInput).toMatchObject({
       flowId: 'flow_legacy',
@@ -270,6 +306,7 @@ describe('MeetingEngine Persona integration', () => {
       },
     });
     expect(legacyInput.personaAttribution).toBeUndefined();
+    expect(legacyInput.personaInstructionContext).toBeUndefined();
 
     const persistedPersona = (await getMeeting(meeting.id))?.participants.find(
       (participant) => participant.id === 'living',
@@ -359,6 +396,76 @@ describe('MeetingEngine Persona integration', () => {
     await cancellingProcess.cancel(meeting.id, 'Successor cancelled the meeting.');
     releasePersonaTurn();
     await expect(run).resolves.toMatchObject({ status: 'cancelled' });
+  });
+
+  it('does not resurrect anonymized Persona evidence when an in-flight turn settles late', async () => {
+    const meeting = await createMixedMeeting();
+    const baseRun = runFlowMock.getMockImplementation()!;
+    let signalPersonaTurn!: () => void;
+    let releasePersonaTurn!: () => void;
+    const personaTurnStarted = new Promise<void>((resolve) => { signalPersonaTurn = resolve; });
+    const personaTurnGate = new Promise<void>((resolve) => { releasePersonaTurn = resolve; });
+    runFlowMock.mockImplementation(async (input: FlowRunInput) => {
+      if (input.meetingParticipant?.participantId === 'living') {
+        signalPersonaTurn();
+        await personaTurnGate;
+      }
+      return baseRun(input);
+    });
+
+    const run = meetingEngine.runToCompletion(meeting.id);
+    await personaTurnStarted;
+    await expect(anonymizeMeetingPersonaAttribution('persona_council')).resolves.toMatchObject({
+      meetings: 1,
+      participants: 1,
+    });
+    const afterArchive = (await getMeeting(meeting.id))!;
+    expect(afterArchive.participants.find((participant) => participant.id === 'living'))
+      .toEqual(expect.objectContaining({
+        name: ARCHIVED_MEETING_PARTICIPANT_NAME,
+        personaArchived: true,
+        personaRetired: true,
+        status: 'left',
+      }));
+
+    releasePersonaTurn();
+    await expect(run).rejects.toThrow(/start intent was lost/i);
+    const afterSettlement = (await getMeeting(meeting.id))!;
+    const events = await readMeetingEvents(meeting.id);
+    expect(afterSettlement).toEqual(afterArchive);
+    expect(JSON.stringify({ afterSettlement, events })).not.toContain('persona_council');
+    expect(JSON.stringify({ afterSettlement, events })).not.toContain('Living Persona');
+    await expect(anonymizeMeetingPersonaAttribution('persona_council'))
+      .resolves.toEqual({ meetings: 0, participants: 0, events: 0 });
+  });
+
+  it('recovers remaining participants without validating or admitting a retained retired Persona', async () => {
+    const meeting = await createMixedMeeting();
+    await expect(retireMeetingPersonaParticipants('persona_council'))
+      .resolves.toEqual({ meetings: 1, participants: 1 });
+    getPersonaMock.mockClear();
+    listBindingsMock.mockClear();
+    getRevisionMock.mockClear();
+    reserveMock.mockClear();
+    runFlowMock.mockClear();
+
+    const recoveredEngine = new MeetingEngine({ isolateProcessRuntime: true });
+    await expect(recoveredEngine.runToCompletion(meeting.id)).resolves.toMatchObject({
+      status: 'completed',
+    });
+    expect(getPersonaMock).not.toHaveBeenCalled();
+    expect(listBindingsMock).not.toHaveBeenCalled();
+    expect(getRevisionMock).not.toHaveBeenCalled();
+    expect(reserveMock).not.toHaveBeenCalled();
+    expect(runFlowMock.mock.calls.map(([input]) =>
+      (input as FlowRunInput).meetingParticipant?.participantId)).toEqual(['legacy']);
+    expect((await getMeeting(meeting.id))?.participants.find(
+      (participant) => participant.id === 'living',
+    )).toEqual(expect.objectContaining({
+      personaId: 'persona_council',
+      personaRetired: true,
+      status: 'left',
+    }));
   });
 
   it('closes claimed Persona Activities as cancelled from durable cross-process state', async () => {

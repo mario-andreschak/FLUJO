@@ -237,6 +237,30 @@ describe('installPackage — Persona control-plane boundary', () => {
     expect(schedulerUpdateMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['archive marker', { personaArchived: true }],
+    ['retirement marker', { personaRetired: true }],
+  ])('rejects a Persona %s from an untrusted manifest', async (_label, markers) => {
+    const targeted = manifest();
+    targeted.plannedExecutions[0] = {
+      ...targeted.plannedExecutions[0],
+      ...markers,
+    } as typeof targeted.plannedExecutions[number];
+    fetchPackageManifestMock.mockResolvedValue(targeted);
+
+    const summary = await installPackage({
+      source: 'registry',
+      packageId: 'my-pkg',
+      consentGranted: true,
+    });
+
+    expect(summary.ok).toBe(false);
+    expect(summary.errors.join(' ')).toMatch(/Persona-targeted/i);
+    expect(saveFlowMock).not.toHaveBeenCalled();
+    expect(schedulerCreateMock).not.toHaveBeenCalled();
+    expect(schedulerUpdateMock).not.toHaveBeenCalled();
+  });
+
   it('rejects a deterministic-id collision with an existing Persona plan all-or-none', async () => {
     schedulerGetMock.mockResolvedValue({
       id: 'pkg-my-pkg-nightly',
@@ -254,6 +278,27 @@ describe('installPackage — Persona control-plane boundary', () => {
     expect(summary.errors.join(' ')).toMatch(/protected workspace execution/i);
     expect(installRegistryServerMock).not.toHaveBeenCalled();
     expect(addModelMock).not.toHaveBeenCalled();
+    expect(saveFlowMock).not.toHaveBeenCalled();
+    expect(schedulerCreateMock).not.toHaveBeenCalled();
+    expect(schedulerUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a deterministic-id collision with anonymized Persona evidence', async () => {
+    schedulerGetMock.mockResolvedValue({
+      id: 'pkg-my-pkg-nightly',
+      personaArchived: true,
+      personaRetired: true,
+    });
+
+    const summary = await installPackage({
+      source: 'registry',
+      packageId: 'my-pkg',
+      consentGranted: true,
+    });
+
+    expect(summary.ok).toBe(false);
+    expect(summary.errors.join(' ')).toMatch(/protected workspace execution/i);
+    expect(installRegistryServerMock).not.toHaveBeenCalled();
     expect(saveFlowMock).not.toHaveBeenCalled();
     expect(schedulerCreateMock).not.toHaveBeenCalled();
     expect(schedulerUpdateMock).not.toHaveBeenCalled();

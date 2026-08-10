@@ -503,6 +503,7 @@ describe('CodexAdapter — tool bridging', () => {
 
     const { transcript } = await new CodexAdapter().createCompletion(
       baseInput({
+        conversationId: 'conversation-current',
         tools: [mcpTool],
         toolNameMap: { mcp_hashed_name: { server: 'my-server', tool: 'list_things', timeout: 30 } },
       }),
@@ -517,7 +518,8 @@ describe('CodexAdapter — tool bridging', () => {
       undefined,
       expect.any(AbortSignal),
       'model',
-      undefined,
+      'conversation:conversation-current',
+      { conversationId: 'conversation-current' },
     );
     const roles = transcript!.map(m => m.role);
     // assistant(tool_call) + tool(result) + final assistant answer.

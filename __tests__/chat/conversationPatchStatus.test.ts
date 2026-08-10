@@ -22,6 +22,19 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => ({
 }));
 jest.mock('@/backend/services/flow', () => ({ flowService: {} }));
 jest.mock('@/backend/services/model', () => ({ modelService: {} }));
+let mockPersonaDeleted = false;
+const mockGetPersona = jest.fn(async (_personaId: string) => ({
+  id: 'persona-target',
+  provisioningState: 'ready',
+  lifecycleState: 'idle',
+}));
+const mockGetPersonaDeletionTombstone = jest.fn(async (_personaId: string) =>
+  mockPersonaDeleted ? { status: 'completed' } : null);
+jest.mock('@/backend/services/enduringAgents', () => ({
+  getPersona: (personaId: string) => mockGetPersona(personaId),
+  getPersonaDeletionTombstone: (personaId: string) =>
+    mockGetPersonaDeletionTombstone(personaId),
+}));
 jest.mock('@/backend/execution/flow/conversationLog', () => ({
   readConversationLog: jest.fn(),
   projectMessages: jest.fn(() => []),
@@ -43,6 +56,7 @@ import {
   GET,
   PATCH,
 } from '@/app/v1/chat/conversations/[conversationId]/route';
+import { withConversationExecutionLock } from '@/backend/execution/flow/conversationExecutionLock';
 
 function seedConversation(id: string, status: SharedState['status']) {
   stored[`conversations/${id}`] = {
@@ -72,6 +86,9 @@ async function patchFlow(conversationId: string) {
 describe('PATCH /v1/chat/conversations/:id status pass-through', () => {
   beforeEach(() => {
     for (const key of Object.keys(stored)) delete stored[key];
+    mockPersonaDeleted = false;
+    mockGetPersona.mockClear();
+    mockGetPersonaDeletionTombstone.mockClear();
   });
 
   it('does not report a never-run conversation as completed when its flow changes', async () => {
@@ -103,6 +120,105 @@ describe('PATCH /v1/chat/conversations/:id status pass-through', () => {
 
     expect(response.status).toBe(409);
     expect(stored['conversations/conv-persona'].flowId).toBe('flow-1');
+  });
+
+  it('re-reads an anonymized draft after waiting and preserves its archive on rename', async () => {
+    const id = 'conv-persona-draft-race';
+    seedConversation(id, undefined);
+    stored[`conversations/${id}`].flowId = '';
+    stored[`conversations/${id}`].personaTargetId = 'persona-target';
+
+    let release!: () => void;
+    let entered!: () => void;
+    const enteredLock = new Promise<void>((resolve) => { entered = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const anonymization = withConversationExecutionLock(id, async () => {
+      entered();
+      await gate;
+      const archived = { ...stored[`conversations/${id}`], personaArchived: true as const };
+      delete archived.personaTargetId;
+      stored[`conversations/${id}`] = archived;
+    });
+    await enteredLock;
+
+    const patch = PATCH(patchRequest({ title: 'Renamed archive' }), {
+      params: Promise.resolve({ conversationId: id }),
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    release();
+    await anonymization;
+
+    const response = await patch;
+    expect(response.status).toBe(200);
+    expect(stored[`conversations/${id}`]).toMatchObject({
+      title: 'Renamed archive',
+      personaArchived: true,
+    });
+    expect(stored[`conversations/${id}`]).not.toHaveProperty('personaTargetId');
+  });
+
+  it('revalidates deletion after waiting before converting a Flow draft to a Persona', async () => {
+    const id = 'conv-flow-to-deleted-persona';
+    seedConversation(id, undefined);
+
+    let release!: () => void;
+    let entered!: () => void;
+    const enteredLock = new Promise<void>((resolve) => { entered = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const deletion = withConversationExecutionLock(id, async () => {
+      entered();
+      await gate;
+    });
+    await enteredLock;
+
+    const patch = PATCH(patchRequest({ personaTargetId: 'persona-target' }), {
+      params: Promise.resolve({ conversationId: id }),
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    mockPersonaDeleted = true;
+    release();
+    await deletion;
+
+    const response = await patch;
+    expect(response.status).toBe(409);
+    expect(stored[`conversations/${id}`]).toMatchObject({ flowId: 'flow-1' });
+    expect(stored[`conversations/${id}`]).not.toHaveProperty('personaTargetId');
+  });
+
+  it('re-reads ownership after a paused Persona-target PATCH before deleting', async () => {
+    const id = 'conv-delete-target-race';
+    seedConversation(id, undefined);
+    let lookupStarted!: () => void;
+    let releaseLookup!: () => void;
+    const startedLookup = new Promise<void>((resolve) => { lookupStarted = resolve; });
+    const lookupGate = new Promise<void>((resolve) => { releaseLookup = resolve; });
+    mockGetPersona.mockImplementationOnce(async () => {
+      lookupStarted();
+      await lookupGate;
+      return {
+        id: 'persona-target',
+        provisioningState: 'ready',
+        lifecycleState: 'idle',
+      };
+    });
+
+    const patch = PATCH(patchRequest({ personaTargetId: 'persona-target' }), {
+      params: Promise.resolve({ conversationId: id }),
+    });
+    await startedLookup;
+    const deletion = DELETE(makeLocalRequest(), {
+      params: Promise.resolve({ conversationId: id }),
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    releaseLookup();
+
+    expect((await patch).status).toBe(200);
+    const deleteResponse = await deletion;
+    expect(deleteResponse.status).toBe(409);
+    expect(stored[`conversations/${id}`]).toMatchObject({
+      flowId: '',
+      personaTargetId: 'persona-target',
+    });
   });
 
   it('does not let the generic read/delete route expose or erase Persona state', async () => {

@@ -8,6 +8,8 @@ const updateReferencesMock = jest.fn();
 const completeActivityMock = jest.fn();
 const cancelMailboxMock = jest.fn();
 const getRevisionMock = jest.fn();
+const getPersonaMock = jest.fn();
+const getRoleVersionMock = jest.fn();
 const pumpMock = jest.fn();
 
 jest.mock('@/backend/services/enduringAgents/activityRuntime', () => {
@@ -30,6 +32,8 @@ jest.mock('@/backend/services/enduringAgents/activityRuntime', () => {
 
 jest.mock('@/backend/services/enduringAgents/store', () => ({
   getBehaviorRevision: (...args: unknown[]) => getRevisionMock(...args),
+  getPersona: (...args: unknown[]) => getPersonaMock(...args),
+  getRoleVersion: (...args: unknown[]) => getRoleVersionMock(...args),
 }));
 
 jest.mock('@/backend/services/enduringAgents/personaDispatcher', () => ({
@@ -37,6 +41,7 @@ jest.mock('@/backend/services/enduringAgents/personaDispatcher', () => ({
 }));
 
 import {
+  cancelMeetingPersonaReservations,
   completeMeetingPersonaReservations,
   MEETING_PERSONA_LEASE_TTL_MS,
   meetingPersonaReservationAttemptId,
@@ -44,6 +49,7 @@ import {
   startMeetingPersonaHeartbeat,
   type MeetingPersonaReservation,
 } from '@/backend/execution/meeting/personaReservations';
+import { buildPersonaInstructionContext } from '@/backend/services/enduringAgents/personaInstructionContext';
 import type { MeetingRecord } from '@/shared/types/meeting';
 
 function snapshot(id: string) {
@@ -63,9 +69,28 @@ function revision(personaId: string) {
     personaId,
     slotKey: 'primary',
     revision: 1,
+    contentHash: 'a'.repeat(64),
     flowSnapshot: snapshot(`flow_${personaId}`),
     source: { kind: 'role_version', roleVersionId: `role_${personaId}` },
     createdAt: 1,
+  };
+}
+
+function persona(personaId: string) {
+  return {
+    id: personaId,
+    name: `Persona ${personaId}`,
+    mission: `Mission for ${personaId}.`,
+    roleVersionId: `role_${personaId}`,
+  };
+}
+
+function roleVersion(personaId: string) {
+  return {
+    id: `role_${personaId}`,
+    name: `Role ${personaId}`,
+    mission: `Role mission for ${personaId}.`,
+    behaviorSlots: [{ key: 'primary' }],
   };
 }
 
@@ -165,6 +190,12 @@ function reservation(personaId = 'persona_a'): MeetingPersonaReservation {
       fencingToken: 1,
     },
     revision: revision(personaId) as any,
+    instructionContext: buildPersonaInstructionContext({
+      persona: persona(personaId) as any,
+      roleVersion: roleVersion(personaId) as any,
+      revision: revision(personaId) as any,
+      activityId: claim.activity.id,
+    }),
   };
 }
 
@@ -184,6 +215,11 @@ beforeEach(() => {
     const personaId = id.replace(/^revision_/, '');
     return revision(personaId);
   });
+  getPersonaMock.mockReset().mockImplementation(async (personaId: string) => persona(personaId));
+  getRoleVersionMock.mockReset().mockImplementation(async (id: string) => {
+    const personaId = id.replace(/^role_/, '');
+    return roleVersion(personaId);
+  });
   pumpMock.mockReset().mockResolvedValue(undefined);
   routeMock.mockImplementation(async (input: { personaId: string; payloadRef: string }) => ({
     decision: 'queued',
@@ -196,6 +232,32 @@ beforeEach(() => {
 });
 
 describe('meeting Persona reservation coordinator', () => {
+  it('restarts remaining participants without reserving or cancelling a retired Persona', async () => {
+    const recovered = meeting();
+    recovered.status = 'paused';
+    recovered.participants[1].status = 'left';
+    recovered.participants[1].personaRetired = true;
+    claimMock.mockImplementation(async (input: { personaId: string }) =>
+      claimFor(input.personaId, 'participant_z'));
+
+    await expect(reserveMeetingPersonas(recovered)).resolves.toEqual([
+      expect.objectContaining({ personaId: 'persona_z', participantId: 'participant_z' }),
+    ]);
+    expect(routeMock.mock.calls.map(([input]) => input.personaId)).toEqual(['persona_z']);
+    expect(claimMock.mock.calls.map(([input]) => input.personaId)).toEqual(['persona_z']);
+
+    routeMock.mockClear();
+    cancelMailboxMock.mockClear();
+    await cancelMeetingPersonaReservations(recovered);
+    expect(routeMock.mock.calls.map(([input]) => input.personaId)).toEqual(['persona_z']);
+    expect(cancelMailboxMock).toHaveBeenCalledWith(expect.objectContaining({
+      personaId: 'persona_z',
+    }));
+    expect(cancelMailboxMock).not.toHaveBeenCalledWith(expect.objectContaining({
+      personaId: 'persona_a',
+    }));
+  });
+
   it('derives a stable attempt id that advances with a recovered barrier', () => {
     const initial = meeting();
     const same = { ...initial, updatedAt: 999, status: 'paused' as const };
@@ -259,6 +321,16 @@ describe('meeting Persona reservation coordinator', () => {
     expect(reservations.map((item) => item.meetingId))
       .toEqual(['meeting_reservation', 'meeting_reservation']);
     expect(new Set(reservations.map((item) => item.attemptId)).size).toBe(1);
+    expect(reservations[0].instructionContext).toMatchObject({
+      personaId: 'persona_a',
+      activityId: 'activity_persona_a',
+      behaviorRevisionId: 'revision_persona_a',
+      roleVersionId: 'role_persona_a',
+      personaName: 'Persona persona_a',
+      roleName: 'Role persona_a',
+    });
+    expect(reservations[0].instructionContext.instruction)
+      .toContain('# TRUSTED PERSONA CONTEXT');
   });
 
   it('serializes overlapping multi-Persona route-and-claim assembly', async () => {

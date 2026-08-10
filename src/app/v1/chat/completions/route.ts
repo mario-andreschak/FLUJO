@@ -12,6 +12,7 @@ import {
 import { UnsupportedOpenAIToolTypeError } from '@/shared/types/openai';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 
 const log = createLogger('app/v1/chat/completions/route');
 
@@ -137,12 +138,26 @@ async function handleRequest(request: NextRequest) {
     }
     if (conversation_id) {
       const existingState = await loadConversationState(conversation_id);
-      if (existingState?.personaAttribution) {
+      if (isPersonaOwnedConversationState(existingState)) {
         const notLocal = assertLocalRequest(request, { strictLoopback: true });
         if (notLocal) return notLocal;
+      }
+      if (existingState?.personaArchived) {
+        return NextResponse.json({
+          error: {
+            message: 'An anonymized Persona archive is read-only and cannot be resumed or retargeted.',
+            type: 'invalid_request_error',
+            code: 'persona_conversation_archived',
+            param: 'metadata.conversationId',
+          },
+        }, { status: 409, headers: corsHeaders });
+      }
+      if (existingState?.personaAttribution || existingState?.personaTargetId) {
+        const requiredPersonaId = existingState.personaAttribution?.personaId
+          ?? existingState.personaTargetId;
         if (
           !personaTarget
-          || personaTarget.personaId !== existingState.personaAttribution.personaId
+          || personaTarget.personaId !== requiredPersonaId
         ) {
           return NextResponse.json({
             error: {
@@ -153,6 +168,24 @@ async function handleRequest(request: NextRequest) {
             },
           }, { status: 409, headers: corsHeaders });
         }
+      } else if (isPersonaOwnedConversationState(existingState)) {
+        return NextResponse.json({
+          error: {
+            message: 'Persona conversation ownership metadata is incomplete and cannot be resumed.',
+            type: 'invalid_request_error',
+            code: 'persona_conversation_attribution_incomplete',
+            param: 'metadata.conversationId',
+          },
+        }, { status: 409, headers: corsHeaders });
+      } else if (existingState && personaTarget) {
+        return NextResponse.json({
+          error: {
+            message: 'An existing Flow conversation cannot be converted to a Persona conversation.',
+            type: 'invalid_request_error',
+            code: 'persona_conversation_target_locked',
+            param: 'metadata.personaId',
+          },
+        }, { status: 409, headers: corsHeaders });
       }
     }
 

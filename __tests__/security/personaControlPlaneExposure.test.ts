@@ -159,4 +159,103 @@ describe('Persona control-plane exposure', () => {
     expect(response.status).toBe(409);
     expect(mockProcessChatCompletion).not.toHaveBeenCalled();
   });
+
+  it('requires a pending Persona draft target to match before dispatch', async () => {
+    process.env.FLUJO_EXPOSURE_MODE = 'localhost';
+    mockLoadConversationState.mockResolvedValue({
+      conversationId: 'conversation-1',
+      flowId: '',
+      personaTargetId: 'persona_support',
+    });
+
+    mockParseRequestParameters.mockResolvedValueOnce(parsed());
+    let response = await POST(request('localhost'));
+    expect(response.status).toBe(409);
+
+    mockParseRequestParameters.mockResolvedValueOnce(parsed({ personaId: 'persona_other' }));
+    response = await POST(request('localhost'));
+    expect(response.status).toBe(409);
+
+    mockParseRequestParameters.mockResolvedValueOnce(parsed({ personaId: 'persona_support' }));
+    response = await POST(request('localhost'));
+    expect(response.status).toBe(200);
+    expect(mockProcessChatCompletion).toHaveBeenCalledTimes(1);
+  });
+
+  it('cannot convert an existing executed Flow conversation into a Persona conversation', async () => {
+    process.env.FLUJO_EXPOSURE_MODE = 'localhost';
+    mockLoadConversationState.mockResolvedValue({
+      conversationId: 'conversation-1',
+      flowId: 'flow-support',
+      messages: [{ role: 'assistant', content: 'Already executed.' }],
+      status: 'completed',
+    });
+    mockParseRequestParameters.mockResolvedValue(parsed({ personaId: 'persona_support' }));
+
+    const response = await POST(request('localhost'));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'persona_conversation_target_locked' },
+    });
+    expect(mockProcessChatCompletion).not.toHaveBeenCalled();
+  });
+
+  it('never resumes or retargets an anonymized Persona archive', async () => {
+    process.env.FLUJO_EXPOSURE_MODE = 'localhost';
+    mockLoadConversationState.mockResolvedValue({
+      conversationId: 'conversation-1',
+      flowId: 'flow-behavior',
+      personaArchived: true,
+    });
+    mockParseRequestParameters.mockResolvedValue(parsed({ personaId: 'persona_support' }));
+
+    const response = await POST(request('localhost'));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'persona_conversation_archived' },
+    });
+    expect(mockProcessChatCompletion).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['instruction-only', { personaInstructionContext: { personaId: 'persona_support' } }],
+    ['null-attribution', { personaAttribution: null }],
+    ['empty-target', { personaTargetId: '' }],
+  ])('fails closed instead of running a %s owned conversation', async (_label, markers) => {
+    process.env.FLUJO_EXPOSURE_MODE = 'localhost';
+    mockLoadConversationState.mockResolvedValue({
+      conversationId: 'conversation-1',
+      flowId: 'flow-support',
+      ...markers,
+    });
+    mockParseRequestParameters.mockResolvedValue(parsed({ personaId: 'persona_support' }));
+
+    const response = await POST(request('localhost'));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'persona_conversation_attribution_incomplete' },
+    });
+    expect(mockProcessChatCompletion).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['instruction-only', { personaInstructionContext: { personaId: 'persona_support' } }],
+    ['null-attribution', { personaAttribution: null }],
+    ['empty-target', { personaTargetId: '' }],
+  ])('rejects remote replay of a %s owned conversation before normal Flow dispatch', async (_label, markers) => {
+    mockLoadConversationState.mockResolvedValue({
+      conversationId: 'conversation-1',
+      flowId: 'flow-support',
+      ...markers,
+    });
+    mockParseRequestParameters.mockResolvedValue(parsed());
+
+    const response = await POST(request('flujo.example.com'));
+
+    expect(response.status).toBe(403);
+    expect(mockProcessChatCompletion).not.toHaveBeenCalled();
+  });
 });

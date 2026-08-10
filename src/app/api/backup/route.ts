@@ -28,6 +28,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isPersonaConversationSnapshot(value: unknown): boolean {
   return isRecord(value) && (
     Object.prototype.hasOwnProperty.call(value, 'personaAttribution')
+    || Object.prototype.hasOwnProperty.call(value, 'personaTargetId')
+    || Object.prototype.hasOwnProperty.call(value, 'personaInstructionContext')
+    || value.personaArchived === true
     || value.personaOwned === true
   );
 }

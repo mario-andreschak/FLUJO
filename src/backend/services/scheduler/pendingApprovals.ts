@@ -4,6 +4,7 @@ import { createLogger } from '@/utils/logger';
 import { bindToCurrentWorkspace, getCurrentWorkspace } from '@/utils/workspace';
 import type { TriggerFirePayload } from '@/shared/types/plannedExecution';
 import { withPersonaRuntimeLock } from '@/backend/services/enduringAgents/runtimeLock';
+import { EnduringAgentIdSchema } from '@/shared/types/enduringAgent';
 
 const log = createLogger('backend/services/scheduler/pendingApprovals');
 
@@ -141,4 +142,34 @@ export async function removePendingApproval(approvalId: string): Promise<void> {
   } finally {
     if (writeChains.get(workspace) === run) writeChains.delete(workspace);
   }
+}
+
+/** Remove resumable approval intents that explicitly target a deleted Persona. */
+export async function removePendingApprovalsForPersonaId(personaId: string): Promise<number> {
+  EnduringAgentIdSchema.parse(personaId);
+  const workspace = getCurrentWorkspace();
+  let removed = 0;
+  const write = bindToCurrentWorkspace(async () => {
+    await withPersonaRuntimeLock(LOCK_ID, async (lock) => {
+      const file = await loadAll();
+      for (const [approvalId, entry] of Object.entries(file)) {
+        if (entry.terminalPublication?.execution.personaId !== personaId) continue;
+        delete file[approvalId];
+        removed += 1;
+      }
+      if (removed === 0) return;
+      await lock.assertOwned();
+      await saveItem(KEY, file);
+    });
+  });
+  const run = (writeChains.get(workspace) ?? Promise.resolve())
+    .catch(() => { /* prior write's error surfaced to its own caller */ })
+    .then(write);
+  writeChains.set(workspace, run);
+  try {
+    await run;
+  } finally {
+    if (writeChains.get(workspace) === run) writeChains.delete(workspace);
+  }
+  return removed;
 }

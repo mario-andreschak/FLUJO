@@ -5,6 +5,7 @@ import { createLogger } from '@/utils/logger';
 import { getSchedulerService } from '@/backend/services/scheduler';
 import { json } from '../../_helpers';
 import { assertLocalRequest } from '@/utils/http/localRequest';
+import { isPersonaControlledPlannedExecution } from '@/shared/types/plannedExecution';
 
 const log = createLogger('app/api/planned-executions/[id]/run/route');
 
@@ -30,7 +31,7 @@ async function POST_handler(
     const { id } = await params;
     const scheduler = getSchedulerService();
     const execution = await scheduler.get(id);
-    if (execution?.personaId) {
+    if (isPersonaControlledPlannedExecution(execution)) {
       const notLocal = assertLocalRequest(request, { strictLoopback: true });
       if (notLocal) return notLocal;
     }

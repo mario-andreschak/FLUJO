@@ -13,6 +13,7 @@ import type {
   SubflowInvocationLaneStatus,
 } from './types';
 import { bindToCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
+import { isPersonaOwnedConversationState } from './personaConversationOwnership';
 
 const log = createLogger('backend/execution/flow/subflowRecovery');
 
@@ -167,11 +168,13 @@ async function resumeReadyParent(parent: SharedState, invocation: SubflowInvocat
     });
     return;
   }
-  if (parent.personaAttribution) {
+  if (isPersonaOwnedConversationState(parent)) {
     log.warn('Refusing to resume a Persona-owned parent outside its dispatcher', {
       parentConversationId: parentId,
       invocationId: invocation.id,
-      personaId: parent.personaAttribution.personaId,
+      ...(parent.personaAttribution
+        ? { personaId: parent.personaAttribution.personaId }
+        : { archived: true }),
     });
     return;
   }
@@ -384,17 +387,18 @@ export async function getSubflowRecoveryOptions(conversationId: string): Promise
   const deepest = deepestFailedStates(states, rootId);
   const hasFailedDescendant = deepest.some((state) => state.conversationId !== conversationId);
   const meetingOwned = belongsToMeetingFamily(current, byId);
+  const personaOwned = isPersonaOwnedConversationState(current);
   return {
     conversationId,
     ...(parentId ? { parentConversationId: parentId } : {}),
     ...(laneRef?.invocationId ? { invocationId: laneRef.invocationId } : {}),
     ...(laneRef?.laneId ? { laneId: laneRef.laneId } : {}),
-    hasRecoverableFamily: !meetingOwned && (!!active || !!ownedInvocation || hasFailedDescendant),
+    hasRecoverableFamily: !meetingOwned && !personaOwned && (!!active || !!ownedInvocation || hasFailedDescendant),
     incompleteSiblingCount,
     deepestFailedCount: deepest.length,
-    canRetryBranch: !meetingOwned && !!current && current.status !== 'running',
-    canRetrySiblings: !meetingOwned && !!active && incompleteSiblingCount > 0 && active.parent.status !== 'running',
-    canRetryDeepest: !meetingOwned && deepest.length > 0,
+    canRetryBranch: !meetingOwned && !personaOwned && !!current && current.status !== 'running',
+    canRetrySiblings: !meetingOwned && !personaOwned && !!active && incompleteSiblingCount > 0 && active.parent.status !== 'running',
+    canRetryDeepest: !meetingOwned && !personaOwned && deepest.length > 0,
   };
 }
 
@@ -412,7 +416,7 @@ async function runRecoveryConversation(state: SharedState): Promise<SubflowRunOu
     if (current.source === 'meeting') {
       throw new Error('Meeting participant recovery must be coordinated by MeetingEngine.');
     }
-    if (current.personaAttribution) {
+    if (isPersonaOwnedConversationState(current)) {
       throw new Error('Persona-owned recovery must be coordinated by the Persona dispatcher.');
     }
     if (current.recovery?.manualActionRequired) {
@@ -449,6 +453,9 @@ export async function retrySubflowRecoveryScope(
   ));
   if (belongsToMeetingFamily(current, byId)) {
     throw new Error('Meeting participant recovery must be coordinated by MeetingEngine.');
+  }
+  if (isPersonaOwnedConversationState(current)) {
+    throw new Error('Persona-owned recovery must be coordinated by the Persona dispatcher.');
   }
 
   let targets: SharedState[] = [];

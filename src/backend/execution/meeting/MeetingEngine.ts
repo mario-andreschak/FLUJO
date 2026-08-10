@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'crypto';
+import { randomUUID } from 'crypto';
 
 import { runFlow, type FlowRunResult } from '@/backend/execution/flow/runFlow';
 import type { FlowExecutionAuthority } from '@/backend/execution/flow/types';
@@ -19,6 +19,7 @@ import { meetingEventBus } from '@/backend/services/meetings/MeetingEventBus';
 import { latestMeetingSequence, readMeetingEvents } from '@/backend/services/meetings/eventLog';
 import {
   createMeeting,
+  createMeetingRecord,
   getMeeting,
   saveMeeting,
 } from '@/backend/services/meetings/store';
@@ -51,9 +52,11 @@ import {
 import {
   getBehaviorRevision,
   getPersona,
+  getPersonaDeletionTombstone,
   listBehaviorBindings,
 } from '@/backend/services/enduringAgents/store';
-import { withWorkspaceRuntimeLock } from '@/backend/services/enduringAgents/runtimeLock';
+import { withPersonaRuntimeLock } from '@/backend/services/enduringAgents/runtimeLock';
+import { withMeetingControlLock as withControlLock } from '@/backend/services/meetings/controlLock';
 
 const log = createLogger('backend/execution/meeting/MeetingEngine');
 
@@ -83,6 +86,8 @@ export interface MeetingEngineOptions {
   /** Test harness override for expiry/renewal races. */
   startIntentHeartbeatMs?: number;
   failpoints?: {
+    /** Pause after optimistic create validation, before locked admission. */
+    afterCreateValidationBeforePersist?: () => void | Promise<void>;
     /** Simulate process loss without running reservation cleanup. */
     afterPersonaClaimsBeforeRunningPersist?: () => void | Promise<void>;
     /** Pause after durable admission (and Persona claims, when present). */
@@ -111,44 +116,81 @@ declare global {
   // Next development bundles can instantiate this module more than once. A
   // process-global registry keeps the one-meeting/one-participant guarantees.
   var __flujo_meeting_runtimes: Map<string, RuntimeHandle> | undefined;
-  var __flujo_meeting_control_locks: Map<string, Promise<void>> | undefined;
+}
+
+async function withSortedPersonaRuntimeLocks<T>(
+  personaIds: readonly string[],
+  task: () => Promise<T>,
+): Promise<T> {
+  const ordered = [...new Set(personaIds)].sort();
+  const acquire = async (index: number): Promise<T> => {
+    if (index >= ordered.length) return task();
+    return withPersonaRuntimeLock(ordered[index], async (lock) => {
+      await lock.assertOwned();
+      return acquire(index + 1);
+    });
+  };
+  return acquire(0);
+}
+
+async function resolvePersonaBehaviorRevisionPins(
+  participants: CreateMeetingInput['participants'],
+): Promise<Map<string, string>> {
+  const pins = new Map<string, string>();
+  await Promise.all(participants.map(async (participant) => {
+    if (!participant.personaId) return;
+    if (participant.flowId) {
+      throw new Error(`Participant ${participant.name} must target one Flow or Persona, not both.`);
+    }
+    if (await getPersonaDeletionTombstone(participant.personaId)) {
+      throw new Error(`Participant Persona ${participant.personaId} is pending deletion.`);
+    }
+    const persona = await getPersona(participant.personaId);
+    if (!persona) throw new Error(`Participant Persona ${participant.personaId} was not found.`);
+    if (persona.provisioningState !== 'ready') {
+      throw new Error(`Participant Persona ${participant.personaId} is not ready.`);
+    }
+    if (persona.lifecycleState === 'disabled') {
+      throw new Error(`Participant Persona ${participant.personaId} is disabled.`);
+    }
+    const slotKey = participant.behaviorSlotKey ?? 'primary';
+    const matchingBindings = (await listBehaviorBindings(participant.personaId))
+      .filter((candidate) => candidate.slotKey === slotKey);
+    if (matchingBindings.length === 0) {
+      throw new Error(
+        `Participant Persona ${participant.personaId} has no Behavior for slot ${slotKey}.`,
+      );
+    }
+    if (matchingBindings.length > 1) {
+      throw new Error(
+        `Participant Persona ${participant.personaId} has multiple Behaviors for slot ${slotKey}.`,
+      );
+    }
+    const binding = matchingBindings[0];
+    const revision = await getBehaviorRevision(binding.activeRevisionId);
+    if (
+      binding.personaId !== participant.personaId
+      || binding.slotKey !== slotKey
+      || !revision
+      || revision.id !== binding.activeRevisionId
+      || revision.personaId !== participant.personaId
+      || revision.behaviorId !== binding.id
+      || revision.slotKey !== slotKey
+    ) {
+      throw new Error(`Participant Persona ${participant.personaId} has an invalid Behavior binding.`);
+    }
+    if (!getStartNodeId(revision.flowSnapshot)) {
+      throw new Error(`Participant Behavior ${revision.id} has no Start node.`);
+    }
+    pins.set(participant.personaId, revision.id);
+  }));
+  return pins;
 }
 
 const runtimes = global.__flujo_meeting_runtimes
   ?? (global.__flujo_meeting_runtimes = new Map());
-const controlLocks = global.__flujo_meeting_control_locks
-  ?? (global.__flujo_meeting_control_locks = new Map());
-
 function runtimeKey(meetingId: string): string {
   return workspaceCacheKey('meeting-runtime', meetingId);
-}
-
-function meetingControlLockId(meetingId: string): string {
-  const digest = createHash('sha256').update(meetingId).digest('hex').slice(0, 40);
-  return `meeting_control_${digest}`;
-}
-
-async function withControlLock<T>(meetingId: string, task: () => Promise<T>): Promise<T> {
-  const key = runtimeKey(meetingId);
-  const predecessor = controlLocks.get(key) ?? Promise.resolve();
-  let release!: () => void;
-  const current = new Promise<void>((resolve) => { release = resolve; });
-  const tail = predecessor.catch(() => undefined).then(() => current);
-  controlLocks.set(key, tail);
-  await predecessor.catch(() => undefined);
-  try {
-    // The promise chain handles duplicate module instances in one process;
-    // the filesystem-backed runtime lock serializes processes sharing the
-    // selected workspace. Workspace locks use a physical namespace that cannot
-    // alias a user-created Persona id.
-    return await withWorkspaceRuntimeLock(meetingControlLockId(meetingId), async (lock) => {
-      await lock.assertOwned();
-      return task();
-    });
-  } finally {
-    release();
-    if (controlLocks.get(key) === tail) controlLocks.delete(key);
-  }
 }
 
 export const MEETING_START_INTENT_TTL_MS = 30_000;
@@ -611,12 +653,16 @@ async function runParticipantTurn(
         abortSignal: handle.abortController.signal,
         executionAuthority,
         ...(reservation
-          ? {
+            ? {
               personaAttribution: {
                 personaId: reservation.personaId,
                 activityId: reservation.claim.activity.id,
                 behaviorRevisionId: reservation.revision.id,
               },
+              // This was frozen at reservation time from the exact Persona,
+              // pinned Role version, Behavior revision, and claimed Activity.
+              // Never re-resolve mutable identity metadata during a round.
+              personaInstructionContext: structuredClone(reservation.instructionContext),
             }
           : {}),
         meetingParticipant: {
@@ -918,12 +964,21 @@ function projectTerminalEvent(
  * meeting. Recovery may use the old immutable snapshot or fail closed; it
  * must never silently adopt a newly activated revision.
  */
+function isActivePersonaParticipant(
+  participant: MeetingParticipant,
+): participant is MeetingParticipant & { personaId: string } {
+  return typeof participant.personaId === 'string'
+    && participant.status !== 'left'
+    && !participant.personaRetired
+    && !participant.personaArchived;
+}
+
 async function validateMeetingPersonaBehaviorPins(
   meeting: MeetingRecord,
 ): Promise<MeetingRecord> {
   let changed = false;
   await Promise.all(meeting.participants.map(async (participant) => {
-    if (!participant.personaId) return;
+    if (!isActivePersonaParticipant(participant)) return;
     const persona = await getPersona(participant.personaId);
     if (!persona) throw new Error(`Participant Persona ${participant.personaId} was not found.`);
     if (persona.provisioningState !== 'ready') {
@@ -995,8 +1050,12 @@ export class MeetingEngine {
   }
 
   async create(input: CreateMeetingInput): Promise<MeetingRecord> {
+    // Validate/normalize the request before deriving a filesystem lock id. When
+    // the caller omitted an id, carry this generated id into the eventual
+    // persisted constructor so the admission lock protects the exact record.
+    const meetingId = createMeetingRecord(input).id;
+    const creationInput = input.id ? input : { ...input, id: meetingId };
     const seenPersonaIds = new Set<string>();
-    const personaBehaviorRevisionPins = new Map<string, string>();
     for (const participant of input.participants) {
       if (!participant.personaId) continue;
       if (seenPersonaIds.has(participant.personaId)) {
@@ -1004,51 +1063,12 @@ export class MeetingEngine {
       }
       seenPersonaIds.add(participant.personaId);
     }
+    // This first pass gives callers prompt validation errors without entering a
+    // multi-owner critical section. It is deliberately repeated under the
+    // meeting -> sorted Persona lock order immediately before persistence.
+    await resolvePersonaBehaviorRevisionPins(input.participants);
     await Promise.all(input.participants.map(async (participant) => {
-      if (participant.personaId) {
-        if (participant.flowId) {
-          throw new Error(`Participant ${participant.name} must target one Flow or Persona, not both.`);
-        }
-        const persona = await getPersona(participant.personaId);
-        if (!persona) throw new Error(`Participant Persona ${participant.personaId} was not found.`);
-        if (persona.provisioningState !== 'ready') {
-          throw new Error(`Participant Persona ${participant.personaId} is not ready.`);
-        }
-        if (persona.lifecycleState === 'disabled') {
-          throw new Error(`Participant Persona ${participant.personaId} is disabled.`);
-        }
-        const slotKey = participant.behaviorSlotKey ?? 'primary';
-        const matchingBindings = (await listBehaviorBindings(participant.personaId))
-          .filter((candidate) => candidate.slotKey === slotKey);
-        if (matchingBindings.length === 0) {
-          throw new Error(
-            `Participant Persona ${participant.personaId} has no Behavior for slot ${slotKey}.`,
-          );
-        }
-        if (matchingBindings.length > 1) {
-          throw new Error(
-            `Participant Persona ${participant.personaId} has multiple Behaviors for slot ${slotKey}.`,
-          );
-        }
-        const binding = matchingBindings[0];
-        const revision = await getBehaviorRevision(binding.activeRevisionId);
-        if (
-          binding.personaId !== participant.personaId
-          || binding.slotKey !== slotKey
-          || !revision
-          || revision.id !== binding.activeRevisionId
-          || revision.personaId !== participant.personaId
-          || revision.behaviorId !== binding.id
-          || revision.slotKey !== slotKey
-        ) {
-          throw new Error(`Participant Persona ${participant.personaId} has an invalid Behavior binding.`);
-        }
-        if (!getStartNodeId(revision.flowSnapshot)) {
-          throw new Error(`Participant Behavior ${revision.id} has no Start node.`);
-        }
-        personaBehaviorRevisionPins.set(participant.personaId, revision.id);
-        return;
-      }
+      if (participant.personaId) return;
       if (!participant.flowId) {
         throw new Error(`Participant ${participant.name} must target a Flow or Persona.`);
       }
@@ -1064,16 +1084,31 @@ export class MeetingEngine {
         throw new Error(`Conversation ${participant.conversationId} is already in use.`);
       }
     }
-    let meeting = await createMeeting(input, personaBehaviorRevisionPins);
-    const event = await meetingEventBus.emit(meeting.id, {
-      type: 'meeting:created',
-      audience: 'public',
-      title: meeting.title,
-      eventId: `${meeting.id}:created`,
-    });
-    meeting.lastEventSeq = event.seq;
-    meeting = await saveMeeting(meeting);
-    return meeting;
+    await this.failpoints.afterCreateValidationBeforePersist?.();
+
+    const personaIds = [...seenPersonaIds].sort();
+    return withControlLock(meetingId, () => withSortedPersonaRuntimeLocks(
+      personaIds,
+      async () => {
+        // A deletion intent is written under the same Persona lock before its
+        // meeting scan. Re-resolving here makes either ordering safe: creation
+        // commits first and is subsequently retired, or the tombstone wins and
+        // this admission fails without writing identifying evidence.
+        const personaBehaviorRevisionPins = await resolvePersonaBehaviorRevisionPins(
+          input.participants,
+        );
+        let meeting = await createMeeting(creationInput, personaBehaviorRevisionPins);
+        const event = await meetingEventBus.emit(meeting.id, {
+          type: 'meeting:created',
+          audience: 'public',
+          title: meeting.title,
+          eventId: `${meeting.id}:created`,
+        });
+        meeting.lastEventSeq = event.seq;
+        meeting = await saveMeeting(meeting);
+        return meeting;
+      },
+    ));
   }
 
   async start(meetingId: string): Promise<MeetingRecord> {
@@ -1125,7 +1160,7 @@ export class MeetingEngine {
         }
 
         const hasPersonaParticipants = candidate.participants.some(
-          (participant) => participant.personaId,
+          isActivePersonaParticipant,
         );
         if (hasPersonaParticipants) {
           candidate = await validateMeetingPersonaBehaviorPins(candidate);
@@ -1148,7 +1183,7 @@ export class MeetingEngine {
         // Attribution from an expired generation must never look current while
         // its successor is still waiting to assemble all Persona leases.
         for (const participant of candidate.participants) {
-          if (participant.personaId) participant.activityId = undefined;
+          if (isActivePersonaParticipant(participant)) participant.activityId = undefined;
         }
         candidate = await saveMeeting(candidate);
         return {
@@ -1384,7 +1419,7 @@ export class MeetingEngine {
         );
       } else if (!simulatedCrash && handle.personaAdmissionStarted) {
         const queuedMeeting = await getMeeting(meetingId);
-        if (queuedMeeting?.participants.some((participant) => participant.personaId)) {
+        if (queuedMeeting?.participants.some(isActivePersonaParticipant)) {
           await cancelMeetingPersonaReservations(
             queuedMeeting,
             handle.personaReservationAttemptId,
@@ -1492,7 +1527,7 @@ export class MeetingEngine {
         staleAttempt = { meeting: structuredClone(meeting), attemptId: intent.attemptId };
         meeting.personaReservationIntent = undefined;
         for (const participant of meeting.participants) {
-          if (participant.personaId) participant.activityId = undefined;
+          if (isActivePersonaParticipant(participant)) participant.activityId = undefined;
         }
       }
       const events = await readMeetingEvents(meeting.id);

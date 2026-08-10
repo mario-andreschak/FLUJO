@@ -215,4 +215,51 @@ describe('planned execution Persona trust boundary', () => {
     expect((await pauseExecutions(request('/api/planned-executions', { paused: true }))).status).toBe(403);
     expect(setPausedMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ['anonymized', { personaArchived: true, personaRetired: true }],
+    ['retained tombstone', { personaId: 'persona_deleted', personaRetired: true }],
+    ['corrupt empty target', { personaId: '' }],
+  ])('keeps %s Persona execution evidence inside the strict control plane', async (_label, markers) => {
+    const protectedExecution = {
+      id: 'execution_1',
+      flowId: 'legacy-flow-must-not-run',
+      enabled: false,
+      ...markers,
+    };
+    getMock.mockResolvedValue(protectedExecution);
+    listMock.mockResolvedValue([{
+      execution: protectedExecution,
+      status: {},
+      lastRun: null,
+    }]);
+    loadRunRecordsMock.mockResolvedValue([{
+      runId: 'run_1',
+      conversationId: 'conversation_1',
+      firedAt: new Date(0).toISOString(),
+      status: 'completed',
+      triggerSummary: 'test',
+      personaArchived: true,
+    }]);
+    assertLocalRequestMock.mockReturnValue(new Response('forbidden', { status: 403 }));
+
+    expect((await getExecution(request('/api/planned-executions/execution_1'), context)).status).toBe(403);
+    expect((await updateExecution(
+      request('/api/planned-executions/execution_1', { prompt: 'changed' }),
+      context,
+    )).status).toBe(403);
+    expect((await deleteExecution(request('/api/planned-executions/execution_1'), context)).status).toBe(403);
+    expect((await runExecution(request('/api/planned-executions/execution_1'), context)).status).toBe(403);
+    expect((await listExecutionRuns(request('/api/planned-executions/execution_1'), context)).status).toBe(403);
+    expect((await pauseExecutions(request('/api/planned-executions', { paused: true }))).status).toBe(403);
+
+    const listed = await listExecutions(request('/api/planned-executions'));
+    expect(listed.status).toBe(200);
+    expect((await listed.json()).executions).toEqual([]);
+    expect(updateMock).not.toHaveBeenCalled();
+    expect(deleteMock).not.toHaveBeenCalled();
+    expect(runNowMock).not.toHaveBeenCalled();
+    expect(setPausedMock).not.toHaveBeenCalled();
+    expect(ensureBackendInitializedMock).not.toHaveBeenCalled();
+  });
 });

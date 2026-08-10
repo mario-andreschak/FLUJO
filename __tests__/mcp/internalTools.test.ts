@@ -1270,6 +1270,27 @@ describe('read_conversation', () => {
     expect(readConversationLogMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['pending target', { personaTargetId: 'persona-1' }],
+    ['frozen instruction context', { personaInstructionContext: { personaId: 'persona-1' } }],
+    ['corrupt null attribution', { personaAttribution: null }],
+    ['corrupt empty target', { personaTargetId: '' }],
+  ])('rejects %s ownership markers before flushing or reading the log', async (_label, markers) => {
+    loadConversationStateMock.mockResolvedValue({
+      conversationId: 'persona-conversation',
+      ...markers,
+    });
+
+    const result = await internalCallTool(makeService(), 'read_conversation', {
+      conversation: 'persona-conversation',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('Persona conversations');
+    expect(flushConversationLogMock).not.toHaveBeenCalled();
+    expect(readConversationLogMock).not.toHaveBeenCalled();
+  });
+
   it('falls back to snapshot messages and excludes system-role messages', async () => {
     loadConversationStateMock.mockResolvedValue({
       conversationId: 'c1',

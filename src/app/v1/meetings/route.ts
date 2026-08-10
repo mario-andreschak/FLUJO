@@ -4,6 +4,7 @@ import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { meetingEngine } from '@/backend/execution/meeting';
 import {
   listMeetings,
+  isPersonaScopedMeeting,
   sanitizeMeetingForApi,
   summarizeMeeting,
 } from '@/backend/services/meetings/store';
@@ -20,16 +21,12 @@ async function GET_handler(request: NextRequest) {
   if (locked) return locked;
   try {
     const meetings = await listMeetings();
-    const hasPersonaMeetings = meetings.some(meeting =>
-      meeting.participants.some(participant => Boolean(participant.personaId))
-    );
+    const hasPersonaMeetings = meetings.some(isPersonaScopedMeeting);
     let visible = meetings;
     if (hasPersonaMeetings) {
       const notLocal = assertLocalRequest(request, { strictLoopback: true });
       if (notLocal) {
-        visible = meetings.filter(meeting =>
-          !meeting.participants.some(participant => Boolean(participant.personaId))
-        );
+        visible = meetings.filter(meeting => !isPersonaScopedMeeting(meeting));
       }
     }
     return NextResponse.json(visible.map(summarizeMeeting));

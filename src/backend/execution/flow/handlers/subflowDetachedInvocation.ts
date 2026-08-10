@@ -150,7 +150,8 @@ export async function executeDetachedSubflowStart(
       return { success: false, error: `Detached job limit reached (${settings.maxConcurrentDetachedJobs}).` };
     }
 
-    const flow = await flowService.getFlow(shared.flowId);
+    const flow = shared.flowSnapshot
+      ?? await flowService.getFlow(shared.flowId);
     const node = flow?.nodes.find(item => item.id === targetNodeId);
     const props = node?.data?.properties as SubflowNodeProperties | undefined;
     if (!props?.subflowId) return { success: false, error: 'Target subflow node has no configured subflowId.' };

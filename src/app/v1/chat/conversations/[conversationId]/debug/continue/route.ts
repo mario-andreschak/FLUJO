@@ -6,6 +6,7 @@ import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import { StorageKey } from '@/shared/types/storage';
 import { processChatCompletion } from '@/app/v1/chat/completions/chatCompletionService'; // Import the main service
 import { ChatCompletionRequest } from '@/app/v1/chat/completions/requestParser'; // Import request type
@@ -45,6 +46,22 @@ async function POST_handler(
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }
 
+    if (isPersonaOwnedConversationState(sharedState)) {
+      const notLoopback = assertLocalRequest(request, { strictLoopback: true });
+      if (notLoopback) return notLoopback;
+    }
+    if (sharedState.personaArchived) {
+      return NextResponse.json(
+        { error: 'An anonymized Persona archive cannot be resumed.' },
+        { status: 409 },
+      );
+    }
+    if (isPersonaOwnedConversationState(sharedState) && !sharedState.personaAttribution) {
+      return NextResponse.json({
+        error: 'Persona conversation attribution is incomplete; refusing an unfenced resume.',
+      }, { status: 409 });
+    }
+
     // 2. Continue is also "leave the debugger". Only a parked debugger run has
     // something meaningful to continue; accepting this on arbitrary states can
     // accidentally start a second execution for an already-running conversation.
@@ -54,8 +71,6 @@ async function POST_handler(
     }
 
     if (sharedState.personaAttribution) {
-      const notLoopback = assertLocalRequest(request, { strictLoopback: true });
-      if (notLoopback) return notLoopback;
       const { personaId, activityId, behaviorRevisionId } = sharedState.personaAttribution;
       if (!activityId || !behaviorRevisionId) {
         return NextResponse.json({
@@ -173,7 +188,7 @@ async function POST_handler(
     // Attempt to update state with error status if possible
      if (
        FlowExecutor.conversationStates.has(conversationId)
-       && !FlowExecutor.conversationStates.get(conversationId)?.personaAttribution
+       && !isPersonaOwnedConversationState(FlowExecutor.conversationStates.get(conversationId))
      ) {
         const state = FlowExecutor.conversationStates.get(conversationId)!;
         state.status = 'error';

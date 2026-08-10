@@ -5,6 +5,7 @@ import { createLogger } from '@/utils/logger';
 import { getSchedulerService } from '@/backend/services/scheduler';
 import { json } from '../_helpers';
 import { assertLocalRequest } from '@/utils/http/localRequest';
+import { isPersonaControlledPlannedExecution } from '@/shared/types/plannedExecution';
 
 const log = createLogger('app/api/planned-executions/[id]/route');
 
@@ -25,7 +26,7 @@ async function GET_handler(
     if (!execution) {
       return json({ error: `No planned execution with id "${id}"` }, 404);
     }
-    if (execution.personaId) {
+    if (isPersonaControlledPlannedExecution(execution)) {
       const notLocal = assertLocalRequest(request, { strictLoopback: true });
       if (notLocal) return notLocal;
     }
@@ -53,10 +54,8 @@ async function PATCH_handler(
     const scheduler = getSchedulerService();
     const existing = await scheduler.get(id);
     if (
-      existing?.personaId
-      || (patch && typeof patch === 'object' && (
-        'personaId' in patch || 'behaviorSlotKey' in patch
-      ))
+      isPersonaControlledPlannedExecution(existing)
+      || isPersonaControlledPlannedExecution(patch)
     ) {
       const notLocal = assertLocalRequest(request, { strictLoopback: true });
       if (notLocal) return notLocal;
@@ -88,7 +87,7 @@ async function DELETE_handler(
     const { id } = await params;
     const scheduler = getSchedulerService();
     const existing = await scheduler.get(id);
-    if (existing?.personaId) {
+    if (isPersonaControlledPlannedExecution(existing)) {
       const notLocal = assertLocalRequest(request, { strictLoopback: true });
       if (notLocal) return notLocal;
     }

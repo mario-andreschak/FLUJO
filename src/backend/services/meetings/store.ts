@@ -17,12 +17,18 @@ import {
 import {
   assertSafeCollectionId,
   deleteCollectionItem,
+  listCollectionItemEntriesStrict,
   listCollectionItems,
   loadCollectionItem,
   saveCollectionItem,
 } from '@/utils/storage/backend';
 import { createLogger } from '@/utils/logger';
-import { deleteMeetingEventLog } from './eventLog';
+import {
+  anonymizeMeetingParticipantEvents,
+  deleteMeetingEventLog,
+} from './eventLog';
+import { withMeetingControlLock } from './controlLock';
+import { ARCHIVED_MEETING_PARTICIPANT_NAME } from '@/shared/types/meeting';
 
 const log = createLogger('backend/services/meetings/store');
 
@@ -238,8 +244,24 @@ function assertMeetingRecord(record: MeetingRecord): void {
     requireSafeId(participant.id, 'participant id');
     const hasFlow = typeof participant.flowId === 'string' && participant.flowId.length > 0;
     const hasPersona = typeof participant.personaId === 'string' && participant.personaId.length > 0;
-    if (hasFlow === hasPersona) {
-      throw new Error(`Participant ${participant.id} must target exactly one Flow or Persona`);
+    const hasArchivedPersona = participant.personaArchived === true;
+    const hasRetiredPersona = participant.personaRetired === true;
+    if (Number(hasFlow) + Number(hasPersona) + Number(hasArchivedPersona) !== 1) {
+      throw new Error(
+        `Participant ${participant.id} must target exactly one Flow, Persona, or archived Persona`,
+      );
+    }
+    if (participant.personaArchived !== undefined && !hasArchivedPersona) {
+      throw new Error(`Participant ${participant.id} has an invalid archived Persona marker`);
+    }
+    if (participant.personaRetired !== undefined && !hasRetiredPersona) {
+      throw new Error(`Participant ${participant.id} has an invalid retired Persona marker`);
+    }
+    if (hasRetiredPersona && !hasPersona && !hasArchivedPersona) {
+      throw new Error(`Retired participant ${participant.id} must retain or archive its Persona target`);
+    }
+    if ((hasArchivedPersona || hasRetiredPersona) && participant.status !== 'left') {
+      throw new Error(`Archived or retired participant ${participant.id} must have left the meeting`);
     }
     if (hasFlow) requireSafeId(participant.flowId!, 'participant flow id');
     if (hasPersona) {
@@ -250,7 +272,9 @@ function assertMeetingRecord(record: MeetingRecord): void {
       personaIds.add(participant.personaId!);
     }
     if (participant.behaviorSlotKey !== undefined) {
-      if (!hasPersona) throw new Error('A participant Behavior slot requires a Persona target');
+      if (!hasPersona && !hasArchivedPersona) {
+        throw new Error('A participant Behavior slot requires a Persona target');
+      }
       BehaviorSlotKeySchema.parse(participant.behaviorSlotKey);
     }
     if (participant.activityId !== undefined) EnduringAgentIdSchema.parse(participant.activityId);
@@ -313,6 +337,134 @@ function assertMeetingRecord(record: MeetingRecord): void {
       throw new Error('Persona reservation intent timestamps are inconsistent');
     }
   }
+}
+
+export interface MeetingPersonaAnonymizationResult {
+  meetings: number;
+  participants: number;
+  events: number;
+}
+
+export interface MeetingPersonaRetirementResult {
+  meetings: number;
+  participants: number;
+}
+
+function isTerminalMeeting(meeting: MeetingRecord): boolean {
+  return meeting.status === 'completed'
+    || meeting.status === 'cancelled'
+    || meeting.status === 'error';
+}
+
+/** Live and archived Persona meetings share the strict-local read boundary. */
+export function isPersonaScopedMeeting(meeting: Pick<MeetingRecord, 'participants'>): boolean {
+  return meeting.participants.some((participant) => Boolean(
+    participant.personaId || participant.personaArchived || participant.personaRetired,
+  ));
+}
+
+function fenceMeetingRuntime(meeting: MeetingRecord): void {
+  meeting.personaReservationGeneration = (meeting.personaReservationGeneration ?? 0) + 1;
+  meeting.personaReservationIntent = undefined;
+}
+
+/**
+ * Stop exact Persona participants in live meetings without changing retained
+ * attribution evidence. Terminal meeting snapshots are deliberately untouched.
+ */
+export async function retireMeetingPersonaParticipants(
+  personaId: string,
+): Promise<MeetingPersonaRetirementResult> {
+  EnduringAgentIdSchema.parse(personaId);
+  const result: MeetingPersonaRetirementResult = { meetings: 0, participants: 0 };
+  const entries = await listCollectionItemEntriesStrict<MeetingRecord>(MEETINGS_COLLECTION);
+  for (const { id, item } of entries) {
+    assertMeetingRecord(item);
+    if (item.id !== id) {
+      throw new Error(`Meeting snapshot ${id} contains mismatched id ${item.id}`);
+    }
+    await withMeetingControlLock(id, async () => {
+      const current = await loadCollectionItem<MeetingRecord | null>(MEETINGS_COLLECTION, id, null);
+      if (!current) return;
+      assertMeetingRecord(current);
+      if (current.id !== id || isTerminalMeeting(current)) return;
+      const retired = structuredClone(current);
+      let changed = 0;
+      for (const participant of retired.participants) {
+        if (participant.personaId !== personaId || participant.personaRetired) continue;
+        participant.status = 'left';
+        participant.personaRetired = true;
+        changed += 1;
+      }
+      if (changed === 0) return;
+      // Advancing and clearing the durable start intent makes every stale
+      // MeetingEngine handle fail assertOwnedStartIntent before its next commit.
+      fenceMeetingRuntime(retired);
+      assertMeetingRecord(retired);
+      await saveCollectionItem(MEETINGS_COLLECTION, id, retired);
+      result.meetings += 1;
+      result.participants += changed;
+    });
+  }
+  return result;
+}
+
+/**
+ * Replace exact Persona participant references with a nonidentifying archival
+ * marker. Event-log names are rewritten first so a retry can always recover
+ * the participant-id association from the still-identifying snapshot.
+ */
+export async function anonymizeMeetingPersonaAttribution(
+  personaId: string,
+): Promise<MeetingPersonaAnonymizationResult> {
+  EnduringAgentIdSchema.parse(personaId);
+  const result: MeetingPersonaAnonymizationResult = {
+    meetings: 0,
+    participants: 0,
+    events: 0,
+  };
+  const entries = await listCollectionItemEntriesStrict<MeetingRecord>(MEETINGS_COLLECTION);
+  for (const { id, item } of entries) {
+    assertMeetingRecord(item);
+    if (item.id !== id) {
+      throw new Error(`Meeting snapshot ${id} contains mismatched id ${item.id}`);
+    }
+    await withMeetingControlLock(id, async () => {
+      const current = await loadCollectionItem<MeetingRecord | null>(MEETINGS_COLLECTION, id, null);
+      if (!current) return;
+      assertMeetingRecord(current);
+      if (current.id !== id) {
+        throw new Error(`Meeting snapshot ${id} contains mismatched id ${current.id}`);
+      }
+      const targets = current.participants
+        .filter((participant) => participant.personaId === personaId);
+      if (targets.length === 0) return;
+      const participantIds = targets.map((participant) => participant.id);
+
+      // Keep the exact participant-id association durable until cached event
+      // names have been scrubbed; a crash between writes remains retryable.
+      result.events += await anonymizeMeetingParticipantEvents(id, participantIds);
+      const archived = structuredClone(current);
+      if (!isTerminalMeeting(archived) && targets.some((participant) => !participant.personaRetired)) {
+        fenceMeetingRuntime(archived);
+      }
+      for (const participant of archived.participants) {
+        if (participant.personaId !== personaId) continue;
+        delete participant.personaId;
+        delete participant.activityId;
+        delete participant.behaviorRevisionId;
+        participant.personaRetired = true;
+        participant.personaArchived = true;
+        participant.name = ARCHIVED_MEETING_PARTICIPANT_NAME;
+        participant.status = 'left';
+        result.participants += 1;
+      }
+      assertMeetingRecord(archived);
+      await saveCollectionItem(MEETINGS_COLLECTION, id, archived);
+      result.meetings += 1;
+    });
+  }
+  return result;
 }
 
 export function summarizeMeeting(meeting: MeetingRecord): MeetingSummary {

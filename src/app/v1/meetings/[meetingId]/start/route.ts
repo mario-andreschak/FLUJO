@@ -2,7 +2,11 @@ import { NextResponse } from 'next/server';
 
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { meetingEngine } from '@/backend/execution/meeting';
-import { getMeeting, sanitizeMeetingForApi } from '@/backend/services/meetings/store';
+import {
+  getMeeting,
+  isPersonaScopedMeeting,
+  sanitizeMeetingForApi,
+} from '@/backend/services/meetings/store';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 
@@ -18,7 +22,7 @@ async function POST_handler(
   try {
     const stored = await getMeeting(meetingId);
     if (!stored) return NextResponse.json({ error: 'Meeting not found.' }, { status: 404 });
-    if (stored.participants.some((participant) => participant.personaId)) {
+    if (isPersonaScopedMeeting(stored)) {
       const notLocal = assertLocalRequest(request, { strictLoopback: true });
       if (notLocal) return notLocal;
     }

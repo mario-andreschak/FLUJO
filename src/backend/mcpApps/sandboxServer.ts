@@ -1221,8 +1221,6 @@ function handleSandboxRequest(
     return;
   }
 
-  const effectiveOriginKey = deriveOriginKeyFromHost(req.headers.host);
-
   // Validate token scoped to this originKey.
   const token = url.searchParams.get(SANDBOX_AUTH_QUERY_PARAM);
   if (!effectiveOriginKey || !isSandboxTokenValidForOriginKey(token, effectiveOriginKey)) {

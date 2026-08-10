@@ -16,10 +16,13 @@ jest.mock('@/config/features', () => ({
   FEATURES: { ENABLE_REVERT_TO_HERE: true },
 }));
 
-const personaState = {
+const baseState = {
   conversationId: 'conversation-1',
   status: 'paused_debug',
   messages: [{ id: 'message-1', role: 'user', content: 'hello' }],
+};
+let personaState: Record<string, unknown> = {
+  ...baseState,
   personaAttribution: {
     personaId: 'persona-1',
     activityId: 'activity-1',
@@ -73,41 +76,73 @@ function request(path: string, method: string, body?: unknown): NextRequest {
   });
 }
 
+const controlCases = [
+  ['breakpoints', () => replaceBreakpoints(
+    request('/v1/chat/conversations/conversation-1/breakpoints', 'PUT', { breakpoints: ['node-1'] }),
+    context,
+  )],
+  ['edit-state', () => editState(
+    request('/v1/chat/conversations/conversation-1/edit-state', 'PATCH', {
+      messageId: 'message-1',
+      content: 'changed',
+    }),
+    context,
+  )],
+  ['debug attach', () => attachDebugger(
+    request('/v1/chat/conversations/conversation-1/debug/attach', 'POST'),
+    context,
+  )],
+  ['revert', () => revertConversation(
+    request('/v1/chat/conversations/conversation-1/revert', 'POST', {}),
+    context,
+  )],
+] as const;
+
 describe('Persona-owned legacy conversation controls', () => {
   beforeEach(() => {
+    personaState = {
+      ...baseState,
+      personaAttribution: {
+        personaId: 'persona-1',
+        activityId: 'activity-1',
+        behaviorRevisionId: 'revision-1',
+      },
+    };
     loadConversationStateMock.mockClear();
     persistConversationStateMock.mockClear();
     appendRawForStateMock.mockClear();
     shadowRevertMock.mockClear();
   });
 
-  it.each([
-    ['breakpoints', () => replaceBreakpoints(
-      request('/v1/chat/conversations/conversation-1/breakpoints', 'PUT', { breakpoints: ['node-1'] }),
-      context,
-    )],
-    ['edit-state', () => editState(
-      request('/v1/chat/conversations/conversation-1/edit-state', 'PATCH', {
-        messageId: 'message-1',
-        content: 'changed',
-      }),
-      context,
-    )],
-    ['debug attach', () => attachDebugger(
-      request('/v1/chat/conversations/conversation-1/debug/attach', 'POST'),
-      context,
-    )],
-    ['revert', () => revertConversation(
-      request('/v1/chat/conversations/conversation-1/revert', 'POST', {}),
-      context,
-    )],
-  ])('returns 409 before %s can mutate attributed state', async (_label, invoke) => {
+  it.each(controlCases)('returns 409 before %s can mutate attributed state', async (_label, invoke) => {
     const response = await invoke();
 
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({
       error: expect.stringContaining('Persona dispatcher'),
     });
+    expect(persistConversationStateMock).not.toHaveBeenCalled();
+    expect(appendRawForStateMock).not.toHaveBeenCalled();
+    expect(shadowRevertMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ...controlCases.map(([control, invoke]) => [control, 'pending target', invoke, { personaTargetId: 'persona-1' }] as const),
+    ...controlCases.map(([control, invoke]) => [control, 'instruction context', invoke, {
+      personaInstructionContext: { personaId: 'persona-1' },
+    }] as const),
+    ...controlCases.map(([control, invoke]) => [control, 'null attribution', invoke, {
+      personaAttribution: null,
+    }] as const),
+    ...controlCases.map(([control, invoke]) => [control, 'empty target', invoke, {
+      personaTargetId: '',
+    }] as const),
+  ])('returns 409 before %s can mutate %s state', async (_control, _marker, invoke, markers) => {
+    personaState = { ...baseState, ...markers };
+
+    const response = await invoke();
+
+    expect(response.status).toBe(409);
     expect(persistConversationStateMock).not.toHaveBeenCalled();
     expect(appendRawForStateMock).not.toHaveBeenCalled();
     expect(shadowRevertMock).not.toHaveBeenCalled();

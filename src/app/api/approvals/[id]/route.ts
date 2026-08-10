@@ -3,11 +3,13 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { withConversationExecutionLock } from '@/backend/execution/flow/conversationExecutionLock';
 import { StorageKey } from '@/shared/types/storage';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { appendRawForState } from '@/backend/execution/flow/conversationLog';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import { applyApprovalDecision } from '@/backend/execution/flow/resumeAfterApproval';
 import { processChatCompletion } from '@/app/v1/chat/completions/chatCompletionService';
 import { ChatCompletionRequest } from '@/app/v1/chat/completions/requestParser';
@@ -128,9 +130,12 @@ async function POST_handler(
     }
     const questionState = FlowExecutor.conversationStates.get(id)
       ?? await loadConversationState(id);
-    if (!questionState || questionState.personaAttribution) {
+    if (!questionState || isPersonaOwnedConversationState(questionState)) {
       const notLoopback = assertLocalRequest(request, { strictLoopback: true });
       if (notLoopback) return notLoopback;
+    }
+    if (isPersonaOwnedConversationState(questionState) && !questionState?.personaAttribution) {
+      return json({ error: 'Persona conversation attribution is incomplete; refusing an unfenced response.' }, 409);
     }
     const resolved = body.action === 'question-answer'
       ? resolvePendingQuestion(id, body.questionId, body.answers ?? [])
@@ -146,16 +151,31 @@ async function POST_handler(
   log.info('Resolving approval', { requestId, approvalId: id, action: body.action, toolCallId: body.toolCallId });
 
   try {
+    const candidateEntry = await getPendingApproval(id);
+    if (!candidateEntry) {
+      return json({ error: `No pending approval with id "${id}"` }, 404);
+    }
+
+    return await withConversationExecutionLock(candidateEntry.conversationId, async () => {
+    // Re-read both receipt and conversation under the conversation lease. A
+    // pre-lock snapshot must never authorize legacy tool execution after the
+    // Persona deletion workflow has anonymized the durable state.
     const entry = await getPendingApproval(id);
-    if (!entry) {
+    if (!entry || entry.conversationId !== candidateEntry.conversationId) {
       return json({ error: `No pending approval with id "${id}"` }, 404);
     }
 
     const storageKey = `conversations/${entry.conversationId}` as StorageKey;
     const state = await loadConversationState(entry.conversationId);
-    if (!state || state.personaAttribution) {
+    if (!state || isPersonaOwnedConversationState(state)) {
       const notLoopback = assertLocalRequest(request, { strictLoopback: true });
       if (notLoopback) return notLoopback;
+    }
+    if (state?.personaArchived) {
+      return json({ error: 'An anonymized Persona archive is read-only.' }, 409);
+    }
+    if (isPersonaOwnedConversationState(state) && !state?.personaAttribution) {
+      return json({ error: 'Persona conversation attribution is incomplete; refusing an unfenced approval.' }, 409);
     }
     if (entry.resumeDispatchId) {
       const resumedDispatch = await getPersonaFlowDispatch(entry.resumeDispatchId);
@@ -455,6 +475,7 @@ async function POST_handler(
       status: finalStatus,
       approvalId: id,
       conversationId: entry.conversationId,
+    });
     });
   } catch (error) {
     log.error('Error resolving approval', {

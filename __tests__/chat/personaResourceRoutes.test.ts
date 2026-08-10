@@ -47,15 +47,20 @@ function request(path: string) {
 }
 
 describe('Persona run-resource HTTP boundaries', () => {
+  let ownershipMarkers: Record<string, unknown>;
+
   beforeEach(() => {
     jest.clearAllMocks();
-    loadConversationStateMock.mockResolvedValue({
-      conversationId: 'conversation_persona',
+    ownershipMarkers = {
       personaAttribution: {
         personaId: 'persona_1',
         activityId: 'activity_1',
         behaviorRevisionId: 'revision_1',
       },
+    };
+    loadConversationStateMock.mockResolvedValue({
+      conversationId: 'conversation_persona',
+      ...ownershipMarkers,
     });
     assertLocalRequestMock.mockReturnValue(new Response('forbidden', { status: 403 }));
   });
@@ -75,6 +80,32 @@ describe('Persona run-resource HTTP boundaries', () => {
 
     expect(response.status).toBe(403);
     expect(assertLocalRequestMock).toHaveBeenCalledWith(req, { strictLoopback: true });
+    expect(buildRunResourceUriMock).not.toHaveBeenCalled();
+    expect(readRunResourceMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['pending target', { personaTargetId: 'persona_1' }],
+    ['frozen instruction context', { personaInstructionContext: { personaId: 'persona_1' } }],
+    ['corrupt null attribution', { personaAttribution: null }],
+    ['corrupt empty target', { personaTargetId: '' }],
+  ])('fails closed for %s state before listing or reading resources', async (_label, markers) => {
+    ownershipMarkers = markers;
+    loadConversationStateMock.mockResolvedValue({
+      conversationId: 'conversation_persona',
+      ...ownershipMarkers,
+    });
+
+    const listReq = request('/v1/chat/conversations/conversation_persona/resources');
+    const listResponse = await listResources(listReq, conversationContext);
+    expect(listResponse.status).toBe(403);
+    expect(assertLocalRequestMock).toHaveBeenCalledWith(listReq, { strictLoopback: true });
+    expect(listRunResourcesMock).not.toHaveBeenCalled();
+
+    const contentReq = request('/v1/chat/conversations/conversation_persona/resources/resource_1/content');
+    const contentResponse = await readResource(contentReq, resourceContext);
+    expect(contentResponse.status).toBe(403);
+    expect(assertLocalRequestMock).toHaveBeenCalledWith(contentReq, { strictLoopback: true });
     expect(buildRunResourceUriMock).not.toHaveBeenCalled();
     expect(readRunResourceMock).not.toHaveBeenCalled();
   });

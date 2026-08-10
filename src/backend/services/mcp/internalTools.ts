@@ -55,6 +55,7 @@ import { compileSpec } from '@/backend/services/flow/compileFlow';
 import { explainCompiledFlow } from '@/backend/services/flow/explainFlow';
 import { truncate, MAX_FLOW_DESCRIPTION_CHARS } from '@/backend/services/flow/generationContext';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import {
   flushConversationLog,
   readConversationLog,
@@ -1550,7 +1551,7 @@ async function listConversations(args: Record<string, unknown>): Promise<CallToo
 
   const stored = (await listConversationSummaries()).filter((summary) => (
     !summary.personaOwned
-    && !FlowExecutor.conversationStates.get(summary.id)?.personaAttribution
+    && !isPersonaOwnedConversationState(FlowExecutor.conversationStates.get(summary.id))
   ));
   const summaries = stored.map((summary): ConversationSummary => {
     // Match the main conversations API: in-memory state wins while a run is in
@@ -1664,7 +1665,7 @@ async function readConversation(args: Record<string, unknown>): Promise<CallTool
   if (!state) {
     return textResult({ error: `No conversation with id "${id}". Use list_conversations to see the stored conversations.` }, true);
   }
-  if (state.personaAttribution) {
+  if (isPersonaOwnedConversationState(state)) {
     return textResult({ error: 'Persona conversations require the trusted local control plane.' }, true);
   }
   await flushConversationLog(id);

@@ -9,6 +9,12 @@ jest.mock('@/backend/execution/meeting', () => ({
 }));
 
 jest.mock('@/backend/services/meetings/store', () => ({
+  isPersonaScopedMeeting: (meeting: { participants?: Array<{
+    personaId?: string;
+    personaArchived?: boolean;
+    personaRetired?: boolean;
+  }> }) => meeting.participants?.some((participant) =>
+    Boolean(participant.personaId || participant.personaArchived || participant.personaRetired)),
   listMeetings: (...args: unknown[]) => listMeetingsMock(...args),
   summarizeMeeting: (meeting: unknown) => summarizeMeetingMock(meeting),
   sanitizeMeetingForApi: (meeting: Record<string, unknown>) => {
@@ -98,6 +104,10 @@ describe('POST /v1/meetings Persona targeting', () => {
     listMeetingsMock.mockResolvedValue([
       { id: 'legacy', participants: [{ flowId: 'flow_legacy' }] },
       { id: 'persona', participants: [{ personaId: 'persona_jim' }] },
+      {
+        id: 'archived-persona',
+        participants: [{ personaArchived: true, personaRetired: true }],
+      },
     ]);
     assertLocalRequestMock.mockReturnValue(new Response('forbidden', { status: 403 }));
     const req = new NextRequest('https://flujo.example.com/v1/meetings');

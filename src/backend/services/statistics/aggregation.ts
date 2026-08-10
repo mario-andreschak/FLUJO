@@ -48,11 +48,13 @@ import {
   type SubflowInvocationStatisticsEvent,
   type ToolInvocationStatisticsEvent,
 } from '@/shared/types/statistics';
+import type { PersonaAttribution } from '@/shared/types/enduringAgent';
 import { workspaceCacheKey } from '@/utils/workspace';
 
 const UTC_DAY = /^\d{4}-\d{2}-\d{2}$/;
 const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,255}$/;
 const SAFE_CREDENTIAL = /^cred_[A-Za-z0-9_-]{1,128}$/;
+const SAFE_PERSONA_ATTRIBUTION_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const SAFE_CURSOR = /^\d{1,9}$/;
 const DAY_MS = 86_400_000;
 const CACHE_TTL_MS = 5 * 60_000;
@@ -87,6 +89,7 @@ const SORT_FIELDS = new Set<StatisticsSortField>([
 ]);
 
 const FILTER_QUERY_KEYS = [
+  'personaId', 'activityId', 'behaviorRevisionId',
   'flowId', 'plannedExecutionId', 'source', 'status', 'modelId', 'providerId',
   'credentialId', 'nodeId', 'toolId', 'subflowId', 'subflowMode', 'revisionId',
   'cacheOutcome', 'contentCategory', 'parentRunId',
@@ -102,6 +105,7 @@ const COMPARE_QUERY_KEYS = new Set<string>([
   'baselineFrom', 'baselineTo', 'candidateFrom', 'candidateTo',
 ]);
 const ALLOWED_FILTER_KEYS = new Set<keyof StatisticsFilters>([
+  'personaIds', 'activityIds', 'behaviorRevisionIds',
   'flowIds', 'plannedExecutionIds', 'sources', 'statuses', 'modelIds', 'providerIds',
   'credentialIds', 'nodeIds', 'toolIds', 'subflowIds', 'subflowModes', 'revisionIds',
   'cacheOutcomes', 'contentCategories', 'parentRunIds',
@@ -181,6 +185,21 @@ function assertAllowedKeys(searchParams: URLSearchParams, allowed: ReadonlySet<s
 }
 
 function parseFilters(searchParams: URLSearchParams): StatisticsFilters {
+  const personaIds = parseValues(
+    searchParams,
+    'personaId',
+    value => SAFE_PERSONA_ATTRIBUTION_ID.test(value),
+  );
+  const activityIds = parseValues(
+    searchParams,
+    'activityId',
+    value => SAFE_PERSONA_ATTRIBUTION_ID.test(value),
+  );
+  const behaviorRevisionIds = parseValues(
+    searchParams,
+    'behaviorRevisionId',
+    value => SAFE_PERSONA_ATTRIBUTION_ID.test(value),
+  );
   const flowIds = parseValues(searchParams, 'flowId', value => SAFE_IDENTIFIER.test(value));
   const plannedExecutionIds = parseValues(
     searchParams,
@@ -202,6 +221,9 @@ function parseFilters(searchParams: URLSearchParams): StatisticsFilters {
   const parentRunIds = parseValues(searchParams, 'parentRunId', value => SAFE_IDENTIFIER.test(value));
 
   return {
+    ...(personaIds ? { personaIds } : {}),
+    ...(activityIds ? { activityIds } : {}),
+    ...(behaviorRevisionIds ? { behaviorRevisionIds } : {}),
     ...(flowIds ? { flowIds } : {}),
     ...(plannedExecutionIds ? { plannedExecutionIds } : {}),
     ...(sources ? { sources } : {}),
@@ -444,6 +466,7 @@ interface RunBundle {
   runId: string;
   earliestDay: string;
   earliestTimestamp: string;
+  personaAttribution?: PersonaAttribution;
   anchorDay?: string;
   anchorTimestamp?: string;
   source?: StatisticsRunSource;
@@ -846,6 +869,9 @@ function matchingSubflows(run: RunBundle, filters: StatisticsFilters): SubflowCo
 }
 
 function runMatches(run: RunBundle, filters: StatisticsFilters): boolean {
+  if (!matches(filters.personaIds, run.personaAttribution?.personaId)) return false;
+  if (!matches(filters.activityIds, run.personaAttribution?.activityId)) return false;
+  if (!matches(filters.behaviorRevisionIds, run.personaAttribution?.behaviorRevisionId)) return false;
   if (!matches(filters.flowIds, run.flow?.id)) return false;
   if (!matches(filters.plannedExecutionIds, run.plannedExecution?.id)) return false;
   if (!matches(filters.sources, run.source)) return false;
@@ -881,7 +907,8 @@ function skipMatches(
     filters.flowIds || filters.modelIds || filters.providerIds || filters.credentialIds
     || filters.nodeIds || filters.toolIds || filters.subflowIds || filters.subflowModes
     || filters.revisionIds || filters.cacheOutcomes || filters.contentCategories
-    || filters.parentRunIds
+    || filters.parentRunIds || filters.personaIds || filters.activityIds
+    || filters.behaviorRevisionIds
   ) return false;
   if (!matches(filters.plannedExecutionIds, event.plannedExecution.id)) return false;
   if (!matches(filters.sources, event.source)) return false;
@@ -1002,6 +1029,9 @@ function updateRun(bundle: RunBundle, event: Exclude<StatisticsEvent, { type: 's
   const day = event.timestamp.slice(0, 10);
   if (day < bundle.earliestDay) bundle.earliestDay = day;
   if (event.timestamp < bundle.earliestTimestamp) bundle.earliestTimestamp = event.timestamp;
+  if (!bundle.personaAttribution && event.personaAttribution) {
+    bundle.personaAttribution = { ...event.personaAttribution };
+  }
   switch (event.type) {
     case 'run.started':
       bundle.hasLifecycle = true;
@@ -1134,7 +1164,10 @@ function validateFilters(filters: StatisticsFilters): void {
     throw new StatisticsRequestError('invalid_filter', 'Invalid statistics filter.');
   }
   if (
-    !validFilterArray(filters.flowIds, value => SAFE_IDENTIFIER.test(value))
+    !validFilterArray(filters.personaIds, value => SAFE_PERSONA_ATTRIBUTION_ID.test(value))
+    || !validFilterArray(filters.activityIds, value => SAFE_PERSONA_ATTRIBUTION_ID.test(value))
+    || !validFilterArray(filters.behaviorRevisionIds, value => SAFE_PERSONA_ATTRIBUTION_ID.test(value))
+    || !validFilterArray(filters.flowIds, value => SAFE_IDENTIFIER.test(value))
     || !validFilterArray(filters.plannedExecutionIds, value => SAFE_IDENTIFIER.test(value))
     || !validFilterArray(filters.sources, value => RUN_SOURCES.has(value as StatisticsRunSource))
     || !validFilterArray(filters.statuses, value => STATUSES.has(value as StatisticsStatusFilter))
@@ -1459,6 +1492,7 @@ export async function statisticsDetails(
         runId: run.runId,
         day: run.anchorDay ?? run.earliestDay,
         timestamp: run.anchorTimestamp ?? run.earliestTimestamp,
+        ...(run.personaAttribution ? { personaAttribution: { ...run.personaAttribution } } : {}),
         ...(run.source ? { source: run.source } : {}),
         ...(run.flow ? { flowId: run.flow.id, ...(run.flow.name ? { flowName: run.flow.name } : {}) } : {}),
         ...(run.plannedExecution ? { plannedExecutionId: run.plannedExecution.id } : {}),

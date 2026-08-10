@@ -1,6 +1,10 @@
 import { z } from 'zod';
+import { PersonaAttributionSchema } from '@/shared/types/enduringAgent';
 
 export const SAFE_TICKET_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** Trusted conversation provenance; intentionally absent from the caller input schema. */
+export const TicketPersonaAttributionSchema = PersonaAttributionSchema;
 
 export const CreateTicketInputSchema = z.object({
   message: z.string().trim().min(1).max(4000),

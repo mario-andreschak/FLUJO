@@ -23,15 +23,18 @@ import {
   PERSONA_ACTIVITY_KINDS,
   PERSONA_ACTIVITY_SOURCE_KINDS,
   PERSONA_PRIORITIES,
+  PersonaInstructionContextSchema,
   type BehaviorRevision,
   type Persona,
   type PersonaActivity,
   type PersonaActivityKind,
   type PersonaActivitySource,
   type PersonaAttribution,
+  type PersonaInstructionContext,
   type PersonaLease,
   type PersonaMailboxItem,
   type PersonaPriority,
+  type RoleVersion,
 } from '@/shared/types/enduringAgent';
 import {
   assertSafeCollectionId,
@@ -73,6 +76,7 @@ import {
 import { canonicalJson } from './behaviorRevisions';
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
 import { stableEnduringAgentId } from './ids';
+import { buildPersonaInstructionContext } from './personaInstructionContext';
 import {
   withPersonaRuntimeLock,
   type PersonaRuntimeLock,
@@ -82,6 +86,7 @@ import {
   getPersona,
   getPersonaActivity,
   getPersonaMailboxItem,
+  getRoleVersion,
 } from './store';
 
 const log = createLogger('backend/services/enduringAgents/personaDispatcher');
@@ -191,6 +196,8 @@ export interface PersonaFlowDispatchRecord {
   targetActivityId?: string;
   activityId?: string;
   behaviorRevisionId?: string;
+  /** Frozen trusted identity/mission context for this exact Activity. */
+  instructionContext?: PersonaInstructionContext;
   waitingReason?: 'delivery' | 'approval' | 'debug' | 'running' | 'interrupted';
   /** Durable, scoped lifecycle intent. No lease, holder, or fencing data lives here. */
   cancellationRequestedAt?: number;
@@ -476,6 +483,7 @@ const PersonaFlowDispatchRecordSchema = z.object({
   targetActivityId: EnduringAgentIdSchema.optional(),
   activityId: EnduringAgentIdSchema.optional(),
   behaviorRevisionId: EnduringAgentIdSchema.optional(),
+  instructionContext: PersonaInstructionContextSchema.optional(),
   waitingReason: z.enum(['delivery', 'approval', 'debug', 'running', 'interrupted']).optional(),
   cancellationRequestedAt: z.number().int().nonnegative().optional(),
   cancellationReason: z.string().trim().min(1).max(512).optional(),
@@ -497,6 +505,17 @@ const PersonaFlowDispatchRecordSchema = z.object({
   }
   if (record.state === 'running' && (!record.activityId || !record.behaviorRevisionId)) {
     ctx.addIssue({ code: 'custom', message: 'A running dispatch requires Activity and revision ids.' });
+  }
+  if (record.instructionContext && (
+    record.instructionContext.personaId !== record.personaId
+    || record.instructionContext.activityId !== record.activityId
+    || record.instructionContext.behaviorRevisionId !== record.behaviorRevisionId
+  )) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'A frozen instruction context must match the dispatch attribution triple.',
+      path: ['instructionContext'],
+    });
   }
   if (record.state === 'waiting' && !record.waitingReason) {
     ctx.addIssue({ code: 'custom', message: 'A waiting dispatch requires waitingReason.' });
@@ -528,6 +547,29 @@ const PersonaFlowDispatchRecordSchema = z.object({
 
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function assertInstructionContextMatchesClaim(
+  record: PersonaFlowDispatchRecord,
+  claim: PersonaActivityClaim,
+  revision: BehaviorRevision,
+): PersonaInstructionContext {
+  const context = PersonaInstructionContextSchema.parse(record.instructionContext);
+  if (
+    context.personaId !== record.personaId
+    || context.personaId !== claim.activity.personaId
+    || context.activityId !== claim.activity.id
+    || context.behaviorRevisionId !== revision.id
+    || context.behaviorContentHash !== revision.contentHash
+    || context.behaviorSlotKey !== revision.slotKey
+    || context.rootFlowId !== revision.flowSnapshot.id
+  ) {
+    throw new PersonaFlowDispatchCorruptionError(
+      record.id,
+      'Frozen Persona instruction context does not match the claimed Activity and Behavior revision.',
+    );
+  }
+  return context;
 }
 
 function cloneSerializableFlowInput(value: unknown): SerializablePersonaFlowRunInput {
@@ -672,6 +714,7 @@ export interface PersonaFlowDispatcherDependencies {
   ) => Promise<PersonaLease>;
   observeYieldedPersonaActivity: (value: unknown) => Promise<void>;
   getPersona: (id: string) => Promise<Persona | null>;
+  getRoleVersion: (id: string) => Promise<RoleVersion | null>;
   getBehaviorRevision: (id: string) => Promise<BehaviorRevision | null>;
   getPersonaActivity: (id: string) => Promise<PersonaActivity | null>;
   getPersonaMailboxItem: (id: string) => Promise<PersonaMailboxItem | null>;
@@ -698,6 +741,7 @@ const DEFAULT_DEPENDENCIES: PersonaFlowDispatcherDependencies = {
   yieldPersonaActivityForInterruptionWithinRuntimeLock,
   observeYieldedPersonaActivity,
   getPersona,
+  getRoleVersion,
   getBehaviorRevision,
   getPersonaActivity,
   getPersonaMailboxItem,
@@ -1880,6 +1924,32 @@ export class PersonaFlowDispatcher {
       return true;
     }
 
+    let instructionContext: PersonaInstructionContext | undefined;
+    try {
+      if (record.instructionContext) {
+        instructionContext = assertInstructionContextMatchesClaim(record, claim, revision);
+      } else if (record.startedAt === undefined) {
+        // Resolve mutable Persona metadata exactly once, before the first run.
+        // A started legacy record without this field remains context-free: do
+        // not guess historical identity/mission data during resume or recovery.
+        const persona = await this.inWorkspace(() => this.dependencies.getPersona(record.personaId));
+        if (!persona) throw new Error('Persona no longer exists.');
+        const roleVersion = await this.inWorkspace(() => this.dependencies.getRoleVersion(
+          persona.roleVersionId,
+        ));
+        if (!roleVersion) throw new Error('Persona-pinned Role version no longer exists.');
+        instructionContext = buildPersonaInstructionContext({
+          persona,
+          roleVersion,
+          revision,
+          activityId: claim.activity.id,
+        });
+      }
+    } catch (error) {
+      await this.failClaimWithoutPayload(claim, error);
+      return true;
+    }
+
     const fence = fenceForClaim(claim);
     const conversationId = record.flowInput.conversationId ?? randomUUID();
     const runId = record.flowInput.runId ?? randomUUID();
@@ -1917,6 +1987,9 @@ export class PersonaFlowDispatcher {
         flowInput,
         activityId: claim.activity.id,
         behaviorRevisionId: revision.id,
+        instructionContext: latest.instructionContext ?? (
+          latest.startedAt === undefined ? instructionContext : undefined
+        ),
         error: undefined,
         lastError: undefined,
         startedAt: latest.startedAt ?? Date.now(),
@@ -1931,6 +2004,13 @@ export class PersonaFlowDispatcher {
         await this.completeCancellation(record, fence);
       }
       return false;
+    }
+    if (record.instructionContext) {
+      // Re-read the value saved under the Persona runtime lock. This is the
+      // exact context every continuation must pass to runFlow.
+      instructionContext = assertInstructionContextMatchesClaim(record, claim, revision);
+    } else {
+      instructionContext = undefined;
     }
     if (control.cancelRequested) abortController.abort();
     const heartbeat = this.beginHeartbeat(fence, record.id, abortController);
@@ -2166,6 +2246,9 @@ export class PersonaFlowDispatcher {
           activityId: record.activityId,
           behaviorRevisionId: record.behaviorRevisionId,
         },
+        ...(instructionContext
+          ? { personaInstructionContext: structuredClone(instructionContext) }
+          : {}),
       }));
       await heartbeat.stop();
       control.activeAbort = undefined;

@@ -73,7 +73,12 @@ import {
 import { queueSubflowRunOutcome } from '@/backend/execution/flow/subflowRecovery';
 import { hydrateLazyToolPayloads } from '@/backend/execution/flow/lazyToolPayloads';
 import { combineAbortSignals } from '@/backend/execution/flow/combineAbortSignals';
-import type { PersonaAttribution } from '@/shared/types/enduringAgent';
+import {
+  PersonaInstructionContextSchema,
+  type PersonaAttribution,
+  type PersonaInstructionContext,
+} from '@/shared/types/enduringAgent';
+import { hashBehaviorFlow } from '@/backend/services/enduringAgents/behaviorRevisions';
 import {
   ATTACH_BREAKPOINT,
   matchToolBreakpoint,
@@ -99,6 +104,53 @@ const persistState = persistConversationState;
 
 /** Cap the output carried on a runFlow-originated FlowRunEvent (issue #116). */
 const MAX_EVENT_OUTPUT_CHARS = 4096;
+
+function instructionContextsEqual(
+  left: PersonaInstructionContext,
+  right: PersonaInstructionContext,
+): boolean {
+  return left.schemaVersion === right.schemaVersion
+    && left.personaId === right.personaId
+    && left.activityId === right.activityId
+    && left.behaviorRevisionId === right.behaviorRevisionId
+    && left.behaviorContentHash === right.behaviorContentHash
+    && left.behaviorSlotKey === right.behaviorSlotKey
+    && left.rootFlowId === right.rootFlowId
+    && left.roleVersionId === right.roleVersionId
+    && left.personaName === right.personaName
+    && left.personaMission === right.personaMission
+    && left.roleName === right.roleName
+    && left.roleMission === right.roleMission
+    && left.instruction === right.instruction;
+}
+
+function assertInstructionContextAttribution(
+  context: PersonaInstructionContext,
+  attribution: PersonaAttribution | undefined,
+  label: string,
+): void {
+  if (
+    !attribution
+    || context.personaId !== attribution.personaId
+    || context.activityId !== attribution.activityId
+    || context.behaviorRevisionId !== attribution.behaviorRevisionId
+  ) {
+    throw new Error(`${label} Persona instruction context does not match its attribution triple.`);
+  }
+}
+
+function assertBehaviorSnapshotMatchesInstructionContext(
+  flow: Flow,
+  context: PersonaInstructionContext,
+  label: string,
+): void {
+  if (flow.id !== context.rootFlowId) {
+    throw new Error(`${label} Behavior snapshot does not match the Persona instruction root Flow.`);
+  }
+  if (hashBehaviorFlow(flow) !== context.behaviorContentHash) {
+    throw new Error(`${label} Behavior snapshot does not match the attributed immutable revision.`);
+  }
+}
 
 /** Unattended mode (issue #218): how many times to re-prompt a Process node
  *  that ended on plain text but has MORE THAN ONE forward successor (so the
@@ -254,11 +306,13 @@ async function publishRunFlowEvent(
     if (!flowId) {
       return;
     }
-    let flowName: string | undefined;
-    try {
-      flowName = (await flowService.getFlow(flowId))?.name ?? undefined;
-    } catch {
-      /* best-effort name resolution */
+    let flowName: string | undefined = state.flowSnapshot?.name;
+    if (!state.flowSnapshot) {
+      try {
+        flowName = (await flowService.getFlow(flowId))?.name ?? undefined;
+      } catch {
+        /* best-effort name resolution */
+      }
     }
     // Scheduled/triggered runs are filtered out before this is ever called.
     const firedBy: FlowRunFiredBy = state.source === 'chat' ? 'chat' : 'api';
@@ -307,8 +361,10 @@ export interface FlowRunInput {
    *  run WITHOUT persisting it to the flows store. Mutually exclusive with
    *  `flowId`/`modelName`. For a NEW conversation it is snapshotted onto the
    *  state (`flowSnapshot`) so the engine resolves it from there and follow-up
-   *  turns/restarts work by construction. Ignored when resuming (the snapshot
-   *  is already on the loaded state). */
+   *  turns/restarts work by construction. Ordinarily ignored when resuming (the
+   *  snapshot is already on the loaded state). A validated Persona instruction
+   *  context is the narrow exception: a draft's first Activity or a successor
+   *  Activity installs its newly pinned immutable Behavior snapshot. */
   flowDefinition?: Flow;
 
   /** Full message list (advanced; the OpenAI route passes its request messages). */
@@ -393,6 +449,14 @@ export interface FlowRunInput {
    */
   personaAttribution?: PersonaAttribution;
 
+  /**
+   * Dispatcher-only, capability-free Persona identity/mission instructions.
+   * This field is intentionally absent from serializable public input and from
+   * SubflowNode child inputs; runFlow persists it only after validating the
+   * exact attributed Activity and immutable Behavior root.
+   */
+  personaInstructionContext?: PersonaInstructionContext;
+
   /** MeetingEngine-only participant identity. Never forwarded to subflows. */
   meetingParticipant?: SharedState['meetingParticipant'];
   /** MeetingEngine-only fresh action buffer for this participant turn. */
@@ -441,6 +505,97 @@ export async function runFlow(input: FlowRunInput): Promise<FlowRunResult> {
   );
 }
 
+/**
+ * Install a successor Persona Activity's immutable Behavior as a fresh
+ * execution boundary. The conversation transcript and user-owned metadata
+ * survive, but no graph-derived capability, pending action, or resumable child
+ * state from the prior Activity may cross into the newly pinned revision.
+ */
+function installPersonaActivitySnapshot(
+  sharedState: SharedState,
+  flowDefinition: Flow,
+  debug: boolean,
+): void {
+  const priorFlowId = sharedState.flowId;
+  for (const flowId of new Set([priorFlowId, flowDefinition.id])) {
+    if (flowId) FlowExecutor.clearFlowCache(flowId);
+  }
+
+  sharedState.flowSnapshot = structuredClone(flowDefinition);
+  sharedState.flowId = flowDefinition.id;
+  sharedState.currentNodeId = undefined;
+
+  // Model/tool authority derived from the prior graph.
+  sharedState.mcpContext = undefined;
+  sharedState.currentMCPNodes = undefined;
+  sharedState.armedSyntheticTools = undefined;
+  sharedState.toolNameMap = undefined;
+  sharedState.permissionRules = undefined;
+  sharedState.savedPermissionRules = undefined;
+  sharedState.frozenSystemPrompts = undefined;
+  sharedState.codexSessions = undefined;
+  sharedState.turnBudgets = undefined;
+  sharedState.mcpAppContexts = undefined;
+
+  // Graph routing, subflow recovery, and detached-task handles.
+  sharedState.handoffRequested = undefined;
+  sharedState.handoffInput = undefined;
+  sharedState.handoffNameMap = undefined;
+  sharedState.handoffTargetTypes = undefined;
+  sharedState.pendingSubflowReturn = undefined;
+  sharedState.subflowToolNameMap = undefined;
+  sharedState.subflowDetachedToolNameMap = undefined;
+  sharedState.subflowInvocations = undefined;
+  sharedState.activeSubflowInvocationByNode = undefined;
+  sharedState.subflowSessions = undefined;
+  sharedState.subflowLane = undefined;
+  sharedState.launchedTaskIds = undefined;
+  sharedState.staticInjected = undefined;
+
+  // No paused tool/debug decision from the old Activity may execute under the
+  // new lease. Debug configuration is re-established from this invocation.
+  sharedState.pendingToolCalls = undefined;
+  sharedState.debugPendingToolCalls = undefined;
+  sharedState.debugPendingAction = undefined;
+  sharedState.debugPauseRequested = false;
+  sharedState.debugResumeAfterDetach = false;
+  sharedState.breakpoints = [];
+  sharedState.lastBreakNodeId = undefined;
+  sharedState.debugMode = debug;
+  sharedState.executionTrace = debug && FEATURES.ENABLE_EXECUTION_TRACKER ? [] : undefined;
+
+  // Activity/run-scoped scratchpads and lifecycle projections.
+  sharedState.variables = {};
+  sharedState.todos = undefined;
+  sharedState.usage = undefined;
+  sharedState.logicalRunId = undefined;
+  sharedState.recovery = undefined;
+  sharedState.runDepth = undefined;
+  sharedState.chainDepth = undefined;
+  sharedState.onApprovalRequired = undefined;
+  sharedState.forceSummaryTurn = undefined;
+  sharedState.capped = undefined;
+  sharedState.cappedReason = undefined;
+  sharedState.lastResponse = undefined;
+  sharedState.lastError = undefined;
+  sharedState.errorEventEmitted = false;
+  sharedState.isCancelled = false;
+  sharedState.status = 'running';
+  sharedState.trackingInfo = {
+    executionId: crypto.randomUUID(),
+    startTime: Date.now(),
+    nodeExecutionTracker: [],
+  };
+
+  // Statistics describe this Activity's snapshot, never its predecessor.
+  sharedState.statisticsRunStartedAt = undefined;
+  sharedState.statisticsRunStarted = false;
+  sharedState.statisticsRunFinished = false;
+  sharedState.statisticsFlowName = undefined;
+  sharedState.statisticsPlannedExecutionName = undefined;
+  sharedState.statisticsFlowRevisionId = undefined;
+}
+
 async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   if (!isFlowInvocationSource(input.source)) {
     throw new TypeError(
@@ -452,6 +607,30 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   }
   if (input.personaAttribution && !input.executionAuthority) {
     throw new TypeError('Persona-attributed flow runs require execution authority.');
+  }
+  const personaInstructionContext = input.personaInstructionContext
+    ? PersonaInstructionContextSchema.parse(input.personaInstructionContext)
+    : undefined;
+  if (personaInstructionContext) {
+    if (!input.executionAuthority) {
+      throw new TypeError('Persona instruction context requires execution authority.');
+    }
+    assertInstructionContextAttribution(
+      personaInstructionContext,
+      input.personaAttribution,
+      'Input',
+    );
+    if (input.source === 'subflow' || input.parentRunId || (input.depth ?? 0) > 0) {
+      throw new TypeError('Persona instruction context is confined to its top-level Behavior run.');
+    }
+    if (!input.flowDefinition) {
+      throw new TypeError('Persona instruction context requires its immutable Behavior snapshot.');
+    }
+    assertBehaviorSnapshotMatchesInstructionContext(
+      input.flowDefinition,
+      personaInstructionContext,
+      'Input',
+    );
   }
 
   const startTime = Date.now();
@@ -537,6 +716,12 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     }
   }
 
+  if (loadedState?.personaArchived) {
+    throw new Error(
+      `Conversation ${effectiveConvId} is an anonymized Persona archive and cannot be executed.`,
+    );
+  }
+
   // Meeting participant conversations remain inspectable, but an ordinary
   // chat/API run must not mutate their memory while their owning meeting can
   // still schedule another turn. The shared execution lease above makes this
@@ -554,6 +739,56 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         `Conversation ${effectiveConvId} is reserved by active meeting ${owner.id}.`,
       );
     }
+  }
+
+  const loadedInstructionContext = loadedState?.personaInstructionContext
+    ? PersonaInstructionContextSchema.parse(loadedState.personaInstructionContext)
+    : undefined;
+  let resetPersonaPromptPrefix = false;
+  if (loadedInstructionContext) {
+    assertInstructionContextAttribution(
+      loadedInstructionContext,
+      loadedState?.personaAttribution,
+      'Persisted',
+    );
+    if (loadedState?.flowId !== loadedInstructionContext.rootFlowId) {
+      throw new Error(
+        `Conversation ${effectiveConvId} has Persona instructions for a different Behavior root Flow.`,
+      );
+    }
+    if (!loadedState.flowSnapshot) {
+      throw new Error(
+        `Conversation ${effectiveConvId} is missing its frozen Persona Behavior snapshot.`,
+      );
+    }
+    assertBehaviorSnapshotMatchesInstructionContext(
+      loadedState.flowSnapshot,
+      loadedInstructionContext,
+      'Persisted',
+    );
+    if (!personaInstructionContext) {
+      throw new Error(
+        `Conversation ${effectiveConvId} must resume with its frozen Persona instruction context.`,
+      );
+    }
+    if (loadedInstructionContext.activityId === personaInstructionContext.activityId) {
+      if (!instructionContextsEqual(loadedInstructionContext, personaInstructionContext)) {
+        throw new Error(
+          `Conversation ${effectiveConvId} Persona instruction context changed within one Activity.`,
+        );
+      }
+    } else {
+      // A new leased Activity for the same Persona may install a newly resolved
+      // context. Its system prefix and native provider session must be rebuilt;
+      // approval/debug/recovery continuations keep the same Activity and never
+      // enter this branch.
+      resetPersonaPromptPrefix = true;
+    }
+  } else if (personaInstructionContext && loadedState) {
+    // This is either the first context-aware Activity on an older conversation
+    // or a deliberately context-free legacy Activity's successor. runFlow never
+    // resolves/backfills historical data; it only accepts the dispatcher pin.
+    resetPersonaPromptPrefix = true;
   }
 
   // A Persona-owned conversation may only be resumed by the trusted
@@ -577,10 +812,22 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       writable: true,
     });
   }
+  if (loadedState?.personaTargetId) {
+    if (!input.personaAttribution || !input.executionAuthority) {
+      throw new Error(
+        `Conversation ${effectiveConvId} is targeted to a Persona and must start through the Persona dispatcher.`,
+      );
+    }
+    if (loadedState.personaTargetId !== input.personaAttribution.personaId) {
+      throw new Error(`Conversation ${effectiveConvId} is targeted to a different Persona.`);
+    }
+  }
 
   // Approval/debug resumes are continuations of the same logical run. A new
   // user turn on a completed/error conversation receives a fresh id below.
   const resumingPausedLogicalRun = Boolean(
+    !resetPersonaPromptPrefix
+    &&
     !userTurn
     &&
     loadedState?.logicalRunId
@@ -675,6 +922,11 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     };
   }
 
+  if (personaInstructionContext && resetPersonaPromptPrefix) {
+    // Same-Activity approval/debug/crash resumes never enter this branch.
+    installPersonaActivitySnapshot(sharedState, input.flowDefinition!, flujodebug);
+  }
+
   // `injectOnce` applies to this top-level user turn. Keep the map across
   // approval/debug continuations, but clear it before a new turn re-enters the
   // flow so persisted conversation state cannot suppress a later traversal.
@@ -718,6 +970,10 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   }
   if (input.personaAttribution) {
     sharedState.personaAttribution = { ...input.personaAttribution };
+    delete sharedState.personaTargetId;
+  }
+  if (personaInstructionContext) {
+    sharedState.personaInstructionContext = structuredClone(personaInstructionContext);
   }
   // A meeting round is still executed by the regular flow runtime, but its
   // coordination state belongs to the sibling MeetingEngine. Install only the
@@ -838,6 +1094,9 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         name: sharedState.statisticsPlannedExecutionName,
       }
     : undefined;
+  const runPersonaAttribution = sharedState.personaAttribution
+    ? { ...sharedState.personaAttribution }
+    : undefined;
   // Lineage: the spawning run's logical id travels with every lifecycle record
   // so a child run can be rolled up under its parent without in-memory state.
   const runRevisions = () => (sharedState.statisticsFlowRevisionId
@@ -854,6 +1113,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       conversationId: effectiveConvId,
       parentRunId: sharedState.parentRunId,
       revisions: runRevisions(),
+      ...(runPersonaAttribution ? { personaAttribution: runPersonaAttribution } : {}),
     }));
     sharedState.statisticsRunStarted = true;
   };
@@ -872,6 +1132,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         durationMs,
         parentRunId: sharedState.parentRunId,
         revisions: runRevisions(),
+        ...(runPersonaAttribution ? { personaAttribution: runPersonaAttribution } : {}),
       }));
     } else if (!sharedState.statisticsRunFinished) {
       const outcome = sharedState.isCancelled
@@ -891,6 +1152,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         durationMs,
         parentRunId: sharedState.parentRunId,
         revisions: runRevisions(),
+        ...(runPersonaAttribution ? { personaAttribution: runPersonaAttribution } : {}),
         errorClass: outcome === 'error' ? classifyStatisticsError(result.error) : undefined,
         usage: result.usage ? {
           inputTokens: result.usage.promptTokens,
@@ -1078,16 +1340,17 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     && (!sharedState.statisticsFlowName || !sharedState.statisticsFlowRevisionId)
   ) {
     try {
-      const savedFlow = await flowService.getFlow(sharedState.flowId);
-      sharedState.statisticsFlowName ??= savedFlow?.name;
+      const executionFlow = sharedState.flowSnapshot
+        ?? await flowService.getFlow(sharedState.flowId);
+      sharedState.statisticsFlowName ??= executionFlow?.name;
       // Opaque, installation-local fingerprint of the SAVED flow configuration
       // (graph plus node configuration). The configuration itself is never
       // persisted; the fingerprint only makes revisions comparable over time.
-      if (savedFlow && !sharedState.statisticsFlowRevisionId) {
+      if (executionFlow && !sharedState.statisticsFlowRevisionId) {
         sharedState.statisticsFlowRevisionId = await statisticsRevisionId('flow', {
-          id: savedFlow.id,
-          nodes: savedFlow.nodes,
-          edges: savedFlow.edges,
+          id: executionFlow.id,
+          nodes: executionFlow.nodes,
+          edges: executionFlow.edges,
         });
       }
     } catch {
@@ -1160,7 +1423,8 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       }
       if (!entryNodeId && sharedState.flowId) {
         try {
-          const flow = await flowService.getFlow(sharedState.flowId);
+          const flow = sharedState.flowSnapshot
+            ?? await flowService.getFlow(sharedState.flowId);
           entryNodeId = flow?.nodes?.find((n) => n.type === 'start')?.id;
         } catch (err) {
           log.warn(`Could not resolve start node for error-resume of ${effectiveConvId}`, err);
@@ -2315,7 +2579,8 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
                 // an empty prompt and stall silently. Surface a clear, actionable
                 // warning instead of proceeding quietly.
                 try {
-                  const handoffFlow = await flowService.getFlow(sharedState.flowId);
+                  const handoffFlow = sharedState.flowSnapshot
+                    ?? await flowService.getFlow(sharedState.flowId);
                   const targetNode = handoffFlow?.nodes?.find(n => n.id === nextNodeId);
                   const targetProps = targetNode?.data?.properties as { inputMode?: string; allowCallerPrompt?: boolean; allowCallerFanout?: boolean; promptTemplate?: string; isolatedPrompt?: string } | undefined;
                   // The target's authored isolated message: promptTemplate for a

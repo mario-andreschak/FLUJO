@@ -6,6 +6,7 @@ import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import { StorageKey } from '@/shared/types/storage';
 import { processChatCompletion } from '@/app/v1/chat/completions/chatCompletionService';
 import { ChatCompletionRequest } from '@/app/v1/chat/completions/requestParser';
@@ -45,6 +46,22 @@ async function POST_handler(
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }
 
+    if (isPersonaOwnedConversationState(sharedState)) {
+      const notLoopback = assertLocalRequest(request, { strictLoopback: true });
+      if (notLoopback) return notLoopback;
+    }
+    if (sharedState.personaArchived) {
+      return NextResponse.json(
+        { error: 'An anonymized Persona archive cannot be resumed.' },
+        { status: 409 },
+      );
+    }
+    if (isPersonaOwnedConversationState(sharedState) && !sharedState.personaAttribution) {
+      return NextResponse.json({
+        error: 'Persona conversation attribution is incomplete; refusing an unfenced resume.',
+      }, { status: 409 });
+    }
+
     // 2. Must be paused in debug mode to step.
     if (sharedState.status !== 'paused_debug') {
       log.warn(`Debug step requested but conversation status is not 'paused_debug'`, { requestId, conversationId, status: sharedState.status });
@@ -52,8 +69,6 @@ async function POST_handler(
     }
 
     if (sharedState.personaAttribution) {
-      const notLoopback = assertLocalRequest(request, { strictLoopback: true });
-      if (notLoopback) return notLoopback;
       const { personaId, activityId, behaviorRevisionId } = sharedState.personaAttribution;
       if (!activityId || !behaviorRevisionId) {
         return NextResponse.json({
@@ -129,7 +144,7 @@ async function POST_handler(
     });
     if (
       FlowExecutor.conversationStates.has(conversationId)
-      && !FlowExecutor.conversationStates.get(conversationId)?.personaAttribution
+      && !isPersonaOwnedConversationState(FlowExecutor.conversationStates.get(conversationId))
     ) {
       const state = FlowExecutor.conversationStates.get(conversationId)!;
       const errorMessage = error instanceof Error ? error.message : 'Unknown error during debug step processing';

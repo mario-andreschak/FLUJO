@@ -6,6 +6,7 @@ import {
   readRunResource,
 } from '@/backend/services/runResources';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 
 /**
@@ -32,7 +33,7 @@ async function GET_handler(
   }
 
   const state = await loadConversationState(conversationId);
-  if (!state || state.personaAttribution) {
+  if (!state || isPersonaOwnedConversationState(state)) {
     const notLocal = assertLocalRequest(request, { strictLoopback: true });
     if (notLocal) return notLocal;
   }

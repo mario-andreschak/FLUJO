@@ -52,6 +52,12 @@ const modelsData = [{ id: 'model-1', name: 'Test Model' }];
 // Flows now carry server-managed timestamps (#108); include them so loadFlows'
 // mtime backfill is a no-op and the backup zip round-trips exactly.
 const flowsData = [{ id: 'flow-1', name: 'Test Flow', nodes: [], edges: [], createdAt: 1000, updatedAt: 2000 }];
+const personaConversationMarkers = [
+  ['draft target', { personaTargetId: 'persona_draft' }],
+  ['archived evidence', { personaArchived: true }],
+  ['frozen instruction context', { personaInstructionContext: { personaId: 'persona_instruction' } }],
+  ['legacy Persona summary', { personaOwned: true }],
+] as const;
 
 const callBackup = (selections: unknown) => {
   const request = new Request('http://localhost:4200/api/backup', {
@@ -196,6 +202,27 @@ describe('backup route', () => {
     }
   });
 
+  it.each(personaConversationMarkers)(
+    'requires strict loopback before backing up %s',
+    async (_label, marker) => {
+      conversationFiles.set('persona-conversation', {
+        conversationId: 'persona-conversation',
+        messages: [],
+        ...marker,
+      });
+      const previousMode = process.env.FLUJO_EXPOSURE_MODE;
+      process.env.FLUJO_EXPOSURE_MODE = 'network';
+      try {
+        const response = await callBackup(['chatHistory']);
+        expect(response.status).toBe(403);
+        expect(response.headers.get('Content-Type')).not.toBe('application/zip');
+      } finally {
+        if (previousMode === undefined) delete process.env.FLUJO_EXPOSURE_MODE;
+        else process.env.FLUJO_EXPOSURE_MODE = previousMode;
+      }
+    },
+  );
+
   it('rejects an empty selection list', async () => {
     expect((await callBackup([])).status).toBe(400);
     expect((await callBackup(undefined)).status).toBe(400);
@@ -285,6 +312,28 @@ describe('backup → restore round-trip', () => {
     expect(saveCollectionItemMock).not.toHaveBeenCalled();
     expect(conversationFiles.has('normal-first')).toBe(false);
   });
+
+  it.each(personaConversationMarkers)(
+    'rejects imported %s before writing any selected entry',
+    async (_label, marker) => {
+      const zip = new JSZip();
+      zip.file('backup-info.json', JSON.stringify({ version: '1.0', selections: ['models', 'chatHistory'] }));
+      zip.file('storage/models.json', JSON.stringify([{ id: 'must-not-write' }]));
+      zip.file('storage/conversations/persona-state.json', JSON.stringify({
+        conversationId: 'persona-state',
+        messages: [],
+        ...marker,
+      }));
+
+      const response = await callRestore(
+        await zip.generateAsync({ type: 'arraybuffer' }),
+        ['models', 'chatHistory'],
+      );
+      expect(response.status).toBe(400);
+      expect(saveItemMock).not.toHaveBeenCalled();
+      expect(saveCollectionItemMock).not.toHaveBeenCalled();
+    },
+  );
 
   it('refuses to overwrite an existing Persona conversation regardless of local access', async () => {
     conversationFiles.set('protected-persona', {

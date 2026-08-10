@@ -5,6 +5,7 @@ import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import type { FlowInvocationSource } from '@/backend/execution/flow/types';
 import { flowService } from '@/backend/services/flow';
 import { assertLocalRequest } from '@/utils/http/localRequest';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 
 const log = createLogger('app/api/runs/active/route');
 
@@ -17,6 +18,9 @@ interface ActiveRun {
   startedAt?: string;
   source?: FlowInvocationSource;
   plannedExecutionId?: string;
+  personaId?: string;
+  activityId?: string;
+  behaviorRevisionId?: string;
 }
 
 /** Statuses that mean a run is holding resources / not yet terminal. A
@@ -76,7 +80,7 @@ async function GET_handler(request: Request) {
     let personaControlDenied: Response | null | undefined;
     for (const state of FlowExecutor.conversationStates.values()) {
       if (!state || !ACTIVE_STATUSES.has(state.status ?? '')) continue;
-      if (state.personaAttribution) {
+      if (isPersonaOwnedConversationState(state)) {
         personaControlDenied ??= assertLocalRequest(request, { strictLoopback: true });
         if (personaControlDenied) continue;
       }
@@ -91,6 +95,15 @@ async function GET_handler(request: Request) {
             : undefined,
         source: state.source,
         ...(state.plannedExecutionId ? { plannedExecutionId: state.plannedExecutionId } : {}),
+        ...(state.personaAttribution?.personaId
+          ? { personaId: state.personaAttribution.personaId }
+          : {}),
+        ...(state.personaAttribution?.activityId
+          ? { activityId: state.personaAttribution.activityId }
+          : {}),
+        ...(state.personaAttribution?.behaviorRevisionId
+          ? { behaviorRevisionId: state.personaAttribution.behaviorRevisionId }
+          : {}),
       });
     }
 

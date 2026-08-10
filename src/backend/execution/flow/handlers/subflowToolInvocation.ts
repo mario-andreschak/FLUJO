@@ -196,7 +196,8 @@ export async function executeSubflowToolCall(
     if (!targetNodeId) {
       return { success: false, error: `Unknown call_subflow tool "${name}" — no matching target node.` };
     }
-    const flow = await flowService.getFlow(sharedState.flowId);
+    const flow = sharedState.flowSnapshot
+      ?? await flowService.getFlow(sharedState.flowId);
     const flowNode = flow?.nodes.find((n) => n.id === targetNodeId);
     const props = flowNode?.data?.properties as SubflowNodeProperties | undefined;
     const subflowId = props?.subflowId;

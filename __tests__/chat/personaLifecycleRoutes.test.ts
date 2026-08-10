@@ -71,6 +71,7 @@ jest.mock('@/backend/services/enduringAgents/personaDispatcher', () => ({
 }));
 
 import { POST } from '@/app/v1/chat/conversations/[conversationId]/respond/route';
+import { withConversationExecutionLock } from '@/backend/execution/flow/conversationExecutionLock';
 
 const CONVERSATION_ID = 'conv_persona_approval';
 const originalExposureMode = process.env.FLUJO_EXPOSURE_MODE;
@@ -185,6 +186,84 @@ describe('Persona-attributed conversation lifecycle routes', () => {
     expect(resumePersonaFlowDispatchMock).not.toHaveBeenCalled();
     expect(processChatCompletionMock).not.toHaveBeenCalled();
     expect(getFlowMock).not.toHaveBeenCalled();
+  });
+
+  it('re-reads after a paused anonymization and never falls into legacy approval execution', async () => {
+    const state = approvalState();
+    loadConversationStateMock.mockImplementation(async () => state);
+
+    let release!: () => void;
+    let entered!: () => void;
+    let interleaved!: () => void;
+    const enteredLock = new Promise<void>((resolve) => { entered = resolve; });
+    const interleavingReached = new Promise<void>((resolve) => { interleaved = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const anonymization = withConversationExecutionLock(CONVERSATION_ID, async () => {
+      entered();
+      await gate;
+    });
+    await enteredLock;
+
+    resolvePendingApprovalMock.mockImplementationOnce(() => {
+      delete state.personaAttribution;
+      state.personaArchived = true;
+      interleaved();
+      return false;
+    });
+    const responsePromise = POST(
+      makeLocalRequest({ body: { action: 'approve', toolCallId: 'tool_1' } }),
+      { params: Promise.resolve({ conversationId: CONVERSATION_ID }) },
+    );
+    await interleavingReached;
+    release();
+    await anonymization;
+
+    const response = await responsePromise;
+    expect(response.status).toBe(409);
+    expect(applyApprovalDecisionMock).not.toHaveBeenCalled();
+    expect(resumePersonaFlowDispatchMock).not.toHaveBeenCalled();
+    expect(processChatCompletionMock).not.toHaveBeenCalled();
+    expect(getFlowMock).not.toHaveBeenCalled();
+  });
+
+  it('fails a paused Persona elicitation when its execution authority expires', async () => {
+    const state = approvalState();
+    let checked!: () => void;
+    let expire!: () => void;
+    const authorityChecked = new Promise<void>((resolve) => { checked = resolve; });
+    const expiry = new Promise<void>((resolve) => { expire = resolve; });
+    Object.defineProperty(state, 'executionAuthority', {
+      value: {
+        signal: new AbortController().signal,
+        assertCurrent: jest.fn(async () => undefined),
+        async commitWhileCurrent(_task: () => Promise<unknown>) {
+          checked();
+          await expiry;
+          throw new Error('Persona lease expired');
+        },
+      },
+      enumerable: false,
+      configurable: true,
+    });
+    loadConversationStateMock.mockResolvedValue(state);
+    const responsePromise = POST(
+      makeLocalRequest({
+        body: {
+          action: 'elicitation-submit',
+          elicitationId: 'elicitation_1',
+          content: { confirmed: true },
+        },
+      }),
+      { params: Promise.resolve({ conversationId: CONVERSATION_ID }) },
+    );
+    await authorityChecked;
+    expire();
+
+    const response = await responsePromise;
+    expect(response.status).toBe(409);
+    expect(resolveElicitationMock).not.toHaveBeenCalled();
+    expect(applyApprovalDecisionMock).not.toHaveBeenCalled();
+    expect(resumePersonaFlowDispatchMock).not.toHaveBeenCalled();
   });
 
   it.each([

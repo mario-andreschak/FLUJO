@@ -12,6 +12,7 @@ import { submitPersonaFlowDispatch } from '@/backend/services/enduringAgents/per
 import { FlujoChatMessage } from '@/shared/types/chat';
 import type { StorageKey } from '@/shared/types/storage';
 import { assertSafeCollectionId, loadItem as loadItemBackend } from '@/utils/storage/backend';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/inject/route');
 
@@ -107,6 +108,22 @@ async function POST_handler(
       { status: 409 }
     );
   }
+  if (isPersonaOwnedConversationState(sharedState)) {
+    const notLoopback = assertLocalRequest(request, { strictLoopback: true });
+    if (notLoopback) return notLoopback;
+  }
+  if (sharedState.personaArchived) {
+    return NextResponse.json(
+      { error: 'An anonymized Persona archive is read-only.', reason: 'persona_archived' },
+      { status: 409 },
+    );
+  }
+  if (isPersonaOwnedConversationState(sharedState) && !sharedState.personaAttribution) {
+    return NextResponse.json(
+      { error: 'Persona conversation attribution is incomplete.', reason: 'persona_attribution_incomplete' },
+      { status: 409 },
+    );
+  }
   const relatedAction = sharedState.personaAttribution
     ? personaRelatedAction(sharedState)
     : undefined;
@@ -130,8 +147,6 @@ async function POST_handler(
   const messageId = body.id || crypto.randomUUID();
 
   if (sharedState.personaAttribution && relatedAction) {
-    const notLoopback = assertLocalRequest(request, { strictLoopback: true });
-    if (notLoopback) return notLoopback;
     const submission = await submitPersonaFlowDispatch({
       personaId: sharedState.personaAttribution.personaId,
       idempotencyKey: injectionIdempotencyKey(conversationId, messageId, content),

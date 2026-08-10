@@ -29,6 +29,9 @@ const QUERY_KEYS: Array<{
   field: StatisticsArrayFilterKey;
   query: string;
 }> = [
+  { field: 'personaIds', query: 'personaId' },
+  { field: 'activityIds', query: 'activityId' },
+  { field: 'behaviorRevisionIds', query: 'behaviorRevisionId' },
   { field: 'flowIds', query: 'flowId' },
   { field: 'plannedExecutionIds', query: 'plannedExecutionId' },
   { field: 'sources', query: 'source' },

@@ -18,12 +18,15 @@ import {
 } from '@/backend/services/enduringAgents/activityRuntime';
 import {
   getBehaviorRevision,
+  getPersona,
+  getRoleVersion,
 } from '@/backend/services/enduringAgents/store';
+import { buildPersonaInstructionContext } from '@/backend/services/enduringAgents/personaInstructionContext';
 import {
   PersonaRuntimeLockTimeoutError,
   withWorkspaceRuntimeLock,
 } from '@/backend/services/enduringAgents/runtimeLock';
-import type { BehaviorRevision } from '@/shared/types/enduringAgent';
+import type { BehaviorRevision, PersonaInstructionContext } from '@/shared/types/enduringAgent';
 import type { MeetingParticipant, MeetingRecord } from '@/shared/types/meeting';
 import { createLogger } from '@/utils/logger';
 
@@ -48,6 +51,8 @@ export interface MeetingPersonaReservation {
   claim: PersonaActivityClaim;
   fence: PersonaLeaseFence;
   revision: BehaviorRevision;
+  /** Frozen with the exact claimed Activity and pinned Behavior/Role versions. */
+  instructionContext: PersonaInstructionContext;
 }
 
 export interface MeetingPersonaHeartbeat {
@@ -71,6 +76,15 @@ function payloadRef(meeting: MeetingRecord, participant: MeetingParticipant): st
   return `meeting:${meeting.id}:${participant.id}`;
 }
 
+function isActivePersonaParticipant(
+  participant: MeetingParticipant,
+): participant is MeetingParticipant & { personaId: string } {
+  return typeof participant.personaId === 'string'
+    && participant.status !== 'left'
+    && !participant.personaRetired
+    && !participant.personaArchived;
+}
+
 /**
  * Stable for one persisted start barrier, but different after crash recovery
  * advances or projects that barrier. A resumed meeting therefore cannot reuse
@@ -91,7 +105,7 @@ export function meetingPersonaReservationAttemptId(
       }
     : null;
   const personaBehaviorPins = meeting.participants
-    .filter((participant) => participant.personaId)
+    .filter(isActivePersonaParticipant)
     .map((participant) => ({
       participantId: participant.id,
       personaId: participant.personaId,
@@ -199,8 +213,7 @@ async function reserveMeetingPersonasWhileCoordinated(
 ): Promise<MeetingPersonaReservation[]> {
   const attemptId = options.attemptId ?? meetingPersonaReservationAttemptId(meeting);
   const participants = meeting.participants
-    .filter((participant): participant is MeetingParticipant & { personaId: string } =>
-      typeof participant.personaId === 'string')
+    .filter(isActivePersonaParticipant)
     .sort((left, right) =>
       compareStableIds(left.personaId, right.personaId)
       || compareStableIds(left.id, right.id));
@@ -268,6 +281,7 @@ async function reserveMeetingPersonasWhileCoordinated(
         }
         const claimFence = fenceForClaim(claim);
         let revision: BehaviorRevision;
+        let instructionContext: PersonaInstructionContext;
         try {
           if (
             claim.mailboxItem.id !== mailboxItemId
@@ -297,7 +311,21 @@ async function reserveMeetingPersonasWhileCoordinated(
               + `${participant.behaviorRevisionId}, but its Activity claimed ${resolvedRevision.id}.`,
             );
           }
+          const persona = await getPersona(participant.personaId);
+          if (!persona || persona.id !== participant.personaId) {
+            throw new Error(`Persona ${participant.personaId} no longer exists.`);
+          }
+          const roleVersion = await getRoleVersion(persona.roleVersionId);
+          if (!roleVersion) {
+            throw new Error(`Persona ${participant.personaId} has no pinned Role version.`);
+          }
           revision = resolvedRevision;
+          instructionContext = buildPersonaInstructionContext({
+            persona,
+            roleVersion,
+            revision,
+            activityId: claim.activity.id,
+          });
         } catch (error) {
           try {
             await releasePersonaActivityLease(claimFence);
@@ -317,6 +345,7 @@ async function reserveMeetingPersonasWhileCoordinated(
           claim,
           fence: claimFence,
           revision,
+          instructionContext,
         });
       }
 
@@ -382,8 +411,7 @@ async function cancelMeetingPersonaReservationsWhileCoordinated(
   attemptId = meetingPersonaReservationAttemptId(meeting),
 ): Promise<void> {
   const participants = meeting.participants.filter(
-    (participant): participant is MeetingParticipant & { personaId: string } =>
-      typeof participant.personaId === 'string',
+    isActivePersonaParticipant,
   );
   await Promise.all(participants.map(async (participant) => {
     try {

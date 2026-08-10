@@ -1,5 +1,6 @@
 import { bindToCurrentWorkspace } from '@/utils/workspace';
 import { withPersonaRuntimeLock } from '@/backend/services/enduringAgents/runtimeLock';
+import { EnduringAgentIdSchema } from '@/shared/types/enduringAgent';
 import { canonicalJson } from '@/backend/services/enduringAgents/behaviorRevisions';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
@@ -92,5 +93,25 @@ export async function removeDurableFileWatchIntentsForExecution(
     if (!changed) return;
     await lock.assertOwned();
     await saveItem(KEY, file);
+  }))();
+}
+
+/** Remove pending file deliveries that explicitly target a deleted Persona. */
+export async function removeDurableFileWatchIntentsForPersonaId(
+  personaId: string,
+): Promise<number> {
+  EnduringAgentIdSchema.parse(personaId);
+  return bindToCurrentWorkspace(() => withPersonaRuntimeLock(LOCK_ID, async (lock) => {
+    const file = await loadFile();
+    let removed = 0;
+    for (const [id, intent] of Object.entries(file.pending)) {
+      if (intent.execution.personaId !== personaId) continue;
+      delete file.pending[id];
+      removed += 1;
+    }
+    if (removed === 0) return 0;
+    await lock.assertOwned();
+    await saveItem(KEY, file);
+    return removed;
   }))();
 }

@@ -6,6 +6,7 @@ import { getSchedulerService } from '@/backend/services/scheduler';
 import { ensureBackendInitialized } from '@/backend/init';
 import { json } from './_helpers';
 import { assertLocalRequest } from '@/utils/http/localRequest';
+import { isPersonaControlledPlannedExecution } from '@/shared/types/plannedExecution';
 
 const log = createLogger('app/api/planned-executions/route');
 
@@ -25,14 +26,18 @@ async function GET_handler(request: Request) {
     // action. Public callers retain the legacy list but never see or arm
     // Persona-targeted work through this route.
     const preflight = await scheduler.list();
-    const hasPersonaTargets = preflight.some(entry => Boolean(entry.execution.personaId));
+    const hasPersonaTargets = preflight.some(entry => (
+      isPersonaControlledPlannedExecution(entry.execution)
+    ));
     if (hasPersonaTargets) {
       const notLocal = assertLocalRequest(request, { strictLoopback: true });
       if (notLocal) {
         const paused = await scheduler.isPaused();
         return json({
           paused,
-          executions: preflight.filter(entry => !entry.execution.personaId),
+          executions: preflight.filter(entry => (
+            !isPersonaControlledPlannedExecution(entry.execution)
+          )),
         }, 200);
       }
     }
@@ -61,7 +66,7 @@ async function POST_handler(request: NextRequest) {
 
   try {
     const body = await request.json();
-    if (body && typeof body === 'object' && 'personaId' in body) {
+    if (isPersonaControlledPlannedExecution(body)) {
       const notLocal = assertLocalRequest(request, { strictLoopback: true });
       if (notLocal) return notLocal;
     }
@@ -96,7 +101,7 @@ async function PATCH_handler(request: NextRequest) {
     }
     const scheduler = getSchedulerService();
     const entries = await scheduler.list();
-    if (entries.some(entry => Boolean(entry.execution.personaId))) {
+    if (entries.some(entry => isPersonaControlledPlannedExecution(entry.execution))) {
       const notLocal = assertLocalRequest(request, { strictLoopback: true });
       if (notLocal) return notLocal;
     }

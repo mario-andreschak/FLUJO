@@ -1,8 +1,15 @@
+import { promises as fs } from 'fs';
+import path from 'path';
 import { saveItem, loadItem, clearItem } from '@/utils/storage/backend';
+import { assertSafeCollectionId } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import { RunRecord } from '@/shared/types/plannedExecution';
 import { createLogger } from '@/utils/logger';
-import { bindToCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
+import {
+  bindToCurrentWorkspace,
+  getWorkspaceDataDir,
+  workspaceCacheKey,
+} from '@/utils/workspace';
 import { withPersonaRuntimeLock } from '@/backend/services/enduringAgents/runtimeLock';
 import type { FlowRunEvent } from './flowRunEventBus';
 
@@ -60,6 +67,107 @@ const runsKey = (executionId: string) =>
   `planned-execution-runs/${executionId}` as StorageKey;
 
 const appendChains = new Map<string, Promise<unknown>>();
+let runHistoryExecutionIdsOverride: readonly string[] | undefined;
+
+function anonymizeRunRecord(
+  record: RunRecord,
+  personaId: string,
+): { record: RunRecord; changed: boolean } {
+  if (record.personaId !== personaId) return { record, changed: false };
+  const archived = { ...record, personaArchived: true as const };
+  delete archived.personaId;
+  delete archived.activityId;
+  delete archived.behaviorRevisionId;
+  return { record: archived, changed: true };
+}
+
+async function listRunHistoryExecutionIds(): Promise<string[]> {
+  if (runHistoryExecutionIdsOverride) {
+    return [...new Set(runHistoryExecutionIdsOverride)].sort();
+  }
+  const directory = path.join(getWorkspaceDataDir(), 'db', 'planned-execution-runs');
+  let entries: string[];
+  try {
+    entries = await fs.readdir(directory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+  const ids: string[] = [];
+  for (const entry of entries.sort()) {
+    if (!entry.endsWith('.json')) continue;
+    if (entry.includes('.tmp.') || entry.includes('.corrupted.') || entry.endsWith('.bak')) continue;
+    const id = entry.slice(0, -'.json'.length);
+    assertSafeCollectionId(id);
+    ids.push(id);
+  }
+  return ids;
+}
+
+/** Test seam for storage-mocked scheduler suites. */
+export function _setRunHistoryExecutionIdsForTests(
+  ids: readonly string[] | undefined,
+): readonly string[] | undefined {
+  const previous = runHistoryExecutionIdsOverride;
+  runHistoryExecutionIdsOverride = ids;
+  return previous;
+}
+
+export interface RunHistoryPersonaAnonymizationResult {
+  histories: number;
+  records: number;
+  terminalReceipts: number;
+}
+
+/** Exact-match privacy erasure across every retained scheduler run history. */
+export async function anonymizeRunHistoryPersonaAttribution(
+  personaId: string,
+): Promise<RunHistoryPersonaAnonymizationResult> {
+  return bindToCurrentWorkspace(() => withPersonaRuntimeLock(
+    TERMINAL_PUBLICATION_LOCK_ID,
+    async (lock) => {
+      const result: RunHistoryPersonaAnonymizationResult = {
+        histories: 0,
+        records: 0,
+        terminalReceipts: 0,
+      };
+      for (const executionId of await listRunHistoryExecutionIds()) {
+        const stored = await loadItem<unknown>(runsKey(executionId), []);
+        if (!Array.isArray(stored)) {
+          throw new Error(`Run history ${executionId} is not an array.`);
+        }
+        let changed = false;
+        const records = (stored as RunRecord[]).map((record) => {
+          const anonymized = anonymizeRunRecord(record, personaId);
+          if (anonymized.changed) {
+            changed = true;
+            result.records += 1;
+          }
+          return anonymized.record;
+        });
+        if (!changed) continue;
+        await lock.assertOwned();
+        await saveItem(runsKey(executionId), records);
+        result.histories += 1;
+      }
+
+      const outbox = await loadTerminalPublicationOutbox();
+      let outboxChanged = false;
+      for (const [id, receipt] of Object.entries(outbox.pending)) {
+        const anonymized = anonymizeRunRecord(receipt.record, personaId);
+        if (!anonymized.changed) continue;
+        outbox.pending[id] = { ...receipt, record: anonymized.record };
+        outboxChanged = true;
+        result.terminalReceipts += 1;
+      }
+      if (outboxChanged) {
+        await lock.assertOwned();
+        await saveItem(TERMINAL_PUBLICATION_OUTBOX_KEY, outbox);
+      }
+      return result;
+    },
+  ))();
+}
 
 export async function loadRunRecords(executionId: string): Promise<RunRecord[]> {
   try {

@@ -128,6 +128,26 @@ describe('uninstallPackage — Persona control-plane boundary', () => {
     expect((store.get(LEDGER_KEY) as Record<string, unknown>)['my-pkg']).toBeDefined();
   });
 
+  it('protects anonymized Persona schedule evidence from untrusted uninstall', async () => {
+    store.set(LEDGER_KEY, recordWithProvenance());
+    schedulerGetMock.mockResolvedValue({
+      id: 'pkg-my-pkg-nightly',
+      personaArchived: true,
+      personaRetired: true,
+    });
+
+    await expect(inspectPackageUninstall('my-pkg')).resolves.toEqual({
+      exists: true,
+      requiresPersonaControl: true,
+    });
+    const summary = await uninstallPackage('my-pkg');
+
+    expect(summary).toMatchObject({ ok: false, hasErrors: true });
+    expect(schedulerDeleteMock).not.toHaveBeenCalled();
+    expect(deleteFlowMock).not.toHaveBeenCalled();
+    expect((store.get(LEDGER_KEY) as Record<string, unknown>)['my-pkg']).toBeDefined();
+  });
+
   it('allows the same uninstall only after strict-loopback authorization', async () => {
     store.set(LEDGER_KEY, recordWithProvenance());
     schedulerGetMock.mockResolvedValue({

@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { meetingEventBus } from '@/backend/services/meetings/MeetingEventBus';
-import { getMeeting } from '@/backend/services/meetings/store';
+import { getMeeting, isPersonaScopedMeeting } from '@/backend/services/meetings/store';
 import type { MeetingEvent } from '@/shared/types/meeting';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
@@ -25,7 +25,7 @@ async function GET_handler(
   try {
     const meeting = await getMeeting(meetingId);
     if (!meeting) return new Response('Meeting not found', { status: 404 });
-    if (meeting.participants.some((participant) => participant.personaId)) {
+    if (isPersonaScopedMeeting(meeting)) {
       const notLocal = assertLocalRequest(request, { strictLoopback: true });
       if (notLocal) return notLocal;
     }

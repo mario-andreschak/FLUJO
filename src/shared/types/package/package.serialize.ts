@@ -5,7 +5,10 @@
  */
 import type { Model } from '../model/model';
 import type { Flow, FlowNode } from '../flow/flow';
-import type { PlannedExecution } from '../plannedExecution/plannedExecution';
+import {
+  isPersonaControlledPlannedExecution,
+  type PlannedExecution,
+} from '../plannedExecution/plannedExecution';
 import { MANIFEST_SIZE_CAP_BYTES } from './constants';
 import { collectSecretPlaceholdersDeep } from './secrets';
 import type { PackageSecret } from './secrets';
@@ -112,10 +115,7 @@ function clone<T>(value: T): T {
 
 /** Strip the webhook token (and any per-instance secret state) from a planned execution. */
 function packPlannedExecution(pe: PlannedExecution): PackagedPlannedExecution {
-  if (
-    Object.prototype.hasOwnProperty.call(pe, 'personaId')
-    || Object.prototype.hasOwnProperty.call(pe, 'behaviorSlotKey')
-  ) {
+  if (isPersonaControlledPlannedExecution(pe)) {
     throw new Error('Persona-targeted planned executions cannot be packaged.');
   }
   const copy = clone(pe) as PlannedExecution;

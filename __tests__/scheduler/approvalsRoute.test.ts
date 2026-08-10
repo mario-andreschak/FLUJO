@@ -90,6 +90,7 @@ jest.mock('@/backend/services/scheduler', () => ({
 
 import { GET } from '@/app/api/approvals/route';
 import { POST } from '@/app/api/approvals/[id]/route';
+import { withConversationExecutionLock } from '@/backend/execution/flow/conversationExecutionLock';
 
 const entry = () => ({
   approvalId: 'conv-1',
@@ -276,6 +277,54 @@ describe('POST /api/approvals/:id (#115)', () => {
     expect(await res.json()).toMatchObject({ status: 'running', dispatchId: 'dispatch-running' });
     expect(completeApprovedPersonaRunMock).not.toHaveBeenCalled();
     expect(removePendingApprovalMock).not.toHaveBeenCalled();
+    expect(resumePersonaFlowDispatchMock).not.toHaveBeenCalled();
+  });
+
+  it('waits for anonymization and never falls into legacy headless tool execution', async () => {
+    const state = {
+      ...awaitingState(),
+      personaAttribution: {
+        personaId: 'persona_test',
+        activityId: 'activity_test',
+        behaviorRevisionId: 'revision_test',
+      },
+    };
+    getPendingApprovalMock.mockResolvedValue({
+      ...entry(),
+      resumeDispatchId: 'dispatch-paused-race',
+    });
+    loadConversationStateMock.mockImplementation(async () => state);
+
+    let entered!: () => void;
+    let dispatchReached!: () => void;
+    let releaseDispatch!: () => void;
+    const enteredLock = new Promise<void>((resolve) => { entered = resolve; });
+    const reachedDispatch = new Promise<void>((resolve) => { dispatchReached = resolve; });
+    const dispatchGate = new Promise<void>((resolve) => { releaseDispatch = resolve; });
+    getPersonaFlowDispatchMock.mockImplementation(async () => {
+      dispatchReached();
+      await dispatchGate;
+      return null;
+    });
+    const anonymization = withConversationExecutionLock('conv-1', async () => {
+      entered();
+      await Promise.race([
+        reachedDispatch,
+        new Promise<void>((resolve) => setImmediate(resolve)),
+      ]);
+      delete (state as unknown as Record<string, unknown>).personaAttribution;
+      (state as typeof state & { personaArchived?: true }).personaArchived = true;
+      releaseDispatch();
+    });
+    await enteredLock;
+
+    const responsePromise = makePost('conv-1', { action: 'approve' });
+    await anonymization;
+    const response = await responsePromise;
+
+    expect(response.status).toBe(409);
+    expect(processToolCallsMock).not.toHaveBeenCalled();
+    expect(processChatCompletionMock).not.toHaveBeenCalled();
     expect(resumePersonaFlowDispatchMock).not.toHaveBeenCalled();
   });
 

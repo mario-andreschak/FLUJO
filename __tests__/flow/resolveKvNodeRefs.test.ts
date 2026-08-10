@@ -56,6 +56,27 @@ describe('kvScopeId', () => {
     expect(kvScopeId('folder', { flowId: 'f9' })).toBe('flow-f9');
   });
 
+  it('keeps Persona default/folder KV scope on the hash-covered Flow id', () => {
+    const attribution = {
+      personaId: 'persona-kv',
+      activityId: 'activity-kv',
+      behaviorRevisionId: 'revision-kv',
+    };
+    const first = kvScopeId('folder', {
+      flowId: 'behavior-root',
+      folder: 'Unhashed folder A',
+      personaAttribution: attribution,
+    });
+    const tampered = kvScopeId('folder', {
+      flowId: 'behavior-root',
+      folder: 'Unhashed folder B',
+      personaAttribution: attribution,
+    });
+
+    expect(first).toBe('flow-behavior-root');
+    expect(tampered).toBe(first);
+  });
+
   it('falls back to global when the flow id is absent/unsafe', () => {
     expect(kvScopeId('flow', {})).toBe('global');
   });

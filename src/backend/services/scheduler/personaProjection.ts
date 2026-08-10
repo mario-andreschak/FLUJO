@@ -6,6 +6,7 @@ import type {
 } from '@/shared/types/plannedExecution';
 import type { SubmitPersonaFlowDispatchInput } from '@/backend/services/enduringAgents/personaDispatcher';
 import { withPersonaRuntimeLock } from '@/backend/services/enduringAgents/runtimeLock';
+import { EnduringAgentIdSchema } from '@/shared/types/enduringAgent';
 import { bindToCurrentWorkspace } from '@/utils/workspace';
 import { canonicalJson } from '@/backend/services/enduringAgents/behaviorRevisions';
 
@@ -178,6 +179,35 @@ export async function removePersonaSchedulerProjectionsForExecution(
       await lock.assertOwned();
       await saveItem(KEY, file);
     }
+  }))();
+}
+
+/**
+ * Fence and remove live recovery projections that explicitly target a deleted
+ * Persona. These are resumable intents, not retained historical evidence.
+ */
+export async function removePersonaSchedulerProjectionsForPersonaId(
+  personaId: string,
+): Promise<number> {
+  EnduringAgentIdSchema.parse(personaId);
+  return bindToCurrentWorkspace(() => withPersonaRuntimeLock(LOCK_ID, async (lock) => {
+    const file = await loadFile();
+    let removed = 0;
+    const removedAt = new Date().toISOString();
+    for (const [id, projection] of Object.entries(file.pending)) {
+      if (projection.execution.personaId !== personaId) continue;
+      delete file.pending[id];
+      file.deletedProjections[id] = removedAt;
+      const generationKey = projection.execution.generationId
+        ? executionGenerationKey(projection.execution.id, projection.execution.generationId)
+        : projection.execution.id;
+      file.deletedExecutions[generationKey] = removedAt;
+      removed += 1;
+    }
+    if (removed === 0) return 0;
+    await lock.assertOwned();
+    await saveItem(KEY, file);
+    return removed;
   }))();
 }
 

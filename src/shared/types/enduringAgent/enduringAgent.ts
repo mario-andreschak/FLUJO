@@ -1,6 +1,7 @@
 import type { Flow } from '@/shared/types/flow';
 
 export const ENDURING_AGENT_SCHEMA_VERSION = 1 as const;
+export const PERSONA_INSTRUCTION_CONTEXT_SCHEMA_VERSION = 1 as const;
 
 export const PERSONA_LIFECYCLE_STATES = [
   'idle',
@@ -31,6 +32,29 @@ export interface PersonaAttribution {
   personaId: string;
   activityId?: string;
   behaviorRevisionId?: string;
+}
+
+/**
+ * Capability-free identity/mission instructions frozen by the trusted Persona
+ * dispatcher for one top-level Activity. The rendered instruction is persisted
+ * verbatim so approval/debug resumes and crash recovery never re-resolve mutable
+ * Persona metadata or depend on a newer renderer implementation.
+ */
+export interface PersonaInstructionContext {
+  schemaVersion: typeof PERSONA_INSTRUCTION_CONTEXT_SCHEMA_VERSION;
+  personaId: string;
+  activityId: string;
+  behaviorRevisionId: string;
+  behaviorContentHash: string;
+  behaviorSlotKey: string;
+  rootFlowId: string;
+  roleVersionId: string;
+  personaName: string;
+  personaMission?: string;
+  roleName: string;
+  roleMission: string;
+  /** Exact trusted system-prompt prefix; never interpolate runtime pills in it. */
+  instruction: string;
 }
 
 export interface RoleDefinition {
@@ -305,6 +329,7 @@ export interface PersonaWorkItem {
   nextAction?: string;
   deadline?: number;
   createdByActivityId?: string;
+  behaviorRevisionId?: string;
   sourceRefs?: MemorySourceRef[];
   createdAt: number;
   updatedAt: number;

@@ -206,7 +206,12 @@ export const packagedPlannedExecutionSchema = z
     // control-plane targets. A portable package may describe only a legacy
     // Flow execution; accepting either field would let registry content target
     // an existing Persona when installed into an unrelated workspace.
-    for (const field of ['personaId', 'behaviorSlotKey'] as const) {
+    for (const field of [
+      'personaId',
+      'behaviorSlotKey',
+      'personaRetired',
+      'personaArchived',
+    ] as const) {
       if (Object.prototype.hasOwnProperty.call(execution, field)) {
         ctx.addIssue({
           code: 'custom',

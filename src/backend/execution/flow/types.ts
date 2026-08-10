@@ -10,7 +10,10 @@ import type { VisualCompactionDiagnostic } from '@/shared/types/visualArchive';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import type { NormalizedChatError } from '@/shared/types/execution/errors';
 import type { MeetingToolAction } from '@/shared/types/meeting';
-import type { PersonaAttribution } from '@/shared/types/enduringAgent';
+import type {
+  PersonaAttribution,
+  PersonaInstructionContext,
+} from '@/shared/types/enduringAgent';
 
 // --- Custom Chat Message Type is now imported from shared/types/chat.ts ---
 
@@ -888,8 +891,11 @@ export interface SharedState {
      * mode:'conversation' quick chats by the normal persistConversationState
      * path, which is what makes follow-up turns, crash recovery and app
      * restarts work without any temp-flow store or GC. The snapshot is
-     * immutable for the life of the conversation. Removed by the "Save as flow"
-     * promotion, after which the conversation behaves like any flow-backed one.
+     * immutable for the life of a Quick Chat. Persona conversations additionally
+     * use this field for an Activity-pinned Behavior; a successor Activity may
+     * replace it only through runFlow's trusted instruction-context boundary.
+     * Removed by the "Save as flow" promotion, after which the conversation
+     * behaves like any flow-backed one.
      */
     flowSnapshot?: Flow;
     // Last response from the model
@@ -1200,6 +1206,32 @@ export interface SharedState {
      * never contains holder ids, lease ids, or fencing capabilities.
      */
     personaAttribution?: PersonaAttribution;
+
+    /**
+     * Capability-free Persona identity/mission prefix, frozen for one owning
+     * top-level Activity. It is durable for approval/debug/crash recovery but
+     * is deliberately not part of SubflowNode prep inputs, so a structural
+     * child may retain causal attribution without inheriting Persona identity.
+     */
+    personaInstructionContext?: PersonaInstructionContext;
+
+    /**
+     * Non-authoritative Chat UI target for a fresh Persona conversation. This
+     * is deliberately separate from `personaAttribution`: selecting a Persona
+     * does not own a conversation or grant runtime authority. The trusted
+     * dispatcher replaces this draft intent with the full attribution triple
+     * after it claims an Activity and resolves an immutable Behavior revision.
+     * Strict-loopback conversation routes are the only writers/readers.
+     */
+    personaTargetId?: string;
+
+    /**
+     * Non-identifying tombstone for a retained conversation whose Persona was
+     * deleted under the anonymize policy. Archived Persona conversations remain
+     * trusted-local evidence and can be renamed or deleted, but never executed,
+     * resumed, retargeted, or treated as an ordinary Flow conversation.
+     */
+    personaArchived?: true;
 
     /**
      * For scheduler-originated runs (source === 'schedule'): the planned

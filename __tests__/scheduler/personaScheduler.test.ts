@@ -1,8 +1,12 @@
 import { SchedulerService } from '@/backend/services/scheduler';
 import { getFlowRunEventBus } from '@/backend/services/scheduler/flowRunEventBus';
-import { updateRunRecord } from '@/backend/services/scheduler/runHistory';
+import {
+  _setRunHistoryExecutionIdsForTests,
+  updateRunRecord,
+} from '@/backend/services/scheduler/runHistory';
 import { createHash } from 'crypto';
 import type {
+  PlannedExecution,
   RunRecord,
   TriggerFirePayload,
 } from '@/shared/types/plannedExecution';
@@ -20,11 +24,15 @@ jest.mock('@/utils/storage/backend', () => ({
   }),
 }));
 
+const mockWithPersonaRuntimeLock = jest.fn(async (
+  _id: string,
+  task: (lock: { assertOwned(): Promise<void> }) => Promise<unknown>,
+) => task({ assertOwned: async () => undefined }));
 jest.mock('@/backend/services/enduringAgents/runtimeLock', () => ({
-  withPersonaRuntimeLock: async (
-    _id: string,
+  withPersonaRuntimeLock: (
+    id: string,
     task: (lock: { assertOwned(): Promise<void> }) => Promise<unknown>,
-  ) => task({ assertOwned: async () => undefined }),
+  ) => mockWithPersonaRuntimeLock(id, task),
 }));
 
 let encryptionLocked = false;
@@ -130,6 +138,7 @@ describe('SchedulerService Persona dispatch adapter', () => {
 
   beforeEach(() => {
     storage.clear();
+    _setRunHistoryExecutionIdsForTests([]);
     jest.clearAllMocks();
     encryptionLocked = false;
     mockLoadConversationState.mockReset().mockResolvedValue(undefined);
@@ -159,12 +168,20 @@ describe('SchedulerService Persona dispatch adapter', () => {
       behaviorId: BEHAVIOR_ID,
       slotKey: 'primary',
     });
+    mockWithPersonaRuntimeLock.mockReset().mockImplementation(async (
+      _id: string,
+      task: (lock: { assertOwned(): Promise<void> }) => Promise<unknown>,
+    ) => task({ assertOwned: async () => undefined }));
     mockSubmitPersonaFlowDispatch.mockImplementation(async (input: Record<string, any>) => ({
       dispatch: completedDispatch(input, String(mockSubmitPersonaFlowDispatch.mock.calls.length)),
       decision: 'queued',
     }));
     mockGetPersonaFlowDispatch.mockResolvedValue(null);
     scheduler = new SchedulerService();
+  });
+
+  afterAll(() => {
+    _setRunHistoryExecutionIdsForTests(undefined);
   });
 
   it('validates Persona readiness, safe target ids, and the selected Behavior slot', async () => {
@@ -190,6 +207,7 @@ describe('SchedulerService Persona dispatch adapter', () => {
       personaId: undefined,
     }));
     expect(legacyPackage.error).toBeUndefined();
+    expect(legacyPackage.execution).not.toHaveProperty('personaId');
     const unsafeTargetUpdate = await scheduler.update('legacy.package', {
       personaId: PERSONA_ID,
     });
@@ -221,6 +239,501 @@ describe('SchedulerService Persona dispatch adapter', () => {
       behaviorSlotKey: 'primary',
     }));
     expect(missingSlot.error).toMatch(/no active Behavior/i);
+
+    const clearable = await scheduler.create(scheduleInput({
+      id: 'clear_persona_target',
+      personaId: PERSONA_ID,
+    }));
+    expect(clearable.error).toBeUndefined();
+    const cleared = await scheduler.update('clear_persona_target', {
+      personaId: undefined,
+      behaviorSlotKey: undefined,
+    });
+    expect(cleared.error).toBeUndefined();
+    expect(cleared.execution).not.toHaveProperty('personaId');
+    expect(cleared.execution).not.toHaveProperty('behaviorSlotKey');
+    expect(await scheduler.get('clear_persona_target')).not.toHaveProperty('personaId');
+  });
+
+  it('revalidates Persona deletion after waiting for the config mutation lock', async () => {
+    let entered!: () => void;
+    let release!: () => void;
+    const enteredLock = new Promise<void>((resolve) => { entered = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    mockWithPersonaRuntimeLock.mockImplementation(async (
+      id: string,
+      task: (lock: { assertOwned(): Promise<void> }) => Promise<unknown>,
+    ) => {
+      if (id === 'scheduler_planned_executions') {
+        entered();
+        await gate;
+      }
+      return task({ assertOwned: async () => undefined });
+    });
+    mockGetPersonaDeletionTombstone
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue({ status: 'completed' });
+
+    const creation = scheduler.create(scheduleInput({
+      id: 'execution_create_delete_race',
+      personaId: PERSONA_ID,
+    }));
+    await enteredLock;
+    release();
+
+    await expect(creation).resolves.toEqual({
+      error: `Persona "${PERSONA_ID}" is not ready to accept work`,
+    });
+    expect(await scheduler.get('execution_create_delete_race')).toBeNull();
+  });
+
+  it.each([
+    ['empty Persona id', { personaId: '' }],
+    ['orphaned Behavior slot', { behaviorSlotKey: 'primary' }],
+    ['invalid Behavior slot', { personaId: PERSONA_ID, behaviorSlotKey: 'bad slot' }],
+    ['invalid retirement marker', { personaRetired: false }],
+    ['invalid archive marker', { personaArchived: false }],
+  ])('fails closed for persisted %s instead of using Flow authority', async (_label, markers) => {
+    const execution = {
+      ...scheduleInput({ id: 'execution_corrupt_persona' }),
+      generationId: 'generation_corrupt_persona',
+      createdAt: '2026-08-10T10:00:00.000Z',
+      updatedAt: '2026-08-10T10:00:00.000Z',
+      ...markers,
+    } as unknown as PlannedExecution;
+    storage.set('planned_executions', {
+      version: 1,
+      paused: false,
+      executions: [execution],
+    });
+
+    await scheduler.start();
+    const [listed] = await scheduler.list();
+    expect(listed.status).toMatchObject({
+      armed: false,
+      lastTriggerError: 'Persona planned execution ownership metadata is incomplete',
+    });
+
+    await expect(scheduler.runNow(execution.id)).resolves.toMatchObject({
+      record: {
+        status: 'skipped',
+        error: 'Persona planned execution ownership metadata is incomplete',
+      },
+    });
+
+    // A callback armed from an older legacy snapshot must also honor the
+    // currently persisted Persona marker before it can invoke runFlow.
+    const staleLegacy = { ...execution } as Record<string, unknown>;
+    delete staleLegacy.personaId;
+    delete staleLegacy.behaviorSlotKey;
+    delete staleLegacy.personaRetired;
+    delete staleLegacy.personaArchived;
+    await expect(scheduler.fire(
+      staleLegacy as unknown as PlannedExecution,
+      { kind: 'schedule', summary: 'Stale legacy callback' },
+      'run_stale_corrupt_persona',
+    )).resolves.toMatchObject({
+      status: 'skipped',
+      error: 'Persona planned execution ownership metadata is incomplete',
+    });
+    expect(mockRunFlow).not.toHaveBeenCalled();
+    expect(mockSubmitPersonaFlowDispatch).not.toHaveBeenCalled();
+  });
+
+  it('fences a stale direct-Flow callback after its target changes to a Persona', async () => {
+    const capturedFlow = (await scheduler.create(scheduleInput({
+      id: 'execution_flow_to_persona',
+      personaId: undefined,
+    }))).execution!;
+    await expect(scheduler.update(capturedFlow.id, {
+      personaId: PERSONA_ID,
+    })).resolves.toMatchObject({
+      execution: { personaId: PERSONA_ID },
+    });
+
+    await expect(scheduler.fire(
+      capturedFlow,
+      { kind: 'schedule', summary: 'Stale direct-Flow callback' },
+      'run_flow_to_persona_race',
+    )).resolves.toMatchObject({
+      status: 'skipped',
+      error: 'Persona planned execution authority changed before firing',
+    });
+    expect(mockRunFlow).not.toHaveBeenCalled();
+    expect(mockSubmitPersonaFlowDispatch).not.toHaveBeenCalled();
+  });
+
+  it('fences a stale Persona callback after its target is removed', async () => {
+    const capturedPersona = (await scheduler.create(scheduleInput({
+      id: 'execution_persona_to_flow',
+      personaId: PERSONA_ID,
+    }))).execution!;
+    const cleared = await scheduler.update(capturedPersona.id, {
+      personaId: undefined,
+      behaviorSlotKey: undefined,
+    });
+    expect(cleared.execution).not.toHaveProperty('personaId');
+
+    await expect(scheduler.fire(
+      capturedPersona,
+      { kind: 'schedule', summary: 'Stale Persona callback' },
+      'run_persona_to_flow_race',
+    )).resolves.toMatchObject({
+      status: 'skipped',
+      error: 'Persona planned execution authority changed before firing',
+    });
+    expect(mockRunFlow).not.toHaveBeenCalled();
+    expect(mockSubmitPersonaFlowDispatch).not.toHaveBeenCalled();
+  });
+
+  it('fences a stale Persona callback after its execution is deleted', async () => {
+    const capturedPersona = (await scheduler.create(scheduleInput({
+      id: 'execution_persona_deleted',
+      personaId: PERSONA_ID,
+    }))).execution!;
+    await expect(scheduler.delete(capturedPersona.id)).resolves.toEqual({ success: true });
+
+    await expect(scheduler.fire(
+      capturedPersona,
+      { kind: 'schedule', summary: 'Deleted Persona callback' },
+      'run_persona_deleted_race',
+    )).resolves.toMatchObject({
+      status: 'skipped',
+      error: 'Persona planned execution authority changed before firing',
+    });
+    expect(mockRunFlow).not.toHaveBeenCalled();
+    expect(mockSubmitPersonaFlowDispatch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Persona id', { personaId: 'persona_other' }],
+    ['effective Behavior slot', { behaviorSlotKey: 'secondary' }],
+    ['execution generation', { generationId: 'generation_recreated' }],
+  ])('fences a stale Persona callback when the current %s differs', async (_label, patch) => {
+    const capturedPersona = (await scheduler.create(scheduleInput({
+      id: 'execution_persona_authority_mismatch',
+      personaId: PERSONA_ID,
+    }))).execution!;
+    const config = storage.get('planned_executions') as {
+      version: 1;
+      paused: boolean;
+      executions: PlannedExecution[];
+    };
+    config.executions[0] = { ...config.executions[0], ...patch };
+    storage.set('planned_executions', structuredClone(config));
+
+    await expect(scheduler.fire(
+      capturedPersona,
+      { kind: 'schedule', summary: 'Mismatched Persona authority' },
+      'run_persona_authority_mismatch',
+    )).resolves.toMatchObject({
+      status: 'skipped',
+      error: 'Persona planned execution authority changed before firing',
+    });
+    expect(mockRunFlow).not.toHaveBeenCalled();
+    expect(mockSubmitPersonaFlowDispatch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['retired', { personaRetired: true }],
+    ['archived', { personaArchived: true }],
+  ])('never arms or runs an orphaned %s Persona marker', async (_label, markers) => {
+    const execution = {
+      ...scheduleInput({ id: 'execution_orphaned_persona_tombstone' }),
+      generationId: 'generation_orphaned_persona_tombstone',
+      createdAt: '2026-08-10T10:00:00.000Z',
+      updatedAt: '2026-08-10T10:00:00.000Z',
+      ...markers,
+    } as PlannedExecution;
+    storage.set('planned_executions', {
+      version: 1,
+      paused: false,
+      executions: [execution],
+    });
+
+    await scheduler.start();
+    const [listed] = await scheduler.list();
+    expect(listed.status.armed).toBe(false);
+    await expect(scheduler.runNow(execution.id)).resolves.toEqual({
+      error: 'A retired Persona planned execution cannot be run',
+    });
+    expect(mockRunFlow).not.toHaveBeenCalled();
+    expect(mockSubmitPersonaFlowDispatch).not.toHaveBeenCalled();
+  });
+
+  it('retires exact Persona runtime before anonymizing only matching attribution', async () => {
+    const execution = (await scheduler.create(scheduleInput({
+      personaId: PERSONA_ID,
+      behaviorSlotKey: 'primary',
+      enabled: false,
+    }))).execution!;
+    const otherExecution = {
+      ...execution,
+      id: 'execution_unrelated_archive',
+      generationId: 'generation_unrelated_archive',
+      name: 'Unrelated Persona schedule',
+      personaId: 'persona_unrelated_archive',
+      enabled: false,
+    };
+    const config = storage.get('planned_executions') as {
+      version: 1;
+      paused: boolean;
+      executions: Array<typeof execution>;
+    };
+    config.executions.push(otherExecution);
+    storage.set('planned_executions', structuredClone(config));
+
+    const targetRun: RunRecord = {
+      runId: 'run_archive_target',
+      conversationId: 'conversation_archive_target',
+      firedAt: '2026-08-10T10:00:00.000Z',
+      finishedAt: '2026-08-10T10:00:01.000Z',
+      status: 'completed',
+      triggerSummary: 'Schedule',
+      outputText: 'Retain target output.',
+      personaId: PERSONA_ID,
+      activityId: 'activity_archive_target',
+      behaviorRevisionId: 'revision_archive_target',
+    };
+    const otherRun: RunRecord = {
+      ...targetRun,
+      runId: 'run_archive_other',
+      conversationId: 'conversation_archive_other',
+      outputText: 'Retain unrelated output.',
+      personaId: otherExecution.personaId,
+      activityId: 'activity_archive_other',
+      behaviorRevisionId: 'revision_archive_other',
+    };
+    storage.set(`planned-execution-runs/${execution.id}`, [targetRun, otherRun]);
+    _setRunHistoryExecutionIdsForTests([execution.id]);
+
+    const targetReceipt = {
+      id: 'receipt_archive_target',
+      executionId: execution.id,
+      runId: targetRun.runId,
+      event: {
+        flowId: execution.flowId,
+        executionId: execution.id,
+        runId: targetRun.runId,
+        conversationId: targetRun.conversationId,
+        status: 'completed',
+        firedBy: 'schedule',
+        chainDepth: 0,
+        timestamp: targetRun.finishedAt,
+        deliveryId: 'receipt_archive_target',
+      },
+      record: targetRun,
+      createdAt: targetRun.finishedAt,
+    };
+    const otherReceipt = {
+      ...targetReceipt,
+      id: 'receipt_archive_other',
+      runId: otherRun.runId,
+      event: {
+        ...targetReceipt.event,
+        runId: otherRun.runId,
+        conversationId: otherRun.conversationId,
+        deliveryId: 'receipt_archive_other',
+      },
+      record: otherRun,
+    };
+    storage.set('scheduler-terminal-publication-outbox', {
+      version: 1,
+      pending: {
+        [targetReceipt.id]: targetReceipt,
+        [otherReceipt.id]: otherReceipt,
+      },
+    });
+    storage.set('pending_approvals', {
+      approval_target: {
+        approvalId: 'approval_target',
+        terminalPublication: { execution: { personaId: PERSONA_ID } },
+      },
+      approval_other: {
+        approvalId: 'approval_other',
+        terminalPublication: { execution: { personaId: otherExecution.personaId } },
+      },
+    });
+    storage.set('scheduler-persona-projections', {
+      version: 1,
+      pending: {
+        projection_target: {
+          id: 'projection_target',
+          execution: {
+            id: execution.id,
+            generationId: execution.generationId,
+            personaId: PERSONA_ID,
+          },
+        },
+        projection_other: {
+          id: 'projection_other',
+          execution: {
+            id: otherExecution.id,
+            generationId: otherExecution.generationId,
+            personaId: otherExecution.personaId,
+          },
+        },
+      },
+      deletedExecutions: {},
+      deletedProjections: {},
+    });
+    storage.set('scheduler-file-watch-intents', {
+      version: 1,
+      pending: {
+        intent_target: { id: 'intent_target', execution: { personaId: PERSONA_ID } },
+        intent_other: { id: 'intent_other', execution: { personaId: otherExecution.personaId } },
+      },
+    });
+
+    await expect(scheduler.retirePersonaByPersonaId(PERSONA_ID))
+      .resolves.toEqual({
+        plannedExecutions: 1,
+        pendingApprovals: 1,
+        pendingProjections: 1,
+        pendingFileWatchIntents: 1,
+      });
+
+    const retiredConfig = await scheduler.get(execution.id);
+    expect(retiredConfig).toEqual(expect.objectContaining({
+      id: execution.id,
+      enabled: false,
+      personaId: PERSONA_ID,
+      personaRetired: true,
+    }));
+    expect(retiredConfig).not.toHaveProperty('personaArchived');
+    await expect(scheduler.runNow(execution.id)).resolves.toEqual({
+      error: 'A retired Persona planned execution cannot be run',
+    });
+    await expect(scheduler.update(execution.id, { enabled: true })).resolves.toEqual({
+      error: 'A retired Persona planned execution is read-only',
+    });
+    await expect(scheduler.fire(
+      execution,
+      { kind: 'schedule', summary: 'Stale armed callback' },
+      'run_after_retirement',
+    )).resolves.toMatchObject({
+      runId: 'run_after_retirement',
+      status: 'skipped',
+      error: 'A retired Persona planned execution cannot be fired',
+    });
+    expect(mockSubmitPersonaFlowDispatch).not.toHaveBeenCalled();
+    expect(readRuns(execution.id)).toEqual([targetRun, otherRun]);
+    expect(storage.get('scheduler-terminal-publication-outbox')).toEqual({
+      version: 1,
+      pending: {
+        [targetReceipt.id]: targetReceipt,
+        [otherReceipt.id]: otherReceipt,
+      },
+    });
+    expect(storage.get('pending_approvals')).toEqual({
+      approval_other: expect.any(Object),
+    });
+    expect(storage.get('scheduler-persona-projections')).toMatchObject({
+      pending: { projection_other: expect.any(Object) },
+      deletedProjections: { projection_target: expect.any(String) },
+    });
+    expect(storage.get('scheduler-file-watch-intents')).toEqual({
+      version: 1,
+      pending: { intent_other: expect.any(Object) },
+    });
+    await expect(scheduler.retirePersonaByPersonaId(PERSONA_ID)).resolves.toEqual({
+      plannedExecutions: 0,
+      pendingApprovals: 0,
+      pendingProjections: 0,
+      pendingFileWatchIntents: 0,
+    });
+
+    await expect(scheduler.anonymizePersonaAttributionByPersonaId(PERSONA_ID))
+      .resolves.toEqual({
+        plannedExecutions: 1,
+        runHistories: 1,
+        runRecords: 1,
+        terminalReceipts: 1,
+        pendingApprovals: 0,
+        pendingProjections: 0,
+        pendingFileWatchIntents: 0,
+      });
+
+    const archivedConfig = await scheduler.get(execution.id);
+    expect(archivedConfig).toEqual(expect.objectContaining({
+      id: execution.id,
+      name: execution.name,
+      prompt: execution.prompt,
+      flowId: execution.flowId,
+      behaviorSlotKey: execution.behaviorSlotKey,
+      trigger: execution.trigger,
+      createdAt: execution.createdAt,
+      updatedAt: execution.updatedAt,
+      enabled: false,
+      personaRetired: true,
+      personaArchived: true,
+    }));
+    expect(archivedConfig).not.toHaveProperty('personaId');
+    await expect(scheduler.runNow(execution.id)).resolves.toEqual({
+      error: 'A retired Persona planned execution cannot be run',
+    });
+    await expect(scheduler.update(execution.id, { enabled: true })).resolves.toEqual({
+      error: 'A retired Persona planned execution is read-only',
+    });
+    await expect(scheduler.get(otherExecution.id)).resolves.toEqual(otherExecution);
+
+    expect(readRuns(execution.id)).toEqual([
+      expect.objectContaining({
+        runId: targetRun.runId,
+        outputText: targetRun.outputText,
+        personaArchived: true,
+      }),
+      otherRun,
+    ]);
+    expect(readRuns(execution.id)[0]).not.toHaveProperty('personaId');
+    expect(readRuns(execution.id)[0]).not.toHaveProperty('activityId');
+    expect(readRuns(execution.id)[0]).not.toHaveProperty('behaviorRevisionId');
+    expect(storage.get('scheduler-terminal-publication-outbox')).toMatchObject({
+      pending: {
+        receipt_archive_target: {
+          record: { runId: targetRun.runId, personaArchived: true },
+        },
+        receipt_archive_other: otherReceipt,
+      },
+    });
+    expect(storage.get('pending_approvals')).toEqual({
+      approval_other: expect.any(Object),
+    });
+    expect(storage.get('scheduler-persona-projections')).toMatchObject({
+      pending: { projection_other: expect.any(Object) },
+      deletedProjections: { projection_target: expect.any(String) },
+    });
+    expect(storage.get('scheduler-file-watch-intents')).toEqual({
+      version: 1,
+      pending: { intent_other: expect.any(Object) },
+    });
+
+    const archivedSnapshots = {
+      config: structuredClone(storage.get('planned_executions')),
+      runs: structuredClone(storage.get(`planned-execution-runs/${execution.id}`)),
+      outbox: structuredClone(storage.get('scheduler-terminal-publication-outbox')),
+      approvals: structuredClone(storage.get('pending_approvals')),
+      projections: structuredClone(storage.get('scheduler-persona-projections')),
+      intents: structuredClone(storage.get('scheduler-file-watch-intents')),
+    };
+    await expect(scheduler.anonymizePersonaAttributionByPersonaId(PERSONA_ID))
+      .resolves.toEqual({
+        plannedExecutions: 0,
+        runHistories: 0,
+        runRecords: 0,
+        terminalReceipts: 0,
+        pendingApprovals: 0,
+        pendingProjections: 0,
+        pendingFileWatchIntents: 0,
+      });
+    expect({
+      config: storage.get('planned_executions'),
+      runs: storage.get(`planned-execution-runs/${execution.id}`),
+      outbox: storage.get('scheduler-terminal-publication-outbox'),
+      approvals: storage.get('pending_approvals'),
+      projections: storage.get('scheduler-persona-projections'),
+      intents: storage.get('scheduler-file-watch-intents'),
+    }).toEqual(archivedSnapshots);
   });
 
   it.each([

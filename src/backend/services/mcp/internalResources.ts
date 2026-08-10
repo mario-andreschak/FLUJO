@@ -25,6 +25,7 @@ import {
   readRunResource,
   parseRunResourceUri,
 } from '@/backend/services/runResources';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import { decodeListCursor, encodeListCursor } from './listQuery';
@@ -70,7 +71,7 @@ async function isPersonaRunResourceConversation(
   loadDispatchConversationIds: LoadPersonaDispatchConversationIds,
 ): Promise<boolean> {
   const state = await loadConversationState(conversationId);
-  if (state) return Boolean(state.personaAttribution);
+  if (state) return isPersonaOwnedConversationState(state);
   return (await loadDispatchConversationIds()).has(conversationId);
 }
 

@@ -210,6 +210,12 @@ import {
 import { setNodeRoots as setNodeRootsOverlay } from "./roots";
 import { ToolCallSource, ToolListAudience } from "./appsProtocol";
 import {
+  createdTicketIdFromMcpResult,
+  injectTrustedFlujoToolContext,
+  trustedFlujoTicketConversationId,
+  type TrustedMcpToolInvocationContext,
+} from "./trustedToolContext";
+import {
   cancelExternalAuthorization,
   clearExternalAuthorizationState,
   confirmExternalAuthorization,
@@ -2010,6 +2016,7 @@ export class MCPService {
     signal?: AbortSignal,
     source: ToolCallSource = "host",
     ownerScope?: string,
+    trustedContext?: TrustedMcpToolInvocationContext,
   ): Promise<MCPServiceResponse> {
     log.debug(
       `callTool: Entering method for server ${serverName}, tool ${toolName}, source ${source}`,
@@ -2097,11 +2104,31 @@ export class MCPService {
         }
       }
 
+      const trustedToolConfig = source === "model"
+        && toolName === "create_ticket_for_human"
+        && trustedContext?.conversationId
+        ? await this.getServerConfig(serverName)
+        : null;
+      const trustedTicketConversationId = trustedFlujoTicketConversationId(
+        trustedToolConfig,
+        toolName,
+        source,
+        trustedContext,
+      );
+      const effectiveArgs = trustedTicketConversationId
+        ? injectTrustedFlujoToolContext(
+            trustedToolConfig,
+            toolName,
+            args,
+            source,
+            trustedContext,
+          )
+        : args;
       const result = await callToolFunction(
         client,
         serverName,
         toolName,
-        args,
+        effectiveArgs,
         timeout,
         onProgress,
         signal,
@@ -2109,6 +2136,23 @@ export class MCPService {
         callerNodeId,
         ownerScope,
       );
+      if (result.success && trustedTicketConversationId) {
+        const ticketId = createdTicketIdFromMcpResult(result.data);
+        if (ticketId) {
+          try {
+            const { ticketService } = await import('@/backend/services/ticket');
+            await ticketService.stampPersonaAttributionFromTrustedConversation(
+              ticketId,
+              trustedTicketConversationId,
+            );
+          } catch (error) {
+            // The ticket already exists; keep the tool result truthful while
+            // surfacing a storage failure for operators instead of trusting an
+            // unverified payload at the HTTP boundary.
+            log.error(`callTool: Failed to stamp trusted ticket attribution for ${ticketId}`, error);
+          }
+        }
+      }
       log.info(`callTool: Called tool ${toolName} on ${serverName}`);
       return result;
     } finally {

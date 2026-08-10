@@ -19,6 +19,12 @@ jest.mock('@/backend/execution/meeting', () => ({
 
 jest.mock('@/backend/services/meetings/store', () => ({
   getMeeting: (...args: unknown[]) => getMeetingMock(...args),
+  isPersonaScopedMeeting: (meeting: { participants?: Array<{
+    personaId?: string;
+    personaArchived?: boolean;
+    personaRetired?: boolean;
+  }> }) => meeting.participants?.some((participant) =>
+    Boolean(participant.personaId || participant.personaArchived || participant.personaRetired)),
   saveMeeting: (...args: unknown[]) => saveMeetingMock(...args),
   sanitizeMeetingForApi: (meeting: Record<string, unknown>) => {
     const {
@@ -70,6 +76,15 @@ const legacyMeeting = {
   id: 'meeting_1',
   participants: [{ id: 'participant_1', flowId: 'flow_legacy' }],
 };
+const archivedPersonaMeeting = {
+  id: 'meeting_1',
+  participants: [{
+    id: 'participant_1',
+    name: 'Archived Persona participant',
+    personaArchived: true,
+    personaRetired: true,
+  }],
+};
 
 describe('Persona meeting action routes', () => {
   beforeEach(() => {
@@ -86,6 +101,29 @@ describe('Persona meeting action routes', () => {
   });
 
   it('guards Persona start, cancel, detail, and event access before lifecycle work', async () => {
+    assertLocalRequestMock.mockReturnValue(new Response('forbidden', { status: 403 }));
+
+    const responses = await Promise.all([
+      startMeetingRoute(new Request('http://localhost/v1/meetings/meeting_1/start', {
+        method: 'POST',
+      }), context),
+      cancelMeetingRoute(new NextRequest('http://localhost/v1/meetings/meeting_1/cancel', {
+        method: 'POST',
+      }), context),
+      getMeetingRoute(new Request('http://localhost/v1/meetings/meeting_1'), context),
+      meetingEventsRoute(new NextRequest('http://localhost/v1/meetings/meeting_1/events'), context),
+    ]);
+
+    expect(responses.map(({ status }) => status)).toEqual([403, 403, 403, 403]);
+    expect(startMeetingMock).not.toHaveBeenCalled();
+    expect(cancelMeetingMock).not.toHaveBeenCalled();
+    expect(reconcileMeetingMock).not.toHaveBeenCalled();
+    expect(subscribeMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps archived Persona meetings local-only after their Persona id is erased', async () => {
+    getMeetingMock.mockResolvedValue(archivedPersonaMeeting);
+    reconcileMeetingMock.mockResolvedValue(archivedPersonaMeeting);
     assertLocalRequestMock.mockReturnValue(new Response('forbidden', { status: 403 }));
 
     const responses = await Promise.all([

@@ -4,13 +4,18 @@ import {
   createMeetingRecord,
   deleteMeeting,
   getMeeting,
+  anonymizeMeetingPersonaAttribution,
+  retireMeetingPersonaParticipants,
   listMeetingSummaries,
   listMeetings,
   sanitizeMeetingForApi,
   saveMeeting,
 } from '@/backend/services/meetings/store';
 import { appendMeetingEvent, readMeetingEvents } from '@/backend/services/meetings/eventLog';
-import type { CreateMeetingInput } from '@/shared/types/meeting';
+import {
+  ARCHIVED_MEETING_PARTICIPANT_NAME,
+  type CreateMeetingInput,
+} from '@/shared/types/meeting';
 
 function input(overrides: Partial<CreateMeetingInput> = {}): CreateMeetingInput {
   return {
@@ -150,6 +155,152 @@ describe('meeting snapshot store', () => {
     expect(created.participants.find((participant) => participant.id === 'legacy'))
       .not.toHaveProperty('behaviorRevisionId');
     expect(await getMeeting(created.id)).toEqual(created);
+  });
+
+  it('retires exact live Persona participants without rewriting retained evidence', async () => {
+    const makePersonaMeeting = async (suffix: string, status: 'running' | 'completed') => {
+      const creation = input({
+        id: `meeting-retire-${suffix}-${randomUUID()}`,
+        participants: [
+          {
+            id: `persona-${suffix}`,
+            name: 'Retained Persona Name',
+            personaId: 'persona_retire_exact',
+            behaviorSlotKey: 'council',
+            conversationId: randomUUID(),
+          },
+          {
+            id: `unrelated-${suffix}`,
+            name: 'Unrelated participant',
+            flowId: 'flow-unrelated',
+            conversationId: randomUUID(),
+          },
+        ],
+      });
+      createdIds.push(creation.id!);
+      const record = createMeetingRecord(creation);
+      record.status = status;
+      record.participants[0].activityId = `activity-retire-${suffix}`;
+      record.participants[0].behaviorRevisionId = `revision-retire-${suffix}`;
+      return saveMeeting(record);
+    };
+    const live = await makePersonaMeeting('live', 'running');
+    const completed = await makePersonaMeeting('completed', 'completed');
+    const retainedEvent = (await appendMeetingEvent(live.id, {
+      type: 'participant:spoke',
+      audience: 'public',
+      participantId: live.participants[0].id,
+      participantName: live.participants[0].name,
+      turnId: 'turn-retire-live',
+      content: 'Retain this live contribution.',
+      eventId: 'event-retire-live',
+    })).event;
+
+    await expect(retireMeetingPersonaParticipants('persona_retire_exact'))
+      .resolves.toEqual({ meetings: 1, participants: 1 });
+    const retired = await getMeeting(live.id);
+    expect(retired?.participants[0]).toEqual({
+      ...live.participants[0],
+      status: 'left',
+      personaRetired: true,
+    });
+    expect(retired?.participants[1]).toEqual(live.participants[1]);
+    expect(retired?.personaReservationGeneration).toBe(1);
+    expect(retired?.personaReservationIntent).toBeUndefined();
+    expect(retired?.createdAt).toBe(live.createdAt);
+    expect(retired?.updatedAt).toBe(live.updatedAt);
+    await expect(readMeetingEvents(live.id)).resolves.toEqual([retainedEvent]);
+    await expect(getMeeting(completed.id)).resolves.toEqual(completed);
+
+    const firstRetirement = structuredClone(retired);
+    await expect(retireMeetingPersonaParticipants('persona_retire_exact'))
+      .resolves.toEqual({ meetings: 0, participants: 0 });
+    await expect(getMeeting(live.id)).resolves.toEqual(firstRetirement);
+    await expect(getMeeting(completed.id)).resolves.toEqual(completed);
+  });
+
+  it('anonymizes one exact Persona participant and its cached event names idempotently', async () => {
+    const creation = input({
+      participants: [
+        {
+          id: 'archived-persona',
+          name: 'Private Persona Name',
+          personaId: 'persona_archive_exact',
+          behaviorSlotKey: 'council',
+          conversationId: randomUUID(),
+        },
+        {
+          id: 'unrelated-flow',
+          name: 'Unrelated participant',
+          flowId: 'flow-unrelated',
+          conversationId: randomUUID(),
+        },
+      ],
+    });
+    createdIds.push(creation.id!);
+    const record = createMeetingRecord(creation);
+    record.participants[0].activityId = 'activity_archive_exact';
+    record.participants[0].behaviorRevisionId = 'revision_archive_exact';
+    const saved = await saveMeeting(record);
+    const targetEvent = (await appendMeetingEvent(saved.id, {
+      type: 'participant:spoke',
+      audience: 'public',
+      participantId: 'archived-persona',
+      participantName: 'Private Persona Name',
+      turnId: 'turn-archive',
+      content: 'Retain this authored contribution.',
+      eventId: 'event-archive-target',
+    })).event;
+    const unrelatedEvent = (await appendMeetingEvent(saved.id, {
+      type: 'participant:spoke',
+      audience: 'public',
+      participantId: 'unrelated-flow',
+      participantName: 'Unrelated participant',
+      turnId: 'turn-unrelated',
+      content: 'Retain this unrelated contribution.',
+      eventId: 'event-archive-unrelated',
+    })).event;
+
+    await expect(anonymizeMeetingPersonaAttribution('persona_archive_exact'))
+      .resolves.toEqual({ meetings: 1, participants: 1, events: 1 });
+    const archived = await getMeeting(saved.id);
+    expect(archived).toMatchObject({
+      title: saved.title,
+      openingPrompt: saved.openingPrompt,
+      createdAt: saved.createdAt,
+      updatedAt: saved.updatedAt,
+      participants: [
+        {
+          id: 'archived-persona',
+          name: ARCHIVED_MEETING_PARTICIPANT_NAME,
+          personaArchived: true,
+          behaviorSlotKey: 'council',
+          status: 'left',
+        },
+        saved.participants[1],
+      ],
+    });
+    expect(archived?.participants[0]).not.toHaveProperty('personaId');
+    expect(archived?.participants[0]).not.toHaveProperty('activityId');
+    expect(archived?.participants[0]).not.toHaveProperty('behaviorRevisionId');
+
+    const events = await readMeetingEvents(saved.id);
+    expect(events[0]).toEqual({
+      ...targetEvent,
+      participantName: ARCHIVED_MEETING_PARTICIPANT_NAME,
+    });
+    expect(events[1]).toEqual(unrelatedEvent);
+    expect(events[0]).toMatchObject({
+      content: 'Retain this authored contribution.',
+      timestamp: targetEvent.timestamp,
+    });
+
+    const firstArchive = structuredClone(archived);
+    const firstEvents = structuredClone(events);
+    await expect(anonymizeMeetingPersonaAttribution('persona_archive_exact'))
+      .resolves.toEqual({ meetings: 0, participants: 0, events: 0 });
+    await expect(getMeeting(saved.id)).resolves.toEqual(firstArchive);
+    await expect(readMeetingEvents(saved.id)).resolves.toEqual(firstEvents);
   });
 
   it('rejects missing, ambiguous, and duplicate Persona targets', () => {

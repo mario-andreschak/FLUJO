@@ -40,6 +40,7 @@ let previousDir: string;
 let entry: RunResourceEntry;
 let personaEntry: RunResourceEntry;
 let ephemeralPersonaEntry: RunResourceEntry;
+let personaConversationMarkers: Record<string, unknown>;
 
 const loadConversationStateMock = loadConversationState as jest.Mock;
 const listPersonaFlowDispatchesMock = listPersonaFlowDispatches as jest.Mock;
@@ -75,15 +76,18 @@ beforeAll(async () => {
 
 beforeEach(() => {
   listPersonaFlowDispatchesMock.mockReset().mockResolvedValue([]);
+  personaConversationMarkers = {
+    personaAttribution: {
+      personaId: 'persona-1',
+      activityId: 'activity-1',
+      behaviorRevisionId: 'revision-1',
+    },
+  };
   loadConversationStateMock.mockImplementation(async (conversationId: string) =>
     conversationId === 'conv-persona'
       ? {
           conversationId,
-          personaAttribution: {
-            personaId: 'persona-1',
-            activityId: 'activity-1',
-            behaviorRevisionId: 'revision-1',
-          },
+          ...personaConversationMarkers,
         }
       : undefined,
   );
@@ -194,6 +198,25 @@ describe('internalReadResource', () => {
     } finally {
       unsubscribe();
     }
+  });
+
+  it.each([
+    ['pending target', { personaTargetId: 'persona-1' }],
+    ['frozen instruction context', { personaInstructionContext: { personaId: 'persona-1' } }],
+    ['corrupt null attribution', { personaAttribution: null }],
+    ['corrupt empty target', { personaTargetId: '' }],
+  ])('does not list or read resources for %s ownership markers', async (_label, markers) => {
+    personaConversationMarkers = markers;
+
+    const listed = await internalListResources();
+    expect(listed.resources.some((resource) => resource.uri === personaEntry.uri)).toBe(false);
+
+    const before = await readRunResource(personaEntry.uri);
+    expect(before?.entry.readBy).toEqual([]);
+    const result = await internalReadResource(personaEntry.uri);
+    expect(result).toMatchObject({ success: false, statusCode: 403 });
+    const after = await readRunResource(personaEntry.uri);
+    expect(after?.entry.readBy).toEqual([]);
   });
 
   it('rejects an ephemeral Persona resource owned by a durable dispatch outcome', async () => {

@@ -428,8 +428,12 @@ async function resolveSubflowTemplate(
   if (resolved.includes('${kv:')) {
     let folder: string | undefined;
     try {
-      const { flowService } = await import('@/backend/services/flow/index');
-      folder = (await flowService.getFlow(sharedState.flowId))?.folder;
+      if (sharedState.flowSnapshot) {
+        folder = sharedState.flowSnapshot.folder;
+      } else {
+        const { flowService } = await import('@/backend/services/flow/index');
+        folder = (await flowService.getFlow(sharedState.flowId))?.folder;
+      }
     } catch { /* best effort */ }
     resolved = await resolveKvNodeRefs(resolved, {
       flowId: sharedState.flowId,
@@ -1196,8 +1200,12 @@ export class SubflowNode extends BaseNode {
       try {
         let folder: string | undefined;
         try {
-          const { flowService } = await import('@/backend/services/flow/index');
-          folder = (await flowService.getFlow(sharedState.flowId))?.folder;
+          if (sharedState.flowSnapshot) {
+            folder = sharedState.flowSnapshot.folder;
+          } else {
+            const { flowService } = await import('@/backend/services/flow/index');
+            folder = (await flowService.getFlow(sharedState.flowId))?.folder;
+          }
         } catch { /* best effort */ }
         const res = await captureKvValue(captureKv, resultText, {
           flowId: sharedState.flowId,

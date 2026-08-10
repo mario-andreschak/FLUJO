@@ -181,6 +181,14 @@ export interface PlannedExecution {
    * direct-Flow path byte-compatible.
    */
   personaId?: string;
+  /** Server-managed marker that permanently disables a deleted Persona target. */
+  personaRetired?: true;
+  /**
+   * Nonidentifying tombstone left when the targeted Persona is anonymized.
+   * Such executions are permanently disabled and must never fall back to the
+   * legacy direct-Flow path.
+   */
+  personaArchived?: true;
   /** Optional Role Behavior slot selected for a Persona-targeted execution. */
   behaviorSlotKey?: string;
   /**
@@ -239,6 +247,21 @@ export interface PlannedExecution {
   updatedAt: string;
 }
 
+/**
+ * Server-managed or trusted-target markers that keep a planned execution in
+ * the Persona control plane. Own-property checks deliberately fail closed for
+ * malformed imported/persisted rows instead of reviving their legacy Flow id.
+ */
+export function isPersonaControlledPlannedExecution(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  return [
+    'personaId',
+    'behaviorSlotKey',
+    'personaRetired',
+    'personaArchived',
+  ].some((field) => Object.prototype.hasOwnProperty.call(value, field));
+}
+
 /** Envelope persisted at db/planned_executions.json. */
 export interface PlannedExecutionsFile {
   version: 1;
@@ -287,6 +310,8 @@ export interface RunRecord {
   personaId?: string;
   activityId?: string;
   behaviorRevisionId?: string;
+  /** The Persona attribution triple was removed by the deletion policy. */
+  personaArchived?: true;
 }
 
 /**

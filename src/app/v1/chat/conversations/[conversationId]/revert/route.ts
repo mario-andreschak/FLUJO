@@ -7,6 +7,7 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { readConversationLog, projectMessages } from '@/backend/execution/flow/conversationLog';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { shadowRepoService } from '@/backend/services/snapshot/ShadowRepoService';
@@ -81,7 +82,7 @@ async function GET_handler(
   if (!state) {
     return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
   }
-  if (state.personaAttribution) {
+  if (isPersonaOwnedConversationState(state)) {
     const notLocal = assertLocalRequest(request, { strictLoopback: true });
     if (notLocal) return notLocal;
   }
@@ -103,7 +104,7 @@ async function POST_handler(
   const { conversationId } = await params;
   const state = await loadConversationState(conversationId);
   if (!state) return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
-  if (state.personaAttribution) {
+  if (isPersonaOwnedConversationState(state)) {
     const personaNotLocal = assertLocalRequest(request, { strictLoopback: true });
     if (personaNotLocal) return personaNotLocal;
     return NextResponse.json(

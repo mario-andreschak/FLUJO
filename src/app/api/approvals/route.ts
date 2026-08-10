@@ -9,6 +9,7 @@ import { assertLocalRequest } from '@/utils/http/localRequest';
 import { getSchedulerService } from '@/backend/services/scheduler';
 import type { SharedState } from '@/backend/execution/flow/types';
 import { getPersonaFlowDispatch } from '@/backend/services/enduringAgents/personaDispatcher';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 
 const log = createLogger('app/api/approvals/route');
 
@@ -74,7 +75,7 @@ async function GET_handler(request: Request) {
             stillAwaiting = false;
           }
         }
-        if (!state || state.personaAttribution) requiresStrictControlPlane = true;
+        if (!state || isPersonaOwnedConversationState(state)) requiresStrictControlPlane = true;
       } catch (error) {
         requiresStrictControlPlane = true;
         log.debug(`Could not load state for approval ${entry.approvalId}`, error);
@@ -117,7 +118,7 @@ async function GET_handler(request: Request) {
     for (const question of pendingQuestions) {
       const state = FlowExecutor.conversationStates.get(question.conversationId)
         ?? await loadConversationState(question.conversationId).catch(() => undefined);
-      if (!state || state.personaAttribution) {
+      if (!state || isPersonaOwnedConversationState(state)) {
         requiresStrictControlPlane = true;
         break;
       }

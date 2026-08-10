@@ -15,6 +15,7 @@ import {
   PERSONA_DELETION_ARCHIVE_POLICIES,
   PERSONA_DELETION_STATUSES,
   PERSONA_INTERRUPTION_POLICIES,
+  PERSONA_INSTRUCTION_CONTEXT_SCHEMA_VERSION,
   PERSONA_LEASE_STATUSES,
   PERSONA_LIFECYCLE_STATES,
   PERSONA_MAILBOX_DELIVERY_STATUSES,
@@ -77,6 +78,22 @@ export const PersonaAttributionSchema = z.object({
   personaId: EnduringAgentIdSchema,
   activityId: EnduringAgentIdSchema.optional(),
   behaviorRevisionId: EnduringAgentIdSchema.optional(),
+}).strict();
+
+export const PersonaInstructionContextSchema = z.object({
+  schemaVersion: z.literal(PERSONA_INSTRUCTION_CONTEXT_SCHEMA_VERSION),
+  personaId: EnduringAgentIdSchema,
+  activityId: EnduringAgentIdSchema,
+  behaviorRevisionId: EnduringAgentIdSchema,
+  behaviorContentHash: z.string().regex(SHA256_PATTERN),
+  behaviorSlotKey: BehaviorSlotKeySchema,
+  rootFlowId: z.string().min(1).max(256),
+  roleVersionId: EnduringAgentIdSchema,
+  personaName: NonEmptyText(160),
+  personaMission: z.string().trim().min(1).max(20_000).optional(),
+  roleName: NonEmptyText(160),
+  roleMission: NonEmptyText(20_000),
+  instruction: z.string().min(1).max(64_000),
 }).strict();
 
 export const PersonaPresentationSchema = z.object({
@@ -443,6 +460,7 @@ export const PersonaWorkItemSchema = z.object({
   nextAction: z.string().trim().max(20_000).optional(),
   deadline: TimestampSchema.optional(),
   createdByActivityId: EnduringAgentIdSchema.optional(),
+  behaviorRevisionId: EnduringAgentIdSchema.optional(),
   sourceRefs: z.array(MemorySourceRefSchema).max(100).optional(),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,

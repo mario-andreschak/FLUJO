@@ -62,6 +62,8 @@ const workItem = {
   status: 'open' as const,
   priority: 'normal' as const,
   dependencyIds: [],
+  createdByActivityId: 'activity_1',
+  behaviorRevisionId: 'behavior_revision_1',
   createdAt: 100,
   updatedAt: 100,
 };
@@ -163,6 +165,10 @@ describe('enduring-agent lifecycle schemas', () => {
 
   it('ties WorkItem completion state to completedAt', () => {
     expect(PersonaWorkItemSchema.safeParse(workItem).success).toBe(true);
+    expect(PersonaWorkItemSchema.safeParse({
+      ...workItem,
+      behaviorRevisionId: '../unsafe',
+    }).success).toBe(false);
     expect(PersonaWorkItemSchema.safeParse({
       ...workItem,
       status: 'completed',

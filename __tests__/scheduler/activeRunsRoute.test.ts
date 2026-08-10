@@ -143,4 +143,27 @@ describe('active runs route', () => {
     expect(body.runs.map((run: { conversationId?: string }) => run.conversationId)).toEqual(['legacy']);
     expect(getFlowMock).not.toHaveBeenCalledWith('persona-flow-snapshot');
   });
+
+  it('projects the trusted Persona attribution triple on the strict control plane', async () => {
+    conversationStates.set('persona', makeState({
+      conversationId: 'persona',
+      flowId: 'persona-flow-snapshot',
+      personaAttribution: {
+        personaId: 'persona_1',
+        activityId: 'activity_1',
+        behaviorRevisionId: 'revision_1',
+      },
+    }));
+
+    const response = await GET(new Request('http://localhost:4200/api/runs/active'));
+    const body = await response.json();
+
+    expect(body.runs).toHaveLength(1);
+    expect(body.runs[0]).toMatchObject({
+      conversationId: 'persona',
+      personaId: 'persona_1',
+      activityId: 'activity_1',
+      behaviorRevisionId: 'revision_1',
+    });
+  });
 });

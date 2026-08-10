@@ -447,6 +447,7 @@ export class CodexAdapter implements CompletionAdapter {
               // Codex-driven Bash session landed under `caller:<nodeId>` and was
               // never released when the run ended.
               ownerScopeForRun({ runId, conversationId }),
+              conversationId ? { conversationId } : undefined,
             );
             await afterToolDispatch?.();
             if (runId) {

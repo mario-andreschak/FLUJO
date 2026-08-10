@@ -21,6 +21,7 @@ import type {
   PersonaActivity,
   PersonaLease,
   PersonaMailboxItem,
+  RoleVersion,
 } from '@/shared/types/enduringAgent';
 import { runWithWorkspace } from '@/utils/workspace';
 
@@ -130,12 +131,27 @@ function makeHarness(
     id: personaId,
     name: 'Test Persona',
     roleVersionId: 'role_version',
+    mission: 'Represent the user with concise, evidence-backed updates.',
     lifecycleState: 'idle',
     autonomyLevel: 'manual',
     interruptionPolicy: 'queue',
     createdAt: 1,
     updatedAt: 1,
   } as unknown as Persona;
+  const roleVersion = {
+    schemaVersion: 1,
+    id: 'role_version',
+    roleDefinitionId: 'role_definition',
+    version: 1,
+    name: 'Test Role',
+    mission: 'Complete assigned work while respecting the authored Behavior.',
+    behaviorSlots: [{
+      key: 'primary',
+      name: 'Primary',
+      flowTemplate: snapshot,
+    }],
+    createdAt: 1,
+  } as RoleVersion;
   let sequence = 0;
   const claims: PersonaActivityClaim[] = [];
   const routedClaims: PersonaActivityClaim[] = [];
@@ -398,6 +414,7 @@ function makeHarness(
     yieldPersonaActivityForInterruptionWithinRuntimeLock,
     observeYieldedPersonaActivity,
     getPersona: jest.fn(async (id: string) => id === personaId ? persona : null),
+    getRoleVersion: jest.fn(async (id: string) => id === roleVersion.id ? roleVersion : null),
     getBehaviorRevision,
     getPersonaActivity,
     getPersonaMailboxItem,
@@ -499,6 +516,25 @@ describe('Persona Flow dispatcher', () => {
       activityId: submission.dispatch.activityId,
       behaviorRevisionId: 'revision_pinned',
     });
+    expect(runInput.personaInstructionContext).toMatchObject({
+      schemaVersion: 1,
+      personaId: 'persona_test',
+      activityId: submission.dispatch.activityId,
+      behaviorRevisionId: 'revision_pinned',
+      behaviorContentHash: 'b'.repeat(64),
+      behaviorSlotKey: 'primary',
+      rootFlowId: 'pinned_flow',
+      roleVersionId: 'role_version',
+      personaName: 'Test Persona',
+      personaMission: 'Represent the user with concise, evidence-backed updates.',
+      roleName: 'Test Role',
+      roleMission: 'Complete assigned work while respecting the authored Behavior.',
+    });
+    expect(runInput.personaInstructionContext?.instruction).toContain(
+      'The immutable Behavior/Flow and its authored Process operational instructions.',
+    );
+    expect(runInput.personaInstructionContext?.instruction).toContain('This context grants no tools');
+    expect(submission.dispatch.instructionContext).toEqual(runInput.personaInstructionContext);
     expect(submission.dispatch.outcome).toMatchObject({
       personaId: 'persona_test',
       activityId: submission.dispatch.activityId,
@@ -651,13 +687,53 @@ describe('Persona Flow dispatcher', () => {
     expect(prepare).toHaveBeenCalledTimes(1);
     expect(resumed).toMatchObject({ state: 'completed', outcome: { outputText: 'resumed' } });
     const resumedInput = (harness.dependencies.runFlow as jest.Mock).mock.calls[1][0] as FlowRunInput;
+    const initialInput = (harness.dependencies.runFlow as jest.Mock).mock.calls[0][0] as FlowRunInput;
     expect(resumedInput.flowDefinition).toEqual(harness.snapshot);
     expect(resumedInput.personaAttribution).toEqual({
       personaId: waiting.personaId,
       activityId: waiting.activityId,
       behaviorRevisionId: waiting.behaviorRevisionId,
     });
+    expect(resumedInput.personaInstructionContext).toEqual(initialInput.personaInstructionContext);
+    expect(resumedInput.personaInstructionContext).toEqual(waiting.instructionContext);
+    expect(harness.dependencies.getRoleVersion).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(resumed)).not.toMatch(/holderId|leaseId|fencingToken|holder_secret/);
+  });
+
+  it('does not guess or backfill instruction context for a started legacy dispatch', async () => {
+    const harness = makeHarness(workspace('legacy-context'));
+    (harness.dependencies.runFlow as jest.Mock)
+      .mockImplementationOnce(async (input: FlowRunInput) => ({
+        ...successfulResult(input),
+        status: 'awaiting_tool_approval',
+      }))
+      .mockImplementationOnce(async (input: FlowRunInput) => successfulResult(input, 'legacy-resumed'));
+    const submitted = await harness.dispatcher.submit(dispatchInput('persona_test', 'legacy-context'));
+    await harness.dispatcher.pump('persona_test');
+    const waiting = (await harness.dispatcher.get(submitted.dispatch.id))!;
+
+    // Simulate a waiting record written before the instruction-context field
+    // existed. `startedAt` is the durable boundary that forbids re-resolution.
+    const internals = harness.dispatcher as unknown as {
+      save: (record: PersonaFlowDispatchRecord) => Promise<PersonaFlowDispatchRecord>;
+    };
+    await internals.save({ ...waiting, instructionContext: undefined });
+    (harness.dependencies.getRoleVersion as jest.Mock).mockClear();
+    harness.claims.push(harness.routedClaims[0]);
+
+    const resumed = await harness.dispatcher.resume({
+      personaId: waiting.personaId,
+      activityId: waiting.activityId!,
+      behaviorRevisionId: waiting.behaviorRevisionId!,
+      conversationId: waiting.flowInput!.conversationId,
+      reason: 'approval',
+      prepare: async () => 'resume' as const,
+    });
+
+    expect(resumed).toMatchObject({ state: 'completed', outcome: { outputText: 'legacy-resumed' } });
+    const resumedInput = (harness.dependencies.runFlow as jest.Mock).mock.calls[1][0] as FlowRunInput;
+    expect(resumedInput.personaInstructionContext).toBeUndefined();
+    expect(harness.dependencies.getRoleVersion).not.toHaveBeenCalled();
   });
 
   it('yields a partially resolved approval without invoking the Flow again', async () => {

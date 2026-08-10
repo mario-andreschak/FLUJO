@@ -3235,6 +3235,7 @@ export class ModelHandler {
               callSignal,
               'model',
               runOwnerScope,
+              conversationId ? { conversationId } : undefined,
             );
             // The MCP abort is cooperative.  A result may arrive after the
             // Persona lease/meeting generation was replaced; reject it before

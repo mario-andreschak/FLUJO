@@ -55,6 +55,33 @@ describe('Persona package selection boundary', () => {
     })).rejects.toThrow(/Persona-targeted planned executions cannot be packaged/);
   });
 
+  it.each([
+    ['anonymized', { personaArchived: true, personaRetired: true }],
+    ['retained tombstone', { personaId: 'persona_deleted', personaRetired: true }],
+  ])('rejects a %s Persona plan instead of exporting its legacy Flow fallback', async (_label, markers) => {
+    schedulerListMock.mockResolvedValue([{
+      execution: {
+        id: 'retired-persona-plan',
+        name: 'Retired Persona plan',
+        enabled: false,
+        flowId: 'legacy-flow-must-not-run',
+        behaviorSlotKey: 'primary',
+        prompt: 'private Persona prompt',
+        trigger: { type: 'schedule', cron: '0 0 * * *' },
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        ...markers,
+      },
+    }]);
+
+    await expect(resolvePackageSelection({
+      plannedExecutionIds: ['retired-persona-plan'],
+    })).rejects.toThrow(/Persona-targeted planned executions cannot be packaged/);
+    await expect(scanTargetsForSelection({
+      plannedExecutionIds: ['retired-persona-plan'],
+    })).rejects.toThrow(/Persona-targeted planned executions cannot be packaged/);
+  });
+
   it('keeps legacy planned-execution selection compatible', async () => {
     schedulerListMock.mockResolvedValue([{
       execution: {

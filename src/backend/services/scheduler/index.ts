@@ -3,6 +3,7 @@ import { createHash } from 'crypto';
 import { saveItem, loadItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import {
+  isPersonaControlledPlannedExecution,
   OverlapStrategy,
   PlannedExecution,
   PlannedExecutionsFile,
@@ -33,6 +34,7 @@ import {
 } from './flowRunEventBus';
 import {
   appendRunRecord,
+  anonymizeRunHistoryPersonaAttribution,
   deleteRunHistory,
   drainStableTerminalPublications,
   loadLastRunRecord,
@@ -48,6 +50,7 @@ import {
   putPersonaSchedulerProjection,
   removePersonaSchedulerProjection,
   removePersonaSchedulerProjectionsForExecution,
+  removePersonaSchedulerProjectionsForPersonaId,
   restorePersonaSchedulerExecution,
   type PersonaSchedulerProjection,
   withPersonaSchedulerProjectionGuard,
@@ -63,6 +66,7 @@ import {
   putDurableFileWatchIntent,
   removeDurableFileWatchIntent,
   removeDurableFileWatchIntentsForExecution,
+  removeDurableFileWatchIntentsForPersonaId,
   type DurableFileWatchIntent,
 } from './fileWatchOutbox';
 import type { FlowRunResult } from '@/backend/execution/flow/runFlow';
@@ -75,6 +79,7 @@ import {
   createStatisticsEvent,
   recordStatisticsEvent,
 } from '@/backend/services/statistics';
+import { removePendingApprovalsForPersonaId } from './pendingApprovals';
 
 const log = createLogger('backend/services/scheduler/index');
 
@@ -83,11 +88,75 @@ const MAX_STORED_OUTPUT_CHARS = 4096;
 
 const EMPTY_FILE: PlannedExecutionsFile = { version: 1, paused: false, executions: [] };
 const CONFIG_MUTATION_LOCK_ID = 'scheduler_planned_executions';
+const INCOMPLETE_PERSONA_EXECUTION_ERROR =
+  'Persona planned execution ownership metadata is incomplete';
+const STALE_PERSONA_EXECUTION_AUTHORITY_ERROR =
+  'Persona planned execution authority changed before firing';
+
+function hasOwn(value: object, field: PropertyKey): boolean {
+  return Object.prototype.hasOwnProperty.call(value, field);
+}
+
+function isIncompletePersonaControlledExecution(
+  execution: PlannedExecution | null | undefined,
+): boolean {
+  return Boolean(
+    execution
+    && isPersonaControlledPlannedExecution(execution)
+    && !execution.personaRetired
+    && !execution.personaArchived
+    && (
+      !EnduringAgentIdSchema.safeParse(execution.personaId).success
+      || (
+        hasOwn(execution, 'behaviorSlotKey')
+        && !BehaviorSlotKeySchema.safeParse(execution.behaviorSlotKey).success
+      )
+      || (hasOwn(execution, 'personaRetired') && execution.personaRetired !== true)
+      || (hasOwn(execution, 'personaArchived') && execution.personaArchived !== true)
+    ),
+  );
+}
+
+function omitUndefinedPersonaTargetFields(
+  execution: PlannedExecution,
+): PlannedExecution {
+  // Trusted TypeScript callers historically used explicit `undefined` to mean
+  // "no Persona target". Canonicalize those values before returning/saving so
+  // the own-property corruption guard remains reserved for persisted/imported
+  // rows that bypass this mutation boundary.
+    if (
+      Object.prototype.hasOwnProperty.call(execution, 'personaId')
+      && execution.personaId === undefined
+  ) {
+    delete execution.personaId;
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(execution, 'behaviorSlotKey')
+    && execution.behaviorSlotKey === undefined
+  ) {
+    delete execution.behaviorSlotKey;
+  }
+  return execution;
+}
 
 export interface PlannedExecutionListEntry {
   execution: PlannedExecution;
   status: PlannedExecutionStatus;
   lastRun: RunRecord | null;
+}
+
+export interface SchedulerPersonaRetirementResult {
+  plannedExecutions: number;
+  pendingApprovals: number;
+  pendingProjections: number;
+  pendingFileWatchIntents: number;
+}
+
+export interface SchedulerPersonaAnonymizationResult
+  extends SchedulerPersonaRetirementResult {
+  runHistories: number;
+  runRecords: number;
+  terminalReceipts: number;
 }
 
 /** A fire deferred by the 'queue' overlap strategy (issue #121). */
@@ -275,7 +344,15 @@ export class SchedulerService {
       return;
     }
     for (const execution of file.executions) {
-      if (!execution.enabled) {
+      if (!execution.enabled || execution.personaRetired || execution.personaArchived) {
+        continue;
+      }
+      if (isIncompletePersonaControlledExecution(execution)) {
+        this.lastTriggerErrors.set(execution.id, INCOMPLETE_PERSONA_EXECUTION_ERROR);
+        log.error(
+          `Refusing to arm Persona-controlled execution "${execution.name}" (${execution.id}): `
+          + INCOMPLETE_PERSONA_EXECUTION_ERROR,
+        );
         continue;
       }
       try {
@@ -657,6 +734,111 @@ export class SchedulerService {
   }
 
   /**
+   * Permanently retire exact Persona-targeted configs and their resumable live
+   * intents while preserving retained attribution evidence. This applies to
+   * every Persona deletion policy: retaining a tombstone must never leave a
+   * deleted actor runnable.
+   */
+  async retirePersonaByPersonaId(
+    personaId: string,
+  ): Promise<SchedulerPersonaRetirementResult> {
+    return this.inWorkspace(async () => {
+      EnduringAgentIdSchema.parse(personaId);
+      const affectedExecutionIds: string[] = [];
+      const plannedExecutions = await withPersonaRuntimeLock(
+        CONFIG_MUTATION_LOCK_ID,
+        async (lock) => {
+          const file = await this.loadFile();
+          let changed = 0;
+          const executions = file.executions.map((execution) => {
+            if (execution.personaId !== personaId) return execution;
+            affectedExecutionIds.push(execution.id);
+            if (execution.personaRetired && !execution.enabled) return execution;
+            changed += 1;
+            return {
+              ...execution,
+              enabled: false,
+              personaRetired: true as const,
+            };
+          });
+          if (changed === 0) return 0;
+          await lock.assertOwned();
+          await this.saveFile({ ...file, executions });
+          return changed;
+        },
+      );
+
+      // Fence durable continuations before disarming process-local triggers so
+      // a recovered projection cannot submit work for the deleted actor.
+      const pendingProjections = await removePersonaSchedulerProjectionsForPersonaId(personaId);
+      if (affectedExecutionIds.length > 0) {
+        await this.reconcile();
+        for (const id of affectedExecutionIds) {
+          await this.cancelQueued(id, 'Persona retired', false);
+          await this.cancelExclusiveWaiting(id, 'Persona retired', false);
+          this.lastTriggerErrors.delete(id);
+        }
+      }
+      const [pendingApprovals, pendingFileWatchIntents] = await Promise.all([
+        removePendingApprovalsForPersonaId(personaId),
+        removeDurableFileWatchIntentsForPersonaId(personaId),
+      ]);
+      return {
+        plannedExecutions,
+        pendingApprovals,
+        pendingProjections,
+        pendingFileWatchIntents,
+      };
+    });
+  }
+
+  /**
+   * Retire exact Persona schedules, then erase their attribution triple from
+   * durable config/history evidence. `personaArchived` is the nonidentifying
+   * marker; `personaRetired` independently records the permanent runtime fence.
+   */
+  async anonymizePersonaAttributionByPersonaId(
+    personaId: string,
+  ): Promise<SchedulerPersonaAnonymizationResult> {
+    EnduringAgentIdSchema.parse(personaId);
+    const retirement = await this.retirePersonaByPersonaId(personaId);
+    return this.inWorkspace(async () => {
+      const plannedExecutions = await withPersonaRuntimeLock(
+        CONFIG_MUTATION_LOCK_ID,
+        async (lock) => {
+          const file = await this.loadFile();
+          let changed = 0;
+          const executions = file.executions.map((execution) => {
+            if (execution.personaId !== personaId) return execution;
+            changed += 1;
+            const archived = {
+              ...execution,
+              enabled: false,
+              personaRetired: true as const,
+              personaArchived: true as const,
+            };
+            delete archived.personaId;
+            return archived;
+          });
+          if (changed === 0) return 0;
+          await lock.assertOwned();
+          await this.saveFile({ ...file, executions });
+          return changed;
+        },
+      );
+      if (plannedExecutions > 0) await this.reconcile();
+      const histories = await anonymizeRunHistoryPersonaAttribution(personaId);
+      return {
+        ...retirement,
+        plannedExecutions,
+        runHistories: histories.histories,
+        runRecords: histories.records,
+        terminalReceipts: histories.terminalReceipts,
+      };
+    });
+  }
+
+  /**
    * Create a new execution. Fills timestamps/webhook-token server-side. The
    * client MAY supply the id — that's what lets the editor show the webhook URL
    * before the first save, AND what lets a package applier install a planned
@@ -668,7 +850,15 @@ export class SchedulerService {
    * storage key (planned-execution-state/<id>.json, run history) it derives.
    */
   async create(
-    input: Omit<PlannedExecution, 'id' | 'generationId' | 'createdAt' | 'updatedAt'> & { id?: string }
+    input: Omit<
+      PlannedExecution,
+      | 'id'
+      | 'generationId'
+      | 'createdAt'
+      | 'updatedAt'
+      | 'personaArchived'
+      | 'personaRetired'
+    > & { id?: string }
   ): Promise<{ execution?: PlannedExecution; error?: string; conflict?: boolean }> {
     const error = this.validateInput(input);
     if (error) {
@@ -689,7 +879,7 @@ export class SchedulerService {
       return { error: 'The id must be a safe identifier, not "." or ".."' };
     }
     const now = new Date().toISOString();
-    const execution: PlannedExecution = {
+    const execution = omitUndefinedPersonaTargetFields({
       ...input,
       // Treat a blank folder as "unfiled" and keep folder names tidy at the
       // persistence boundary, regardless of whether the caller is the UI/API.
@@ -699,33 +889,49 @@ export class SchedulerService {
       generationId: uuidv4(),
       createdAt: now,
       updatedAt: now,
-    };
-    const conflict = await withPersonaRuntimeLock(CONFIG_MUTATION_LOCK_ID, async (lock) => {
+    });
+    const mutation = await withPersonaRuntimeLock(CONFIG_MUTATION_LOCK_ID, async (lock) => {
       // Re-read inside the cross-process serialization boundary: two creators
       // for the same id cannot both validate against a stale snapshot.
       const file = await this.loadFile();
-      if (file.executions.some(e => e.id === execution.id)) return true;
+      if (file.executions.some(e => e.id === execution.id)) {
+        return { conflict: true as const };
+      }
+      // Persona deletion retires schedules under this same config lock. Repeat
+      // the target/tombstone lookup here so validation performed before lock
+      // acquisition cannot cross deletion and persist a fresh runnable target.
+      const personaTargetError = await this.validatePersonaTarget(execution);
+      if (personaTargetError) return { error: personaTargetError };
       await lock.assertOwned();
       await this.saveFile({ ...file, executions: [...file.executions, execution] });
       // A deliberate recreation establishes a new generation. Clear the
       // execution-wide admission fence while retaining old projection-id
       // tombstones, which continue fencing loaded old continuations.
       await restorePersonaSchedulerExecution(execution.id);
-      return false;
+      return {};
     });
-    if (conflict) {
+    if (mutation.conflict) {
       return {
         error: `A planned execution with id "${execution.id}" already exists`,
         conflict: true,
       };
     }
+    if (mutation.error) return { error: mutation.error };
     await this.reconcile();
     return { execution };
   }
 
   async update(
     id: string,
-    patch: Partial<Omit<PlannedExecution, 'id' | 'generationId' | 'createdAt' | 'updatedAt'>>
+    patch: Partial<Omit<
+      PlannedExecution,
+      | 'id'
+      | 'generationId'
+      | 'createdAt'
+      | 'updatedAt'
+      | 'personaArchived'
+      | 'personaRetired'
+    >>
   ): Promise<{ execution?: PlannedExecution; error?: string }> {
     const mutation = await withPersonaRuntimeLock(CONFIG_MUTATION_LOCK_ID, async (lock) => {
       const file = await this.loadFile();
@@ -742,7 +948,10 @@ export class SchedulerService {
         return { error: 'Folder must be text' };
       }
       const current = file.executions[index];
-      const merged: PlannedExecution = {
+      if (current.personaRetired || current.personaArchived) {
+        return { error: 'A retired Persona planned execution is read-only' };
+      }
+      const merged = omitUndefinedPersonaTargetFields({
         ...current,
         ...patch,
         // An explicit blank folder clears the assignment. When folder is absent
@@ -755,7 +964,7 @@ export class SchedulerService {
         generationId: this.executionGenerationId(current),
         createdAt: current.createdAt,
         updatedAt: new Date().toISOString(),
-      };
+      });
       const error = this.validateInput(merged);
       if (error) return { error };
       const personaTargetError = await this.validatePersonaTarget(merged);
@@ -842,6 +1051,12 @@ export class SchedulerService {
   private validateInput(
     input: Omit<PlannedExecution, 'id' | 'createdAt' | 'updatedAt'>
   ): string | null {
+    if (
+      (input as PlannedExecution).personaArchived !== undefined
+      || (input as PlannedExecution).personaRetired !== undefined
+    ) {
+      return 'Persona retirement and archive markers are server-managed';
+    }
     if (!input.name?.trim()) {
       return 'A name is required';
     }
@@ -1425,14 +1640,22 @@ export class SchedulerService {
 
   getStatus(execution: PlannedExecution): PlannedExecutionStatus {
     const trigger = this.armed.get(execution.id);
+    const personaRuntimeBlocked = Boolean(
+      execution.personaRetired
+      || execution.personaArchived
+      || isIncompletePersonaControlledExecution(execution),
+    );
     // Webhook triggers have no armed component — they count as armed whenever
     // the execution is enabled and the scheduler isn't paused.
     const armed =
-      trigger !== undefined ||
-      (execution.enabled &&
-        execution.trigger.type === 'webhook' &&
-        this.started &&
-        !this.pausedCache);
+      !personaRuntimeBlocked
+      && (
+        trigger !== undefined
+        || (execution.enabled
+          && execution.trigger.type === 'webhook'
+          && this.started
+          && !this.pausedCache)
+      );
     const runningSince = this.earliestRunningSince(execution.id);
     // When NOT armed, tell the UI *why* so it can render a truthful hint
     // instead of a bare "Not armed" (issue #118). A disabled execution is
@@ -1474,6 +1697,9 @@ export class SchedulerService {
     const execution = await this.get(id);
     if (!execution) {
       return { error: `No planned execution with id "${id}"` };
+    }
+    if (execution.personaRetired || execution.personaArchived) {
+      return { error: 'A retired Persona planned execution cannot be run' };
     }
     const runId = uuidv4();
     const record = await this.fire(execution, {
@@ -1978,6 +2204,76 @@ export class SchedulerService {
   ): Promise<RunRecord> {
     const firedAt = new Date().toISOString();
     const stablePersonaDelivery = this.stablePersonaDeliveryId(execution, payload);
+
+    // Trigger callbacks capture a config snapshot when they are armed. Re-read
+    // the durable row before dispatch so a callback already in flight cannot
+    // submit work after Persona deletion retired (or anonymized) that config.
+    const currentExecution = await this.get(execution.id);
+    if (
+      execution.personaRetired
+      || execution.personaArchived
+      || currentExecution?.personaRetired
+      || currentExecution?.personaArchived
+    ) {
+      const error = new TypeError('A retired Persona planned execution cannot be fired');
+      admissionObserver?.reject(error);
+      return {
+        runId,
+        executionGenerationId: this.executionGenerationId(execution),
+        conversationId: '',
+        firedAt,
+        finishedAt: firedAt,
+        status: 'skipped',
+        triggerSummary: payload.summary,
+        error: error.message,
+      };
+    }
+    if (
+      isIncompletePersonaControlledExecution(execution)
+      || isIncompletePersonaControlledExecution(currentExecution)
+    ) {
+      const error = new TypeError(INCOMPLETE_PERSONA_EXECUTION_ERROR);
+      admissionObserver?.reject(error);
+      return {
+        runId,
+        executionGenerationId: this.executionGenerationId(execution),
+        conversationId: '',
+        firedAt,
+        finishedAt: firedAt,
+        status: 'skipped',
+        triggerSummary: payload.summary,
+        error: error.message,
+      };
+    }
+
+    const capturedPersonaControlled = isPersonaControlledPlannedExecution(execution);
+    const currentPersonaControlled = isPersonaControlledPlannedExecution(currentExecution);
+    if (
+      (capturedPersonaControlled || currentPersonaControlled)
+      && (
+        !currentExecution
+        || !capturedPersonaControlled
+        || !currentPersonaControlled
+        || execution.personaId !== currentExecution.personaId
+        || (execution.behaviorSlotKey ?? 'primary')
+          !== (currentExecution.behaviorSlotKey ?? 'primary')
+        || this.executionGenerationId(execution)
+          !== this.executionGenerationId(currentExecution)
+      )
+    ) {
+      const error = new TypeError(STALE_PERSONA_EXECUTION_AUTHORITY_ERROR);
+      admissionObserver?.reject(error);
+      return {
+        runId,
+        executionGenerationId: this.executionGenerationId(execution),
+        conversationId: '',
+        firedAt,
+        finishedAt: firedAt,
+        status: 'skipped',
+        triggerSummary: payload.summary,
+        error: error.message,
+      };
+    }
 
     // Persona concurrency and ordering are owned by the durable mailbox. Admit
     // before touching every process-local encryption/overlap/exclusive/running

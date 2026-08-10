@@ -12,6 +12,30 @@ import { normalizeTicketLabels } from '@/shared/types/ticket';
 import type { Ticket } from '@/shared/types/ticket';
 
 const store = new Map<string, unknown>();
+const mockDeletionTombstones = new Set<string>();
+const mockLockTails = new Map<string, Promise<void>>();
+let mockBeforeSave: ((id: string, value: unknown) => Promise<void>) | undefined;
+
+jest.mock('@/backend/services/enduringAgents/runtimeLock', () => ({
+  withPersonaRuntimeLock: async (id: string, task: (lock: { assertOwned(): Promise<void> }) => Promise<unknown>) => {
+    const previous = mockLockTails.get(id) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => { release = resolve; });
+    mockLockTails.set(id, previous.then(() => current));
+    await previous;
+    try {
+      return await task({ assertOwned: async () => undefined });
+    } finally {
+      release();
+      if (mockLockTails.get(id) === current) mockLockTails.delete(id);
+    }
+  },
+}));
+
+jest.mock('@/backend/services/enduringAgents/store', () => ({
+  getPersonaDeletionTombstone: jest.fn(async (personaId: string) =>
+    mockDeletionTombstones.has(personaId) ? { personaId } : null),
+}));
 
 jest.mock('@/utils/storage/backend', () => ({
   assertSafeCollectionId: (id: string) => {
@@ -23,6 +47,7 @@ jest.mock('@/utils/storage/backend', () => ({
   loadCollectionItem: jest.fn(async (_collection: string, id: string, fallback: unknown) =>
     store.has(id) ? store.get(id) : fallback),
   saveCollectionItem: jest.fn(async (_collection: string, id: string, value: unknown) => {
+    await mockBeforeSave?.(id, value);
     store.set(id, value);
   }),
   deleteCollectionItem: jest.fn(async (_collection: string, id: string) => {
@@ -34,7 +59,14 @@ jest.mock('@/utils/logger', () => ({
   createLogger: () => ({ debug: jest.fn(), verbose: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() }),
 }));
 
+jest.mock('@/backend/execution/flow/FlowExecutor', () => ({
+  FlowExecutor: { conversationStates: new Map<string, unknown>() },
+}));
+
 import { ticketService } from '@/backend/services/ticket';
+import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+
+const conversationStates = FlowExecutor.conversationStates as Map<string, unknown>;
 
 const seed = (ticket: Partial<Ticket> & { id: string }) => {
   const full: Ticket = {
@@ -51,6 +83,10 @@ const seed = (ticket: Partial<Ticket> & { id: string }) => {
 
 beforeEach(() => {
   store.clear();
+  conversationStates.clear();
+  mockDeletionTombstones.clear();
+  mockLockTails.clear();
+  mockBeforeSave = undefined;
   jest.clearAllMocks();
 });
 
@@ -98,6 +134,94 @@ describe('ticketService.createTicket', () => {
       source: 'agent',
     });
     expect(linked.ticket).toMatchObject({ conversationId: 'conv-1', flowId: 'flow-1', source: 'agent' });
+  });
+
+  it('never derives attribution from an arbitrary caller-supplied conversation link', async () => {
+    store.set('conv-persona', {
+      conversationId: 'conv-persona',
+      personaAttribution: {
+        personaId: 'persona-on-disk',
+        activityId: 'activity-on-disk',
+        behaviorRevisionId: 'revision-on-disk',
+      },
+    });
+    conversationStates.set('conv-persona', {
+      conversationId: 'conv-persona',
+      personaAttribution: {
+        personaId: 'persona-live',
+        activityId: 'activity-live',
+        behaviorRevisionId: 'revision-live',
+      },
+    });
+
+    const result = await ticketService.createTicket({
+      message: 'attributed',
+      conversationId: 'conv-persona',
+      personaId: 'persona-caller',
+      activityId: 'activity-caller',
+      behaviorRevisionId: 'revision-caller',
+    } as unknown as Parameters<typeof ticketService.createTicket>[0]);
+
+    expect(result.ticket).not.toHaveProperty('personaId');
+    expect(result.ticket).not.toHaveProperty('activityId');
+    expect(result.ticket).not.toHaveProperty('behaviorRevisionId');
+  });
+
+  it('stamps only through trusted execution context, preferring live attribution', async () => {
+    conversationStates.set('conv-persona', {
+      conversationId: 'conv-persona',
+      personaAttribution: {
+        personaId: 'persona-live',
+        activityId: 'activity-live',
+        behaviorRevisionId: 'revision-live',
+      },
+    });
+    const created = await ticketService.createTicket({ message: 'trusted', conversationId: 'conv-persona' });
+
+    await expect(ticketService.stampPersonaAttributionFromTrustedConversation(
+      created.ticket!.id,
+      'conv-persona',
+    )).resolves.toBe(true);
+    expect(store.get(created.ticket!.id)).toMatchObject({
+      personaId: 'persona-live',
+      activityId: 'activity-live',
+      behaviorRevisionId: 'revision-live',
+    });
+  });
+
+  it('falls back to persisted trusted attribution, drops invalid provenance, and refuses deletion tombstones', async () => {
+    store.set('conv-persisted', {
+      conversationId: 'conv-persisted',
+      personaAttribution: { personaId: 'persona-persisted', activityId: 'activity-persisted' },
+    });
+    store.set('conv-invalid', {
+      conversationId: 'conv-invalid',
+      personaAttribution: { personaId: '../unsafe' },
+    });
+
+    const persisted = await ticketService.createTicket({ message: 'persisted', conversationId: 'conv-persisted' });
+    const invalid = await ticketService.createTicket({ message: 'invalid', conversationId: 'conv-invalid' });
+
+    await expect(ticketService.stampPersonaAttributionFromTrustedConversation(
+      persisted.ticket!.id,
+      'conv-persisted',
+    )).resolves.toBe(true);
+    expect(store.get(persisted.ticket!.id)).toMatchObject({
+      personaId: 'persona-persisted',
+      activityId: 'activity-persisted',
+    });
+    await expect(ticketService.stampPersonaAttributionFromTrustedConversation(
+      invalid.ticket!.id,
+      'conv-invalid',
+    )).resolves.toBe(false);
+
+    const blocked = await ticketService.createTicket({ message: 'blocked', conversationId: 'conv-persisted' });
+    mockDeletionTombstones.add('persona-persisted');
+    await expect(ticketService.stampPersonaAttributionFromTrustedConversation(
+      blocked.ticket!.id,
+      'conv-persisted',
+    )).resolves.toBe(false);
+    expect(store.get(blocked.ticket!.id)).not.toHaveProperty('personaId');
   });
 });
 
@@ -196,5 +320,67 @@ describe('ticketService.updateTicket / deleteTicket', () => {
 
     await expect(ticketService.deleteTickets(['two', 'missing'])).resolves.toEqual({ deleted: 1, errors: 1 });
     expect(store.size).toBe(0);
+  });
+});
+
+describe('ticketService.clearPersonaAttributionByPersonaId', () => {
+  it('is idempotent and leaves ticket content, timestamps, and other provenance intact', async () => {
+    const attributed = seed({
+      id: 'attributed',
+      message: 'keep this content',
+      conversationId: 'conv-1',
+      flowId: 'flow-1',
+      source: 'agent',
+      personaId: 'persona-1',
+      activityId: 'activity-1',
+      behaviorRevisionId: 'revision-1',
+      updatedAt: 42,
+    });
+    const other = seed({
+      id: 'other',
+      personaId: 'persona-2',
+      activityId: 'activity-2',
+      behaviorRevisionId: 'revision-2',
+    });
+    const expected = { ...attributed };
+    delete expected.personaId;
+    delete expected.activityId;
+    delete expected.behaviorRevisionId;
+
+    await expect(ticketService.clearPersonaAttributionByPersonaId('persona-1')).resolves.toBe(1);
+    expect(store.get('attributed')).toEqual(expected);
+    expect(store.get('other')).toEqual(other);
+    await expect(ticketService.clearPersonaAttributionByPersonaId('persona-1')).resolves.toBe(0);
+    expect(store.get('attributed')).toEqual(expected);
+  });
+
+  it('serializes a stale update ahead of anonymization so attribution cannot reappear', async () => {
+    seed({
+      id: 'racy',
+      personaId: 'persona-1',
+      activityId: 'activity-1',
+      behaviorRevisionId: 'revision-1',
+    });
+    let releaseSave!: () => void;
+    const saveReleased = new Promise<void>((resolve) => { releaseSave = resolve; });
+    let updateSaveReached!: () => void;
+    const updateSaving = new Promise<void>((resolve) => { updateSaveReached = resolve; });
+    mockBeforeSave = async (id, value) => {
+      if (id === 'racy' && (value as Ticket).status === 'done') {
+        updateSaveReached();
+        await saveReleased;
+      }
+    };
+
+    const update = ticketService.updateTicket('racy', { status: 'done' });
+    await updateSaving;
+    const anonymize = ticketService.clearPersonaAttributionByPersonaId('persona-1');
+    releaseSave();
+    await Promise.all([update, anonymize]);
+
+    expect(store.get('racy')).toMatchObject({ status: 'done' });
+    expect(store.get('racy')).not.toHaveProperty('personaId');
+    expect(store.get('racy')).not.toHaveProperty('activityId');
+    expect(store.get('racy')).not.toHaveProperty('behaviorRevisionId');
   });
 });
