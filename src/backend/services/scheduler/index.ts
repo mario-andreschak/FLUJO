@@ -596,12 +596,7 @@ export class SchedulerService {
     return {
       version: 1,
       paused: file.paused === true,
-      executions: Array.isArray(file.executions)
-        ? file.executions.map((execution) => ({
-            ...execution,
-            generationId: this.executionGenerationId(execution),
-          }))
-        : [],
+      executions: Array.isArray(file.executions) ? file.executions : [],
     };
   }
 
