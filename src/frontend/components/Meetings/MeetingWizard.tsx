@@ -38,9 +38,11 @@ import {
 import { alpha } from '@mui/material/styles';
 import {
   AddRounded,
+  AttachFileRounded,
   AutoAwesomeRounded,
   CheckCircleRounded,
   CloseRounded,
+  DescriptionRounded,
   GroupsRounded,
   HowToVoteRounded,
   PersonRounded,
@@ -48,6 +50,7 @@ import {
   ShieldRounded,
 } from '@mui/icons-material';
 import type { Flow } from '@/shared/types/flow';
+import type { ModelMediaPart } from '@/shared/types/model/media';
 import type {
   CreateMeetingInput,
   MeetingModeratorMode,
@@ -55,11 +58,14 @@ import type {
 } from '@/shared/types/meeting';
 import { flowService } from '@/frontend/services/flow';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import CardPickerGrid from '@/frontend/components/shared/CardPickerGrid';
+import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 
 interface MeetingWizardProps {
   open: boolean;
   submitting?: boolean;
   error?: string | null;
+  initialInput?: CreateMeetingInput | null;
   onClose: () => void;
   onSubmit: (input: CreateMeetingInput) => void | Promise<void>;
 }
@@ -88,6 +94,7 @@ export default function MeetingWizard({
   open,
   submitting = false,
   error,
+  initialInput,
   onClose,
   onSubmit,
 }: MeetingWizardProps) {
@@ -100,6 +107,7 @@ export default function MeetingWizard({
   const [flowLoadError, setFlowLoadError] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [openingPrompt, setOpeningPrompt] = useState('');
+  const [openingMedia, setOpeningMedia] = useState<ModelMediaPart[]>([]);
   const [participants, setParticipants] = useState<DraftParticipant[]>([]);
   const [moderatorMode, setModeratorMode] = useState<MeetingModeratorMode>('none');
   const [moderatorParticipantId, setModeratorParticipantId] = useState('');
@@ -122,11 +130,40 @@ export default function MeetingWizard({
   }, [open, t]);
 
   useEffect(() => {
+    if (!open) return;
+    setStep(0);
+    setTitle(initialInput?.title ?? '');
+    setOpeningPrompt(initialInput?.openingPrompt ?? '');
+    setOpeningMedia(initialInput?.openingMedia?.map((part) => ({ ...part })) ?? []);
+    setParticipants(initialInput?.participants.map((participant) => ({
+      id: participant.id ?? makeId(),
+      flowId: participant.flowId,
+      flowName: participant.name,
+      name: participant.name,
+    })) ?? []);
+    setModeratorMode(initialInput?.policy?.moderatorMode ?? 'none');
+    setModeratorParticipantId(initialInput?.moderatorParticipantId ?? '');
+    setMaxRounds(initialInput?.policy?.maxRounds ?? 6);
+    setConcurrencyLimit(initialInput?.policy?.concurrencyLimit ?? 4);
+    setFinishThreshold(initialInput?.policy?.finishThreshold ?? 'majority');
+    setErrorStrategy(initialInput?.policy?.errorStrategy ?? 'collect-all');
+  }, [initialInput, open]);
+
+  useEffect(() => {
+    if (!flows.length) return;
+    setParticipants((current) => current.map((participant) => ({
+      ...participant,
+      flowName: flows.find((flow) => flow.id === participant.flowId)?.name ?? participant.flowName,
+    })));
+  }, [flows]);
+
+  useEffect(() => {
     // Participant selection happens before facilitation, so arrive on that
     // step with a useful parallel default instead of inheriting the temporary
     // one-agent clamp from the first card selected.
-    setConcurrencyLimit(Math.max(1, Math.min(4, participants.length || 1)));
-  }, [participants]);
+    setConcurrencyLimit(initialInput?.policy?.concurrencyLimit
+      ?? Math.max(1, Math.min(4, participants.length || 1)));
+  }, [initialInput?.policy?.concurrencyLimit, participants]);
 
   useEffect(() => {
     if (moderatorParticipantId && !participants.some((person) => person.id === moderatorParticipantId)) {
@@ -156,6 +193,7 @@ export default function MeetingWizard({
     setStep(0);
     setTitle('');
     setOpeningPrompt('');
+    setOpeningMedia([]);
     setParticipants([]);
     setModeratorMode('none');
     setModeratorParticipantId('');
@@ -188,6 +226,7 @@ export default function MeetingWizard({
     const input: CreateMeetingInput = {
       title: title.trim(),
       openingPrompt: openingPrompt.trim(),
+      openingMedia: openingMedia.length ? openingMedia : undefined,
       participants: participants.map((participant) => ({
         id: participant.id,
         flowId: participant.flowId,
@@ -205,8 +244,29 @@ export default function MeetingWizard({
         errorStrategy,
         allSilentBehavior: 'finish',
       },
+      parentMeetingId: initialInput?.parentMeetingId,
     };
     void onSubmit(input);
+  };
+
+  const attachFiles = async (files: FileList | null) => {
+    if (!files?.length) return;
+    const read = (file: File) => new Promise<ModelMediaPart>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error ?? new Error(`Could not read ${file.name}`));
+      reader.onload = () => {
+        const result = String(reader.result ?? '');
+        resolve({
+          type: file.type.startsWith('image/') ? 'image' : file.type.startsWith('audio/') ? 'audio' : file.type.startsWith('video/') ? 'video' : 'file',
+          mimeType: file.type || 'application/octet-stream',
+          data: result.includes(',') ? result.slice(result.indexOf(',') + 1) : result,
+          name: file.name,
+        });
+      };
+      reader.readAsDataURL(file);
+    });
+    const next = await Promise.all(Array.from(files).map(read));
+    setOpeningMedia((current) => [...current, ...next].slice(0, 8));
   };
 
   const steps = [
@@ -232,31 +292,12 @@ export default function MeetingWizard({
         },
       }}
     >
-      <DialogTitle sx={{ pb: 1.5 }}>
-        <Stack direction="row" alignItems="center" spacing={1.4}>
-          <Avatar
-            sx={{
-              width: 42,
-              height: 42,
-              bgcolor: alpha(theme.palette.primary.main, 0.14),
-              color: 'primary.light',
-            }}
-          >
-            <GroupsRounded />
-          </Avatar>
-          <Box sx={{ flex: 1 }}>
-            <Typography variant="overline" color="primary.light" sx={{ letterSpacing: '0.12em' }}>
-              {t('meetings.experimental')}
-            </Typography>
-            <Typography variant="h6" component="div" sx={{ fontWeight: 750 }}>
-              {t('meetings.wizard.title')}
-            </Typography>
-          </Box>
-          <IconButton onClick={handleClose} disabled={submitting} aria-label={t('meetings.wizard.close')}>
-            <CloseRounded />
-          </IconButton>
-        </Stack>
-      </DialogTitle>
+      <DialogHeaderActions
+        onClose={handleClose}
+        showAskFlujo={false}
+        showBugReport={false}
+        title={<Stack direction="row" alignItems="center" spacing={1.4}><Avatar sx={{ width: 42, height: 42, bgcolor: alpha(theme.palette.primary.main, 0.14), color: 'primary.light' }}><GroupsRounded /></Avatar><Box><Typography variant="overline" color="primary.light" sx={{ letterSpacing: '0.12em' }}>{initialInput?.parentMeetingId ? t('meetings.followup') : t('meetings.experimental')}</Typography><Typography variant="h6" component="div" sx={{ fontWeight: 750 }}>{t('meetings.wizard.title')}</Typography></Box></Stack>}
+      />
 
       <Box sx={{ px: { xs: 2, sm: 3 }, pb: 2 }}>
         <Stepper
@@ -280,14 +321,19 @@ export default function MeetingWizard({
 
         {step === 0 && (
           <Stack spacing={2.6} sx={{ maxWidth: 680, mx: 'auto' }}>
-            <Box>
+            <Paper variant="outlined" sx={{ p: 2.25, background: `linear-gradient(135deg, ${alpha(theme.palette.primary.main, 0.1)}, ${alpha(theme.palette.secondary.main, 0.04)})` }}>
+              <Stack direction="row" spacing={1.5} alignItems="flex-start">
+                <Avatar sx={{ bgcolor: 'primary.main' }}><AutoAwesomeRounded /></Avatar>
+                <Box>
               <Typography variant="h5" sx={{ fontWeight: 760, letterSpacing: '-0.025em' }}>
                 {t('meetings.topic.title')}
               </Typography>
               <Typography color="text.secondary" sx={{ mt: 0.6 }}>
                 {t('meetings.topic.description')}
               </Typography>
-            </Box>
+                </Box>
+              </Stack>
+            </Paper>
             <TextField
               autoFocus
               fullWidth
@@ -309,6 +355,20 @@ export default function MeetingWizard({
               inputProps={{ maxLength: 12_000 }}
               helperText={t('meetings.topic.promptHelp')}
             />
+            <Box>
+              <Button component="label" variant="outlined" startIcon={<AttachFileRounded />}>
+                {t('meetings.attachments.add')}
+                <Box component="input" type="file" multiple hidden onChange={(event) => { void attachFiles(event.currentTarget.files); event.currentTarget.value = ''; }} />
+              </Button>
+              <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>{t('meetings.attachments.help')}</Typography>
+              {openingMedia.length > 0 && (
+                <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
+                  {openingMedia.map((part, index) => (
+                    <Chip key={`${part.name}-${index}`} icon={<DescriptionRounded />} label={part.name ?? t('meetings.attachments.file')} onDelete={() => setOpeningMedia((current) => current.filter((_, itemIndex) => itemIndex !== index))} />
+                  ))}
+                </Stack>
+              )}
+            </Box>
             <Paper
               variant="outlined"
               sx={{ p: 2, display: 'flex', gap: 1.5, bgcolor: alpha(theme.palette.info.main, 0.045) }}
@@ -352,21 +412,16 @@ export default function MeetingWizard({
                 {t('meetings.participants.empty')}
               </Alert>
             ) : (
-              <Box
-                sx={{
-                  display: 'grid',
-                  gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' },
-                  gap: 1.25,
-                  maxHeight: 260,
-                  overflowY: 'auto',
-                  pr: 0.5,
-                }}
-              >
-                {flows.map((flow) => {
+              <Box sx={{ maxHeight: 310, overflowY: 'auto', pr: 0.5 }}>
+                <CardPickerGrid
+                  searchable
+                  stickySearch
+                  columns={{ xs: 12, sm: 6, md: 6 }}
+                  searchPlaceholder={t('meetings.participants.search')}
+                  items={flows.map((flow) => {
                   const selected = participants.some((person) => person.flowId === flow.id);
-                  return (
+                  return { key: flow.id, searchText: `${flow.name} ${flow.description ?? ''}`, content: (
                     <Card
-                      key={flow.id}
                       variant="outlined"
                       sx={{
                         borderColor: selected ? 'primary.main' : 'divider',
@@ -389,8 +444,9 @@ export default function MeetingWizard({
                         </Stack>
                       </CardActionArea>
                     </Card>
-                  );
+                  ) };
                 })}
+                />
               </Box>
             )}
 
@@ -556,6 +612,7 @@ export default function MeetingWizard({
               <Typography variant="overline" color="primary.light">{t('meetings.review.topic')}</Typography>
               <Typography variant="h6" sx={{ fontWeight: 740 }}>{title}</Typography>
               <Typography sx={{ mt: 1, whiteSpace: 'pre-wrap' }} color="text.secondary">{openingPrompt}</Typography>
+              {openingMedia.length > 0 && <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ mt: 1.5 }}>{openingMedia.map((part, index) => <Chip key={`${part.name}-${index}`} size="small" icon={<DescriptionRounded />} label={part.name ?? t('meetings.attachments.file')} />)}</Stack>}
             </Paper>
             <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2 }}>
               <Paper variant="outlined" sx={{ p: 2 }}>

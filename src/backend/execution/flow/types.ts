@@ -121,6 +121,57 @@ export interface DebugStep {
   modelInputs?: ModelInputSnapshot[];
 }
 
+/** The operation represented by the debugger's current safe boundary. */
+export type DebugBoundaryOperation = 'node' | 'model' | 'tool' | 'handoff';
+
+/**
+ * A small, durable state view captured immediately before the run is marked
+ * `paused_debug`. The live SharedState still carries the complete conversation;
+ * this snapshot preserves the execution-relevant values as they were at the
+ * boundary so the inspector does not accidentally show a later mutation.
+ */
+export interface DebugBoundaryStateSnapshot {
+  status?: SharedState['status'];
+  currentNodeId?: string;
+  messageCount: number;
+  lastMessage?: {
+    id?: string;
+    role: string;
+    processNodeId?: string;
+    toolCallIds?: string[];
+  };
+  variables?: Record<string, unknown>;
+  usage?: UsageTotals;
+  lastResponse?: unknown;
+  handoffInput?: SharedState['handoffInput'];
+  pendingSubflowReturn?: SharedState['pendingSubflowReturn'];
+}
+
+/**
+ * The debugger cursor at a safe runtime boundary. Unlike DebugStep (which is a
+ * completed node visit), this represents what is about to happen or what just
+ * happened. Tool arguments and the exact model input are included when they
+ * are available, but credentials and provider headers are never captured.
+ */
+export interface DebugBoundary {
+  index: number;
+  operation: DebugBoundaryOperation;
+  phase: 'before' | 'after';
+  timestamp: string;
+  nodeId?: string;
+  targetNodeId?: string;
+  edgeId?: string;
+  toolCalls?: OpenAI.ChatCompletionMessageFunctionToolCall[];
+  /** MCP canvas node ids advertising the pending/running tools. */
+  toolNodeIds?: string[];
+  /** Exact wire input for the model turn relevant to this boundary. */
+  modelInput?: ModelInputSnapshot;
+  /** Adjacent operation sharing the same state (for example after-tool/before-model). */
+  previousOperation?: DebugBoundaryOperation;
+  nextOperation?: DebugBoundaryOperation;
+  stateSnapshot: DebugBoundaryStateSnapshot;
+}
+
 // --- Core Flow Types ---
 
 // Base node params interface with generic properties
@@ -1081,6 +1132,10 @@ export interface SharedState {
      * *after* the results come back. Unset during normal (non-debug) runs.
      */
     debugPendingToolCalls?: OpenAI.ChatCompletionMessageFunctionToolCall[];
+    /** Structured before/after cursor rendered by the visual debugger. */
+    debugBoundary?: DebugBoundary;
+    /** Monotonic sequence for debugBoundary within this conversation. */
+    debugBoundaryCounter?: number;
 
     /**
      * Maps each model-facing MCP tool name (mcp_<slug>_<hash>, see toolNamespace.ts)

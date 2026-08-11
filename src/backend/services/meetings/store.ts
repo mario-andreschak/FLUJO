@@ -176,6 +176,7 @@ export function createMeetingRecord(input: CreateMeetingInput): MeetingRecord {
     id,
     title,
     openingPrompt,
+    ...(input.openingMedia?.length ? { openingMedia: input.openingMedia.map((part) => ({ ...part })) } : {}),
     status: 'draft',
     phase: 'draft',
     ...(parentMeetingId ? { parentMeetingId } : {}),
@@ -197,6 +198,9 @@ function assertMeetingRecord(record: MeetingRecord): void {
   requireSafeId(record.id, 'meeting id');
   requireNonEmpty(record.title, 'title', 160);
   requireNonEmpty(record.openingPrompt, 'openingPrompt', 100_000);
+  if (record.openingMedia !== undefined && !Array.isArray(record.openingMedia)) {
+    throw new Error('openingMedia must be an array');
+  }
   if (!Array.isArray(record.participants)) throw new Error('participants must be an array');
   if (record.participants.length < MIN_MEETING_PARTICIPANTS) {
     throw new Error(`A meeting requires at least ${MIN_MEETING_PARTICIPANTS} participants`);

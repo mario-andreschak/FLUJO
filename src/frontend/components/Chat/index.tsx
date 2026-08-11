@@ -1859,6 +1859,7 @@ const Chat: React.FC = () => {
       || event.type === 'subflow:done'
       || event.type === 'node:enter'
       || event.type === 'node:exit'
+      || event.type === 'handoff'
       || event.type === 'resource:read'
       || event.type === 'resource:write'
       || event.type === 'error'
@@ -4329,18 +4330,36 @@ const Chat: React.FC = () => {
   const activeDebuggerStep = activeDebuggerStepIndex >= 0
     ? debuggerTrace[activeDebuggerStepIndex]
     : undefined;
+  const activeDebugBoundary = debugState?.debugBoundary;
+  // The newest trace row and a pre-execution boundary describe the same live
+  // cursor. Prefer the boundary snapshot there: it is prepared before the
+  // Process node runs, so Wire view can inspect the upcoming request. Selecting
+  // an older row still shows that historical row's recorded model call(s).
+  const inspectingLiveDebugBoundary = !!activeDebugBoundary && (
+    debuggerTrace.length === 0
+    || debuggerSelectedStepIndex < 0
+    || activeDebuggerStepIndex === debuggerTrace.length - 1
+  );
+  const boundaryModelInputs: ModelInputSnapshot[] =
+    inspectingLiveDebugBoundary && activeDebugBoundary.modelInput
+      ? [activeDebugBoundary.modelInput]
+      : [];
   // Prefer the plural snapshots emitted for nodes that make multiple model
   // calls; retain the singular fallback for older saved traces.
-  const debuggerModelInputs: ModelInputSnapshot[] = activeDebuggerStep?.modelInputs?.length
-    ? activeDebuggerStep.modelInputs
-    : activeDebuggerStep?.modelInput
-      ? [activeDebuggerStep.modelInput]
-      : [];
+  const debuggerModelInputs: ModelInputSnapshot[] = boundaryModelInputs.length > 0
+    ? boundaryModelInputs
+    : activeDebuggerStep?.modelInputs?.length
+      ? activeDebuggerStep.modelInputs
+      : activeDebuggerStep?.modelInput
+        ? [activeDebuggerStep.modelInput]
+        : [];
   const safeDebuggerModelCallIndex = debuggerModelInputs.length > 0
     ? Math.min(debuggerModelCallIndex, debuggerModelInputs.length - 1)
     : 0;
   const selectedDebuggerModelInput = debuggerModelInputs[safeDebuggerModelCallIndex];
-  const wireViewAvailable = debugPanelOpen && !!debugState && activeDebuggerStepIndex >= 0;
+  const wireViewAvailable = debugPanelOpen && !!debugState && (
+    debuggerModelInputs.length > 0 || activeDebuggerStepIndex >= 0
+  );
   const showingWireView = transcriptView === 'wire' && wireViewAvailable;
 
   // The viewed conversation counts as running when THIS client started or
@@ -4942,7 +4961,9 @@ const Chat: React.FC = () => {
                   {selectedDebuggerModelInput ? (
                     <DebuggerConversation
                       modelInput={selectedDebuggerModelInput}
-                      conversationId={`${detailedConversation.id}-step-${activeDebuggerStepIndex}-call-${safeDebuggerModelCallIndex}`}
+                      conversationId={`${detailedConversation.id}-${inspectingLiveDebugBoundary
+                        ? `boundary-${activeDebugBoundary?.index ?? 'live'}`
+                        : `step-${activeDebuggerStepIndex}`}-call-${safeDebuggerModelCallIndex}`}
                     />
                   ) : (
                     <Alert severity="info" variant="outlined" sx={{ mx: 'auto', mt: 2, maxWidth: 720 }}>

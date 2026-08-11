@@ -23,6 +23,7 @@ import { EmitFn, type RecoveryLaneIdentity, UsageTotals } from '@/shared/types/e
 import OpenAI from 'openai';
 import {
   SharedState,
+  type DebugBoundary,
   type FlowInvocationSource,
   isFlowInvocationSource,
   isUnattendedFlowInvocation,
@@ -32,6 +33,7 @@ import {
   STAY_ON_NODE_ACTION,
   ErrorDetails,
 } from '@/backend/execution/flow/types';
+import cloneDeep from 'lodash/cloneDeep';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { requireFunctionToolCalls } from '@/shared/types/openai';
@@ -571,6 +573,8 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       sharedState.handoffRequested = undefined;
       sharedState.debugPendingAction = undefined;
       sharedState.debugPendingToolCalls = undefined;
+      sharedState.debugBoundary = undefined;
+      sharedState.debugBoundaryCounter = 0;
       sharedState.debugPauseRequested = false;
       sharedState.isCancelled = false;
 
@@ -984,6 +988,8 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       }
       sharedState.debugPendingToolCalls = undefined;
       sharedState.debugPendingAction = undefined;
+      sharedState.debugBoundary = undefined;
+      sharedState.debugBoundaryCounter = 0;
       sharedState.debugPauseRequested = false;
     }
     if (sharedState.debugMode) {
@@ -1361,6 +1367,20 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   };
 
   const singleStep = !!sharedState.debugMode && !continueDebug;
+  if (!userTurn && sharedState.status === 'paused_debug') {
+    // A Step request resumes one safe boundary. Mark the transient in-flight
+    // state accurately; pauseForDebug below parks it again before returning.
+    sharedState.status = 'running';
+  }
+  type DebugPausePhase =
+    | 'before-node'
+    | 'after-node'
+    | 'before-model'
+    | 'after-model'
+    | 'before-tool'
+    | 'after-tool'
+    | 'before-handoff'
+    | 'after-handoff';
   /** The tool breakpoint (if any) armed for this batch of tool calls. Decodes
    *  namespaced MCP names so `tool:read_file` matches `mcp_<slug>_<hash>`. */
   const matchedToolBreakpointName = (toolCalls: readonly { function?: { name?: string } }[] | undefined) =>
@@ -1380,14 +1400,103 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     sharedState.breakpoints = (sharedState.breakpoints ?? []).filter(b => b !== ATTACH_BREAKPOINT);
     return true;
   };
+  type BoundaryDetails = Omit<DebugBoundary, 'index' | 'timestamp' | 'stateSnapshot'>;
+  const toolNodeIdsFor = (
+    toolCalls: readonly OpenAI.ChatCompletionMessageFunctionToolCall[] | undefined,
+  ): string[] | undefined => {
+    if (!toolCalls?.length) return undefined;
+    const ids = Array.from(new Set(toolCalls
+      .map(call => sharedState.toolNameMap?.[call.function.name]?.nodeId)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0)));
+    return ids.length > 0 ? ids : undefined;
+  };
+  const latestModelInput = () => {
+    const step = sharedState.executionTrace?.[sharedState.executionTrace.length - 1];
+    return step?.modelInputs?.[step.modelInputs.length - 1] ?? step?.modelInput;
+  };
+  const previewNextModelInput = async () => {
+    // Some focused tests replace FlowExecutor with a deliberately small mock;
+    // keep the preview additive so those legacy seams and recovered runtimes
+    // still fall back to the ordinary conversation/state inspector.
+    const preview = (FlowExecutor as typeof FlowExecutor & {
+      previewNextModelInput?: typeof FlowExecutor.previewNextModelInput;
+    }).previewNextModelInput;
+    if (typeof preview !== 'function') return null;
+    try {
+      return await preview.call(FlowExecutor, sharedState);
+    } catch (error) {
+      log.warn(`Could not prepare debugger wire preview for conv ${effectiveConvId}`, error);
+      return null;
+    }
+  };
+  const captureBoundaryState = () => {
+    const lastMessage = sharedState.messages[sharedState.messages.length - 1];
+    return {
+      status: sharedState.status,
+      currentNodeId: sharedState.currentNodeId,
+      messageCount: sharedState.messages.length,
+      ...(lastMessage ? {
+        lastMessage: {
+          id: lastMessage.id,
+          role: lastMessage.role,
+          processNodeId: lastMessage.processNodeId,
+          ...(lastMessage.tool_calls?.length
+            ? { toolCallIds: lastMessage.tool_calls.map(call => call.id) }
+            : {}),
+        },
+      } : {}),
+      ...(sharedState.variables ? { variables: cloneDeep(sharedState.variables) } : {}),
+      ...(sharedState.usage ? { usage: cloneDeep(sharedState.usage) } : {}),
+      ...(sharedState.lastResponse !== undefined
+        ? { lastResponse: cloneDeep(sharedState.lastResponse) }
+        : {}),
+      ...(sharedState.handoffInput ? { handoffInput: cloneDeep(sharedState.handoffInput) } : {}),
+      ...(sharedState.pendingSubflowReturn
+        ? { pendingSubflowReturn: cloneDeep(sharedState.pendingSubflowReturn) }
+        : {}),
+    };
+  };
+  const inferredBoundary = (
+    phase: DebugPausePhase | undefined,
+    nodeId: string | undefined,
+  ): BoundaryDetails | undefined => {
+    if (!phase) return undefined;
+    if (phase === 'before-node' || phase === 'after-node') {
+      return { operation: 'node', phase: phase === 'before-node' ? 'before' : 'after', nodeId };
+    }
+    if (phase === 'before-model' || phase === 'after-model') {
+      return {
+        operation: 'model',
+        phase: phase === 'before-model' ? 'before' : 'after',
+        nodeId,
+        ...(latestModelInput() ? { modelInput: latestModelInput() } : {}),
+      };
+    }
+    if (phase === 'before-tool' || phase === 'after-tool') {
+      return { operation: 'tool', phase: phase === 'before-tool' ? 'before' : 'after', nodeId };
+    }
+    return { operation: 'handoff', phase: phase === 'before-handoff' ? 'before' : 'after', nodeId };
+  };
   const pauseForDebug = (options: {
     reason?: 'debug' | 'breakpoint';
-    phase?: 'before-node' | 'after-model' | 'before-tool' | 'after-tool' | 'before-handoff';
+    phase?: DebugPausePhase;
     nodeId?: string;
     kind?: 'node' | 'tool' | 'attach';
     toolName?: string;
+    boundary?: BoundaryDetails;
   } = {}) => {
     const nodeId = options.nodeId ?? sharedState.currentNodeId;
+    const boundary = options.boundary ?? inferredBoundary(options.phase, nodeId);
+    if (boundary) {
+      const index = (sharedState.debugBoundaryCounter ?? 0) + 1;
+      sharedState.debugBoundaryCounter = index;
+      sharedState.debugBoundary = {
+        ...boundary,
+        index,
+        timestamp: new Date().toISOString(),
+        stateSnapshot: captureBoundaryState(),
+      };
+    }
     sharedState.status = 'paused_debug';
     sharedState.debugMode = true;
     if (options.kind && nodeId) {
@@ -1407,10 +1516,11 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     });
   };
   const pauseForAttachAtSafePoint = async (
-    phase: 'before-node' | 'after-model' | 'before-tool' | 'after-tool' | 'before-handoff',
+    phase: DebugPausePhase,
+    boundary?: BoundaryDetails,
   ): Promise<boolean> => {
     if (!consumeAttachRequest()) return false;
-    pauseForDebug({ reason: 'breakpoint', phase, kind: 'attach' });
+    pauseForDebug({ reason: 'breakpoint', phase, kind: 'attach', boundary });
     FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
     try {
       sharedState.updatedAt = Date.now();
@@ -1456,6 +1566,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         // Consume that action exactly once on resume instead of calling the
         // model again and potentially producing a different decision.
         let actionReadyFromDebugPause = false;
+        let steppedThroughControlNode = false;
         if (sharedState.debugPendingAction) {
           currentAction = sharedState.debugPendingAction.action;
           sharedState.debugPendingAction = undefined;
@@ -1466,10 +1577,42 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         // Debug step granularity: execute tool calls a previous step paused before.
         if (!actionReadyFromDebugPause && sharedState.debugPendingToolCalls && sharedState.debugPendingToolCalls.length > 0) {
           const pendingCalls = sharedState.debugPendingToolCalls;
-          sharedState.debugPendingToolCalls = undefined;
-          log.info(`[Debug Step] Executing ${pendingCalls.length} pending tool call(s) for conv ${effectiveConvId}.`);
+          // After one call in a model-produced batch, expose the next call as its
+          // own BEFORE boundary. Advancing from AFTER call N to BEFORE call N+1
+          // intentionally performs no side effect.
+          if (
+            singleStep
+            && sharedState.debugBoundary?.operation === 'tool'
+            && sharedState.debugBoundary.phase === 'after'
+          ) {
+            const nextCall = pendingCalls[0];
+            pauseForDebug({
+              phase: 'before-tool',
+              boundary: {
+                operation: 'tool',
+                phase: 'before',
+                nodeId: sharedState.currentNodeId,
+                toolCalls: [nextCall],
+                ...(toolNodeIdsFor([nextCall]) ? { toolNodeIds: toolNodeIdsFor([nextCall]) } : {}),
+                ...(latestModelInput() ? { modelInput: latestModelInput() } : {}),
+              },
+            });
+            FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+            try {
+              sharedState.updatedAt = Date.now();
+              await persistState(storageKey, sharedState);
+            } catch (error) {
+              log.error(`Failed to save before-tool debugger boundary for conv ${effectiveConvId}:`, error);
+            }
+            break;
+          }
+
+          const callsToExecute = singleStep ? pendingCalls.slice(0, 1) : pendingCalls;
+          const remainingCalls = pendingCalls.slice(callsToExecute.length);
+          sharedState.debugPendingToolCalls = remainingCalls.length > 0 ? remainingCalls : undefined;
+          log.info(`[Debug Step] Executing ${callsToExecute.length} pending tool call(s) for conv ${effectiveConvId}.`);
           const toolProcessingResult = await processToolCallsRecoverably({
-            toolCalls: pendingCalls, toolNameMap: sharedState.toolNameMap, emit,
+            toolCalls: callsToExecute, toolNameMap: sharedState.toolNameMap, emit,
             // Run-resource auto-capture: ephemeral (subflow-child) runs never
             // write resources — same policy as persistConversationState.
             conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
@@ -1493,17 +1636,33 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
           sharedState.messages.push(...toolResultMessages);
           FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
           emitNewMessages();
-          await commitToolCheckpoint(storageKey, sharedState, pendingCalls, 'completed', recoveryEmit);
+          await commitToolCheckpoint(storageKey, sharedState, callsToExecute, 'completed', recoveryEmit);
           try {
             sharedState.updatedAt = Date.now();
             await persistState(storageKey, sharedState); // chokepoint refuses ephemeral states
           } catch (error) {
             log.error(`Failed to save state after debug tool execution for conv ${effectiveConvId}:`, error);
           }
-          const attachedAfterTool = await pauseForAttachAtSafePoint('after-tool');
+          const nextModelPreview = remainingCalls.length === 0
+            ? await previewNextModelInput()
+            : null;
+          const afterToolBoundary: BoundaryDetails = {
+            operation: 'tool',
+            phase: 'after',
+            nodeId: sharedState.currentNodeId,
+            toolCalls: callsToExecute,
+            ...(toolNodeIdsFor(callsToExecute) ? { toolNodeIds: toolNodeIdsFor(callsToExecute) } : {}),
+            ...(remainingCalls.length === 0 ? { nextOperation: 'model' as const } : {}),
+            ...(nextModelPreview?.modelInput
+              ? { modelInput: nextModelPreview.modelInput }
+              : latestModelInput()
+                ? { modelInput: latestModelInput() }
+                : {}),
+          };
+          const attachedAfterTool = await pauseForAttachAtSafePoint('after-tool', afterToolBoundary);
           if (singleStep && !attachedAfterTool) {
             log.info(`[Debug Step] Paused after tool execution for conv ${effectiveConvId}.`);
-            pauseForDebug({ phase: 'after-tool' });
+            pauseForDebug({ phase: 'after-tool', boundary: afterToolBoundary });
           }
           if (singleStep || attachedAfterTool) break;
           continue;
@@ -1528,11 +1687,20 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
             }
             log.info(`Breakpoint hit at node ${nextNodeId}${wildcard ? ' (attach)' : ''} for conv ${effectiveConvId}. Pausing.`);
             sharedState.lastBreakNodeId = nextNodeId;
+            const modelPreview = await previewNextModelInput();
             pauseForDebug({
               reason: 'breakpoint',
               phase: 'before-node',
               nodeId: nextNodeId,
               kind: wildcard ? 'attach' : 'node',
+              boundary: {
+                operation: 'node',
+                phase: 'before',
+                nodeId: nextNodeId,
+                ...(modelPreview?.nodeId === nextNodeId
+                  ? { modelInput: modelPreview.modelInput }
+                  : {}),
+              },
             });
             try {
               sharedState.updatedAt = Date.now();
@@ -1543,6 +1711,37 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
             break;
           } else if (nextNodeId && sharedState.lastBreakNodeId && nextNodeId !== sharedState.lastBreakNodeId) {
             sharedState.lastBreakNodeId = undefined;
+          }
+        }
+
+        // A debugger-started user turn stops before its very first executable
+        // node. Older debugger sessions did not carry a boundary cursor, so key
+        // this only to the fresh user turn instead of treating every missing
+        // cursor as an initial pause (backward-compatible resumes still run).
+        if (singleStep && userTurn && internalIterations === 1) {
+          const nextNodeId = await FlowExecutor.peekNextNodeId(sharedState);
+          if (nextNodeId) {
+            const modelPreview = await previewNextModelInput();
+            pauseForDebug({
+              phase: 'before-node',
+              nodeId: nextNodeId,
+              boundary: {
+                operation: 'node',
+                phase: 'before',
+                nodeId: nextNodeId,
+                ...(modelPreview?.nodeId === nextNodeId
+                  ? { modelInput: modelPreview.modelInput }
+                  : {}),
+              },
+            });
+            FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+            try {
+              sharedState.updatedAt = Date.now();
+              await persistState(storageKey, sharedState);
+            } catch (error) {
+              log.error(`Failed to save initial before-node debug boundary for conv ${effectiveConvId}:`, error);
+            }
+            break;
           }
         }
 
@@ -1604,58 +1803,98 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         // Only inspect calls produced by this model turn. Looking backwards for
         // the last assistant with calls would re-trigger an old tool breakpoint
         // when a later assistant turn contains only final narration.
-        const producedToolCalls = latestAssistant?.tool_calls;
+        const producedToolCalls = completedModelTurn ? latestAssistant?.tool_calls : undefined;
         const toolBreakpointName = matchedToolBreakpointName(producedToolCalls);
         const attachRequested = hasAttachRequest();
 
         if (
           currentAction !== ERROR_ACTION
-          && completedModelTurn
+          && (completedModelTurn || singleStep)
           && (singleStep || attachRequested || !!toolBreakpointName)
         ) {
           const attached = attachRequested ? consumeAttachRequest() : false;
           const pendingCalls = currentAction === TOOL_CALL_ACTION ? producedToolCalls : undefined;
+          const debugHandoff = ![
+            ERROR_ACTION,
+            FINAL_RESPONSE_ACTION,
+            TOOL_CALL_ACTION,
+            STAY_ON_NODE_ACTION,
+          ].includes(currentAction)
+            ? await FlowExecutor.resolveHandoff(sharedState, currentAction)
+            : undefined;
+          const isHandoff = debugHandoff?.isSuccessorEdge === true;
+          // Start/static/control nodes have no meaningful internal work to stop
+          // between their AFTER boundary and their outgoing edge. A Step across
+          // one of those nodes therefore applies the graph transition and parks
+          // at the target node, where the next Process input can be inspected.
+          const transparentControlHandoff = singleStep && !completedModelTurn && isHandoff;
+          steppedThroughControlNode = transparentControlHandoff;
 
           // Without approvals, the next Step executes exactly this captured
           // batch and pauses after its results. With approvals enabled, retain
           // the action instead so resuming still passes through the permission /
           // approval gate rather than accidentally bypassing it.
-          if (pendingCalls?.length && !requireApproval) {
-            sharedState.debugPendingToolCalls = pendingCalls;
-          } else {
-            sharedState.debugPendingAction = {
-              action: currentAction,
-              nodeId: checkpointNodeId,
-              phase: 'after-model',
-            };
-          }
+          if (!transparentControlHandoff) {
+            if (pendingCalls?.length && !requireApproval) {
+              sharedState.debugPendingToolCalls = pendingCalls;
+            } else {
+              sharedState.debugPendingAction = {
+                action: currentAction,
+                nodeId: checkpointNodeId,
+                phase: 'after-model',
+              };
+            }
 
-          const isHandoffCall = producedToolCalls?.some(call =>
-            call.type === 'function'
-            && (
-              call.function?.name === 'handoff'
-              || call.function?.name?.startsWith('handoff_to_')
-            ),
-          );
-          pauseForDebug({
-            reason: attached || toolBreakpointName ? 'breakpoint' : 'debug',
-            phase: isHandoffCall
-              ? 'before-handoff'
-              : pendingCalls?.length
-                ? 'before-tool'
-                : 'after-model',
-            nodeId: checkpointNodeId,
-            kind: attached ? 'attach' : toolBreakpointName ? 'tool' : undefined,
-            ...(toolBreakpointName ? { toolName: toolBreakpointName } : {}),
-          });
-          FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
-          try {
-            sharedState.updatedAt = Date.now();
-            await persistState(storageKey, sharedState);
-          } catch (error) {
-            log.error(`Failed to save state at post-model debug boundary for conv ${effectiveConvId}:`, error);
+            const boundary: BoundaryDetails = isHandoff
+            ? {
+                operation: 'handoff',
+                phase: 'before',
+                nodeId: checkpointNodeId,
+                edgeId: currentAction,
+                ...(debugHandoff.targetNodeId ? { targetNodeId: debugHandoff.targetNodeId } : {}),
+                ...(producedToolCalls?.length ? { toolCalls: producedToolCalls } : {}),
+                previousOperation: completedModelTurn ? 'model' : 'node',
+                ...(latestModelInput() ? { modelInput: latestModelInput() } : {}),
+              }
+            : pendingCalls?.length
+              ? {
+                  operation: 'tool',
+                  phase: 'before',
+                  nodeId: checkpointNodeId,
+                  toolCalls: [pendingCalls[0]],
+                  ...(toolNodeIdsFor([pendingCalls[0]])
+                    ? { toolNodeIds: toolNodeIdsFor([pendingCalls[0]]) }
+                    : {}),
+                  previousOperation: 'model',
+                  ...(latestModelInput() ? { modelInput: latestModelInput() } : {}),
+                }
+              : {
+                  operation: 'node',
+                  phase: 'after',
+                  nodeId: checkpointNodeId,
+                  ...(completedModelTurn && latestModelInput() ? { modelInput: latestModelInput() } : {}),
+                };
+            pauseForDebug({
+              reason: attached || toolBreakpointName ? 'breakpoint' : 'debug',
+              phase: isHandoff
+                ? 'before-handoff'
+                : pendingCalls?.length
+                  ? 'before-tool'
+                  : 'after-node',
+              nodeId: checkpointNodeId,
+              kind: attached ? 'attach' : toolBreakpointName ? 'tool' : undefined,
+              ...(toolBreakpointName ? { toolName: toolBreakpointName } : {}),
+              boundary,
+            });
+            FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
+            try {
+              sharedState.updatedAt = Date.now();
+              await persistState(storageKey, sharedState);
+            } catch (error) {
+              log.error(`Failed to save state at post-model debug boundary for conv ${effectiveConvId}:`, error);
+            }
+            break;
           }
-          break;
         }
         }
 
@@ -1883,9 +2122,19 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
                 // If no calls need approval, continue the loop
                 if (toolCallsForApproval.length === 0) {
                   FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
-                  const attachedAfterTool = await pauseForAttachAtSafePoint('after-tool');
+                  const afterToolBoundary: BoundaryDetails = {
+                    operation: 'tool',
+                    phase: 'after',
+                    nodeId: sharedState.currentNodeId,
+                    toolCalls: toolCallsToProcessNow,
+                    ...(toolNodeIdsFor(toolCallsToProcessNow)
+                      ? { toolNodeIds: toolNodeIdsFor(toolCallsToProcessNow) }
+                      : {}),
+                    nextOperation: 'model',
+                  };
+                  const attachedAfterTool = await pauseForAttachAtSafePoint('after-tool', afterToolBoundary);
                   if (singleStep && !attachedAfterTool) {
-                    pauseForDebug({ phase: 'after-tool' });
+                    pauseForDebug({ phase: 'after-tool', boundary: afterToolBoundary });
                   }
                   if (singleStep || attachedAfterTool) break;
                   continue;
@@ -1944,7 +2193,16 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
                 FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
                 emitNewMessages();
                 await commitToolCheckpoint(storageKey, sharedState, lastAssistantMsg.tool_calls, 'completed', recoveryEmit);
-                const attachedAfterTool = await pauseForAttachAtSafePoint('after-tool');
+                const attachedAfterTool = await pauseForAttachAtSafePoint('after-tool', {
+                  operation: 'tool',
+                  phase: 'after',
+                  nodeId: sharedState.currentNodeId,
+                  toolCalls: lastAssistantMsg.tool_calls,
+                  ...(toolNodeIdsFor(lastAssistantMsg.tool_calls)
+                    ? { toolNodeIds: toolNodeIdsFor(lastAssistantMsg.tool_calls) }
+                    : {}),
+                  nextOperation: 'model',
+                });
                 if (attachedAfterTool) break;
                 log.info(`Continuing loop for conv ${effectiveConvId} after internal tool processing (no approval needed).`);
                 continue;
@@ -2058,6 +2316,11 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
             sharedState.handoffInput = undefined;
 
             const lastAssistantMsg = sharedState.messages.length > 0 ? sharedState.messages[sharedState.messages.length - 1] : null;
+            const handoffCallsForBoundary = lastAssistantMsg?.role === 'assistant'
+              ? requireFunctionToolCalls(lastAssistantMsg.tool_calls).filter(call =>
+                  call.function.name === 'handoff' || call.function.name.startsWith('handoff_to_'),
+                )
+              : undefined;
 
             if (lastAssistantMsg?.role === 'assistant' && lastAssistantMsg.tool_calls) {
               const allHandoffCalls = lastAssistantMsg.tool_calls.filter(tc =>
@@ -2240,8 +2503,33 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
             log.info(`Transitioning conv ${effectiveConvId} to node ${sharedState.currentNodeId}`);
             FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
             if (singleStep) {
-              log.info(`[Debug Step] Paused after handoff to node ${sharedState.currentNodeId} for conv ${effectiveConvId}.`);
-              pauseForDebug();
+              const modelPreview = await previewNextModelInput();
+              log.info(`[Debug Step] Paused at handoff target node ${sharedState.currentNodeId} for conv ${effectiveConvId}.`);
+              pauseForDebug({
+                phase: steppedThroughControlNode ? 'before-node' : 'after-handoff',
+                nodeId: steppedThroughControlNode ? nextNodeId : fromNodeId,
+                boundary: steppedThroughControlNode
+                  ? {
+                      operation: 'node',
+                      phase: 'before',
+                      nodeId: nextNodeId,
+                      edgeId: currentAction,
+                      ...(modelPreview?.nodeId === nextNodeId
+                        ? { modelInput: modelPreview.modelInput }
+                        : {}),
+                    }
+                  : {
+                      operation: 'handoff',
+                      phase: 'after',
+                      nodeId: fromNodeId,
+                      targetNodeId: nextNodeId,
+                      edgeId: currentAction,
+                      ...(handoffCallsForBoundary?.length ? { toolCalls: handoffCallsForBoundary } : {}),
+                      ...(modelPreview?.nodeId === nextNodeId
+                        ? { modelInput: modelPreview.modelInput, nextOperation: 'model' }
+                        : { nextOperation: 'node' }),
+                    },
+              });
               break;
             }
             log.info(`Continuing loop for conv ${effectiveConvId} after handoff.`);
@@ -2350,6 +2638,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     sharedState.debugPauseRequested = false;
     sharedState.debugPendingAction = undefined;
     sharedState.debugPendingToolCalls = undefined;
+    sharedState.debugBoundary = undefined;
     sharedState.breakpoints = [];
     sharedState.lastBreakNodeId = undefined;
   }

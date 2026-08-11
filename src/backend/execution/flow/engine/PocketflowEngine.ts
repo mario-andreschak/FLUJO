@@ -2,10 +2,11 @@ import { Flow as PocketFlow, BaseNode } from '../pocketflow';
 import { flowService } from '@/backend/services/flow';
 import { FlowConverter } from '../FlowConverter';
 import { createLogger } from '@/utils/logger';
-import { IMPLICIT_SUBFLOW_RETURN_ACTION, SharedState } from '../types';
+import { IMPLICIT_SUBFLOW_RETURN_ACTION, ProcessNodePrepResult, SharedState } from '../types';
 import { EmitFn } from '@/shared/types/execution/events';
 import { FlowEngine, ResolvedNode, RunNodeResult, HandoffResolution } from './FlowEngine';
 import { getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
+import cloneDeep from 'lodash/cloneDeep';
 
 const log = createLogger('backend/execution/flow/engine/PocketflowEngine');
 
@@ -240,5 +241,22 @@ export class PocketflowEngine implements FlowEngine {
     } finally {
       delete sharedState.emit;
     }
+  }
+
+  async previewModelInput(sharedState: SharedState) {
+    const previewState = cloneDeep(sharedState);
+    delete previewState.emit;
+    // The preview is debugger-only even if a recovered legacy state omitted the
+    // flag. ProcessNode.prep gates its model-input derivation on debugMode.
+    previewState.debugMode = true;
+
+    const resolved = await this.resolveNode(previewState);
+    if (resolved.type !== 'process') return null;
+
+    const node = resolved.handle as BaseNode;
+    const prepResult = await node.prep(previewState, node.node_params) as ProcessNodePrepResult;
+    return prepResult.modelInput
+      ? { nodeId: resolved.id, modelInput: prepResult.modelInput }
+      : null;
   }
 }

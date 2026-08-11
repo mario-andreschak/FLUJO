@@ -24,6 +24,7 @@ import PageHeader from '@/frontend/components/shared/PageHeader';
 import MeetingList from './MeetingList';
 import MeetingView from './MeetingView';
 import MeetingWizard from './MeetingWizard';
+import { meetingLogMarkdown } from './meetingTranscriptProjection';
 
 const log = createLogger('frontend/components/Meetings');
 
@@ -46,6 +47,7 @@ export default function MeetingsManager() {
   const [detail, setDetail] = useState<MeetingDetailResponse | null>(null);
   const [detailLoading, setDetailLoading] = useState(Boolean(initialMeetingId()));
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardSeed, setWizardSeed] = useState<CreateMeetingInput | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [streamConnected, setStreamConnected] = useState(false);
@@ -142,6 +144,7 @@ export default function MeetingsManager() {
     try {
       const created = await meetingsService.create(input);
       setWizardOpen(false);
+      setWizardSeed(null);
       selectMeeting(created.id);
       setDetail({ meeting: created, events: [] });
       try {
@@ -157,6 +160,99 @@ export default function MeetingsManager() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const runContinuation = async (steeringPrompt?: string) => {
+    if (!selectedMeeting) return;
+    const lastOutcome = [...(detail?.events ?? [])].reverse().find((event) => event.type === 'meeting:completed' || event.type === 'meeting:cancelled');
+    const outcome = lastOutcome && 'reason' in lastOutcome ? lastOutcome.reason : undefined;
+    const direction = steeringPrompt?.trim();
+    const input: CreateMeetingInput = {
+      title: `${selectedMeeting.title} · Continued`,
+      openingPrompt: [
+        `Continue the meeting “${selectedMeeting.title}” as a new session.`,
+        outcome ? `Previous outcome: ${outcome}` : undefined,
+        direction
+          ? `The moderator is continuing the meeting with this direction:\n${direction}`
+          : 'Revisit unresolved points, incorporate the prior outcome, and converge on the next concrete decision.',
+        '',
+        'Original brief:',
+        selectedMeeting.openingPrompt,
+      ].filter((line): line is string => line !== undefined).join('\n'),
+      openingMedia: selectedMeeting.openingMedia,
+      parentMeetingId: selectedMeeting.id,
+      participants: selectedMeeting.participants.map(({ id, name, flowId, role }) => ({ id, name, flowId, role })),
+      moderatorParticipantId: selectedMeeting.moderatorParticipantId,
+      policy: { ...selectedMeeting.policy },
+    };
+    setBusy(true);
+    try {
+      const created = await meetingsService.create(input);
+      selectMeeting(created.id);
+      setDetail({ meeting: created, events: [] });
+      const started = await meetingsService.start(created.id);
+      setDetail((current) => ({ meeting: started, events: current?.events ?? [] }));
+      await loadDetail(created.id);
+      await loadList();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const continueMeeting = async () => {
+    try {
+      await runContinuation();
+    } catch (continueError) {
+      setError(continueError instanceof Error ? continueError.message : t('meetings.error.create'));
+    }
+  };
+
+  const openFollowup = () => {
+    if (!selectedMeeting) return;
+    setWizardSeed({
+      title: `Follow-up: ${selectedMeeting.title}`,
+      openingPrompt: `Define the next decision or action that follows from “${selectedMeeting.title}”.\n\nRelevant context from the original brief:\n${selectedMeeting.openingPrompt}`,
+      openingMedia: selectedMeeting.openingMedia,
+      parentMeetingId: selectedMeeting.id,
+      participants: selectedMeeting.participants.map(({ id, name, flowId, role }) => ({ id, name, flowId, role })),
+      moderatorParticipantId: selectedMeeting.moderatorParticipantId,
+      policy: { ...selectedMeeting.policy },
+    });
+    setWizardError(null);
+    setWizardOpen(true);
+  };
+
+  const addPrivateNote = async (content: string) => {
+    if (!selectedId) return;
+    const event = await meetingsService.addPrivateNote(selectedId, content);
+    setDetail((current) => current?.meeting.id === selectedId ? { ...current, events: mergeEvents(current.events, [event]) } : current);
+  };
+
+  const steerMeeting = async (content: string) => {
+    if (!selectedId || !selectedMeeting) return;
+    if (['completed', 'cancelled', 'error'].includes(selectedMeeting.status)) {
+      try {
+        await runContinuation(content);
+      } catch (continueError) {
+        const message = continueError instanceof Error ? continueError.message : t('meetings.error.create');
+        setError(message);
+        throw continueError instanceof Error ? continueError : new Error(message);
+      }
+      return;
+    }
+    const event = await meetingsService.steer(selectedId, content);
+    setDetail((current) => current?.meeting.id === selectedId ? { ...current, events: mergeEvents(current.events, [event]) } : current);
+  };
+
+  const createMeetingLog = () => {
+    if (!selectedMeeting || typeof window === 'undefined') return;
+    const blob = new Blob([meetingLogMarkdown(selectedMeeting, detail?.events ?? [])], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${selectedMeeting.title.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'meeting'}-log.md`;
+    anchor.click();
+    URL.revokeObjectURL(url);
   };
 
   const startMeeting = async () => {
@@ -204,7 +300,7 @@ export default function MeetingsManager() {
             {!selectedId && error && (
               <Button variant="outlined" startIcon={<RefreshRounded />} onClick={() => void loadList()}>{t('common.tryAgain')}</Button>
             )}
-            <Button variant="contained" startIcon={<AddRounded />} onClick={() => { setWizardError(null); setWizardOpen(true); }}>
+            <Button variant="contained" startIcon={<AddRounded />} onClick={() => { setWizardSeed(null); setWizardError(null); setWizardOpen(true); }}>
               {t('meetings.new')}
             </Button>
           </>
@@ -229,6 +325,11 @@ export default function MeetingsManager() {
               onBack={() => selectMeeting(null)}
               onStart={startMeeting}
               onStop={stopMeeting}
+              onContinue={continueMeeting}
+              onFollowup={openFollowup}
+              onPrivateNote={addPrivateNote}
+              onSteer={steerMeeting}
+              onCreateLog={createMeetingLog}
             />
           ) : (
             <Alert
@@ -247,7 +348,8 @@ export default function MeetingsManager() {
         open={wizardOpen}
         submitting={submitting}
         error={wizardError}
-        onClose={() => setWizardOpen(false)}
+        initialInput={wizardSeed}
+        onClose={() => { setWizardOpen(false); setWizardSeed(null); }}
         onSubmit={createMeeting}
       />
     </Box>

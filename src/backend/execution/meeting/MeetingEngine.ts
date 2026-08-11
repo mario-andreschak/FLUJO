@@ -128,6 +128,8 @@ function contributionLine(event: MeetingEvent, meeting: MeetingRecord): string |
       return `[${event.participantName}]\n${event.content}`;
     case 'private-message':
       return `[Private message from ${meeting.participants.find((item) => item.id === event.fromParticipantId)?.name ?? event.fromParticipantId}]\n${event.content}`;
+    case 'moderator:intervention':
+      return `[Human steering instruction]\n${event.content}`;
     case 'participant:left':
       return `[Meeting update] ${event.participantName} left${event.reason ? `: ${event.reason}` : '.'}`;
     case 'participant:error':
@@ -265,6 +267,9 @@ async function buildTurnMessage(
     if (event.type !== 'participant:spoke' && event.type !== 'private-message') return [];
     return [copyMediaForParticipant(event.media, participant.conversationId)];
   }))).flat();
+  if ((round.number === 1 || participant.lastDeliveredSeq < 0) && meeting.openingMedia?.length) {
+    media.push(...await copyMediaForParticipant(meeting.openingMedia, participant.conversationId));
+  }
   const roster = meeting.participants
     .filter((item) => item.status !== 'left')
     .map((item) => `${item.name}${item.role === 'moderator' ? ' (moderator)' : ''}`)

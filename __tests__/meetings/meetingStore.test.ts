@@ -52,6 +52,15 @@ describe('meeting snapshot store', () => {
     expect(new Set(record.participants.map((participant) => participant.conversationId)).size).toBe(2);
   });
 
+  it('preserves opening brief attachments without sharing mutable input objects', () => {
+    const openingMedia = [{ type: 'file' as const, name: 'brief.pdf', mimeType: 'application/pdf', data: 'cGRm' }];
+    const record = createMeetingRecord(input({ openingMedia }));
+
+    expect(record.openingMedia).toEqual(openingMedia);
+    expect(record.openingMedia).not.toBe(openingMedia);
+    expect(record.openingMedia?.[0]).not.toBe(openingMedia[0]);
+  });
+
   it('normalizes the selected moderator and validates moderator policies', () => {
     const record = createMeetingRecord(input({
       moderatorParticipantId: 'bob',

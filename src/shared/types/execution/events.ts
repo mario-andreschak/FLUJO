@@ -186,7 +186,15 @@ export interface RunPausedEvent extends ExecutionEventBase {
   reason: 'debug' | 'breakpoint';
   node?: NodeRef;
   /** Stable runtime boundary at which execution was parked. */
-  phase?: 'before-node' | 'after-model' | 'before-tool' | 'after-tool' | 'before-handoff';
+  phase?:
+    | 'before-node'
+    | 'after-node'
+    | 'before-model'
+    | 'after-model'
+    | 'before-tool'
+    | 'after-tool'
+    | 'before-handoff'
+    | 'after-handoff';
   /** Model-facing tool name when a tool breakpoint caused the pause. */
   toolName?: string;
 }

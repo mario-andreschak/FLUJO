@@ -35,7 +35,7 @@ import {
   DialogContentText,
   DialogActions,
 } from '@mui/material';
-import ReactMarkdown, { type Components } from 'react-markdown';
+import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import BlockIcon from '@mui/icons-material/Block';
@@ -75,7 +75,6 @@ import { mediaDataUrl, type ModelMediaPart } from '@/shared/types/model/media';
 import { summarizeTokenMeter } from '@/shared/utils/tokenUsage';
 import {
   MARKDOWN_LINK_COMPONENTS,
-  MarkdownLink,
   markdownLinkVars,
 } from '@/frontend/components/shared/MarkdownLink';
 import { useI18n } from '@/frontend/contexts/I18nContext';
@@ -85,6 +84,7 @@ import {
   groupMcpAppOccurrences,
   latestMcpAppResultIdsByResource,
 } from './mcpAppProjection';
+import { ChatMarkdownContent } from './ChatMarkdown';
 
 const log = createLogger('frontend/components/Chat/ChatMessages'); // Initialize logger
 
@@ -315,53 +315,6 @@ export function messageContentText(content: unknown): string {
     .filter(Boolean)
     .join('\n');
 }
-
-// Markdown renderers are pure of any per-message state, so they live at module
-// scope: a stable identity means memoized bubbles don't re-parse/re-render
-// their markdown when the list re-renders.
-const MARKDOWN_COMPONENTS: Components = {
-  p: (props) => <Typography variant="body1" sx={{ mb: 0.5, whiteSpace: 'pre-line' }}>{props.children}</Typography>,
-  h1: (props) => <Typography variant="h5" sx={{ mt: 2, mb: 0.5 }}>{props.children}</Typography>,
-  h2: (props) => <Typography variant="h6" sx={{ mt: 2, mb: 0.5 }}>{props.children}</Typography>,
-  h3: (props) => <Typography variant="subtitle1" sx={{ mt: 1.5, mb: 0.5 }}>{props.children}</Typography>,
-  h4: (props) => <Typography variant="subtitle2" sx={{ mt: 1.5, mb: 0.5 }}>{props.children}</Typography>,
-  h5: (props) => <Typography variant="body1" sx={{ mt: 1, mb: 0.5, fontWeight: 'bold' }}>{props.children}</Typography>,
-  h6: (props) => <Typography variant="body2" sx={{ mt: 1, mb: 0.5, fontWeight: 'bold' }}>{props.children}</Typography>,
-  ul: (props) => <Box component="ul" sx={{ pl: 2, mb: 1 }}>{props.children}</Box>,
-  ol: (props) => <Box component="ol" sx={{ pl: 2, mb: 1 }}>{props.children}</Box>,
-  li: (props) => <Box component="li" sx={{ mb: 0.5, whiteSpace: 'pre-line' }}>{props.children}</Box>,
-  // Link color comes from the `--flujo-link-color` the surrounding surface sets
-  // (see MarkdownLink): `primary.main` was invisible on the accent-filled user
-  // bubble in the light modern theme.
-  a: MarkdownLink,
-  blockquote: (props) => (
-    <Box component="blockquote" sx={{
-      borderLeft: '4px solid',
-      borderColor: 'divider',
-      pl: 2,
-      py: 0.5,
-      my: 1,
-      bgcolor: 'action.hover',
-      borderRadius: '4px'
-    }}>{props.children}</Box>
-  ),
-  code: ({ node, className, children, ...props }: any) => {
-    const match = /language-(\w+)/.exec(className || '');
-    const isInline = !match && !className;
-    return isInline ? (
-      <Typography component="code" sx={{
-        bgcolor: 'action.hover', px: 0.5, py: 0.25, borderRadius: '4px', fontFamily: 'monospace',
-        wordBreak: 'break-all', // Break inline code if needed
-      }}>{children}</Typography>
-    ) : (
-      <Box component="pre" sx={{
-        bgcolor: 'action.hover', p: 1.5, borderRadius: '4px', overflowX: 'auto', fontFamily: 'monospace',
-        fontSize: '0.875rem', my: 1, whiteSpace: 'pre-wrap', // Ensure wrapping in code blocks
-        wordBreak: 'break-word', // Break long words in code blocks
-      }}>{children}</Box>
-    );
-  }
-};
 
 const MessageMediaView: React.FC<{ media: ModelMediaPart[] }> = ({ media }) => {
   const { t } = useI18n();
@@ -1211,12 +1164,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
           <>
             {/* Render message content only if it's a string and not a tool message */}
             {message.role !== 'tool' && typeof message.content === 'string' && (
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                components={MARKDOWN_COMPONENTS}
-              >
-                {message.content}
-              </ReactMarkdown>
+              <ChatMarkdownContent>{message.content}</ChatMarkdownContent>
             )}
             {/* Multipart content (text + images): user attachments and generated
                 assistant images are normalized to an OpenAI-style content-part
@@ -1231,13 +1179,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
                       // links consume the bubble's `--flujo-link-color` instead
                       // of the UA default (invisible violet-on-violet in the
                       // light modern theme).
-                      <ReactMarkdown
-                        key={partIndex}
-                        remarkPlugins={[remarkGfm]}
-                        components={MARKDOWN_COMPONENTS}
-                      >
-                        {part.text}
-                      </ReactMarkdown>
+                      <ChatMarkdownContent key={partIndex}>{part.text}</ChatMarkdownContent>
                     );
                   }
                   if (part?.type === 'image_url' && part.image_url?.url) {

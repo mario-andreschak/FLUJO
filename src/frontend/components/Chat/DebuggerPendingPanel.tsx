@@ -121,7 +121,6 @@ const DebuggerPendingPanel: React.FC<DebuggerPendingPanelProps> = ({
       >
         <Button variant="outlined" size="small" disabled>{t('chat.debug.previous')}</Button>
         <Button variant="contained" size="small" disabled>{t('chat.debug.stepNext')}</Button>
-        <Button variant="outlined" size="small" disabled>{t('chat.debug.stepOver')}</Button>
         <Button variant="contained" color="secondary" size="small" disabled>{t('chat.debug.continue')}</Button>
       </Box>
     </Paper>

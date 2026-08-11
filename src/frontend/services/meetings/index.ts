@@ -67,6 +67,30 @@ class MeetingsService {
     return result.meeting;
   }
 
+  async addPrivateNote(id: string, content: string): Promise<MeetingEvent> {
+    const result = await parse<{ event: MeetingEvent }>(await fetch(
+      withWorkspaceUrl(`${BASE}/${encodeURIComponent(id)}/private-notes`),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+      },
+    ));
+    return result.event;
+  }
+
+  async steer(id: string, content: string): Promise<MeetingEvent> {
+    const result = await parse<{ event: MeetingEvent }>(await fetch(
+      withWorkspaceUrl(`${BASE}/${encodeURIComponent(id)}/interventions`),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+      },
+    ));
+    return result.event;
+  }
+
   subscribe(
     id: string,
     handlers: MeetingStreamHandlers,

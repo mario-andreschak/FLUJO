@@ -2,6 +2,7 @@ import type { MeetingEvent, MeetingRecord } from '@/shared/types/meeting';
 import {
   countDiscussionRounds,
   isTranscriptVisibleEvent,
+  meetingLogMarkdown,
 } from '@/frontend/components/Meetings/meetingTranscriptProjection';
 
 const base = {
@@ -51,6 +52,14 @@ describe('meeting transcript projection', () => {
     expect(isTranscriptVisibleEvent(completed)).toBe(true);
   });
 
+  it('keeps human notes and steering in the visible log projection', () => {
+    const note: MeetingEvent = { ...base, type: 'private-note', audience: [], content: 'Check the assumptions.' };
+    const steering: MeetingEvent = { ...base, eventId: 'event-2', type: 'moderator:intervention', content: 'Compare the two launch dates.' };
+
+    expect(isTranscriptVisibleEvent(note)).toBe(true);
+    expect(isTranscriptVisibleEvent(steering)).toBe(true);
+  });
+
   it('does not count moderator-only synthesis turns as discussion rounds', () => {
     const meeting = {
       moderatorParticipantId: 'moderator',
@@ -87,5 +96,24 @@ describe('meeting transcript projection', () => {
     ];
 
     expect(countDiscussionRounds(meeting, events)).toBe(1);
+  });
+
+  it('exports a readable markdown log with speech, notes, and votes', () => {
+    const meeting = {
+      title: 'Launch council', status: 'completed', phase: 'completed', createdAt: 1,
+      openingPrompt: 'Choose a launch date.',
+      participants: [{ id: 'agent-1', name: 'Strategist' }],
+    } as MeetingRecord;
+    const events: MeetingEvent[] = [
+      { ...base, type: 'participant:spoke', participantId: 'agent-1', participantName: 'Strategist', turnId: 'turn-1', content: 'Launch on Tuesday.' },
+      { ...base, eventId: 'note-1', seq: 1, type: 'private-note', audience: [], content: 'Validate demand.' },
+      { ...base, eventId: 'vote-1', seq: 2, type: 'vote:cast', motionId: 'motion-1', participantId: 'agent-1', choice: 'yes' },
+    ];
+
+    const markdown = meetingLogMarkdown(meeting, events);
+    expect(markdown).toContain('# Launch council');
+    expect(markdown).toContain('### Strategist');
+    expect(markdown).toContain('Private note');
+    expect(markdown).toContain('Vote · Strategist: yes');
   });
 });

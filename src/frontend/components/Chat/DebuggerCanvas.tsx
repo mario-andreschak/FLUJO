@@ -45,6 +45,7 @@ import {
 } from '@/utils/shared/debugBreakpoints';
 import RunResourcesPanel from './RunResourcesPanel';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { debugBoundaryEdgeIds } from '@/utils/shared/debugBoundaryGraph';
 
 // Import Canvas components if needed (or create simplified versions)
 // import { CanvasControls } from '@/frontend/components/Flow/FlowManager/FlowBuilder/Canvas/components/CanvasControls';
@@ -105,6 +106,18 @@ const edgeTypes = {
 // Teal, matching RESOURCE_COLOR in CustomNodes.
 const RESOURCE_HIGHLIGHT = '#009688';
 const EMPTY_EXECUTION_EVENTS: readonly ExecutionEvent[] = [];
+
+function escapeCssAttribute(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function formatToolArguments(value: string): string {
+  try {
+    return JSON.stringify(JSON.parse(value || '{}'), null, 2);
+  } catch {
+    return value;
+  }
+}
 
 type FlowCacheEntry =
   | { status: 'loading' }
@@ -217,7 +230,6 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   debugState,
   conversationId,
   onStep,
-  onStepOver,
   onContinue,
   onCancel,
   isLoading,
@@ -433,6 +445,84 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
     return undefined; // Explicitly return undefined if conditions aren't met
   }, [debugState.executionTrace, currentStepIndex]); // Added closing parenthesis and dependency array
 
+  const debugBoundary = debugState.debugBoundary;
+  const boundaryColor = debugBoundary?.phase === 'before'
+    ? theme.palette.warning.main
+    : theme.palette.success.main;
+  const boundaryOperationLabel = (operation: NonNullable<typeof debugBoundary>['operation']) =>
+    t(`chat.debug.boundary.operation.${operation}` as Parameters<typeof t>[0]);
+  const boundaryPhaseLabel = (
+    phase: 'before' | 'after',
+    operation: NonNullable<typeof debugBoundary>['operation'],
+  ) => t(`chat.debug.boundary.${phase}` as Parameters<typeof t>[0], {
+    operation: boundaryOperationLabel(operation),
+  });
+  const boundaryTitle = debugBoundary
+    ? debugBoundary.previousOperation
+      ? t('chat.debug.boundary.transition', {
+          from: boundaryPhaseLabel('after', debugBoundary.previousOperation),
+          to: boundaryPhaseLabel('before', debugBoundary.operation),
+        })
+      : debugBoundary.nextOperation
+        ? t('chat.debug.boundary.transition', {
+            from: boundaryPhaseLabel('after', debugBoundary.operation),
+            to: boundaryPhaseLabel('before', debugBoundary.nextOperation),
+          })
+        : boundaryPhaseLabel(debugBoundary.phase, debugBoundary.operation)
+    : '';
+
+  // Resolve the boundary to real graph edges. Graph transitions carry the
+  // authored edge id directly; MCP tool calls carry the advertising MCP node
+  // ids through the persisted tool-name map. Synthetic tools have no graph edge.
+  const boundaryEdgeIds = useMemo(
+    () => debugBoundaryEdgeIds(debugBoundary, edges),
+    [debugBoundary, edges],
+  );
+  const boundaryEdges = useMemo(
+    () => edges.filter(edge => boundaryEdgeIds.has(edge.id)),
+    [edges, boundaryEdgeIds],
+  );
+
+  const displayEdges = useMemo(() => edges.map(edge => {
+    if (!debugBoundary || !boundaryEdgeIds.has(edge.id)) return edge;
+    return {
+      ...edge,
+      data: {
+        ...(edge.data ?? {}),
+        debuggerActivity: {
+          phase: debugBoundary.phase,
+          operation: debugBoundary.operation,
+        },
+      },
+    };
+  }), [edges, debugBoundary, boundaryEdgeIds]);
+
+  // React Flow exposes the authored handle id in the DOM. Build scoped selectors
+  // for the exact two endpoints instead of lighting every connector on a node.
+  const boundaryHandleSelectors = useMemo(() => {
+    const selectors: Record<string, Record<string, unknown>> = {};
+    for (const edge of boundaryEdges) {
+      const endpoints = [
+        { nodeId: edge.source, handleId: edge.sourceHandle },
+        { nodeId: edge.target, handleId: edge.targetHandle },
+      ];
+      for (const endpoint of endpoints) {
+        if (!endpoint.handleId) continue;
+        const nodeId = escapeCssAttribute(endpoint.nodeId);
+        const handleId = escapeCssAttribute(endpoint.handleId);
+        selectors[`& .react-flow__node[data-id="${nodeId}"] [data-handleid="${handleId}"]`] = {
+          backgroundColor: boundaryColor,
+          borderColor: theme.palette.background.paper,
+          boxShadow: `0 0 0 4px ${alpha(boundaryColor, 0.24)}, 0 0 14px ${boundaryColor}`,
+          transform: 'scale(1.28)',
+          transition: 'transform 140ms ease, box-shadow 140ms ease',
+          zIndex: 20,
+        };
+      }
+    }
+    return selectors;
+  }, [boundaryEdges, boundaryColor, theme.palette.background.paper]);
+
   // Decay repaint (Tier 3 live highlighting): while any live-activity entry is
   // younger than the TTL, a low-frequency interval bumps `now` so highlights
   // fade out; it self-stops once everything has aged out.
@@ -505,9 +595,12 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
     const highlightId = canvasFrame.key === DEBUGGER_ROOT_FRAME_KEY ? currentStepData?.nodeId : undefined;
     return nodes.map((node: Node) => {
       const isCurrent = node.id === highlightId;
+      const isBoundaryNode = canvasFrame.key === DEBUGGER_ROOT_FRAME_KEY && !!debugBoundary && (
+        node.id === debugBoundary.nodeId || node.id === debugBoundary.targetNodeId
+      );
       const breakpointKey = breakpointKeyForNode(node);
       const isBreakpoint = !!breakpointKey && !!breakpoints?.includes(breakpointKey);
-      const live = isCurrent ? null : liveActivityFor(node);
+      const live = isCurrent || isBoundaryNode ? null : liveActivityFor(node);
       const liveOpacity = live ? Math.max(0.25, 1 - (now - live.ts) / LIVE_HIGHLIGHT_TTL_MS) : 0;
       const liveColor = live?.kind === 'active' ? theme.palette.primary.main : RESOURCE_HIGHLIGHT;
       return {
@@ -517,17 +610,25 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
         // now a class on the node wrapper: the canvas styles it with a solid
         // red ring, a halo and a red dot marker (like a gutter breakpoint in an
         // IDE), so it stays visible WHILE the node is executing/highlighted.
-        className: [node.className, isBreakpoint ? 'flujo-breakpoint' : null]
+        className: [
+          node.className,
+          isBreakpoint ? 'flujo-breakpoint' : null,
+          isBoundaryNode ? `flujo-debug-boundary flujo-debug-${debugBoundary?.phase}` : null,
+        ]
           .filter(Boolean)
           .join(' ') || undefined,
         style: {
           ...node.style,
-          border: isCurrent
+          border: isBoundaryNode
+            ? `3px solid ${boundaryColor}`
+            : isCurrent
             ? `2px solid ${theme.palette.warning.main}`
             : live
               ? `2px solid ${liveColor}`
               : (node.style?.border as string | undefined),
-          boxShadow: isCurrent
+          boxShadow: isBoundaryNode
+            ? `0 0 0 5px ${alpha(boundaryColor, 0.18)}, 0 0 16px ${boundaryColor}`
+            : isCurrent
             ? `0 0 10px ${theme.palette.warning.light}`
             : live
               ? `0 0 ${live.kind === 'resource-write' ? 14 : 10}px ${liveColor}${Math.round(liveOpacity * 255).toString(16).padStart(2, '0')}`
@@ -535,7 +636,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
         },
       };
     });
-  }, [nodes, canvasFrame.key, currentStepData, breakpoints, theme, liveActivityFor, now, breakpointKeyForNode]);
+  }, [nodes, canvasFrame.key, currentStepData, debugBoundary, boundaryColor, breakpoints, theme, liveActivityFor, now, breakpointKeyForNode]);
 
   // --- Breakpoint context menu ---------------------------------------------
   // Right-clicking a node (or the empty canvas) opens the breakpoint menu:
@@ -694,6 +795,26 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
               </ListItemButton>
             </ListItem>
           ))}
+          {debugBoundary && (
+            <ListItem disablePadding data-testid="debug-boundary-row">
+              <ListItemButton
+                selected
+                disableRipple
+                sx={{
+                  cursor: 'default',
+                  borderLeft: `3px solid ${boundaryColor}`,
+                  bgcolor: alpha(boundaryColor, 0.1),
+                }}
+              >
+                <ListItemText
+                  primary={`B${debugBoundary.index}: ${boundaryTitle}`}
+                  secondary={debugBoundary.targetNodeId
+                    ? `${debugBoundary.nodeId ?? '?'} → ${debugBoundary.targetNodeId}`
+                    : debugBoundary.nodeId}
+                />
+              </ListItemButton>
+            </ListItem>
+          )}
           {isLoading && ( // Show loading indicator at the end if stepping
                <ListItem>
                   <CircularProgress size={20} sx={{ margin: 'auto' }}/>
@@ -787,6 +908,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
                 zIndex: 12,
                 pointerEvents: 'none',
               },
+              ...boundaryHandleSelectors,
             }}
             onContextMenu={(e) => {
               // Right-click anywhere on the canvas surface (including gaps that
@@ -804,7 +926,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
               <ReactFlowProvider>
                 <ReactFlow
                   nodes={displayNodes}
-                  edges={edges}
+                  edges={displayEdges}
                   onNodesChange={onNodesChange}
                   onEdgesChange={onEdgesChange}
                   nodeTypes={nodeTypes}
@@ -876,6 +998,85 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
 
   const detailBody = (
     <Box sx={{ flexGrow: 1, overflowY: 'auto', minHeight: 0, p: 2 }}>
+      {debugBoundary && (
+        <Box data-testid="debug-boundary-detail" sx={{ mb: currentStepData ? 2 : 0 }}>
+          <Alert
+            severity={debugBoundary.phase === 'before' ? 'warning' : 'success'}
+            variant="outlined"
+            sx={{ alignItems: 'flex-start' }}
+          >
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, minWidth: 0 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
+                <Chip
+                  size="small"
+                  color={debugBoundary.phase === 'before' ? 'warning' : 'success'}
+                  label={debugBoundary.phase.toUpperCase()}
+                />
+                <Typography variant="subtitle2">{boundaryTitle}</Typography>
+              </Box>
+              {debugBoundary.edgeId && (
+                <Typography variant="caption" sx={{ wordBreak: 'break-all' }}>
+                  {t('chat.debug.boundary.edge')}: {debugBoundary.edgeId}
+                </Typography>
+              )}
+              <Typography variant="caption" color="text.secondary">
+                {debugBoundary.targetNodeId
+                  ? `${debugBoundary.nodeId ?? '?'} → ${debugBoundary.targetNodeId}`
+                  : debugBoundary.nodeId ?? t('chat.debug.boundary.noNode')}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {t('chat.debug.boundary.conversationCount', {
+                  count: debugBoundary.stateSnapshot.messageCount,
+                })}
+              </Typography>
+            </Box>
+          </Alert>
+
+          {!!debugBoundary.toolCalls?.length && (
+            <Accordion defaultExpanded sx={{ mt: 1, boxShadow: 'none', '&:before': { display: 'none' } }}>
+              <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ minHeight: '36px', '& .MuiAccordionSummary-content': { margin: '8px 0' } }}>
+                <Typography variant="caption">{t('chat.debug.boundary.parameters')}</Typography>
+              </AccordionSummary>
+              <AccordionDetails sx={{ p: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                {debugBoundary.toolCalls.map(call => (
+                  <Box key={call.id} sx={{ minWidth: 0 }}>
+                    <Typography variant="caption" sx={{ fontWeight: 700, wordBreak: 'break-all' }}>
+                      {call.function.name}
+                    </Typography>
+                    <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: '180px', overflowY: 'auto', background: 'var(--surface-raised)', color: 'var(--foreground)', padding: '8px', borderRadius: '4px', fontSize: '0.75rem', margin: 0 }}>
+                      {formatToolArguments(call.function.arguments)}
+                    </pre>
+                  </Box>
+                ))}
+              </AccordionDetails>
+            </Accordion>
+          )}
+
+          {debugBoundary.modelInput && (
+            <Accordion sx={{ boxShadow: 'none', '&:before': { display: 'none' } }}>
+              <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ minHeight: '36px', '& .MuiAccordionSummary-content': { margin: '8px 0' } }}>
+                <Typography variant="caption">{t('chat.debug.boundary.modelInput')}</Typography>
+              </AccordionSummary>
+              <AccordionDetails sx={{ p: 0 }}>
+                <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: '260px', overflowY: 'auto', background: 'var(--surface-raised)', color: 'var(--foreground)', padding: '8px', borderRadius: '4px', fontSize: '0.75rem', margin: 0 }}>
+                  {JSON.stringify(debugBoundary.modelInput, null, 2)}
+                </pre>
+              </AccordionDetails>
+            </Accordion>
+          )}
+
+          <Accordion sx={{ boxShadow: 'none', '&:before': { display: 'none' } }}>
+            <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ minHeight: '36px', '& .MuiAccordionSummary-content': { margin: '8px 0' } }}>
+              <Typography variant="caption">{t('chat.debug.boundary.state')}</Typography>
+            </AccordionSummary>
+            <AccordionDetails sx={{ p: 0 }}>
+              <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: '220px', overflowY: 'auto', background: 'var(--surface-raised)', color: 'var(--foreground)', padding: '8px', borderRadius: '4px', fontSize: '0.75rem', margin: 0 }}>
+                {JSON.stringify(debugBoundary.stateSnapshot, null, 2)}
+              </pre>
+            </AccordionDetails>
+          </Accordion>
+        </Box>
+      )}
       {currentStepData ? (
         <Box>
           <Typography variant="body2"><b>{t('chat.debug.node')}</b> {currentStepData.nodeName} ({currentStepData.nodeId})</Typography>
@@ -949,9 +1150,9 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
             </AccordionDetails>
           </Accordion>
         </Box>
-      ) : (
+      ) : !debugBoundary ? (
         <Typography variant="body2" color="textSecondary">{t('chat.debug.selectStep')}</Typography>
-      )}
+      ) : null}
 
       {/* Run data (Tier 3): the run-scoped resources captured so far —
           auto-captured tool results, captureResource outputs, links.
@@ -1119,15 +1320,10 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
             <Button variant="outlined" size="small" onClick={handlePreviousStep} disabled={isLoading || currentStepIndex <= 0}>
                 {t('chat.debug.previous')}
             </Button>
-            <Button variant="contained" size="small" onClick={handleNextStep} disabled={isLoading || currentStepIndex === -1}>
+            <Button variant="contained" size="small" onClick={handleNextStep} disabled={isLoading || (currentStepIndex === -1 && !debugBoundary)}>
                 {/* Adjust button text based on whether we are at the end of the current trace */}
                 {debugState.executionTrace && currentStepIndex < debugState.executionTrace.length - 1 ? t('chat.debug.nextTrace') : t('chat.debug.stepNext')}
             </Button>
-            {onStepOver && (
-              <Button variant="outlined" size="small" onClick={onStepOver} disabled={isLoading}>
-                {t('chat.debug.stepOver')}
-              </Button>
-            )}
             <Button variant="contained" color="secondary" size="small" onClick={onContinue} disabled={isLoading}>
                 {t('chat.debug.continue')}
             </Button>

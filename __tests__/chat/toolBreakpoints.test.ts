@@ -34,6 +34,10 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => {
   const TOOL_CALL = 'TOOL_CALL';
   const conversationStates = new Map();
   const executeStep = jest.fn(async (sharedState: any) => {
+    if (sharedState.__debugTestControlNode) {
+      sharedState.currentNodeId = 'start';
+      return { sharedState, action: 'start->process' };
+    }
     const handoff = !!sharedState.__debugTestHandoff;
     const final = !!sharedState.__debugTestFinal;
     sharedState.currentNodeId = P;
@@ -54,9 +58,11 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => {
       conversationStates,
       clearFlowCache: jest.fn(),
       executeStep,
-      resolveHandoff: jest.fn(async (_state: any, action: string) => action === 'process->finish'
-        ? ({ isSuccessorEdge: true, targetNodeId: 'finish' })
-        : ({ isSuccessorEdge: false, targetNodeId: null })),
+      resolveHandoff: jest.fn(async (_state: any, action: string) => {
+        if (action === 'process->finish') return { isSuccessorEdge: true, targetNodeId: 'finish' };
+        if (action === 'start->process') return { isSuccessorEdge: true, targetNodeId: P };
+        return { isSuccessorEdge: false, targetNodeId: null };
+      }),
       peekNextNodeId: jest.fn(async (s: any) => s.currentNodeId ?? P),
     },
   };
@@ -153,6 +159,28 @@ describe('breakpoint vocabulary', () => {
 });
 
 describe('tool breakpoints pause a normal (non-single-step) run', () => {
+  it('steps through a control node directly to the BEFORE target-node boundary', async () => {
+    const state = seedRunningState([]);
+    state.status = 'paused_debug';
+    state.debugMode = true;
+    state.currentNodeId = 'start';
+    (state as any).__debugTestControlNode = true;
+
+    await run();
+
+    expect(FlowExecutor.executeStep).toHaveBeenCalledTimes(1);
+    expect(conversationStates.get(CONV_ID)).toMatchObject({
+      status: 'paused_debug',
+      currentNodeId: PROCESS,
+      debugBoundary: {
+        operation: 'node',
+        phase: 'before',
+        nodeId: PROCESS,
+        edgeId: 'start->process',
+      },
+    });
+  });
+
   it('pauses BEFORE the tools run when "any tool" is armed', async () => {
     seedRunningState([ANY_TOOL_BREAKPOINT]);
     await run();
@@ -217,6 +245,38 @@ describe('tool breakpoints pause a normal (non-single-step) run', () => {
       status: 'paused_debug',
       currentNodeId: PROCESS,
       debugPendingAction: { action: 'process->finish', phase: 'after-model' },
+      debugBoundary: {
+        operation: 'handoff',
+        phase: 'before',
+        nodeId: PROCESS,
+        targetNodeId: 'finish',
+        edgeId: 'process->finish',
+        previousOperation: 'model',
+      },
+    });
+
+    const parked = conversationStates.get(CONV_ID)!;
+    await processChatCompletion(
+      { ...request, messages: parked.messages } as any,
+      true,
+      false,
+      false,
+      CONV_ID,
+      false,
+      false,
+    );
+
+    expect(conversationStates.get(CONV_ID)).toMatchObject({
+      status: 'paused_debug',
+      currentNodeId: 'finish',
+      debugBoundary: {
+        operation: 'handoff',
+        phase: 'after',
+        nodeId: PROCESS,
+        targetNodeId: 'finish',
+        edgeId: 'process->finish',
+        nextOperation: 'node',
+      },
     });
   });
 

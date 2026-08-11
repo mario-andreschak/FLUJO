@@ -78,6 +78,13 @@ const EdgePath = styled(BaseEdge)({
     strokeDasharray: 5,
     animation: `flowPathAnimation ${BASE_ANIMATION_BOTH_MS}ms infinite linear alternate`,
   },
+  '&&.debugger-before': {
+    strokeDasharray: '8 5',
+    animation: 'debuggerPathPulse 900ms infinite ease-in-out',
+  },
+  '&&.debugger-after': {
+    animation: 'debuggerPathSettle 900ms 1 ease-out',
+  },
   '@keyframes flowPathAnimation': {
     '0%': {
       strokeDashoffset: 10,
@@ -85,7 +92,15 @@ const EdgePath = styled(BaseEdge)({
     '100%': {
       strokeDashoffset: 0,
     },
-  }
+  },
+  '@keyframes debuggerPathPulse': {
+    '0%, 100%': { strokeOpacity: 0.72, strokeDashoffset: 13 },
+    '50%': { strokeOpacity: 1, strokeDashoffset: 0 },
+  },
+  '@keyframes debuggerPathSettle': {
+    '0%': { strokeOpacity: 0.45 },
+    '100%': { strokeOpacity: 1 },
+  },
 });
 
 interface FlowEdgeBaseProps extends EdgeProps {
@@ -158,8 +173,16 @@ const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
   const suppressClickRef = useRef(false);
 
   const edgeData = data as
-    | { waypoints?: Point[]; waypoint?: Point; bidirectional?: boolean; animated?: boolean; condition?: EdgeCondition }
+    | {
+        waypoints?: Point[];
+        waypoint?: Point;
+        bidirectional?: boolean;
+        animated?: boolean;
+        condition?: EdgeCondition;
+        debuggerActivity?: { phase: 'before' | 'after'; operation: string };
+      }
     | undefined;
+  const debuggerActivity = edgeData?.debuggerActivity;
   // A conditional (Tier 2b) flow-control edge shows a small badge so branching
   // is legible on the canvas. Only standard edges carry routing conditions.
   const conditionLabel = variant === 'standard' && edgeData?.condition
@@ -235,22 +258,32 @@ const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
     controlsPoint = { x: labelX, y: labelY };
   }
 
-  const animationClass = sideways
+  const baseAnimationClass = sideways
     ? ''
     : bidirectional
       ? 'animated-both'
       : edgeData?.animated !== false
         ? 'animated'
         : '';
+  const animationClass = [
+    baseAnimationClass,
+    debuggerActivity ? `debugger-${debuggerActivity.phase}` : '',
+  ].filter(Boolean).join(' ');
+  const debuggerColor = debuggerActivity?.phase === 'before'
+    ? theme.palette.warning.main
+    : debuggerActivity?.phase === 'after'
+      ? theme.palette.success.main
+      : undefined;
 
   const edgeStyle = {
     ...style,
-    strokeWidth: selected ? 3 : 2,
-    stroke: variant === 'mcp'
+    strokeWidth: debuggerActivity ? 4 : selected ? 3 : 2,
+    stroke: debuggerColor ?? (variant === 'mcp'
       ? (selected ? theme.palette.info.light : theme.palette.info.main)
       : variant === 'resource'
       ? (selected ? RESOURCE_EDGE_COLOR_SELECTED : RESOURCE_EDGE_COLOR)
-      : (selected ? theme.palette.primary.main : theme.palette.text.secondary),
+      : (selected ? theme.palette.primary.main : theme.palette.text.secondary)),
+    ...(debuggerColor ? { filter: `drop-shadow(0 0 5px ${debuggerColor})` } : {}),
     // A static dash marks resource (data-flow) wiring so it reads differently
     // from solid MCP tool wiring and animated control edges even for
     // color-vision-deficient users (issue #223). Applied in the renderer only
@@ -260,7 +293,7 @@ const FlowEdgeBase: FC<FlowEdgeBaseProps> = ({
     // overlapping siblings on the same handle drift out of phase. Inline
     // animation-duration (a longhand) overrides the `animation` shorthand from
     // the styled class, leaving keyframes/dash/direction untouched.
-    ...(animationClass
+    ...(baseAnimationClass && !debuggerActivity
       ? {
           animationDuration: `${Math.round(
             (bidirectional ? BASE_ANIMATION_BOTH_MS : BASE_ANIMATION_MS) * edgeSpeedFactor(id)

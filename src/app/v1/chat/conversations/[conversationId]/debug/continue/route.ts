@@ -77,6 +77,7 @@ async function POST_handler(
     // pending action/tool batch: runFlow consumes it exactly once on resume.
     sharedState.debugMode = false;
     sharedState.debugPauseRequested = false;
+    sharedState.debugBoundary = undefined;
     sharedState.breakpoints = [];
     sharedState.lastBreakNodeId = undefined;
     sharedState.status = 'running';

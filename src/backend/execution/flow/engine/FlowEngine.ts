@@ -1,4 +1,4 @@
-import { SharedState, PrepResult, ExecResult } from '../types';
+import { SharedState, PrepResult, ExecResult, ModelInputSnapshot } from '../types';
 import { EmitFn } from '@/shared/types/execution/events';
 
 /**
@@ -56,6 +56,16 @@ export interface FlowEngine {
    * fine-grained model/tool/handoff events through `emit`.
    */
   runNode(node: ResolvedNode, sharedState: SharedState, emit?: EmitFn): Promise<RunNodeResult>;
+
+  /**
+   * Prepare the next Process node against an isolated state clone and return
+   * the model-facing wire preview without executing the model. Used only by a
+   * paused debugger; normal execution never pays this preparation cost.
+   */
+  previewModelInput(sharedState: SharedState): Promise<{
+    nodeId: string;
+    modelInput: ModelInputSnapshot;
+  } | null>;
 
   /**
    * Determine whether `action` corresponds to a handoff edge leaving the

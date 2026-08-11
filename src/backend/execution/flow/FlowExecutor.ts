@@ -173,6 +173,11 @@ export class FlowExecutor {
     }
   }
 
+  /** Build the exact pre-call wire preview for the next Process node. */
+  static previewNextModelInput(sharedState: SharedState) {
+    return this.engine.previewModelInput(sharedState);
+  }
+
   /**
    * Executes a single step of the flow based on the provided shared state.
    * Updates the shared state in the conversationStates map.

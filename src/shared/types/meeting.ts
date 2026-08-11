@@ -116,6 +116,8 @@ export interface MeetingRecord {
   id: string;
   title: string;
   openingPrompt: string;
+  /** Optional files delivered with the opening brief on each participant's first turn. */
+  openingMedia?: ModelMediaPart[];
   status: MeetingStatus;
   phase: MeetingPhase;
   parentMeetingId?: string;
@@ -149,6 +151,7 @@ export interface CreateMeetingInput {
   id?: string;
   title: string;
   openingPrompt: string;
+  openingMedia?: ModelMediaPart[];
   participants: CreateMeetingParticipantInput[];
   moderatorParticipantId?: string;
   policy?: Partial<MeetingPolicy>;
@@ -221,6 +224,8 @@ export type MeetingEventType =
   | 'participant:left'
   | 'participant:error'
   | 'private-message'
+  | 'private-note'
+  | 'moderator:intervention'
   | 'motion:opened'
   | 'vote:cast'
   | 'motion:resolved'
@@ -330,6 +335,18 @@ export interface MeetingPrivateMessageEvent extends MeetingEventBase {
   media?: ModelMediaPart[];
 }
 
+/** Human-authored note retained in the log but never delivered to an agent. */
+export interface MeetingPrivateNoteEvent extends MeetingEventBase {
+  type: 'private-note';
+  content: string;
+}
+
+/** Human steering instruction delivered to every participant on the next round snapshot. */
+export interface MeetingModeratorInterventionEvent extends MeetingEventBase {
+  type: 'moderator:intervention';
+  content: string;
+}
+
 export interface MeetingMotionOpenedEvent extends MeetingEventBase {
   type: 'motion:opened';
   motion: MeetingMotion;
@@ -388,6 +405,8 @@ export type MeetingEvent =
   | MeetingParticipantLeftEvent
   | MeetingParticipantErrorEvent
   | MeetingPrivateMessageEvent
+  | MeetingPrivateNoteEvent
+  | MeetingModeratorInterventionEvent
   | MeetingMotionOpenedEvent
   | MeetingVoteCastEvent
   | MeetingMotionResolvedEvent

@@ -18,6 +18,8 @@ interface PromptTemplateEditorProps {
   nodeData: any;
   flowId?: string;
   suggestions?: PromptReferenceSuggestion[];
+  /** Use PromptBuilder's lightweight reference preview instead of the process-node renderer. */
+  renderPromptPreview?: boolean;
 }
 
 /**
@@ -40,6 +42,7 @@ const PromptTemplateEditor = forwardRef<PromptBuilderRef, PromptTemplateEditorPr
     nodeData,
     flowId,
     suggestions,
+    renderPromptPreview = true,
   } = props;
 
   // State for rendered prompt
@@ -199,8 +202,8 @@ const PromptTemplateEditor = forwardRef<PromptBuilderRef, PromptTemplateEditorPr
         onChange={handlePromptChange}
         label=""
         height="100%"
-        onModeChange={handleModeChange}
-        customPreviewRenderer={customPreviewRenderer}
+        onModeChange={renderPromptPreview ? handleModeChange : undefined}
+        customPreviewRenderer={renderPromptPreview ? customPreviewRenderer : undefined}
         suggestions={suggestions}
       />
     </Box>
