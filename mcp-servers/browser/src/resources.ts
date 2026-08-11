@@ -117,6 +117,9 @@ body{background:var(--bg);color:var(--fg);font:13px/1.45 system-ui,-apple-system
   var note = document.getElementById("note");
   var fbUrl = document.getElementById("fbUrl");
   var theme = "light", pollTimer = 0, usingFallback = false;
+  // null = host did not report its sandbox CSP grant (unknown policy);
+  // [] = host reported a grant that excludes the gateway (denied).
+  var grantedFrameDomains = null, viewReady = false, readyTimer = 0;
 
   function post(m){ parentWin.postMessage(m, "*"); }
   function rpc(method, params){
@@ -154,14 +157,34 @@ body{background:var(--bg);color:var(--fg);font:13px/1.45 system-ui,-apple-system
   }
 
   /* ---------- live view ---------- */
+  // Whether the host's effective frame-src grant covers the gateway origin.
+  // Grants may be exact origins, the loopback port-wildcard form
+  // (http://127.0.0.1:*), or the allow-all escape hatch.
+  function frameGrantCovers(origin){
+    if (grantedFrameDomains === null) return true; /* unknown policy: probe, the ready watchdog still guards */
+    var o = String(origin || "").toLowerCase();
+    for (var i = 0; i < grantedFrameDomains.length; i++){
+      var d = String(grantedFrameDomains[i] || "").toLowerCase();
+      if (d === "*" || d === o) return true;
+      if (d.slice(-2) === ":*" && o.indexOf(d.slice(0, -1)) === 0) return true;
+    }
+    return false;
+  }
   function mountLiveView(){
     frame.src = GATEWAY.origin + "/view?s=" + encodeURIComponent(sessionId) + "&t=" + encodeURIComponent(GATEWAY.token);
+    // A CSP-blocked or unreachable iframe fires neither load nor error, so a
+    // silent live view must degrade to screenshots on its own.
+    clearTimeout(readyTimer);
+    readyTimer = setTimeout(function(){
+      if (!viewReady) useFallback("The live view is not reachable from this browser; showing periodic screenshots.");
+    }, 8000);
   }
 
   /* ---------- screenshot fallback ---------- */
   function useFallback(reason){
     if (usingFallback) return;
     usingFallback = true;
+    clearTimeout(readyTimer);
     frame.classList.add("hide");
     fallback.classList.add("show");
     setNote(reason || "Live streaming is unavailable; showing periodic screenshots.", true);
@@ -218,8 +241,9 @@ body{background:var(--bg);color:var(--fg);font:13px/1.45 system-ui,-apple-system
       var state = payload(result);
       sessionId = state.sessionId || "";
       if (!sessionId) throw new Error("The browser session did not report an id.");
-      if (GATEWAY.origin && GATEWAY.token) mountLiveView();
-      else useFallback("The live stream gateway is disabled, so this view falls back to screenshots.");
+      if (!GATEWAY.origin || !GATEWAY.token) useFallback("The live stream gateway is disabled, so this view falls back to screenshots.");
+      else if (!frameGrantCovers(GATEWAY.origin)) useFallback("This deployment cannot frame the local live-view gateway; showing periodic screenshots.");
+      else mountLiveView();
     } catch (e) {
       starting = false;
       useFallback(errorText(e));
@@ -250,7 +274,7 @@ body{background:var(--bg);color:var(--fg);font:13px/1.45 system-ui,-apple-system
     var m = event.data;
     if (m && m.source === "flujo-browser-view"){
       if (event.source !== frame.contentWindow) return;
-      if (m.type === "ready") toView({ type: "theme", theme: theme });
+      if (m.type === "ready"){ viewReady = true; clearTimeout(readyTimer); toView({ type: "theme", theme: theme }); }
       else void runViewCommand(m);
       return;
     }
@@ -287,6 +311,8 @@ body{background:var(--bg);color:var(--fg);font:13px/1.45 system-ui,-apple-system
     appCapabilities: { availableDisplayModes: ["inline", "fullscreen", "pip"] },
     protocolVersion: "${MCP_APPS_PROTOCOL_VERSION}"
   }).then(function(result){
+    var sandboxCaps = result && result.capabilities && result.capabilities.sandbox;
+    if (sandboxCaps) grantedFrameDomains = (sandboxCaps.csp && sandboxCaps.csp.frameDomains) || [];
     theme = (result && result.hostContext && result.hostContext.theme) === "dark" ? "dark" : "light";
     document.documentElement.setAttribute("data-theme", theme);
     notify("ui/notifications/initialized", {});
