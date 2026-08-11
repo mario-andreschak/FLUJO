@@ -24,7 +24,7 @@ import { bindToCurrentWorkspace, getCurrentWorkspace } from '@/utils/workspace';
 
 const log = createLogger('backend/services/telemetry');
 const TELEMETRY_PATH = '/v1/telemetry/daily-active';
-const REQUEST_TIMEOUT_MS = 5_000;
+const REQUEST_TIMEOUT_MS = 30_000;
 
 export const DEFAULT_TELEMETRY_SETTINGS: TelemetrySettings = {
   enabled: true,
