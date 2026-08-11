@@ -585,6 +585,12 @@ function sanitizeCspDomains(
   allowLoopback = false,
 ): string[] {
   if (!Array.isArray(domains)) return [];
+  // Escape hatch: FLUJO's own bundled servers declare a literal '*' when the
+  // persisted `network.allowAllMcpAppContent` setting is on (they cannot know
+  // the rewritten public origin behind a hosted reverse proxy). Honor it ONLY
+  // under that same gate — mirroring getAllowedFrameAncestors — otherwise a
+  // bare '*' is dropped like any other non-origin token.
+  if (sandboxAllowAllContent() && domains.includes('*')) return ['*'];
   const seen = new Set<string>();
   const clean: string[] = [];
   for (const source of domains) {

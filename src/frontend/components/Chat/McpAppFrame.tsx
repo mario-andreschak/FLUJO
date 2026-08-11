@@ -318,6 +318,12 @@ function createStablePostMessageTransport(
 interface AppResource {
   html: string;
   csp?: McpUiResourceCsp;
+  /**
+   * The resource's declared CSP before sanitization. Kept so the grant can be
+   * re-derived once sandbox discovery reports the server-side allow-all escape
+   * hatch (a literal '*' is otherwise dropped by the strict mirror).
+   */
+  rawCsp?: McpUiResourceCsp;
   permissions?: McpUiResourcePermissions;
   // `_meta.ui.prefersBorder: false` means the app paints its own frame (a
   // workbench, a browser window). Drawing FLUJO's decorative border on top of
@@ -331,6 +337,8 @@ interface SandboxEndpointResponse {
   url?: string;
   originKey?: string;
   shared?: boolean;
+  /** Server reports the `network.allowAllMcpAppContent` escape hatch. */
+  allowAll?: boolean;
 }
 
 interface BrowserLocation {
@@ -404,7 +412,7 @@ async function resolveSandboxBaseUrl(
   serverName: string,
   uri: string,
   conversationId?: string,
-): Promise<string> {
+): Promise<{ href: string; allowAll: boolean }> {
   const workspace = getSelectedWorkspace();
   const cacheKey = mcpAppSandboxCacheKey(workspace, serverName, uri, conversationId);
   if (!sandboxEndpointCache.has(cacheKey)) {
@@ -440,7 +448,10 @@ async function resolveSandboxBaseUrl(
     sandboxEndpointCache.set(cacheKey, promise);
   }
   const response = await sandboxEndpointCache.get(cacheKey)!;
-  return buildSandboxUrl(response, window.location);
+  return {
+    href: buildSandboxUrl(response, window.location),
+    allowAll: response.allowAll === true,
+  };
 }
 
 function decodeBase64Utf8(blob: string): string {
@@ -452,6 +463,7 @@ function sanitizeCspOrigins(
   values: string[] | undefined,
   schemes: Array<'https' | 'wss'>,
   allowLoopback = false,
+  allowStar = false,
 ): string[] {
   const isSecureOrigin = (value: string): boolean => {
     const match = /^(https|wss):\/\/(\*\.)?([^/:?#]+)(?::(\d{1,5}))?$/i.exec(value);
@@ -472,6 +484,13 @@ function sanitizeCspOrigins(
   const seen = new Set<string>();
   for (const value of values ?? []) {
     if (value.length === 0 || value.length > 2_048 || /[^\x21-\x7e]/.test(value)) continue;
+    // Escape hatch mirror: the sandbox enforcer honors a literal '*' only when
+    // the server-side allow-all setting is on; the discovery response reports
+    // that state, so this stays faithful to the applied policy.
+    if (value === '*') {
+      if (allowStar) return ['*'];
+      continue;
+    }
     // ws: may widen only connect-style directives, mirroring wss:.
     // Loopback grants collapse to their port-wildcard form so a local App
     // server's ephemeral-port restart cannot invalidate the committed policy;
@@ -522,12 +541,13 @@ export function allowLoopbackCspGrant(
 export function sanitizeGrantedCsp(
   csp: McpUiResourceCsp,
   allowLoopback: boolean = allowLoopbackCspGrant(),
+  allowStar = false,
 ): McpUiResourceCsp {
   return {
-    connectDomains: sanitizeCspOrigins(csp.connectDomains, ['https', 'wss'], allowLoopback),
-    resourceDomains: sanitizeCspOrigins(csp.resourceDomains, ['https'], allowLoopback),
-    frameDomains: sanitizeCspOrigins(csp.frameDomains, ['https'], allowLoopback),
-    baseUriDomains: sanitizeCspOrigins(csp.baseUriDomains, ['https'], allowLoopback),
+    connectDomains: sanitizeCspOrigins(csp.connectDomains, ['https', 'wss'], allowLoopback, allowStar),
+    resourceDomains: sanitizeCspOrigins(csp.resourceDomains, ['https'], allowLoopback, allowStar),
+    frameDomains: sanitizeCspOrigins(csp.frameDomains, ['https'], allowLoopback, allowStar),
+    baseUriDomains: sanitizeCspOrigins(csp.baseUriDomains, ['https'], allowLoopback, allowStar),
   };
 }
 
@@ -587,6 +607,7 @@ export function extractAppResource(readData: unknown, expectedUri: string): AppR
   return {
     html,
     csp: csp.success ? sanitizeGrantedCsp(csp.data) : undefined,
+    rawCsp: csp.success ? csp.data : undefined,
     permissions: permissions.success
       ? sanitizeGrantedPermissions(permissions.data)
       : undefined,
@@ -1263,6 +1284,12 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       // workspace-scoped browser origin. The View never selects its own origin.
       const sandboxBase = await resolveSandboxBaseUrl(serverName, uri, conversationId);
       if (!isCurrentMount() || !containerRef.current) return;
+      // Re-derive the grant once discovery reports the server-side allow-all
+      // escape hatch: a declared literal '*' may then survive sanitization,
+      // matching exactly what the sandbox enforcer will apply.
+      if (sandboxBase.allowAll && app.rawCsp) {
+        app.csp = sanitizeGrantedCsp(app.rawCsp, allowLoopbackCspGrant(), true);
+      }
 
       // 3. Create the OUTER (sandbox-proxy) iframe.
       const iframe = document.createElement('iframe');
@@ -1292,7 +1319,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       // 4. Wait for the proxy to signal readiness, then point it at the sandbox.
       // Pin both WindowProxy and origin: a redirect (or a misconfigured public
       // endpoint) must not be able to impersonate FLUJO's trusted relay.
-      const sandboxUrl = new URL(sandboxBase);
+      const sandboxUrl = new URL(sandboxBase.href);
       if (app.csp) sandboxUrl.searchParams.set('csp', JSON.stringify(app.csp));
       const expectedSandboxOrigin = sandboxUrl.origin;
       const proxyReady = new Promise<void>((resolve, reject) => {

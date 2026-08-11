@@ -93,6 +93,9 @@ describe('MCP App resource validation', () => {
         frameDomains: [],
         baseUriDomains: [],
       },
+      // The pre-sanitization declaration is kept so the grant can be
+      // re-derived when discovery reports the server-side allow-all hatch.
+      rawCsp: { connectDomains: ['https://api.example.com'] },
       permissions: { clipboardWrite: {} },
     });
   });

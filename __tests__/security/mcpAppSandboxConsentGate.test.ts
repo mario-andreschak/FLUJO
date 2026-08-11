@@ -57,6 +57,7 @@ jest.mock('@/backend/mcpApps/sandboxServer', () => ({
   registerSandboxHostOrigin: (origin: string) => registerSandboxHostOrigin(origin),
   deriveSandboxPublicUrl: (_host: string, port: number, key: string) =>
     `http://${key}.localhost:${port}/sandbox.html`,
+  sandboxAllowAllContent: () => false,
 }));
 
 import { GET } from '@/app/api/mcp/app-sandbox/route';

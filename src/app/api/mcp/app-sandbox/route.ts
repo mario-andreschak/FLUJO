@@ -11,6 +11,7 @@ import {
   deriveSandboxPublicUrl,
   ensureSandboxForOriginKey,
   registerSandboxHostOrigin,
+  sandboxAllowAllContent,
 } from '@/backend/mcpApps/sandboxServer';
 
 /**
@@ -211,6 +212,10 @@ async function GET_handler(request: NextRequest) {
       url: publicUrl,
       originKey,
       shared,
+      // The frontend CSP mirror may pass a declared literal '*' through to the
+      // sandbox only when the enforcer will actually honor it (the persisted
+      // `network.allowAllMcpAppContent` escape hatch).
+      allowAll: sandboxAllowAllContent(),
     },
     {
       headers: {

@@ -303,6 +303,49 @@ describe('buildSandboxProxyCsp', () => {
   });
 });
 
+describe('allow-all escape hatch and loopback CSP grants', () => {
+  const originalAllowAll = process.env.FLUJO_MCP_APP_SANDBOX_ALLOW_ALL;
+  const originalExposure = process.env.FLUJO_EXPOSURE_MODE;
+  const originalExposureSource = process.env.FLUJO_EXPOSURE_MODE_SOURCE;
+
+  afterEach(() => {
+    if (originalAllowAll === undefined) delete process.env.FLUJO_MCP_APP_SANDBOX_ALLOW_ALL;
+    else process.env.FLUJO_MCP_APP_SANDBOX_ALLOW_ALL = originalAllowAll;
+    if (originalExposure === undefined) delete process.env.FLUJO_EXPOSURE_MODE;
+    else process.env.FLUJO_EXPOSURE_MODE = originalExposure;
+    if (originalExposureSource === undefined) delete process.env.FLUJO_EXPOSURE_MODE_SOURCE;
+    else process.env.FLUJO_EXPOSURE_MODE_SOURCE = originalExposureSource;
+  });
+
+  it("drops a literal '*' while the escape hatch is off", () => {
+    delete process.env.FLUJO_MCP_APP_SANDBOX_ALLOW_ALL;
+    expect(buildSandboxCsp({ frameDomains: ['*'] } as any)).toContain("frame-src 'none'");
+    expect(buildSandboxProxyCsp([], { frameDomains: ['*'] } as any)).toContain("frame-src 'self';");
+  });
+
+  it("honors a literal '*' when network.allowAllMcpAppContent is enabled", () => {
+    process.env.FLUJO_MCP_APP_SANDBOX_ALLOW_ALL = 'true';
+    expect(buildSandboxCsp({ frameDomains: ['*'] } as any)).toContain('frame-src *');
+    expect(buildSandboxCsp({ connectDomains: ['*'] } as any)).toContain('connect-src *');
+    expect(buildSandboxProxyCsp([], { frameDomains: ['*'] } as any)).toContain("frame-src 'self' *");
+  });
+
+  it('keeps loopback frame grants in non-public modes and strips them in public', () => {
+    delete process.env.FLUJO_EXPOSURE_MODE_SOURCE;
+    process.env.FLUJO_EXPOSURE_MODE = 'network';
+    // Exact ports collapse to the canonical port wildcard; the already-
+    // canonical form must round-trip unchanged (frontend mirror sends it).
+    expect(buildSandboxCsp({ frameDomains: ['http://127.0.0.1:45283'] } as any))
+      .toContain('frame-src http://127.0.0.1:*');
+    expect(buildSandboxCsp({ frameDomains: ['http://127.0.0.1:*'] } as any))
+      .toContain('frame-src http://127.0.0.1:*');
+
+    process.env.FLUJO_EXPOSURE_MODE = 'public';
+    expect(buildSandboxCsp({ frameDomains: ['http://127.0.0.1:45283'] } as any))
+      .toContain("frame-src 'none'");
+  });
+});
+
 describe('hosted sandbox endpoint configuration', () => {
   const originKey = `app${'c'.repeat(60)}`;
   const originalPublicUrl = process.env[SANDBOX_PUBLIC_URL_ENV];
