@@ -225,6 +225,13 @@ export interface ExperimentalSettings {
    */
   claudeSessionResume?: boolean;
   /**
+   * When true, pass the normal Codex installation's `models_cache.json` to the
+   * SDK as its `model_catalog_json` startup override. This can avoid Codex's
+   * online catalogue refresh, but the cached file may be incompatible with the
+   * bundled Codex version. Off by default; a missing value is disabled.
+   */
+  codexModelCatalogCache?: boolean;
+  /**
    * When true, a Subflow node whose `invocationMode` property is `'tool'` is
    * advertised to the routing model as a distinct `call_subflow_<slug>` tool
    * (issue #385, deferred Part B of #359) instead of the usual `handoff_to_*`

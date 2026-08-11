@@ -291,6 +291,32 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
     });
   });
 
+  it('keeps the Codex model catalog cache off by default and persists its opt-in', () => {
+    mockStorageValue = {
+      settings: {
+        speech: { enabled: true },
+        experimental: { enabled: true, mcpBetaProtocol: true },
+      },
+      settingsHydrated: true,
+      updateSettings: mockUpdateSettings,
+    };
+    render(<ExperimentalFeaturesSettings />);
+    const toggle = screen.getByRole('checkbox', {
+      name: /Use Codex's cached model catalog/i,
+    });
+    expect(toggle).not.toBeChecked();
+
+    fireEvent.click(toggle);
+    expect(mockUpdateSettings).toHaveBeenCalledWith({
+      speech: { enabled: true },
+      experimental: {
+        enabled: true,
+        mcpBetaProtocol: true,
+        codexModelCatalogCache: true,
+      },
+    });
+  });
+
   it('hides explicitly tool-less provider models by default and persists the reveal toggle', () => {
     mockStorageValue = {
       settings: {

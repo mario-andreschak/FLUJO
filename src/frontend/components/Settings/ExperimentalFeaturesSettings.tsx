@@ -172,6 +172,17 @@ export default function ExperimentalFeaturesSettings() {
     });
   };
 
+  const handleCodexModelCatalogCacheChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    log.debug(`Codex model catalog cache toggled: ${event.target.checked}`);
+    updateSettings({
+      ...settings,
+      experimental: {
+        ...experimental,
+        codexModelCatalogCache: event.target.checked,
+      },
+    });
+  };
+
   const handleAutoUnloadOllamaChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     log.debug(`Auto-unload Ollama models toggled: ${event.target.checked}`);
     updateSettings({
@@ -380,6 +391,22 @@ export default function ExperimentalFeaturesSettings() {
         />
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
           {t('settings.experimental.claudeResumeDescription')}
+        </Typography>
+      </FormControl>
+
+      <FormControl fullWidth sx={{ mb: 2 }}>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={experimental.codexModelCatalogCache ?? false}
+              onChange={handleCodexModelCatalogCacheChange}
+              name="codexModelCatalogCache"
+            />
+          }
+          label={t('settings.experimental.codexModelCatalogCache')}
+        />
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+          {t('settings.experimental.codexModelCatalogCacheDescription')}
         </Typography>
       </FormControl>
 
