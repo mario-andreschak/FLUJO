@@ -163,8 +163,23 @@ describe('sandbox hostname/key derivation', () => {
     );
   });
 
+  it('serves every app from one shared hosted origin when no {app} template is set', () => {
+    const sandbox = loadSandboxModule({
+      [EXPOSURE_ENV]: 'public',
+      [EXPOSURE_SOURCE_ENV]: undefined,
+      [PUBLIC_URL_ENV]: 'https://apps.example.test',
+    });
+
+    expect(sandbox.hasValidSandboxAppUrlTemplate()).toBe(false);
+    expect(sandbox.deriveSandboxPublicUrl('https://flujo.example.test', 4201, APP_A)).toBe(
+      `https://apps.example.test/sandbox.html?originKey=${APP_A}`,
+    );
+    // Host-based key derivation stays template-only; the shared origin relies
+    // on the authenticated query key, exactly like the LAN fallback.
+    expect(sandbox.deriveOriginKeyFromHost('apps.example.test')).toBeUndefined();
+  });
+
   it.each([
-    'https://apps.example.test',
     'https://prefix-{app}.example.test',
     'https://{app}-suffix.example.test',
     'https://{app}.{app}.example.test',

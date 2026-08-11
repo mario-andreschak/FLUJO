@@ -335,6 +335,13 @@ describe('hosted sandbox endpoint configuration', () => {
     delete process.env.FLUJO_EXPOSURE_MODE_SOURCE;
     process.env.FLUJO_EXPOSURE_MODE = 'public';
     process.env[SANDBOX_PUBLIC_URL_ENV] = 'https://apps.example.test';
+    // A configured public URL without {app} is a single shared hosted origin;
+    // the verified key travels in the authenticated URL like the LAN fallback.
+    expect(deriveSandboxPublicUrl('https://flujo.example.test', 4201, originKey)).toBe(
+      `https://apps.example.test/sandbox.html?originKey=${originKey}`,
+    );
+
+    delete process.env[SANDBOX_PUBLIC_URL_ENV];
     expect(deriveSandboxPublicUrl('https://flujo.example.test', 4201, originKey))
       .toBeUndefined();
 

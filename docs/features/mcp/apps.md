@@ -37,6 +37,23 @@ A hosted HTTPS deployment can set `FLUJO_MCP_APP_SANDBOX_PUBLIC_URL` to an HTTP(
 FLUJO_MCP_APP_SANDBOX_PUBLIC_URL=https://{app}.sandbox.example.com/sandbox.html
 ```
 
+Alternatively, a hosted deployment that cannot provision wildcard DNS and a
+wildcard certificate can set the same variable to a single shared sandbox
+origin **without** `{app}`, for example:
+
+```
+FLUJO_MCP_APP_SANDBOX_PUBLIC_URL=https://sandbox.example.com
+```
+
+All Apps then share that one TLS-terminated outer proxy origin (one DNS
+record, one certificate). The verified App key travels in the authenticated
+sandbox URL — exactly like the automatic plain-HTTP LAN fallback — and every
+access token remains scoped to that key. Untrusted App HTML still renders in
+the nested sandboxed View on an opaque origin; only the browser storage
+partition of the trusted outer proxy is shared. Prefer the `{app}` template
+when you can provision it. The shared origin must differ from the origin the
+FLUJO dashboard itself is browsed on.
+
 Before issuing sandbox credentials, FLUJO re-reads the exact resource through the App-authorized MCP path and requires an exact URI plus the stable MCP App HTML MIME type. It then computes the `{app}` label with SHA-256 over the active workspace, configured server name, and exact resource URI. App metadata and caller-provided origin hints cannot select or merge browser origins. Each access token is scoped to that derived hostname.
 
 On localhost, FLUJO automatically uses `<app>.localhost:4201`. On a plain-HTTP LAN, it automatically reuses the hostname or IP that opened the dashboard on port `4201`; the outer proxy origin is shared, while its URL and HMAC token remain scoped to the verified App identity. No DNS lookup or environment variable is required.

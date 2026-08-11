@@ -25,8 +25,10 @@ import {
  *
  * Local requests use `http://<originKey>.localhost:<port>/sandbox.html` on a
  * shared listener. Plain-HTTP LAN requests automatically reuse the requested
- * hostname on the sandbox port; hosted HTTPS installs may provide a `{app}`
- * hostname template for separately routed/TLS-terminated app origins.
+ * hostname on the sandbox port; hosted HTTPS installs provide
+ * FLUJO_MCP_APP_SANDBOX_PUBLIC_URL as either a per-app `{app}` hostname
+ * template or a single shared sandbox origin (the app key then travels in the
+ * authenticated URL, mirroring the LAN fallback).
  *
  * Response shape:
  *   - port: Port number for the sandbox listener
@@ -162,7 +164,11 @@ async function GET_handler(request: NextRequest) {
   const publicUrl = deriveSandboxPublicUrl(hostOrigin, sandboxResult.port, originKey);
   if (!publicUrl) {
     return NextResponse.json(
-      { error: 'MCP Apps sandbox hosting requires a per-app origin template' },
+      {
+        error: 'No sandbox origin is reachable from this HTTPS host. Set '
+          + 'FLUJO_MCP_APP_SANDBOX_PUBLIC_URL to a per-app "{app}" hostname '
+          + 'template or to a single shared sandbox origin.',
+      },
       { status: 503, headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } },
     );
   }

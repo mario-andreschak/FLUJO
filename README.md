@@ -69,7 +69,7 @@ FLUJO is powered by the [PocketFlow Framework](https://the-pocket-world.github.i
 
 ### 🤖 Model Management
 
-- **Multiple providers**: OpenAI, Anthropic (native or OpenAI-compatible), Google Gemini, X.ai (Grok), OpenRouter, and local models via Ollama
+- **Multiple providers**: OpenAI, Azure OpenAI, Anthropic (native or OpenAI-compatible), Google Gemini, X.ai (Grok), OpenRouter, and local models via Ollama
 - **Claude Subscription**: use your Claude Pro/Max plan directly (via the Claude Agent SDK) instead of a metered API key
 - **Per-model system prompts** and tunable parameters, reused across any flow
 
@@ -275,7 +275,10 @@ Network install. FLUJO discovers the browser-visible host automatically and uses
 port `4201` for the sandbox. Hosted HTTPS deployments can optionally configure
 `FLUJO_MCP_APP_SANDBOX_PUBLIC_URL` with `{app}` as one complete hostname label,
 for example `https://{app}.sandbox.example.com/sandbox.html`, and proxy those
-wildcard hostnames to FLUJO's plain HTTP port `4201`. Preserve the browser's
+wildcard hostnames to FLUJO's plain HTTP port `4201`. Without wildcard
+DNS/TLS, set the same variable to a single shared sandbox origin instead
+(for example `https://sandbox.example.com`); the App key then travels in the
+authenticated sandbox URL. Preserve the browser's
 `Host` and `Referer` headers through the proxy. Docker Compose publishes both
 listener ports to host loopback by default; change those mappings when other LAN
 devices or a reverse proxy need to reach them.

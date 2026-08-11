@@ -387,6 +387,9 @@ export function hasValidSandboxAppUrlTemplate(): boolean {
  * automatic for normal installs:
  *   - Local requests use a stable `<originKey>.localhost` browser origin.
  *   - A configured `{app}` hostname template is honored for hosted HTTPS.
+ *   - A configured public URL WITHOUT `{app}` serves every app from that one
+ *     TLS-terminated shared origin (one DNS record, one certificate). The
+ *     scoped key travels in the authenticated URL like the LAN fallback.
  *   - Plain-HTTP LAN requests reuse the already-working request hostname and
  *     sandbox port. The scoped key travels in the authenticated URL because a
  *     server cannot create DNS records for invented LAN subdomains.
@@ -427,6 +430,32 @@ export function deriveSandboxPublicUrl(
       .map(label => label === '{app}' ? originKey : label)
       .join('.');
     return template.href;
+  }
+
+  // Shared hosted origin: a configured public URL WITHOUT an `{app}`
+  // placeholder names ONE TLS-terminated browser origin for every app, so a
+  // hosted install needs a single DNS record and certificate instead of a
+  // wildcard pair. The verified key travels in the authenticated URL exactly
+  // like the LAN fallback below and each proxy token stays scoped to that
+  // key; untrusted App HTML still renders in the nested sandboxed View on an
+  // opaque origin. A URL that still CONTAINS `{app}` but failed template
+  // validation is a configuration error and must keep failing closed rather
+  // than silently collapsing per-app origins into a shared one.
+  // Note: the URL parser percent-encodes `{app}` outside the hostname, so a
+  // misplaced placeholder must be rejected in either spelling.
+  const configuredShared = getSandboxPublicUrl();
+  if (
+    configuredShared
+    && !configuredShared.includes('{app}')
+    && !/%7Bapp%7D/i.test(configuredShared)
+  ) {
+    try {
+      const sharedUrl = new URL(configuredShared);
+      sharedUrl.searchParams.set('originKey', originKey);
+      return sharedUrl.href;
+    } catch {
+      return undefined;
+    }
   }
 
   // Browsers block an HTTP iframe inside an HTTPS page. HTTPS deployments need
