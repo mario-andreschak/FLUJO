@@ -2422,30 +2422,41 @@ export class MCPService {
    * Update an MCP server configuration
    */
   /**
-   * Eagerly create the root dir of a remote (streamable/SSE/websocket) server (issue 52).
-   * Remote servers default to mcp-servers/<name> like stdio servers, but nothing else
-   * ever creates that folder for them (no clone/install step). Only safe, scoped paths
-   * are created: filesystem roots are skipped, and relative paths resolve against the
-   * data dir (where mcp-servers/ lives). Best-effort — failures are logged, never thrown.
+   * Eagerly create managed roots that have no clone/install step: remote servers
+   * (issue 52) and Registry stdio packages executed by npx/uvx/etc. Registry package
+   * processes launch from a separate private runtime cwd, but roots/list and file
+   * pickers still need their mcp-servers/<name> directory to exist.
+   * Best-effort — failures are logged, never thrown.
    */
-  private async ensureRemoteServerRootDir(
+  private async ensureManagedServerRootDir(
     config: MCPServerConfig,
   ): Promise<void> {
     try {
-      if (!["streamable", "sse", "websocket"].includes(config.transport))
-        return;
       const rootPath = (config.rootPath || "").trim();
       if (!rootPath) return;
+      const isRemote = ["streamable", "sse", "websocket"].includes(config.transport);
+      const isRegistryPackage =
+        config.transport === "stdio"
+        && (config.source?.type === "registry" || config.source?.type === "marketplace");
+      if (!isRemote && !isRegistryPackage) return;
+
       const resolved = path.resolve(getWorkspaceDataDir(), rootPath);
       // Never create (or touch) a filesystem root — a root is its own parent.
       if (path.dirname(resolved) === resolved) return;
+      if (isRegistryPackage) {
+        // Registry stdio roots are FLUJO-managed. Refuse an unexpected absolute or
+        // traversing value even if a malformed config reaches this boundary.
+        const managedRoot = path.join(getWorkspaceDataDir(), "mcp-servers");
+        const relative = path.relative(managedRoot, resolved);
+        if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return;
+      }
       await fs.mkdir(resolved, { recursive: true });
       log.debug(
-        `ensureRemoteServerRootDir: ensured ${resolved} for ${config.name}`,
+        `ensureManagedServerRootDir: ensured ${resolved} for ${config.name}`,
       );
     } catch (error) {
       log.warn(
-        `ensureRemoteServerRootDir: could not create root dir for ${config.name}:`,
+        `ensureManagedServerRootDir: could not create root dir for ${config.name}:`,
         error,
       );
     }
@@ -2584,11 +2595,9 @@ export class MCPService {
       return saveResult;
     }
 
-    // Remote servers spawn no process, but their root dir (default mcp-servers/<name>,
-    // issue 52) is where folder pickers, per-node roots and future file work point.
-    // Eagerly create it so the server always has a folder to work in. Best-effort:
-    // a failure here must never block the config update.
-    await this.ensureRemoteServerRootDir(updatedConfig);
+    // Remote and Registry package servers have no clone step, so create their
+    // managed root explicitly. A failure here must never block the config update.
+    await this.ensureManagedServerRootDir(updatedConfig);
 
     if (isRename) {
       // Flow nodes persist MCP bindings by server name (`properties.boundServer`).

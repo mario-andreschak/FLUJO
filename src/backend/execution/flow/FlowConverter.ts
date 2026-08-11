@@ -41,18 +41,31 @@ export class FlowConverter {
       edgeCount: reactFlow.edges.length
     }));
     
+    // Trigger nodes are a FlowBuilder representation of scheduler configuration,
+    // not executable flow steps. Keep them persisted for the canvas, but remove
+    // them (and their trigger -> Start presentation edge) at the runtime boundary.
+    const triggerNodeIds = new Set(
+      reactFlow.nodes
+        .filter(node => node.type === 'trigger' || node.data?.type === 'trigger')
+        .map(node => node.id)
+    );
+    const executableNodes = reactFlow.nodes.filter(node => !triggerNodeIds.has(node.id));
+    const executableEdges = reactFlow.edges.filter(edge =>
+      !triggerNodeIds.has(edge.source) && !triggerNodeIds.has(edge.target)
+    );
+
     // Create a map to store nodes by ID
     const nodesMap = new Map<string, BaseNode>();
     
     // First pass: Create all nodes
-    for (const node of reactFlow.nodes) {
+    for (const node of executableNodes) {
       log.debug(`Creating node: ${node.id} (${node.type})`);
       const pocketNode = this.createNode(node);
       nodesMap.set(node.id, pocketNode);
     }
     
     // Second pass: Connect nodes based on edges
-    for (const edge of reactFlow.edges) {
+    for (const edge of executableEdges) {
       log.debug(`Connecting edge: ${edge.id} (${edge.source} -> ${edge.target})`);
       const sourceNode = nodesMap.get(edge.source);
       const targetNode = nodesMap.get(edge.target);
@@ -216,7 +229,7 @@ export class FlowConverter {
     }
     
     // Find the start node (should be only one)
-    const startNode = reactFlow.nodes.find(node => node.type === 'start');
+    const startNode = executableNodes.find(node => node.type === 'start');
     if (!startNode) {
       log.error('No start node found in flow');
       throw new Error("Flow must have a start node");

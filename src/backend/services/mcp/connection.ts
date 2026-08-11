@@ -547,7 +547,12 @@ export interface StdioLaunch {
  * persistence roots below the selected workspace and below a hash of the
  * server name (names are user-controlled and must never become path segments).
  */
-function isolatedStdioRuntimeEnv(serverName: string): Record<string, string> {
+interface IsolatedStdioRuntime {
+  cwd: string;
+  env: Record<string, string>;
+}
+
+function isolatedStdioRuntime(serverName: string): IsolatedStdioRuntime {
   const workspaceRoot = getWorkspaceDataDir();
   const serverKey = createHash('sha256').update(serverName, 'utf8').digest('hex').slice(0, 24);
 
@@ -575,11 +580,15 @@ function isolatedStdioRuntimeEnv(serverName: string): Record<string, string> {
   }
 
   let current = workspaceRoot;
-  for (const segment of ['userdata', 'mcp-runtime', serverKey, 'home']) {
+  for (const segment of ['userdata', 'mcp-runtime', serverKey]) {
     current = path.join(current, segment);
     assertOrCreateRealDirectory(current, 'MCP runtime directory');
   }
-  const home = current;
+  const runtimeRoot = current;
+  const home = path.join(runtimeRoot, 'home');
+  const cwd = path.join(runtimeRoot, 'cwd');
+  assertOrCreateRealDirectory(home, 'MCP runtime home');
+  assertOrCreateRealDirectory(cwd, 'MCP runtime cwd');
 
   const directories = {
     appData: path.join(home, 'AppData', 'Roaming'),
@@ -625,7 +634,7 @@ function isolatedStdioRuntimeEnv(serverName: string): Record<string, string> {
     result.HOMEDRIVE = parsed.root.replace(/[\\/]$/, '');
     result.HOMEPATH = home.slice(parsed.root.length - 1);
   }
-  return result;
+  return { cwd, env: result };
 }
 
 /**
@@ -708,6 +717,7 @@ export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
 
   log.debug(`Final command: ${command}`);
   log.debug(`Final args: ${JSON.stringify(args)}`);
+  const runtime = isolatedStdioRuntime(config.name);
   const resolvedCwd = remapMcpPath(resolveServerCwd({
     // Use the original (pre-.bat-rewrite) command/args for runner detection so
     // e.g. `npx` isn't masked by the cmd.exe wrapper applied above for .bat files.
@@ -717,6 +727,9 @@ export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
     cwd: config.cwd,
     serverName: config.name,
     defaultCwd: `${SERVER_DIR_PREFIX}/${config.name}`,
+    // Package managers walk ancestor directories for package.json/node_modules.
+    // Keep their cwd outside both the server root and every other server root.
+    packageRunnerCwd: runtime.cwd,
   }));
   const cwd = path.isAbsolute(resolvedCwd)
     ? resolvedCwd
@@ -735,7 +748,7 @@ export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
   // packages. These assignments intentionally win over persisted config and
   // over inherit-all launch modes; otherwise ordinary SDK defaults expose the
   // host account and let workspace A reuse workspace B's auth/config state.
-  Object.assign(transformedEnv, isolatedStdioRuntimeEnv(config.name));
+  Object.assign(transformedEnv, runtime.env);
   transformedEnv.FLUJO_DATA_DIR = getWorkspaceDataDir();
   transformedEnv.FLUJO_WORKSPACE = getCurrentWorkspace();
   if (shippedDescriptorForConfig(config)?.defaultName === 'browser') {

@@ -31,6 +31,19 @@ beforeEach(() => {
   mockFetch.mockReset();
 });
 
+describe('fetchModelsFromProvider (azure)', () => {
+  it('does not query the deployment-scoped inference endpoint for a management-plane catalogue', async () => {
+    const models = await fetchModelsFromProvider(
+      'azure',
+      'https://team.openai.azure.com',
+      'azure-key',
+    );
+
+    expect(models).toEqual([]);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+});
+
 describe('fetchModelsFromProvider (litellm)', () => {
   const litellmBaseUrl = 'http://localhost:4000/v1';
   const litellmApiKey = 'sk-litellm-master-key';

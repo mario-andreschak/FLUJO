@@ -125,6 +125,7 @@ describe('bundled browser MCP', () => {
     expect(html).toContain('ui/initialize');
     expect(html).toContain('tools/call');
     expect(html).toContain('browser_open');
+    expect(html).toContain('availableDisplayModes: ["inline", "fullscreen", "pip"]');
     // Navigation still travels the tool channel so the model observes it.
     expect(html).toContain('browser_navigate');
     const appScript = html.match(/<script>([\s\S]*)<\/script>/)?.[1];

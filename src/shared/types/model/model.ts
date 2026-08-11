@@ -37,6 +37,8 @@ export interface Model {
     description?: string;
     ApiKey: string;
     baseUrl?: string;
+    /** Azure OpenAI data-plane API version (for example `2024-10-21`). */
+    azureApiVersion?: string;
     provider?: ModelProvider;
     /**
      * Which completion adapter/SDK drives this model. Optional for backward

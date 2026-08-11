@@ -14,10 +14,10 @@ import { AnnotatedHistory, wireSummary } from './DebuggerModelInput';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 
 /**
- * Conversation section of the Visual Debugger (issue #162).
+ * Read-only model-input conversation shown in the regular chat transcript.
  *
  * Shows the *wired* conversation for the currently-selected Process-node model
- * call using the REAL chat renderer (`ChatMessages`) — so the debugger renders
+ * call using the REAL chat renderer (`ChatMessages`) — so the model-input view renders
  * tool-call timelines, tool results and attribution pills exactly as the chat
  * does, reflecting the conversation after all fold / inputMode-scope /
  * handoff-strip plumbing but before the model call. A toggle switches to the
@@ -34,7 +34,7 @@ const noop = () => {};
 
 interface DebuggerConversationProps {
   modelInput: ModelInputSnapshot;
-  /** Owning conversation id — used only to key the ChatMessages render window. */
+  /** Owning conversation/step id — used only to key the ChatMessages render window. */
   conversationId?: string;
 }
 
@@ -52,7 +52,7 @@ const DebuggerConversation: React.FC<DebuggerConversationProps> = ({ modelInput,
   );
 
   return (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', p: 1 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', p: 1 }}>
       {/* Summary + input mode */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap', mb: 1 }}>
         <Typography variant="caption" color="textSecondary">{wireSummary(counts, t)}</Typography>
@@ -93,7 +93,7 @@ const DebuggerConversation: React.FC<DebuggerConversationProps> = ({ modelInput,
 
       {/* Content-capped preview note (WIRE_CONTENT_MAX): so truncation isn't
           mistaken for stripping. */}
-      <Box sx={{ flexGrow: 1, overflowY: 'auto', minHeight: 0 }}>
+      <Box>
         {view === 'wire' ? (
           wireBody.length === 0 ? (
             <Typography variant="body2" color="textSecondary" sx={{ p: 1 }}>

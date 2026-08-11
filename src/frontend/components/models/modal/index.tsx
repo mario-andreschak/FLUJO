@@ -81,12 +81,14 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const promptBuilderRef = useRef<PromptBuilderRef>(null);
   const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const currentProfile = getProviderProfile(formState.provider, formState.adapter);
 
   const askEditableFields = useMemo(() => [
     'displayName',
     'name',
     'description',
     'baseUrl',
+    'azureApiVersion',
     'promptTemplate',
     'temperature',
     'reasoningEffort',
@@ -169,7 +171,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
 
   // Clear models when baseUrl or apiKey changes
   useEffect(() => {
-    if (formState.baseUrl) {
+    if (currentProfile.supportsModelDiscovery !== false && formState.baseUrl) {
       log.debug("Base URL or API Key changed", { baseUrl: formState.baseUrl });
       // Clear cached models when baseUrl or API key changes
       setOpenRouterModels([]);
@@ -202,7 +204,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         clearTimeout(debounceTimeoutRef.current);
       }
     };
-  }, [formState.name, formState.baseUrl]);
+  }, [formState.name, formState.baseUrl, currentProfile.id, currentProfile.supportsModelDiscovery]);
 
   // Cleanup timeout on component unmount
   useEffect(() => {
@@ -320,7 +322,6 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
   // The provider/SDK is now chosen explicitly via the Provider dropdown (no
   // longer inferred from the base URL). The currently-selected profile is
   // derived from the stored provider + adapter.
-  const currentProfile = getProviderProfile(formState.provider, formState.adapter);
   const configurationCapabilities = getModelConfigurationCapabilities(
     formState.provider,
     formState.adapter,
@@ -343,6 +344,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
       provider: profile.provider,
       adapter: profile.adapter,
       baseUrl: profile.baseUrl,
+      azureApiVersion: profile.defaultApiVersion ?? '',
     }));
     setErrors(prev => ({ ...prev, baseUrl: '' }));
   };
@@ -383,6 +385,23 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
     if (!formState.displayName?.trim()) {
       newErrors.displayName = t('models.modal.displayNameRequired');
     }
+    if (currentProfile.adapter === 'azure') {
+      const endpoint = formState.baseUrl?.trim();
+      if (!endpoint) {
+        newErrors.baseUrl = t('models.modal.azureEndpointRequired');
+      } else {
+        try {
+          if (new URL(endpoint).protocol !== 'https:') {
+            newErrors.baseUrl = t('models.modal.azureEndpointHttps');
+          }
+        } catch {
+          newErrors.baseUrl = t('models.modal.azureEndpointInvalid');
+        }
+      }
+      if (!formState.azureApiVersion?.trim()) {
+        newErrors.azureApiVersion = t('models.modal.azureApiVersionRequired');
+      }
+    }
     if (configurationCapabilities.creativity && formState.temperature?.trim()) {
       const creativity = Number(formState.temperature);
       if (
@@ -418,6 +437,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
         description: formState.description,
         ApiKey: formState.ApiKey,
         baseUrl: formState.baseUrl,
+        azureApiVersion: currentProfile.adapter === 'azure' ? formState.azureApiVersion : '',
         provider: formState.provider!,
         adapter: formState.adapter || 'openai',
         promptTemplate: formState.promptTemplate,
@@ -580,11 +600,31 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                   <TextField
                     name="baseUrl"
                     margin="dense"
-                    label={t('models.card.baseUrl')}
+                    label={currentProfile.adapter === 'azure'
+                      ? t('models.modal.azureEndpoint')
+                      : t('models.card.baseUrl')}
                     fullWidth
+                    required={currentProfile.adapter === 'azure'}
                     value={formState.baseUrl || ''}
                     onChange={(e) => handleChange('baseUrl', e.target.value)}
-                    helperText={t('models.modal.baseUrlHelp')}
+                    error={!!errors.baseUrl}
+                    helperText={errors.baseUrl || (currentProfile.adapter === 'azure'
+                      ? t('models.modal.azureEndpointHelp')
+                      : t('models.modal.baseUrlHelp'))}
+                  />
+                )}
+
+                {currentProfile.adapter === 'azure' && (
+                  <TextField
+                    name="azureApiVersion"
+                    margin="dense"
+                    label={t('models.modal.azureApiVersion')}
+                    fullWidth
+                    required
+                    value={formState.azureApiVersion || ''}
+                    onChange={(e) => handleChange('azureApiVersion', e.target.value)}
+                    error={!!errors.azureApiVersion}
+                    helperText={errors.azureApiVersion || t('models.modal.azureApiVersionHelp')}
                   />
                 )}
 
@@ -633,7 +673,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                   freeSolo
                   loading={isLoadingModels}
                   options={
-                    currentProfile.showBaseUrl
+                    currentProfile.supportsModelDiscovery !== false && currentProfile.showBaseUrl
                       ? visibleProviderModels.map(model => model.id)
                       : (currentProfile.defaultModels ?? [])
                   }
@@ -692,10 +732,14 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                     <TextField
                       {...params}
                       margin="dense"
-                      label={t('models.modal.technicalName')}
+                      label={currentProfile.adapter === 'azure'
+                        ? t('models.modal.azureDeployment')
+                        : t('models.modal.technicalName')}
                       required
                       error={!!errors.name}
-                      helperText={errors.name || t('models.modal.technicalNameHelp')}
+                      helperText={errors.name || (currentProfile.adapter === 'azure'
+                        ? t('models.modal.azureDeploymentHelp')
+                        : t('models.modal.technicalNameHelp'))}
                       InputProps={{
                         ...params.InputProps,
                         endAdornment: (

@@ -1,12 +1,14 @@
 import { v4 as uuidv4 } from 'uuid';
 
 import { Model } from '@/shared/types';
+import { AZURE_OPENAI_DEFAULT_API_VERSION } from '@/shared/types/model/provider';
 
 export type GuidedConnectionKind =
   | 'openrouter-free'
   | 'requesty-free'
   | 'openrouter-paid'
   | 'requesty-paid'
+  | 'azure'
   | 'claude-subscription'
   | 'codex-subscription'
   | 'gemini-native'
@@ -17,6 +19,9 @@ interface GuidedModelInput {
   apiKey?: string;
   ollamaModel?: string;
   ollamaUrl?: string;
+  azureEndpoint?: string;
+  azureDeployment?: string;
+  azureApiVersion?: string;
 }
 
 interface ModelTemplate {
@@ -30,7 +35,7 @@ interface ModelTemplate {
   supportsTools?: boolean;
 }
 
-const TEMPLATES: Record<Exclude<GuidedConnectionKind, 'ollama'>, ModelTemplate[]> = {
+const TEMPLATES: Record<Exclude<GuidedConnectionKind, 'ollama' | 'azure'>, ModelTemplate[]> = {
   'openrouter-free': [
     {
       name: 'openrouter/free',
@@ -210,7 +215,21 @@ const TEMPLATES: Record<Exclude<GuidedConnectionKind, 'ollama'>, ModelTemplate[]
 /** Build the concrete FLUJO model records produced by a completed wizard path. */
 export function buildGuidedModels(input: GuidedModelInput): Model[] {
   const apiKey = input.apiKey?.trim() ?? '';
-  const templates: ModelTemplate[] = input.kind === 'ollama'
+  const templates: ModelTemplate[] = input.kind === 'azure'
+    ? [
+        {
+          name: input.azureDeployment?.trim() || 'azure-deployment',
+          displayName: input.azureDeployment?.trim()
+            ? `Azure ${input.azureDeployment.trim()}`
+            : 'Azure OpenAI deployment',
+          description: 'An Azure OpenAI deployment connected through the deployment-aware Azure SDK.',
+          provider: 'azure',
+          adapter: 'azure',
+          baseUrl: input.azureEndpoint?.trim().replace(/\/+$/, '') || '',
+          supportsTools: true,
+        },
+      ]
+    : input.kind === 'ollama'
     ? [
         {
           name: input.ollamaModel?.trim() || 'llama3.2:3b',
@@ -233,8 +252,13 @@ export function buildGuidedModels(input: GuidedModelInput): Model[] {
     baseUrl: template.baseUrl || '',
     provider: template.provider,
     adapter: template.adapter,
+    ...(input.kind === 'azure'
+      ? { azureApiVersion: input.azureApiVersion?.trim() || AZURE_OPENAI_DEFAULT_API_VERSION }
+      : {}),
     promptTemplate: '',
-    temperature: template.adapter === 'openai' || template.adapter === 'gemini' ? '0.0' : undefined,
+    temperature: template.adapter === 'openai' || template.adapter === 'azure' || template.adapter === 'gemini'
+      ? '0.0'
+      : undefined,
     reasoningEffort: template.reasoningEffort,
     supportsTools: template.supportsTools,
   }));

@@ -314,7 +314,7 @@ export function estimateVisualPageTokens(
 ): number {
   if (provider === 'gemini') return 258;
   if (provider === 'anthropic') return Math.ceil((page.width * page.height) / 750);
-  if (provider === 'openai' || provider === 'openrouter' || provider === 'requesty') {
+  if (provider === 'openai' || provider === 'azure' || provider === 'openrouter' || provider === 'requesty') {
     return 85 + 170 * Math.ceil(page.width / 512) * Math.ceil(page.height / 512);
   }
   return Math.ceil((page.width * page.height) / 600);

@@ -1,6 +1,9 @@
-import OpenAI from 'openai';
+import OpenAI, { AzureOpenAI } from 'openai';
 import { Agent, fetch as undiciFetch } from 'undici';
 import { LLM_REQUEST_TIMEOUT_MS } from '@/shared/config/timeouts';
+import { AZURE_OPENAI_DEFAULT_API_VERSION } from '@/shared/types/model/provider';
+
+export { AZURE_OPENAI_DEFAULT_API_VERSION } from '@/shared/types/model/provider';
 
 /**
  * OpenAI SDK 5+ uses Fetch instead of node-fetch's `httpAgent` option. Keep a
@@ -27,6 +30,17 @@ export interface CreateOpenAIClientOptions {
   timeout?: number;
   /** Extra headers sent with every request (e.g. provider attribution headers). */
   defaultHeaders?: Record<string, string>;
+}
+
+export interface CreateAzureOpenAIClientOptions {
+  apiKey: string;
+  endpoint: string;
+  deployment: string;
+  apiVersion?: string;
+  /** SDK-level retries for transient failures (429 / 5xx / connection errors). */
+  maxRetries?: number;
+  /** Per-request timeout in milliseconds. */
+  timeout?: number;
 }
 
 /**
@@ -77,5 +91,28 @@ export function createOpenAIClient(opts: CreateOpenAIClientOptions): OpenAI {
     maxRetries,
     timeout,
     ...(defaultHeaders ? { defaultHeaders } : {}),
+  });
+}
+
+/** Build the deployment-aware Azure OpenAI SDK client on the shared transport. */
+export function createAzureOpenAIClient(opts: CreateAzureOpenAIClientOptions): AzureOpenAI {
+  const {
+    apiKey,
+    endpoint,
+    deployment,
+    apiVersion = AZURE_OPENAI_DEFAULT_API_VERSION,
+    maxRetries = 2,
+    timeout = LLM_REQUEST_TIMEOUT_MS,
+  } = opts;
+
+  return new AzureOpenAI({
+    apiKey,
+    endpoint,
+    deployment,
+    apiVersion,
+    fetch: openAIFetch,
+    fetchOptions: { dispatcher: openAITransport },
+    maxRetries,
+    timeout,
   });
 }

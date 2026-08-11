@@ -156,6 +156,23 @@ export async function loadServerConfigs(): Promise<MCPServerConfig[] | MCPServic
         log.info(`Normalizing filesystem-root rootPath "${serverConfig.rootPath}" of remote server ${name} to mcp-servers/${name}`);
         serverConfig = { ...serverConfig, rootPath: `mcp-servers/${name}` };
       }
+
+      // Registry package configs historically used ".", which now means the
+      // complete selected workspace and made every npx/uvx server share one root.
+      // Migrate only sourced package configs so an operator's explicit local "."
+      // remains untouched. Like the remote normalization above, this is in-memory
+      // and becomes durable the next time the config is saved.
+      const sourceType = serverConfig.source?.type;
+      if (
+        transport === 'stdio'
+        && typeof serverConfig.rootPath === 'string'
+        && serverConfig.rootPath.trim() === '.'
+        && (sourceType === 'registry' || sourceType === 'marketplace')
+        && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(name)
+      ) {
+        log.info(`Normalizing shared Registry rootPath "." of ${name} to mcp-servers/${name}`);
+        serverConfig = { ...serverConfig, rootPath: `mcp-servers/${name}` };
+      }
       
       // Default values for any missing properties
       const defaults = {

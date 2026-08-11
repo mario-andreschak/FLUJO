@@ -19,6 +19,7 @@
 import type { Model } from '@/shared/types/model';
 import {
   AnthropicAdapter,
+  AzureOpenAiAdapter,
   ClaudeSubscriptionAdapter,
   CodexAdapter,
   GeminiAdapter,
@@ -127,6 +128,7 @@ describe('adapter selection stays in sync with its description (#370)', () => {
     'openrouter-media': OpenRouterMediaAdapter,
     'openai': OpenAiAdapter,
     'openai-responses': OpenAiResponsesAdapter,
+    'azure': AzureOpenAiAdapter,
     'anthropic': AnthropicAdapter,
     'gemini': GeminiAdapter,
     'claude-cli': ClaudeSubscriptionAdapter,
@@ -139,7 +141,7 @@ describe('adapter selection stays in sync with its description (#370)', () => {
     withOutputs(['text', 'image']),
     withOutputs(undefined),
     withOutputs(['image'], { provider: 'openai' }),
-    ...(['openai', 'openai-responses', 'anthropic', 'gemini', 'claude-cli', 'codex-cli'] as const).map((adapter) =>
+    ...(['openai', 'openai-responses', 'azure', 'anthropic', 'gemini', 'claude-cli', 'codex-cli'] as const).map((adapter) =>
       withOutputs(['text'], { adapter }),
     ),
     ...(['anthropic', 'gemini', 'claude-cli', 'codex-cli'] as const).map((adapter) =>

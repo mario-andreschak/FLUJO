@@ -10,6 +10,7 @@ describe('provider profiles', () => {
     expect(ids).toEqual([
       'openai',
       'openai-responses',
+      'azure',
       'openrouter',
       'requesty',
       'xai',
@@ -36,6 +37,7 @@ describe('provider profiles', () => {
     expect(getProviderProfile('openrouter', 'openai').id).toBe('openrouter');
     expect(getProviderProfile('requesty', 'openai').id).toBe('requesty');
     expect(getProviderProfile('openai', 'openai-responses').id).toBe('openai-responses');
+    expect(getProviderProfile('azure', 'azure').id).toBe('azure');
   });
 
   it('does not let the Responses profile shadow plain OpenAI', () => {
@@ -56,6 +58,12 @@ describe('provider profiles', () => {
 
   it('flags base-URL visibility and SDK label per profile', () => {
     expect(getProviderProfileById('openai')?.showBaseUrl).toBe(true);
+    expect(getProviderProfileById('azure')).toMatchObject({
+      showBaseUrl: true,
+      supportsModelDiscovery: false,
+      defaultApiVersion: '2024-10-21',
+      sdkLabel: 'AzureOpenAI SDK',
+    });
     expect(getProviderProfileById('gemini-native')?.showBaseUrl).toBe(false);
     expect(getProviderProfileById('anthropic-native')?.showBaseUrl).toBe(false);
     expect(getProviderProfileById('claude-subscription')?.showBaseUrl).toBe(false);

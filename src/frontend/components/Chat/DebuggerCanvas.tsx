@@ -12,7 +12,6 @@ import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import FullscreenIcon from '@mui/icons-material/Fullscreen';
 import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
-import ForumOutlinedIcon from '@mui/icons-material/ForumOutlined';
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
@@ -21,7 +20,7 @@ import DeleteSweepOutlinedIcon from '@mui/icons-material/DeleteSweepOutlined';
 import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
 import { styled, useTheme } from '@mui/material/styles';
 import { ReactFlow, useNodesState, useEdgesState, Node, Edge, ReactFlowProvider } from '@xyflow/react'; // Import ReactFlow components
-import { SharedState, DebugStep, ModelInputSnapshot } from '@/backend/execution/flow/types'; // Import backend types
+import { SharedState, DebugStep } from '@/backend/execution/flow/types'; // Import backend types
 import { Flow } from '@/shared/types/flow'; // Import shared Flow type
 import type { ExecutionEvent } from '@/shared/types/execution/events';
 import { flowService } from '@/frontend/services/flow'; // Import flow service
@@ -45,7 +44,6 @@ import {
   TOOL_NODE_BREAKPOINT_PREFIX,
 } from '@/utils/shared/debugBreakpoints';
 import RunResourcesPanel from './RunResourcesPanel';
-import DebuggerConversation from './DebuggerConversation';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 
 // Import Canvas components if needed (or create simplified versions)
@@ -78,6 +76,9 @@ interface DebuggerCanvasProps {
   liveActivity?: LiveActivity;
   /** Ordered, deduplicated events from the owning SSE subscription. */
   executionEvents?: readonly ExecutionEvent[];
+  /** Keeps the regular chat's model-input view aligned with the trace row the
+   *  user is inspecting in the debugger. */
+  onStepSelectionChange?: (index: number) => void;
 }
 
 // Define node types for React Flow display. Every builder node type must be
@@ -112,21 +113,17 @@ type FlowCacheEntry =
   | { status: 'error'; message: string };
 
 // --- Debugger layout (issue #162) ---------------------------------------------
-// The debugger is split into three top-level sections — Conversation,
-// Execution Tracker + Canvas, and Detail — each of which can be hidden,
-// reordered (moved left/right), and (for the side sections) resized. The chosen
-// visibility / order / widths persist in localStorage so the layout survives
-// reloads, consistent with how the docked panel width is handled in Chat/index.
-type SectionKey = 'conversation' | 'tracker' | 'detail';
-const SECTION_KEYS: SectionKey[] = ['conversation', 'tracker', 'detail'];
-const CONV_WIDTH_DEFAULT = 480;
+// The model-facing conversation now lives in the regular chat transcript. The
+// debugger itself keeps the two execution-focused sections: tracker + canvas,
+// and detail. Both can be hidden/reordered and the detail width is persisted.
+type SectionKey = 'tracker' | 'detail';
+const SECTION_KEYS: SectionKey[] = ['tracker', 'detail'];
 const DETAIL_WIDTH_DEFAULT = 320;
 const SECTION_MIN_WIDTH = 240;
 const SECTION_MAX_WIDTH = 1100;
 
 const LS_ORDER = 'flujo-debugger-section-order';
 const LS_VISIBLE = 'flujo-debugger-section-visible';
-const LS_CONV_WIDTH = 'flujo-debugger-conv-width';
 const LS_DETAIL_WIDTH = 'flujo-debugger-detail-width';
 
 function readOrder(): SectionKey[] {
@@ -144,7 +141,7 @@ function readOrder(): SectionKey[] {
 }
 
 function readVisible(): Record<SectionKey, boolean> {
-  const base: Record<SectionKey, boolean> = { conversation: true, tracker: true, detail: true };
+  const base: Record<SectionKey, boolean> = { tracker: true, detail: true };
   if (typeof window === 'undefined') return base;
   try {
     const raw = JSON.parse(window.localStorage.getItem(LS_VISIBLE) || 'null');
@@ -232,11 +229,11 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   onToggleExpand,
   liveActivity,
   executionEvents = EMPTY_EXECUTION_EVENTS,
+  onStepSelectionChange,
 }) => {
   const theme = useTheme();
   const { t, tp, formatDate: formatLocalizedDate } = useI18n();
   const sectionTitles: Record<SectionKey, string> = {
-    conversation: t('chat.debug.section.conversation'),
     tracker: t('chat.debug.section.tracker'),
     detail: t('chat.debug.section.detail'),
   };
@@ -248,7 +245,6 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   // --- Section layout state (issue #162) ---
   const [order, setOrder] = useState<SectionKey[]>(() => readOrder());
   const [visible, setVisible] = useState<Record<SectionKey, boolean>>(() => readVisible());
-  const [convWidth, setConvWidth] = useState<number>(() => readWidth(LS_CONV_WIDTH, CONV_WIDTH_DEFAULT));
   const [detailWidth, setDetailWidth] = useState<number>(() => readWidth(LS_DETAIL_WIDTH, DETAIL_WIDTH_DEFAULT));
 
   const frameState = useMemo(
@@ -275,10 +271,6 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   }, [visible]);
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    window.localStorage.setItem(LS_CONV_WIDTH, String(Math.round(convWidth)));
-  }, [convWidth]);
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
     window.localStorage.setItem(LS_DETAIL_WIDTH, String(Math.round(detailWidth)));
   }, [detailWidth]);
 
@@ -297,6 +289,10 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
     }
     // Depend only on the trace itself, not the index state variable
   }, [debugState.executionTrace]);
+
+  useEffect(() => {
+    onStepSelectionChange?.(currentStepIndex);
+  }, [currentStepIndex, onStepSelectionChange]);
 
   // Follow the most recent qualified event frame. A manual history selection is
   // preserved until another event arrives, at which point live-follow resumes.
@@ -436,24 +432,6 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
     }
     return undefined; // Explicitly return undefined if conditions aren't met
   }, [debugState.executionTrace, currentStepIndex]); // Added closing parenthesis and dependency array
-
-  // Per-model-call wire snapshots for the selected step (issue #167, Phase 2 of
-  // #162). Prefer the plural `modelInputs` array; fall back to the singular
-  // `modelInput` for older traces / non-plural producers so nothing regresses.
-  const modelInputs: ModelInputSnapshot[] | undefined = useMemo(() => {
-    if (currentStepData?.modelInputs && currentStepData.modelInputs.length > 0) {
-      return currentStepData.modelInputs;
-    }
-    return currentStepData?.modelInput ? [currentStepData.modelInput] : undefined;
-  }, [currentStepData]);
-
-  // Which model call within the selected step is shown. Reset to the first call
-  // whenever the step changes so paging never points past a shorter step.
-  const [callIndex, setCallIndex] = useState<number>(0);
-  useEffect(() => { setCallIndex(0); }, [currentStepIndex]);
-
-  const safeCallIndex = modelInputs ? Math.min(callIndex, modelInputs.length - 1) : 0;
-  const selectedModelInput: ModelInputSnapshot | undefined = modelInputs?.[safeCallIndex];
 
   // Decay repaint (Tier 3 live highlighting): while any live-activity entry is
   // younger than the TTL, a low-frequency interval bumps `now` so highlights
@@ -646,18 +624,17 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   // Resize a fixed-width side section by dragging. `sign` is +1 when dragging
   // right should grow the target (target is on the left of the divider) and -1
   // when it should shrink it (target is on the right of the divider).
-  const startResize = useCallback((target: 'conversation' | 'detail', sign: 1 | -1, e: React.PointerEvent) => {
+  const startResize = useCallback((sign: 1 | -1, e: React.PointerEvent) => {
     e.preventDefault();
     const startX = e.clientX;
-    const startWidth = target === 'conversation' ? convWidth : detailWidth;
-    const set = target === 'conversation' ? setConvWidth : setDetailWidth;
+    const startWidth = detailWidth;
     const previousUserSelect = document.body.style.userSelect;
     const previousCursor = document.body.style.cursor;
     document.body.style.userSelect = 'none';
     document.body.style.cursor = 'col-resize';
     const onMove = (ev: PointerEvent) => {
       const width = Math.min(Math.max(startWidth + sign * (ev.clientX - startX), SECTION_MIN_WIDTH), SECTION_MAX_WIDTH);
-      set(width);
+      setDetailWidth(width);
     };
     const onUp = () => {
       window.removeEventListener('pointermove', onMove);
@@ -667,7 +644,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
     };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
-  }, [convWidth, detailWidth]);
+  }, [detailWidth]);
 
   // Per-section header with title + move-left / move-right controls.
   const sectionHeader = (key: SectionKey) => {
@@ -701,61 +678,6 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   };
 
   // --- Section bodies ---
-
-  const conversationBody = (
-    <Box sx={{ flexGrow: 1, overflow: 'hidden', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      {currentStepData ? (
-        selectedModelInput && modelInputs ? (
-          <Box sx={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-            {/* Per-model-call pager (issue #167): only shown when the node made
-                more than one captured model call this step. */}
-            {modelInputs.length > 1 && (
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5, px: 1, py: 0.5, borderBottom: `1px solid ${theme.palette.divider}` }}>
-                <Tooltip title={t('chat.debug.previousModelCall')}>
-                  <span>
-                    <IconButton
-                      size="small"
-                      onClick={() => setCallIndex((i) => Math.max(0, Math.min(i, modelInputs.length - 1) - 1))}
-                      disabled={safeCallIndex <= 0}
-                      aria-label={t('chat.debug.previousModelCall')}
-                    >
-                      <ChevronLeftIcon fontSize="small" />
-                    </IconButton>
-                  </span>
-                </Tooltip>
-                <Typography variant="caption" color="textSecondary">
-                  {t('chat.debug.modelCall', { current: safeCallIndex + 1, total: modelInputs.length })}
-                </Typography>
-                <Tooltip title={t('chat.debug.nextModelCall')}>
-                  <span>
-                    <IconButton
-                      size="small"
-                      onClick={() => setCallIndex((i) => Math.min(modelInputs.length - 1, Math.min(i, modelInputs.length - 1) + 1))}
-                      disabled={safeCallIndex >= modelInputs.length - 1}
-                      aria-label={t('chat.debug.nextModelCall')}
-                    >
-                      <ChevronRightIcon fontSize="small" />
-                    </IconButton>
-                  </span>
-                </Tooltip>
-              </Box>
-            )}
-            <Box sx={{ flexGrow: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-              <DebuggerConversation modelInput={selectedModelInput} conversationId={conversationId} />
-            </Box>
-          </Box>
-        ) : (
-          <Typography variant="body2" color="textSecondary" sx={{ p: 2 }}>
-            {t('chat.debug.noModelCall')}
-          </Typography>
-        )
-      ) : (
-        <Typography variant="body2" color="textSecondary" sx={{ p: 2 }}>
-          {t('chat.debug.selectStep')}
-        </Typography>
-      )}
-    </Box>
-  );
 
   const trackerBody = (
     <Box sx={{ flexGrow: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
@@ -961,8 +883,8 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
           <Typography variant="body2"><b>{t('chat.debug.timestamp')}</b> {formatLocalizedDate(new Date(currentStepData.timestamp), { dateStyle: 'medium', timeStyle: 'medium' })}</Typography>
           <Typography variant="body2"><b>{t('chat.debug.actionTaken')}</b> {currentStepData.actionTaken}</Typography>
 
-          {/* Model Input moved to the Conversation section (issue #162). The raw
-              JSON accordions below remain as the power-user fallback. */}
+          {/* Model Input is rendered in the regular chat's model-input view. The
+              raw JSON accordions below remain as the power-user fallback. */}
 
           {/* Accordion for Prep Result */}
           <Accordion sx={{ mt: 2, boxShadow: 'none', '&:before': { display: 'none' } }}>
@@ -1049,16 +971,14 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   );
 
   const sectionBodies: Record<SectionKey, React.ReactNode> = {
-    conversation: conversationBody,
     tracker: trackerBody,
     detail: detailBody,
   };
 
-  // Render one section column: fixed width for conversation/detail, flexible
-  // (fill remaining) for the tracker.
+  // The detail inspector is fixed-width; the tracker fills the remainder.
   const renderSection = (key: SectionKey) => {
-    const isFixed = key !== 'tracker';
-    const width = key === 'conversation' ? convWidth : key === 'detail' ? detailWidth : undefined;
+    const isFixed = key === 'detail';
+    const width = isFixed ? detailWidth : undefined;
     return (
       <Box
         key={key}
@@ -1078,22 +998,14 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
     );
   };
 
-  // A resizer between two adjacent visible sections. The fixed-width neighbour
-  // is the one that gets resized; if the left neighbour is fixed it grows with
-  // rightward drag (sign +1), otherwise the right (fixed) neighbour shrinks
-  // with rightward drag (sign -1).
+  // A resizer between the flexible tracker and fixed detail inspector.
   const renderResizer = (left: SectionKey, right: SectionKey) => {
-    const target: 'conversation' | 'detail' | null =
-      left !== 'tracker' ? (left as 'conversation' | 'detail')
-      : right !== 'tracker' ? (right as 'conversation' | 'detail')
-      : null;
-    if (!target) return null; // two flexible neighbours never happens (only one tracker)
     const sign: 1 | -1 = left !== 'tracker' ? 1 : -1;
     return (
       <SectionResizer
         key={`resizer-${left}-${right}`}
-        onPointerDown={(e) => startResize(target, sign, e)}
-        aria-label={t('chat.debug.resizeSection', { section: sectionTitles[target] })}
+        onPointerDown={(e) => startResize(sign, e)}
+        aria-label={t('chat.debug.resizeSection', { section: sectionTitles.detail })}
       />
     );
   };
@@ -1151,16 +1063,6 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
           {/* Section visibility toggles */}
-          <Tooltip title={visible.conversation ? t('chat.debug.hideSection', { section: sectionTitles.conversation }) : t('chat.debug.showSection', { section: sectionTitles.conversation })}>
-            <IconButton
-              size="small"
-              onClick={() => toggleSection('conversation')}
-              color={visible.conversation ? 'primary' : 'default'}
-              aria-label={visible.conversation ? t('chat.debug.hideSection', { section: sectionTitles.conversation }) : t('chat.debug.showSection', { section: sectionTitles.conversation })}
-            >
-              <ForumOutlinedIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
           <Tooltip title={visible.tracker ? t('chat.debug.hideSection', { section: sectionTitles.tracker }) : t('chat.debug.showSection', { section: sectionTitles.tracker })}>
             <IconButton
               size="small"

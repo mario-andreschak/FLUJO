@@ -7,6 +7,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { extractAssistantMedia } from './messageUtils';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { stripOpenAiPromptCacheBreakpoints } from './openaiPromptCaching';
+import type { Model } from '@/shared/types/model';
 
 const log = createLogger('backend/services/model/adapters/openaiAdapter');
 
@@ -114,6 +115,15 @@ function isPromptCacheControlsRejection(err: unknown): boolean {
  * response body" window that the OpenAI SDK's own `maxRetries` cannot cover.
  */
 export class OpenAiAdapter implements CompletionAdapter {
+  protected createClient(model: Model, apiKey: string): OpenAI {
+    return createOpenAIClient({
+      apiKey,
+      baseURL: model.baseUrl,
+      // Provider attribution (Requesty: HTTP-Referer / X-Title, issue 88).
+      defaultHeaders: getProviderDefaultHeaders(model.provider),
+    });
+  }
+
   async createCompletion({
     model,
     apiKey,
@@ -126,12 +136,7 @@ export class OpenAiAdapter implements CompletionAdapter {
     promptCacheKey,
     promptCacheMode,
   }: CompletionInput): Promise<CompletionResult> {
-    const openai = createOpenAIClient({
-      apiKey,
-      baseURL: model.baseUrl,
-      // Provider attribution (Requesty: HTTP-Referer / X-Title, issue 88).
-      defaultHeaders: getProviderDefaultHeaders(model.provider),
-    });
+    const openai = this.createClient(model, apiKey);
 
     const requestParams: OpenAI.Chat.ChatCompletionCreateParams = {
       model: model.name,
@@ -259,11 +264,7 @@ export class OpenAiAdapter implements CompletionAdapter {
     promptCacheMode,
     onModelDelta,
   }: CompletionInput): Promise<CompletionResult> {
-    const openai = createOpenAIClient({
-      apiKey,
-      baseURL: model.baseUrl,
-      defaultHeaders: getProviderDefaultHeaders(model.provider),
-    });
+    const openai = this.createClient(model, apiKey);
     const requestParams: OpenAI.Chat.ChatCompletionCreateParamsStreaming = {
       model: model.name,
       messages,

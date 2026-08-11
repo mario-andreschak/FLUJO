@@ -82,7 +82,7 @@ export interface ModelTestAttempt {
 
 /** Which adapter/endpoint the flow engine will actually use for this model. */
 export interface ModelAdapterRoute {
-  /** 'openai' | 'openai-responses' | 'anthropic' | 'gemini' | 'claude-cli' | 'codex-cli' | 'openrouter-media' */
+  /** 'openai' | 'openai-responses' | 'azure' | 'anthropic' | 'gemini' | 'claude-cli' | 'codex-cli' | 'openrouter-media' */
   adapterId: string;
   /** '/chat/completions' | '/images' | '/videos' | 'native SDK' | 'local CLI' | '/responses' */
   endpoint: string;

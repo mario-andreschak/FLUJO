@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'; // Added useCallback
 import { useRouter } from 'next/navigation';
-import { Box, Paper, Typography, Divider, CircularProgress, Alert, Button, Chip, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, Drawer, IconButton, Tooltip, TextField, useMediaQuery } from '@mui/material';
+import { Box, Paper, Typography, Divider, CircularProgress, Alert, Button, Chip, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, Drawer, IconButton, Tooltip, TextField, ToggleButton, ToggleButtonGroup, useMediaQuery } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
 import ScrollNavCluster from '@/frontend/components/shared/ScrollNavCluster';
 import { useChatScrollNav } from '@/frontend/components/Chat/hooks/useChatScrollNav';
@@ -12,12 +12,15 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import StopCircleIcon from '@mui/icons-material/StopCircle';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import ViewSidebarIcon from '@mui/icons-material/ViewSidebar';
 import EditIcon from '@mui/icons-material/Edit';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import ScheduleIcon from '@mui/icons-material/Schedule';
 import AddCommentOutlinedIcon from '@mui/icons-material/AddCommentOutlined';
+import ChatBubbleOutlineRoundedIcon from '@mui/icons-material/ChatBubbleOutlineRounded';
+import DataObjectRoundedIcon from '@mui/icons-material/DataObjectRounded';
 import { useLocalStorage, StorageKey } from '@/utils/storage';
 import ChatHistory from './ChatHistory';
 import ChatMessages from './ChatMessages';
@@ -62,6 +65,7 @@ import ConversationStats from './ConversationStats';
 import FlowSelector from './FlowSelector';
 import QuickChatDialog, { QuickChatStartSelection } from './QuickChatDialog';
 import DebuggerCanvas from './DebuggerCanvas';
+import DebuggerConversation from './DebuggerConversation';
 import DebuggerPendingPanel from './DebuggerPendingPanel';
 import ExecutedFlowPanel from './ExecutedFlowPanel';
 import { isQuickChatFlowId } from '@/utils/shared/quickChat';
@@ -87,7 +91,7 @@ import {
   type McpAppModelContext,
   type McpAppModelContextMap,
 } from '@/shared/types/chat'; // Import the shared types
-import type { SharedState } from '@/backend/execution/flow/types'; // Import SharedState type from backend
+import type { ModelInputSnapshot, SharedState } from '@/backend/execution/flow/types'; // Import SharedState type from backend
 import type { ExecutionEvent, TodoEventItem } from '@/shared/types/execution/events'; // Live execution events (SSE)
 import {
   LiveActivity,
@@ -546,6 +550,11 @@ const Chat: React.FC = () => {
   const [editingMessage, setEditingMessage] = useState<{ messageId: string; content: string; nodeId: string | null } | null>(null);
   const [isDebugPaused, setIsDebugPaused] = useState<boolean>(false); // State to control UI split
   const [debugState, setDebugState] = useState<SharedState | null>(null); // State to hold debug data
+  // The debugger publishes its selected trace row, while the regular chat owns
+  // presentation of that row's exact model-facing conversation.
+  const [debuggerSelectedStepIndex, setDebuggerSelectedStepIndex] = useState<number>(-1);
+  const [debuggerModelCallIndex, setDebuggerModelCallIndex] = useState<number>(0);
+  const [transcriptView, setTranscriptView] = useState<'chat' | 'wire'>('chat');
   // Whether a debug session is active (panel should stay open). Decoupled from
   // isDebugPaused so the debugger panel does NOT vanish while a step is executing
   // (between pauses) — it stays open and shows live progress, then re-populates
@@ -581,6 +590,19 @@ const Chat: React.FC = () => {
       window.localStorage.setItem('flujo-debugger-expanded', debuggerExpanded ? '1' : '0');
     }
   }, [debuggerExpanded]);
+
+  useEffect(() => {
+    setTranscriptView('chat');
+    setDebuggerSelectedStepIndex(-1);
+    setDebuggerModelCallIndex(0);
+  }, [currentConversationId]);
+
+  useEffect(() => {
+    if (debugState) return;
+    setTranscriptView('chat');
+    setDebuggerSelectedStepIndex(-1);
+    setDebuggerModelCallIndex(0);
+  }, [debugState]);
 
   // Executed-steps panel (issue #213): a hideable, resizable side panel that
   // renders the current conversation's flow and highlights the executed path.
@@ -4293,6 +4315,34 @@ const Chat: React.FC = () => {
   /** The Debugger button is "on" whenever the panel is showing in any form. */
   const debuggerOpen = debugPanelOpen;
 
+  const handleDebuggerStepSelectionChange = useCallback((index: number) => {
+    setDebuggerSelectedStepIndex(index);
+    setDebuggerModelCallIndex(0);
+  }, []);
+
+  const debuggerTrace = debugState?.executionTrace ?? [];
+  const activeDebuggerStepIndex = debuggerTrace.length === 0
+    ? -1
+    : debuggerSelectedStepIndex >= 0 && debuggerSelectedStepIndex < debuggerTrace.length
+      ? debuggerSelectedStepIndex
+      : debuggerTrace.length - 1;
+  const activeDebuggerStep = activeDebuggerStepIndex >= 0
+    ? debuggerTrace[activeDebuggerStepIndex]
+    : undefined;
+  // Prefer the plural snapshots emitted for nodes that make multiple model
+  // calls; retain the singular fallback for older saved traces.
+  const debuggerModelInputs: ModelInputSnapshot[] = activeDebuggerStep?.modelInputs?.length
+    ? activeDebuggerStep.modelInputs
+    : activeDebuggerStep?.modelInput
+      ? [activeDebuggerStep.modelInput]
+      : [];
+  const safeDebuggerModelCallIndex = debuggerModelInputs.length > 0
+    ? Math.min(debuggerModelCallIndex, debuggerModelInputs.length - 1)
+    : 0;
+  const selectedDebuggerModelInput = debuggerModelInputs[safeDebuggerModelCallIndex];
+  const wireViewAvailable = debugPanelOpen && !!debugState && activeDebuggerStepIndex >= 0;
+  const showingWireView = transcriptView === 'wire' && wireViewAvailable;
+
   // The viewed conversation counts as running when THIS client started or
   // re-attached to the run (isLoading/loadingConversationId/runningConvs) OR
   // when the server says so (sidebar status — kept fresh by lifecycle events,
@@ -4751,6 +4801,52 @@ const Chat: React.FC = () => {
                   </Box>
                 )}
               </Box>
+              {wireViewAvailable && (
+                <ToggleButtonGroup
+                  exclusive
+                  size="small"
+                  value={transcriptView}
+                  onChange={(_event, value: 'chat' | 'wire' | null) => {
+                    if (value) setTranscriptView(value);
+                  }}
+                  aria-label={t('chat.page.transcriptView')}
+                  sx={{
+                    flexShrink: 0,
+                    p: '3px',
+                    gap: '2px',
+                    borderRadius: 999,
+                    bgcolor: 'action.hover',
+                    '& .MuiToggleButton-root': {
+                      gap: 0.5,
+                      minWidth: { xs: 36, sm: 'auto' },
+                      px: { xs: 0.75, sm: 1.25 },
+                      py: 0.35,
+                      border: 0,
+                      borderRadius: '999px !important',
+                      textTransform: 'none',
+                      color: 'text.secondary',
+                      '&.Mui-selected': {
+                        bgcolor: 'background.paper',
+                        color: 'primary.main',
+                        boxShadow: 1,
+                      },
+                    },
+                  }}
+                >
+                  <ToggleButton value="chat" aria-label={t('chat.page.chatView')}>
+                    <ChatBubbleOutlineRoundedIcon fontSize="small" />
+                    <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
+                      {t('chat.page.chatView')}
+                    </Box>
+                  </ToggleButton>
+                  <ToggleButton value="wire" aria-label={t('chat.page.modelInputView')}>
+                    <DataObjectRoundedIcon fontSize="small" />
+                    <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
+                      {t('chat.page.modelInputView')}
+                    </Box>
+                  </ToggleButton>
+                </ToggleButtonGroup>
+              )}
               {/* Token totals + context meter (persisted usage; refreshed with the conversation) */}
               <ConversationStats
                 usage={detailedConversation?.usage}
@@ -4787,6 +4883,75 @@ const Chat: React.FC = () => {
              <Alert severity="error" sx={{ m: 2 }}>{detailsError}</Alert>
           ) : detailedConversation ? (
             <>
+              {showingWireView ? (
+                <Box data-testid="model-input-conversation" sx={{ minHeight: '100%' }}>
+                  {debuggerModelInputs.length > 1 && (
+                    <Box
+                      sx={{
+                        position: 'sticky',
+                        top: 0,
+                        zIndex: 2,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 0.5,
+                        width: 'fit-content',
+                        mx: 'auto',
+                        mb: 1,
+                        px: 0.5,
+                        py: 0.25,
+                        border: 1,
+                        borderColor: 'divider',
+                        borderRadius: 999,
+                        bgcolor: 'background.paper',
+                        boxShadow: 1,
+                      }}
+                    >
+                      <Tooltip title={t('chat.debug.previousModelCall')}>
+                        <span>
+                          <IconButton
+                            size="small"
+                            onClick={() => setDebuggerModelCallIndex(Math.max(0, safeDebuggerModelCallIndex - 1))}
+                            disabled={safeDebuggerModelCallIndex <= 0}
+                            aria-label={t('chat.debug.previousModelCall')}
+                          >
+                            <ChevronLeftIcon fontSize="small" />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                      <Typography variant="caption" color="text.secondary">
+                        {t('chat.debug.modelCall', {
+                          current: safeDebuggerModelCallIndex + 1,
+                          total: debuggerModelInputs.length,
+                        })}
+                      </Typography>
+                      <Tooltip title={t('chat.debug.nextModelCall')}>
+                        <span>
+                          <IconButton
+                            size="small"
+                            onClick={() => setDebuggerModelCallIndex(Math.min(debuggerModelInputs.length - 1, safeDebuggerModelCallIndex + 1))}
+                            disabled={safeDebuggerModelCallIndex >= debuggerModelInputs.length - 1}
+                            aria-label={t('chat.debug.nextModelCall')}
+                          >
+                            <ChevronRightIcon fontSize="small" />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                    </Box>
+                  )}
+                  {selectedDebuggerModelInput ? (
+                    <DebuggerConversation
+                      modelInput={selectedDebuggerModelInput}
+                      conversationId={`${detailedConversation.id}-step-${activeDebuggerStepIndex}-call-${safeDebuggerModelCallIndex}`}
+                    />
+                  ) : (
+                    <Alert severity="info" variant="outlined" sx={{ mx: 'auto', mt: 2, maxWidth: 720 }}>
+                      {t('chat.debug.noModelCall')}
+                    </Alert>
+                  )}
+                </Box>
+              ) : (
+                <>
               <ChatMessages
                 messages={detailedConversation.messages} // Pass messages from detailed state
                 pendingToolCalls={pendingToolCalls}
@@ -5008,6 +5173,8 @@ const Chat: React.FC = () => {
                 >
                   <ChatErrorDetails error={errorInfo} fallbackMessage={error} compact />
                 </Alert>
+              )}
+                </>
               )}
             </>
           ) : isPhoneLayout ? (
@@ -5311,6 +5478,7 @@ const Chat: React.FC = () => {
                   conversationId={currentConversationId}
                   liveActivity={liveActivity}
                   executionEvents={debuggerEvents}
+                  onStepSelectionChange={handleDebuggerStepSelectionChange}
                   onStep={handleDebugStep}
                   onStepOver={handleStepOver}
                   onContinue={handleDebugContinue}
@@ -5356,8 +5524,8 @@ const Chat: React.FC = () => {
       )}
 
       {/* Debugger full-screen modal (issue #162): the same DebuggerCanvas, given
-          the whole viewport so the 3 sections (Conversation / Execution Tracker
-          / Detail) have room. Toggled by the expand button in the debugger
+          the whole viewport so the execution tracker and detail inspector have
+          room. Toggled by the expand button in the debugger
           header; the debug session/state is untouched. */}
       {debugPanelOpen && currentConversationId && (debuggerExpanded || isCompactLayout) && (
         <Dialog
@@ -5376,6 +5544,7 @@ const Chat: React.FC = () => {
                 conversationId={currentConversationId}
                 liveActivity={liveActivity}
                 executionEvents={debuggerEvents}
+                onStepSelectionChange={handleDebuggerStepSelectionChange}
                 onStep={handleDebugStep}
                 onStepOver={handleStepOver}
                 onContinue={handleDebugContinue}

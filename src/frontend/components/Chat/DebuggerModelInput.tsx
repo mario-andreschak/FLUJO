@@ -150,7 +150,7 @@ const MessageRow: React.FC<{
 /**
  * Annotated full-history view: the entire threaded history with per-message
  * provenance badges (folded / scoped-out / handoff-stripped). Extracted so the
- * #162 Conversation section can offer it as the "Full history (annotated)"
+ * regular chat's model-input view can offer it as the "Full history (annotated)"
  * companion to the real-chat wire render.
  */
 export const AnnotatedHistory: React.FC<{ provenance: ModelInputProvenanceEntry[] }> = ({ provenance }) => {

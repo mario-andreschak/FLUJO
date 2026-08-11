@@ -3,6 +3,7 @@
  */
 export type ModelProvider =
   | 'openai'
+  | 'azure'
   | 'openrouter'
   | 'requesty'
   | 'anthropic'
@@ -13,6 +14,9 @@ export type ModelProvider =
   | 'litellm'
   | 'claude-subscription'
   | 'codex';
+
+/** Stable Azure OpenAI data-plane API version used for new connections. */
+export const AZURE_OPENAI_DEFAULT_API_VERSION = '2024-10-21';
 
 /**
  * Which backend completion adapter (and SDK) drives a model.
@@ -27,6 +31,8 @@ export type ModelProvider =
  *                   model in an agentic tool loop stops re-deriving its own
  *                   reasoning each iteration. Only worthwhile for reasoning
  *                   models; 'openai' remains the default everywhere else.
+ * - 'azure'      -> AzureOpenAiAdapter, Azure OpenAI's deployment-scoped Chat
+ *                   Completions API through the AzureOpenAI SDK client.
  * - 'gemini'     -> GeminiAdapter, native Google GenAI SDK.
  * - 'anthropic'  -> AnthropicAdapter, native Anthropic SDK.
  * - 'claude-cli' -> ClaudeSubscriptionAdapter, drives the `claude` CLI against a
@@ -37,6 +43,7 @@ export type ModelProvider =
 export type ModelAdapter =
   | 'openai'
   | 'openai-responses'
+  | 'azure'
   | 'gemini'
   | 'anthropic'
   | 'claude-cli'
@@ -83,6 +90,8 @@ export function validateModelConfiguration(
     provider?: ModelProvider;
     adapter?: ModelAdapter;
     name?: string;
+    baseUrl?: string;
+    azureApiVersion?: string;
     temperature?: unknown;
     reasoningEffort?: unknown;
     thinkingLevel?: unknown;
@@ -90,6 +99,19 @@ export function validateModelConfiguration(
     serviceTier?: unknown;
   }
 ): string | undefined {
+  if (model.adapter === 'azure' || model.provider === 'azure') {
+    if (!model.name?.trim()) return 'Azure OpenAI deployment name is required';
+    const endpoint = model.baseUrl?.trim();
+    if (!endpoint) return 'Azure OpenAI endpoint is required';
+    try {
+      const parsed = new URL(endpoint);
+      if (parsed.protocol !== 'https:') return 'Azure OpenAI endpoint must use HTTPS';
+    } catch {
+      return 'Azure OpenAI endpoint must be a valid URL';
+    }
+    if (!model.azureApiVersion?.trim()) return 'Azure OpenAI API version is required';
+  }
+
   const capabilities = getModelConfigurationCapabilities(model.provider, model.adapter, model.name ?? '');
 
   if (model.temperature !== undefined && model.temperature !== '') {
@@ -259,6 +281,10 @@ export const PROVIDER_INFO: Record<ModelProvider, Omit<ProviderInfo, 'id'>> = {
     label: 'OpenAI',
     baseUrl: 'https://api.openai.com/v1'
   },
+  azure: {
+    label: 'Azure OpenAI',
+    baseUrl: ''
+  },
   openrouter: {
     label: 'OpenRouter',
     baseUrl: 'https://openrouter.ai/api/v1'
@@ -333,6 +359,10 @@ export interface ProviderProfile {
   baseUrl: string;
   /** Whether the Base URL field is shown/editable for this profile. */
   showBaseUrl: boolean;
+  /** Whether the inference endpoint exposes an OpenAI-compatible model list. */
+  supportsModelDiscovery?: boolean;
+  /** Default Azure API version persisted when this profile is selected. */
+  defaultApiVersion?: string;
   /**
    * Suggested model names for the technical-name autocomplete. Used for native
    * providers that have no reachable OpenAI `/models` endpoint. The field stays
@@ -367,6 +397,17 @@ export const PROVIDER_PROFILES: ProviderProfile[] = [
     // carrying encrypted reasoning items across turns of an agentic tool loop.
     // Non-reasoning models should stay on the plain 'OpenAI' profile.
     defaultModels: ['gpt-5', 'gpt-5-mini', 'o4-mini', 'o3'],
+  },
+  {
+    id: 'azure',
+    label: 'Azure OpenAI',
+    provider: 'azure',
+    adapter: 'azure',
+    sdkLabel: 'AzureOpenAI SDK',
+    baseUrl: '',
+    showBaseUrl: true,
+    supportsModelDiscovery: false,
+    defaultApiVersion: AZURE_OPENAI_DEFAULT_API_VERSION,
   },
   {
     id: 'openrouter',

@@ -163,9 +163,22 @@ describe('installRegistryServer', () => {
         transport: 'stdio',
         command: 'npx',
         args: expect.arrayContaining(['-y', '@example/voice@1.0.0']),
+        rootPath: 'mcp-servers/voice',
         disabled: false,
       })
     );
+  });
+
+  it('keeps a requested package-server name and its managed root in sync', async () => {
+    registryGetJsonMock.mockResolvedValue({ servers: [npmEntry('io.github.acme/voice')] });
+    const result = await installRegistryServer('io.github.acme/voice', undefined, {
+      serverName: 'custom-voice',
+    });
+
+    expect(result.installed).toBe(true);
+    const config = updateServerConfigMock.mock.calls[0][1];
+    expect(config.name).toBe('custom-voice');
+    expect(config.rootPath).toBe('mcp-servers/custom-voice');
   });
 
   it('refuses to install when required env is missing, reporting needsEnv', async () => {

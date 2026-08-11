@@ -43,4 +43,24 @@ describe('guided model bundles', () => {
       ApiKey: 'ollama',
     });
   });
+
+  it('creates an Azure deployment model with its endpoint and API version', () => {
+    const [model] = buildGuidedModels({
+      kind: 'azure',
+      apiKey: 'azure-secret',
+      azureEndpoint: 'https://team.openai.azure.com/',
+      azureDeployment: 'production-gpt',
+      azureApiVersion: '2024-10-21',
+    });
+
+    expect(model).toMatchObject({
+      name: 'production-gpt',
+      displayName: 'Azure production-gpt',
+      provider: 'azure',
+      adapter: 'azure',
+      baseUrl: 'https://team.openai.azure.com',
+      azureApiVersion: '2024-10-21',
+      ApiKey: 'azure-secret',
+    });
+  });
 });

@@ -11,7 +11,9 @@ jest.mock('@/backend/utils/resolveGlobalVars', () => ({
   ),
 }));
 
+import path from 'path';
 import { pathToFileURL } from 'url';
+import { getWorkspaceDataDir } from '@/utils/workspace';
 import {
   normalizeRootUri,
   resolveServerRoots,
@@ -37,6 +39,13 @@ describe('normalizeRootUri', () => {
     expect(normalizeRootUri('/home/me/proj')).toBe(pathToFileURL('/home/me/proj').href);
   });
 
+  it('resolves relative paths against the selected workspace', () => {
+    expect(normalizeRootUri('.')).toBe(pathToFileURL(getWorkspaceDataDir()).href);
+    expect(normalizeRootUri('mcp-servers/srv')).toBe(
+      pathToFileURL(path.join(getWorkspaceDataDir(), 'mcp-servers', 'srv')).href,
+    );
+  });
+
   it('rejects blanks and non-file URI schemes', () => {
     expect(normalizeRootUri('')).toBeNull();
     expect(normalizeRootUri('   ')).toBeNull();
@@ -58,6 +67,14 @@ describe('resolveServerRoots', () => {
     expect(roots).toEqual([
       { uri: pathToFileURL('/opt/mcp-servers/srv').href, name: 'srv' },
     ]);
+  });
+
+  it('resolves a relative rootPath fallback inside the selected workspace', async () => {
+    const roots = await resolveServerRoots(cfg(undefined, 'mcp-servers/srv'));
+    expect(roots).toEqual([{
+      uri: pathToFileURL(path.join(getWorkspaceDataDir(), 'mcp-servers', 'srv')).href,
+      name: 'srv',
+    }]);
   });
 
   it('resolves ${global:VAR} in the rootPath fallback too', async () => {

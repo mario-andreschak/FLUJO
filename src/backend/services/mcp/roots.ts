@@ -7,7 +7,13 @@ import { createLogger } from '@/utils/logger';
 import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';
 import { MCPServerConfig } from '@/shared/types/mcp';
 import { StorageKey, type Settings } from '@/shared/types/storage';
-import { bindToCurrentWorkspace, DEFAULT_WORKSPACE, getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
+import {
+  bindToCurrentWorkspace,
+  DEFAULT_WORKSPACE,
+  getCurrentWorkspace,
+  getWorkspaceDataDir,
+  workspaceCacheKey,
+} from '@/utils/workspace';
 
 const log = createLogger('backend/services/mcp/roots');
 
@@ -188,7 +194,12 @@ export function normalizeRootUri(input: string): string | null {
     return null;
   }
   try {
-    return pathToFileURL(s).href;
+    // MCP config paths use the selected workspace as their relative-path base,
+    // matching process launch, config loading and confined shipped tools. Letting
+    // pathToFileURL resolve them implicitly would instead use process.cwd() (the
+    // FLUJO application directory in packaged/workspace installs).
+    const absolute = path.isAbsolute(s) ? s : path.resolve(getWorkspaceDataDir(), s);
+    return pathToFileURL(absolute).href;
   } catch (error) {
     log.warn(`Could not convert root "${s}" to a file URI:`, error);
     return null;

@@ -66,6 +66,44 @@ describe('stdio MCP runtime homes', () => {
     expect(launchA.env.HOME).not.toBe(launchB.env.HOME);
   });
 
+  it('launches package runners from a private per-server cwd outside the managed server root', async () => {
+    const runner: MCPStdioConfig = {
+      ...config,
+      name: 'weather-mcp',
+      command: 'npx',
+      args: ['-y', '@example/weather-mcp'],
+      rootPath: 'mcp-servers/weather-mcp',
+    };
+    const otherRunner: MCPStdioConfig = {
+      ...runner,
+      name: 'search-mcp',
+      rootPath: 'mcp-servers/search-mcp',
+    };
+
+    const weatherLaunch = runWithWorkspace('runtime-a', () => resolveStdioLaunch(runner));
+    const searchLaunch = runWithWorkspace('runtime-a', () => resolveStdioLaunch(otherRunner));
+    const workspaceRoot = getWorkspaceDataDir('runtime-a');
+    const serverRoot = path.join(workspaceRoot, 'mcp-servers', 'weather-mcp');
+
+    expect(weatherLaunch.cwd).toBe(path.join(path.dirname(weatherLaunch.env.HOME), 'cwd'));
+    expect(weatherLaunch.cwd).not.toBe(serverRoot);
+    expect(path.relative(serverRoot, weatherLaunch.cwd)).toMatch(/^\.\.(?:[\\/]|$)/);
+    expect(weatherLaunch.cwd).not.toBe(searchLaunch.cwd);
+    await expect(fs.stat(weatherLaunch.cwd)).resolves.toMatchObject({});
+  });
+
+  it('keeps ordinary stdio commands in their configured server root', () => {
+    const ordinary: MCPStdioConfig = {
+      ...config,
+      name: 'local-node-server',
+      rootPath: 'mcp-servers/local-node-server',
+    };
+    const launch = runWithWorkspace('runtime-a', () => resolveStdioLaunch(ordinary));
+    expect(launch.cwd).toBe(
+      path.join(getWorkspaceDataDir('runtime-a'), 'mcp-servers', 'local-node-server'),
+    );
+  });
+
   it('overrides stale shipped-browser output paths at the final child boundary', () => {
     const browser = SHIPPED_MCP_SERVERS.find(item => item.defaultName === 'browser')!;
     const shipped = createShippedServerConfig(browser, {

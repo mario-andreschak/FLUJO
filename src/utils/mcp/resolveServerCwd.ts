@@ -8,10 +8,11 @@
  * of fetching it. On Windows that surfaces as `Der Befehl "<bin>" ... nicht gefunden`
  * / "command not found", because the local package has no PATH shim.
  *
- * The cwd is irrelevant to what these runners fetch, so for them we drop the
- * package-named leaf directory and run from its parent instead. Non-runner commands
- * (`node dist/index.js`, `python -m ...`) genuinely need the package directory and
- * are left untouched.
+ * The cwd is irrelevant to what these runners fetch. Prefer a caller-provided,
+ * per-server runtime cwd that is outside the package tree; older callers without
+ * one still drop a same-named package leaf as a compatibility fallback. Non-runner
+ * commands (`node dist/index.js`, `python -m ...`) genuinely need their configured
+ * package directory and are left untouched.
  *
  * This is a pure function (no fs / no node `path`) so it can run unchanged in both
  * the backend connection path and the browser-side "Test" path.
@@ -73,6 +74,9 @@ export interface ResolveServerCwdParams {
   /** The fallback cwd used today when neither rootPath nor cwd is set
    *  (e.g. `mcp-servers/<name>`). */
   defaultCwd: string;
+  /** Private cwd for package runners. It must not be nested below rootPath,
+   *  because npm-like runners search ancestor directories for local packages. */
+  packageRunnerCwd?: string;
 }
 
 /**
@@ -85,11 +89,16 @@ export function resolveServerCwd({
   cwd,
   serverName,
   defaultCwd,
+  packageRunnerCwd,
 }: ResolveServerCwdParams): string {
   const resolved = rootPath || cwd || defaultCwd;
 
-  // Only intervene when a package runner is about to run from inside its own
-  // package-named directory. Anything else is left exactly as configured.
+  if (isPackageRunnerCommand(command, args) && packageRunnerCwd) {
+    return packageRunnerCwd;
+  }
+
+  // Compatibility fallback for callers that cannot yet supply an isolated cwd:
+  // never run a package runner from a same-named local package directory.
   if (
     serverName &&
     isPackageRunnerCommand(command, args) &&

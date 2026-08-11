@@ -242,7 +242,12 @@ export default function ModelClient() {
         const match = known.find((model) =>
           model.provider === candidate.provider &&
           (model.adapter || 'openai') === (candidate.adapter || 'openai') &&
-          model.name.trim().toLowerCase() === candidate.name.trim().toLowerCase()
+          model.name.trim().toLowerCase() === candidate.name.trim().toLowerCase() &&
+          (candidate.provider !== 'azure' || (
+            (model.baseUrl || '').replace(/\/+$/, '').toLowerCase() ===
+              (candidate.baseUrl || '').replace(/\/+$/, '').toLowerCase() &&
+            model.azureApiVersion === candidate.azureApiVersion
+          ))
         );
         if (match) {
           existing.push(match);

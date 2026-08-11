@@ -278,7 +278,7 @@ describe('buildConfigFromOption — npm packages', () => {
       WEATHER_API_KEY: { value: '', metadata: { isSecret: true } },
       WEATHER_UNITS: 'metric'
     });
-    expect(config.rootPath).toBe('.');
+    expect(config.rootPath).toBe('mcp-servers/weather-mcp');
   });
 
   it('retains safe marketplace icons on the installed config', () => {

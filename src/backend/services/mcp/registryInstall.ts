@@ -459,7 +459,7 @@ export async function installRegistryServer(
   const registryConfig = {
     ...builtConfig,
     ...(requestedServerName ? { name: requestedServerName } : {}),
-    ...(option.kind === 'remote' && requestedServerName
+    ...(requestedServerName
       ? { rootPath: `mcp-servers/${requestedServerName}` }
       : {}),
     ...(option.kind === 'remote' ? { headers: policyHeaders ?? {} } : {}),

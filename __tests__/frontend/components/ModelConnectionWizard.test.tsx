@@ -79,4 +79,34 @@ describe('ModelConnectionWizard', () => {
     expect(screen.getByText(/pick the billing style/i)).toBeInTheDocument();
     expect(screen.queryByText(/free services are great for learning/i)).not.toBeInTheDocument();
   });
+
+  it('creates an Azure deployment through the guided paid-provider path', async () => {
+    const props = renderWizard();
+
+    fireEvent.click(screen.getByRole('button', { name: /no idea/i }));
+    fireEvent.click(screen.getByRole('button', { name: /i can pay/i }));
+    fireEvent.click(screen.getByRole('heading', { name: 'Azure OpenAI' }).closest('button')!);
+
+    fireEvent.change(screen.getByLabelText(/Resource endpoint/i), {
+      target: { value: 'https://team.openai.azure.com' },
+    });
+    fireEvent.change(screen.getByLabelText(/Deployment name/i), {
+      target: { value: 'production-gpt' },
+    });
+    fireEvent.change(screen.getByLabelText('Azure OpenAI API key'), {
+      target: { value: 'azure-secret' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /create my model/i }));
+
+    await waitFor(() => expect(props.onCreateModels).toHaveBeenCalledTimes(1));
+    const [model] = (props.onCreateModels as jest.Mock).mock.calls[0][0] as Model[];
+    expect(model).toMatchObject({
+      name: 'production-gpt',
+      provider: 'azure',
+      adapter: 'azure',
+      baseUrl: 'https://team.openai.azure.com',
+      azureApiVersion: '2024-10-21',
+      ApiKey: 'azure-secret',
+    });
+  });
 });

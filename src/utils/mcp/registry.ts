@@ -648,15 +648,17 @@ function packageCommandAndArgs(
 
 function buildPackageConfig(server: RegistryServer, pkg: RegistryPackage): Partial<MCPServerConfig> {
   const { command, args, env } = packageCommandAndArgs(pkg);
+  const base = baseConfig(server);
   return {
-    ...baseConfig(server),
+    ...base,
     transport: 'stdio',
     command,
     args,
     env,
-    // Package runners fetch published packages; no local checkout exists or is
-    // needed, so run from the app root.
-    rootPath: '.'
+    // Registry packages have no checkout, but still get a dedicated workspace
+    // root. Package runners such as npx/uvx launch from a private runtime cwd (see
+    // resolveStdioLaunch), so npm-like tools cannot mistake this for a local package.
+    rootPath: `mcp-servers/${base.name}`
   } as Partial<MCPServerConfig>;
 }
 
@@ -674,20 +676,21 @@ function buildLaunchAndConnectConfig(
   option: ManualLaunchOption
 ): Partial<MCPServerConfig> {
   const { command, args, env } = packageCommandAndArgs(option.pkg);
+  const base = baseConfig(server);
   const launch: MCPLaunchSpec = {
     command,
     ...(args.length > 0 ? { args } : {}),
     ...(Object.keys(env).length > 0 ? { env } : {})
   };
   return {
-    ...baseConfig(server),
+    ...base,
     transport: option.transport,
     serverUrl: option.resolvedUrl ?? '',
     headers: {},
     env,
     launch,
-    // The package runner fetches a published package; there is no checkout.
-    rootPath: '.'
+    // Keep the user-facing server root distinct from the future launcher cwd.
+    rootPath: `mcp-servers/${base.name}`
   } as Partial<MCPServerConfig>;
 }
 

@@ -104,6 +104,28 @@ describe('generation settings validation (#329)', () => {
     expect(validateModelConfiguration({ provider: 'openai', adapter: 'openai', name: 'gpt-4o' }))
       .toBeUndefined();
   });
+
+  it('requires a valid HTTPS endpoint and API version for Azure', () => {
+    expect(validateModelConfiguration({
+      provider: 'azure', adapter: 'azure', name: 'deployment',
+      baseUrl: 'https://team.openai.azure.com', azureApiVersion: '2024-10-21',
+    })).toBeUndefined();
+    expect(validateModelConfiguration({
+      provider: 'azure', adapter: 'azure', name: 'deployment', azureApiVersion: '2024-10-21',
+    })).toMatch(/endpoint is required/);
+    expect(validateModelConfiguration({
+      provider: 'azure', adapter: 'azure', name: 'deployment',
+      baseUrl: 'http://team.openai.azure.com', azureApiVersion: '2024-10-21',
+    })).toMatch(/must use HTTPS/);
+    expect(validateModelConfiguration({
+      provider: 'azure', adapter: 'azure', name: 'deployment',
+      baseUrl: 'https://team.openai.azure.com',
+    })).toMatch(/API version is required/);
+    expect(validateModelConfiguration({
+      provider: 'azure', adapter: 'azure', name: '',
+      baseUrl: 'https://team.openai.azure.com', azureApiVersion: '2024-10-21',
+    })).toMatch(/deployment name is required/);
+  });
 });
 
 describe('persisted creativity normalization (#329)', () => {

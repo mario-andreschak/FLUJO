@@ -450,7 +450,7 @@ const FILESYSTEM_APP_HTML = `<!doctype html>
   // Handshake: initialize -> initialized -> initial navigation.
   rpc("ui/initialize", {
     appInfo: { name: "filesystem-browser", version: "1.0.0" },
-    appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] },
+    appCapabilities: { availableDisplayModes: ["inline", "fullscreen", "pip"] },
     protocolVersion: "${MCP_APPS_PROTOCOL_VERSION}"
   }).then(function (result) {
     applyTheme(result && result.hostContext);

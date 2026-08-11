@@ -159,4 +159,27 @@ describe('loadServerConfigs install-origin backfill (#193)', () => {
     });
     expect(mockGit.remote).not.toHaveBeenCalled();
   });
+
+  it('migrates the old shared Registry package root without changing a local explicit dot', async () => {
+    const configs = await load({
+      'registry-package': {
+        transport: 'stdio',
+        command: 'npx',
+        args: ['-y', '@acme/registry-package'],
+        rootPath: '.',
+        source: { type: 'registry', registryName: 'io.github.acme/registry-package' },
+      },
+      'local-package': {
+        transport: 'stdio',
+        command: 'npx',
+        args: ['-y', '@acme/local-package'],
+        rootPath: '.',
+        source: { type: 'local' },
+      },
+    });
+
+    expect(configs.find(c => c.name === 'registry-package')?.rootPath)
+      .toBe('mcp-servers/registry-package');
+    expect(configs.find(c => c.name === 'local-package')?.rootPath).toBe('.');
+  });
 });
