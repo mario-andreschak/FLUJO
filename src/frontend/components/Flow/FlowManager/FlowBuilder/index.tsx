@@ -287,7 +287,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const isMobileBuilder = useMediaQuery(theme.breakpoints.down('md'), { noSsr: true });
 
   const [nodes, setNodes] = useState<FlowNode[]>(initialFlow?.nodes || []);
-  // Initialize with the *filtered* edges (same rule the init effect applies)
 
   useEffect(() => {
     const listener = (event: Event) => {
@@ -305,6 +304,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     window.addEventListener(BIG_TUTORIAL_EVENT, listener);
     return () => window.removeEventListener(BIG_TUTORIAL_EVENT, listener);
   }, []);
+  // Initialize with the *filtered* edges (same rule the init effect applies)
   // so the very first render already matches what history is seeded with —
   // otherwise an unfiltered→filtered diff could itself mark the flow dirty.
   const [edges, setEdges] = useState<Edge[]>(
@@ -2146,6 +2146,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
             )}
 
             <Button
+              data-tour="flow-save"
               variant={authoringMode === 'guided' ? 'outlined' : 'contained'}
               color="primary"
               onClick={() => void handleSave()}
@@ -2169,7 +2170,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
             )}
 
             {(authoringMode === 'advanced' || (initialFlow && !isDraft)) && (
-              data-tour="flow-save"
               <>
                 <Tooltip title={t('flows.builder.moreCommands')}>
                   <IconButton
@@ -2315,6 +2315,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
                 markDirty();
               }}
               onSelectNode={handleSelectGuidedNode}
+              onOpenNode={(node) => openNodeProperties(node)}
               onAddTask={handleAddGuidedTask}
               onTry={onTry ? () => { void handleTry(); } : undefined}
               isSaving={saveStatus === 'saving'}
@@ -2338,7 +2339,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
                 setAssistanceFocus('review');
                 setAssistanceOpen(true);
               }}
-              onOpenNode={(node) => openNodeProperties(node)}
               currentFlowId={initialFlow?.id ?? fallbackFlowId.current}
               availableAgents={allFlows}
               mcpConnectionsByNode={mcpConnectionsByProcess}

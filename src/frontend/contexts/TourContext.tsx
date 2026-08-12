@@ -53,7 +53,7 @@ interface TourContextType {
   backBigTutorial: () => Promise<void>;
   runBigTutorialAction: () => Promise<void>;
   pauseBigTutorial: () => Promise<void>;
-  cancelBigTutorial: () => Promise<void>;
+  restartBigTutorial: () => Promise<void>;
 }
 
 const TourContext = createContext<TourContextType>({
@@ -75,7 +75,7 @@ const TourContext = createContext<TourContextType>({
   backBigTutorial: async () => {},
   runBigTutorialAction: async () => {},
   pauseBigTutorial: async () => {},
-  cancelBigTutorial: async () => {},
+  restartBigTutorial: async () => {},
 });
 
 export const useTour = () => useContext(TourContext);
@@ -102,7 +102,6 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
     settings.onboarding?.tutorials?.bigTutorialStage1 ?? DEFAULT_BIG_PROGRESS,
   );
   const bigProgressRef = useRef(bigTutorialProgress);
-  bigProgressRef.current = bigTutorialProgress;
   const [bigTutorialBusy, setBigTutorialBusy] = useState(false);
   const [bigTutorialError, setBigTutorialError] = useState<string | null>(null);
   const [bigTutorialRunStatus, setBigTutorialRunStatus] = useState<'running' | 'completed' | 'error' | null>(null);
@@ -145,8 +144,8 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const commitBigProgress = useCallback(async (progress: TutorialProgress) => {
     bigProgressRef.current = progress;
+    setBigTutorialProgress(progress);
     await persistBigProgress(progress);
-    if (bigProgressRef.current === progress) setBigTutorialProgress(progress);
   }, [persistBigProgress]);
 
   const startTour = useCallback(() => {
@@ -226,6 +225,10 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await commitBigProgress(progress);
     setIsBigTutorialActive(true);
   }, [commitBigProgress]);
+
+  const restartBigTutorial = useCallback(async () => {
+    await startBigTutorial();
+  }, [startBigTutorial]);
 
   const resumeBigTutorial = useCallback(async () => {
     const stored = settingsRef.current.onboarding?.tutorials?.bigTutorialStage1;
@@ -401,12 +404,6 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsBigTutorialActive(false);
   }, [commitBigProgress]);
 
-  const cancelBigTutorial = useCallback(async () => {
-    const cancelled: TutorialProgress = { status: 'cancelled', stepId: 'intro' };
-    await commitBigProgress(cancelled);
-    setIsBigTutorialActive(false);
-  }, [commitBigProgress]);
-
   useEffect(() => {
     const listener = (event: Event) => {
       if (!isBigTutorialEvent(event) || !isBigTutorialActive) return;
@@ -488,7 +485,7 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
       backBigTutorial,
       runBigTutorialAction,
       pauseBigTutorial,
-      cancelBigTutorial,
+      restartBigTutorial,
     }}>
       {children}
     </TourContext.Provider>

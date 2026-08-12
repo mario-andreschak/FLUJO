@@ -96,12 +96,12 @@ export default function BigTutorialOverlay() {
     backBigTutorial,
     runBigTutorialAction,
     pauseBigTutorial,
-    cancelBigTutorial,
+    restartBigTutorial,
   } = useTour();
   const pathname = usePathname();
   const router = useRouter();
   const [rect, setRect] = useState<Rect | null>(null);
-  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [confirmRestart, setConfirmRestart] = useState(false);
   const step = isBigTutorialActive ? BIG_TUTORIAL_STEP_BY_ID.get(bigTutorialProgress.stepId) : undefined;
   const target = step ? resolveBigTutorialTarget(step, bigTutorialProgress) : undefined;
 
@@ -197,7 +197,22 @@ export default function BigTutorialOverlay() {
       void nextBigTutorial();
       return;
     }
-    if (step.id === 'wait-for-first-answer' || step.id === 'wait-for-second-answer') return;
+    if (step.id === 'wait-for-first-answer' || step.id === 'wait-for-second-answer') {
+      // A completion event can be missed when the tutorial is restored after a
+      // reload or when settings persistence and the chat response finish in the
+      // same render. The Chat root exposes its durable status, so use that as a
+      // fallback instead of leaving the tutorial on "Waiting" forever.
+      let timer = 0;
+      const checkChat = () => {
+        const finished = document.querySelector(
+          '[data-tutorial-chat-status="completed"], [data-tutorial-chat-status="error"]',
+        );
+        if (finished) void nextBigTutorial();
+        else timer = window.setTimeout(checkChat, 200);
+      };
+      checkChat();
+      return () => window.clearTimeout(timer);
+    }
     let timer = 0;
     const check = () => {
       if (document.querySelector(step.waitFor!)) void nextBigTutorial();
@@ -299,27 +314,37 @@ export default function BigTutorialOverlay() {
           )}
         </Box>
 
-        <Box sx={{ display: 'flex', justifyContent: 'center', gap: 0.5, mt: 1 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'center', flexWrap: 'wrap', gap: 0.5, mt: 1 }}>
           <Button size="small" color="inherit" onClick={() => void pauseBigTutorial()} sx={{ opacity: 0.75 }}>
             Continue tutorial later
           </Button>
-          <Button size="small" color="error" onClick={() => setConfirmCancel(true)}>
-            Cancel tutorial
+          <Button size="small" color="inherit" onClick={() => setConfirmRestart(true)}>
+            Restart from beginning
+          </Button>
+          <Button size="small" color="inherit" disabled={!step.next || bigTutorialBusy} onClick={() => void nextBigTutorial()}>
+            Skip
           </Button>
         </Box>
       </Paper>
 
-      <Dialog open={confirmCancel} onClose={() => setConfirmCancel(false)} sx={{ pointerEvents: 'auto' }}>
-        <DialogTitle>Cancel Stage 1?</DialogTitle>
+      <Dialog open={confirmRestart} onClose={() => setConfirmRestart(false)} sx={{ pointerEvents: 'auto' }}>
+        <DialogTitle>Restart Stage 1?</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            This removes your saved tutorial progress. It does not delete your agent, conversations, or connected apps.
+            This clears your saved place and starts the tutorial again from the beginning. It does not delete your agent, conversations, or connected apps.
           </DialogContentText>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setConfirmCancel(false)}>Keep tutorial</Button>
-          <Button color="error" variant="contained" onClick={() => { setConfirmCancel(false); void cancelBigTutorial(); }}>
-            Cancel tutorial
+          <Button onClick={() => setConfirmRestart(false)}>Keep tutorial</Button>
+          <Button
+            color="primary"
+            variant="contained"
+            onClick={() => {
+              setConfirmRestart(false);
+              void restartBigTutorial();
+            }}
+          >
+            Restart tutorial
           </Button>
         </DialogActions>
       </Dialog>

@@ -539,6 +539,7 @@ const CustomNode = ({ id, data, nodeType, selected }: CustomNodeProps & { select
   return (
     <>
       <NodeContainer
+        data-tour={`flow-${nodeType}-node`}
         elevation={2}
         nodeType={nodeType}
         selected={selected}
@@ -555,7 +556,6 @@ const CustomNode = ({ id, data, nodeType, selected }: CustomNodeProps & { select
           const isResourceHandle = quickConnect.handleId.includes('-resource');
           const controlColor = isToolHandle
             ? theme.palette.info.main
-        data-tour={`flow-${nodeType}-node`}
             : isResourceHandle
               ? RESOURCE_COLOR
               : theme.palette.primary.main;

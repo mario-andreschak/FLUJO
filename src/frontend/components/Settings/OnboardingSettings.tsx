@@ -12,6 +12,7 @@ export default function OnboardingSettings() {
     startTour,
     startBigTutorial,
     resumeBigTutorial,
+    restartBigTutorial,
     bigTutorialProgress,
     isBigTutorialActive,
   } = useTour();
@@ -36,22 +37,29 @@ export default function OnboardingSettings() {
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
             Improve your Chat agent by connecting an app that can search the internet. Your place is saved after every step.
           </Typography>
-          <Button
-            variant="contained"
-            startIcon={<PublicRoundedIcon />}
-            disabled={isBigTutorialActive}
-            onClick={bigTutorialProgress.status === 'paused' ? resumeBigTutorial : startBigTutorial}
-          >
-            {isBigTutorialActive
-              ? 'Tutorial is running'
-              : bigTutorialProgress.status === 'paused'
-                ? 'Continue Stage 1'
-                : bigTutorialProgress.status === 'completed'
-                  ? 'Replay Stage 1'
-                  : bigTutorialProgress.status === 'cancelled'
-                    ? 'Restart Stage 1'
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="flex-start">
+            <Button
+              variant="contained"
+              startIcon={<PublicRoundedIcon />}
+              disabled={isBigTutorialActive}
+              onClick={bigTutorialProgress.status === 'paused' ? resumeBigTutorial : startBigTutorial}
+            >
+              {isBigTutorialActive
+                ? 'Tutorial is running'
+                : bigTutorialProgress.status === 'paused'
+                  ? 'Continue Stage 1'
+                  : bigTutorialProgress.status === 'completed'
+                    ? 'Replay Stage 1'
                     : 'Start Stage 1'}
-          </Button>
+            </Button>
+            <Button
+              variant="outlined"
+              disabled={isBigTutorialActive}
+              onClick={() => void restartBigTutorial()}
+            >
+              Restart from beginning
+            </Button>
+          </Stack>
         </Box>
       </Stack>
     </Box>
