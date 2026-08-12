@@ -104,6 +104,7 @@ export function shippedServerEnv(
       'FLUJO_BROWSER_ENABLED',
       'FLUJO_BROWSER_ALLOWED_ORIGINS',
       'FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS',
+      'FLUJO_BROWSER_RESTRICT_NAVIGATION',
       'FLUJO_BROWSER_MODE',
       'FLUJO_BROWSER_EXECUTABLE_PATH',
       'FLUJO_BROWSER_PROFILE_DIR',
@@ -134,12 +135,14 @@ export function shippedServerEnv(
       'FLUJO_BROWSER_AUDIO',
       'FLUJO_BROWSER_ALLOW_SERVICE_WORKERS',
       'PLAYWRIGHT_BROWSERS_PATH',
-      // Deterministic capture (#366): local-source gating, output roots, and
-      // the optional recording/muxing pipeline.
+      // Deterministic capture and the optional recording/muxing pipeline.
       'FLUJO_BROWSER_ALLOW_LOCAL_CAPTURE',
       'FLUJO_BROWSER_LOCAL_CAPTURE_ROOTS',
       'FLUJO_BROWSER_RECORD_DIR',
       'FLUJO_BROWSER_RECORD_MAX_MS',
+      'FLUJO_BROWSER_RECORD_MAX_WIDTH',
+      'FLUJO_BROWSER_RECORD_MAX_HEIGHT',
+      'FLUJO_BROWSER_INLINE_RECORDING_MAX_BYTES',
       'FLUJO_FFMPEG_PATH',
     ]) forwarded.add(key);
   }

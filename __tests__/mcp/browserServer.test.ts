@@ -37,6 +37,7 @@ describe('bundled browser MCP', () => {
   const managedEnvKeys = [
     'FLUJO_BROWSER_ALLOWED_ORIGINS',
     'FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS',
+    'FLUJO_BROWSER_RESTRICT_NAVIGATION',
     'FLUJO_BROWSER_STREAM_ENABLED',
     'FLUJO_BROWSER_MODE',
     'FLUJO_BROWSER_CHANNEL',
@@ -48,6 +49,7 @@ describe('bundled browser MCP', () => {
     'FLUJO_BROWSER_TIMEZONE_ID',
     'FLUJO_BROWSER_EXTENSION_DIRS',
     'FLUJO_BROWSER_WINDOW_VISIBILITY',
+    'FLUJO_BROWSER_SCREENSHOT_DIR',
   ] as const;
   const previousEnv = new Map(managedEnvKeys.map((key) => [key, process.env[key]]));
 
@@ -217,6 +219,89 @@ describe('bundled browser MCP', () => {
     }
   });
 
+  it('propagates the useful browser failure after recovery is exhausted', async () => {
+    const page = {
+      isClosed: jest.fn(() => false),
+      mainFrame: jest.fn(() => ({})),
+      on: jest.fn(),
+      screenshot: jest.fn(async () => { throw new Error('Chromium encoder rejected the requested frame size'); }),
+      url: jest.fn(() => 'about:blank'),
+      viewportSize: jest.fn(() => ({ width: 1280, height: 720 })),
+    };
+    const context = {
+      close: jest.fn(async () => undefined),
+      newPage: jest.fn(async () => page),
+      route: jest.fn(async () => undefined),
+    };
+    mockLaunchBrowser.mockResolvedValue({
+      close: jest.fn(async () => undefined),
+      isConnected: jest.fn(() => true),
+      newContext: jest.fn(async () => context),
+      once: jest.fn(),
+    });
+
+    await openSession('propagated-error', new AbortController().signal);
+    const result = await browserCallTool('browser_screenshot', {}, new AbortController().signal);
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      success: false,
+      error: { message: expect.stringContaining('Chromium encoder rejected the requested frame size') },
+    });
+  });
+
+  it('retries deterministic capture at a safer resolution and reports the recovery', async () => {
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-capture-recovery-'));
+    process.env.FLUJO_BROWSER_SCREENSHOT_DIR = dataDir;
+    const png = Buffer.alloc(26);
+    Buffer.from('89504e470d0a1a0a', 'hex').copy(png);
+    png[25] = 6;
+    const page = (fail: boolean) => ({
+      evaluate: jest.fn(async () => undefined),
+      isClosed: jest.fn(() => false),
+      mainFrame: jest.fn(() => ({})),
+      on: jest.fn(),
+      screenshot: fail
+        ? jest.fn(async () => { throw new Error('GPU rejected the 4k capture surface'); })
+        : jest.fn(async () => png),
+      setContent: jest.fn(async () => undefined),
+      setViewportSize: jest.fn(async () => undefined),
+      waitForLoadState: jest.fn(async () => undefined),
+    });
+    const firstPage = page(true);
+    const secondPage = page(false);
+    const contexts = [firstPage, secondPage].map((currentPage) => ({
+      close: jest.fn(async () => undefined),
+      newPage: jest.fn(async () => currentPage),
+      route: jest.fn(async () => undefined),
+    }));
+    const newContext = jest.fn()
+      .mockResolvedValueOnce(contexts[0])
+      .mockResolvedValueOnce(contexts[1]);
+    mockLaunchBrowser.mockResolvedValue({
+      close: jest.fn(async () => undefined),
+      isConnected: jest.fn(() => true),
+      newContext,
+      once: jest.fn(),
+    });
+
+    const result = await browserCallTool(
+      'browser_capture_page',
+      { source: '<h1>capture</h1>', resolution: '4k' },
+      new AbortController().signal,
+    );
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      success: true,
+      requestedResolution: { width: 3840, height: 2160 },
+      effectiveResolution: { width: 1920, height: 1080 },
+      attempts: [expect.stringContaining('GPU rejected')],
+      warnings: expect.arrayContaining([expect.stringContaining('Capture recovered')]),
+    });
+    expect(contexts[0].close).toHaveBeenCalled();
+    expect(contexts[1].close).toHaveBeenCalled();
+    await fs.rm(dataDir, { recursive: true, force: true });
+  });
+
   it('reuses the most recently used live session when sessionId is omitted', async () => {
     const contexts: Array<{ close: jest.Mock }> = [];
     mockLaunchBrowser.mockResolvedValue({
@@ -365,6 +450,7 @@ describe('bundled browser MCP', () => {
     });
 
     process.env.FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS = '0';
+    process.env.FLUJO_BROWSER_RESTRICT_NAVIGATION = '1';
     const policyResult = await browserCallTool(
       'browser_navigate',
       { sessionId: session.id, url: 'http://127.0.0.1:4200/' },
@@ -490,19 +576,30 @@ describe('bundled browser MCP', () => {
     expect(page.reload).toHaveBeenCalled();
   });
 
-  it('rejects unsafe schemes and URL credentials', async () => {
-    await expect(assertNavigationAllowed('file:///etc/passwd')).rejects.toMatchObject({
-      code: 'NAVIGATION_BLOCKED',
+  it('accepts local files and friendly bare targets while rejecting executable schemes and URL credentials', async () => {
+    await expect(assertNavigationAllowed(path.resolve('package.json'))).resolves.toMatchObject({ protocol: 'file:' });
+    await expect(assertNavigationAllowed('localhost:4200/app')).resolves.toMatchObject({
+      protocol: 'http:', hostname: 'localhost',
+    });
+    await expect(assertNavigationAllowed('192.168.1.20:3000/app')).resolves.toMatchObject({
+      protocol: 'http:', hostname: '192.168.1.20',
+    });
+    await expect(assertNavigationAllowed('example.com/docs')).resolves.toMatchObject({
+      protocol: 'https:', hostname: 'example.com',
+    });
+    await expect(assertNavigationAllowed('javascript:alert(1)')).rejects.toMatchObject({
+      code: 'INVALID_ARGUMENT',
     });
     await expect(assertNavigationAllowed('https://user:secret@example.com/')).rejects.toMatchObject({
-      code: 'NAVIGATION_BLOCKED',
+      code: 'INVALID_ARGUMENT',
     });
   });
 
-  it('allows private destinations by default and supports an explicit opt-out', async () => {
+  it('allows private destinations by default and supports an explicit restricted deployment mode', async () => {
     await expect(assertNavigationAllowed('http://127.0.0.1:4200/')).resolves.toMatchObject({
       hostname: '127.0.0.1',
     });
+    process.env.FLUJO_BROWSER_RESTRICT_NAVIGATION = '1';
     for (const setting of ['0', 'false', 'no', 'off']) {
       process.env.FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS = setting;
       await expect(assertNavigationAllowed('http://127.0.0.1:4200/')).rejects.toMatchObject({
@@ -512,6 +609,7 @@ describe('bundled browser MCP', () => {
   });
 
   it('enforces exact configured origins and clamps timeouts', async () => {
+    process.env.FLUJO_BROWSER_RESTRICT_NAVIGATION = '1';
     process.env.FLUJO_BROWSER_ALLOWED_ORIGINS = 'https://allowed.example';
     await expect(assertNavigationAllowed('https://other.example/path')).rejects.toBeInstanceOf(BrowserMcpError);
     await expect(assertNavigationAllowed('https://allowed.example/path')).resolves.toMatchObject({
@@ -519,7 +617,7 @@ describe('bundled browser MCP', () => {
     });
     expect(timeoutMs(1)).toBe(1_000);
     expect(timeoutMs(500_000)).toBe(60_000);
-    expect(() => timeoutMs('slow')).toThrow('timeoutMs must be a finite number');
+    expect(timeoutMs('slow')).toBe(30_000);
   });
 
   it('enables MCP Apps only for the shipped browser record', () => {

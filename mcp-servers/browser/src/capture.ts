@@ -6,23 +6,162 @@
  * an ephemeral capture context (`createCaptureContext()` in `runtime.ts`) or
  * an existing session's page — and never owns session lifecycle itself.
  *
- * Local-source gating (`assertLocalCaptureAllowed`) is the narrow, explicit
- * bypass mentioned in the plan: it does not touch `assertNavigationAllowed()`,
- * so ordinary `browser_open`/`browser_navigate` behaviour is unchanged. Four
- * independent gates must all hold before a `file://` / localhost / private
- * host is captured:
- *  1. `allowLocal === true` on the call;
- *  2. `FLUJO_BROWSER_ALLOW_LOCAL_CAPTURE` is truthy (default off);
- *  3. the resolved realpath satisfies `isInside()` against the FLUJO data
- *     directory or an entry in `FLUJO_BROWSER_LOCAL_CAPTURE_ROOTS`;
- *  4. everything else still goes through the ordinary `assertNavigationAllowed()`.
+ * Sources intentionally use the same permissive target normalization as
+ * ordinary browser navigation. Models may pass a URL, localhost address,
+ * local path, file:// URL, or inline HTML without having to coordinate policy
+ * flags. Output paths remain confined to FLUJO's data roots.
  */
 import { promises as fs } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { ElementHandle, Page } from 'patchright';
-import { BrowserMcpError, assertNavigationAllowed, enabledEnv } from './runtime.js';
+import { BrowserMcpError, assertNavigationAllowed } from './runtime.js';
+
+export type Resolution = { width: number; height: number };
+
+export type ResolutionOptions = {
+  defaultValue: Resolution;
+  minWidth: number;
+  minHeight: number;
+  maxWidth: number;
+  maxHeight: number;
+  even?: boolean;
+};
+
+export type NormalizedResolution = {
+  requested: Resolution;
+  effective: Resolution;
+  explicit: boolean;
+  warnings: string[];
+};
+
+const RESOLUTION_PRESETS: Record<string, Resolution> = {
+  '360p': { width: 640, height: 360 },
+  '480p': { width: 854, height: 480 },
+  '720p': { width: 1280, height: 720 },
+  hd: { width: 1280, height: 720 },
+  '1080p': { width: 1920, height: 1080 },
+  fhd: { width: 1920, height: 1080 },
+  '1440p': { width: 2560, height: 1440 },
+  qhd: { width: 2560, height: 1440 },
+  '2160p': { width: 3840, height: 2160 },
+  '4k': { width: 3840, height: 2160 },
+};
+
+function finiteNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value.trim());
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function parseResolution(value: unknown): Resolution | undefined {
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase().replace(/\s+/g, '');
+    if (RESOLUTION_PRESETS[normalized]) return { ...RESOLUTION_PRESETS[normalized] };
+    const match = /^(\d{2,5})[x×](\d{2,5})$/.exec(normalized);
+    if (match) return { width: Number(match[1]), height: Number(match[2]) };
+  }
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    const width = finiteNumber(record.width);
+    const height = finiteNumber(record.height);
+    if (width !== undefined && height !== undefined) return { width, height };
+  }
+  return undefined;
+}
+
+function fitInside(value: Resolution, maxWidth: number, maxHeight: number): Resolution {
+  const scale = Math.min(1, maxWidth / value.width, maxHeight / value.height);
+  return {
+    width: Math.round(value.width * scale),
+    height: Math.round(value.height * scale),
+  };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+function makeEven(value: number, min: number): number {
+  const rounded = Math.max(min, value);
+  return rounded % 2 === 0 ? rounded : rounded - 1;
+}
+
+/** Normalize presets, WIDTHxHEIGHT strings, objects, and legacy width/height values. */
+export function normalizeResolution(
+  resolution: unknown,
+  legacyWidth: unknown,
+  legacyHeight: unknown,
+  options: ResolutionOptions,
+): NormalizedResolution {
+  const warnings: string[] = [];
+  const parsed = parseResolution(resolution);
+  const legacyW = finiteNumber(legacyWidth);
+  const legacyH = finiteNumber(legacyHeight);
+  const explicit = parsed !== undefined || legacyW !== undefined || legacyH !== undefined;
+  let requested = parsed ?? {
+    width: legacyW ?? options.defaultValue.width,
+    height: legacyH ?? options.defaultValue.height,
+  };
+
+  if (resolution !== undefined && !parsed) {
+    warnings.push(`Unrecognized resolution ${JSON.stringify(resolution)}; using ${requested.width}x${requested.height}.`);
+  }
+  if (!parsed && (legacyW !== undefined || legacyH !== undefined)) {
+    requested = {
+      width: legacyW ?? Math.round((requested.height * options.defaultValue.width) / options.defaultValue.height),
+      height: legacyH ?? Math.round((requested.width * options.defaultValue.height) / options.defaultValue.width),
+    };
+  }
+
+  const fitted = fitInside({
+    width: Math.max(1, requested.width),
+    height: Math.max(1, requested.height),
+  }, options.maxWidth, options.maxHeight);
+  let effective = {
+    width: clamp(fitted.width, options.minWidth, options.maxWidth),
+    height: clamp(fitted.height, options.minHeight, options.maxHeight),
+  };
+  if (options.even) {
+    effective = {
+      width: makeEven(effective.width, options.minWidth),
+      height: makeEven(effective.height, options.minHeight),
+    };
+  }
+  requested = { width: Math.round(requested.width), height: Math.round(requested.height) };
+
+  if (effective.width !== requested.width || effective.height !== requested.height) {
+    warnings.push(
+      `Requested ${requested.width}x${requested.height}; using the supported ${effective.width}x${effective.height} resolution.`,
+    );
+  }
+  return { requested, effective, explicit, warnings };
+}
+
+/** Try the requested size first, then progressively safer standard resolutions. */
+export function resolutionFallbacks(primary: Resolution): Resolution[] {
+  const candidates: Resolution[] = [
+    primary,
+    { width: 1920, height: 1080 },
+    { width: 1280, height: 720 },
+    { width: 854, height: 480 },
+    { width: 640, height: 360 },
+  ];
+  const seen = new Set<string>();
+  return candidates.filter(({ width, height }) => {
+    const key = `${width}x${height}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+export function finiteParameter(value: unknown, fallback: number): number {
+  return finiteNumber(value) ?? fallback;
+}
 
 /**
  * Local `getDataDir()`/`isInside()` — deliberately not imported from
@@ -44,8 +183,8 @@ const PNG_SIGNATURE = '89504e470d0a1a0a';
 const PNG_COLOR_TYPE_OFFSET = 25;
 
 export type CaptureSource =
-  | { kind: 'html'; html: string }
-  | { kind: 'url'; url: string };
+  | { kind: 'html'; html: string; warnings: string[] }
+  | { kind: 'url'; url: string; warnings: string[] };
 
 /** Assert a single, stable PNG color type and return it. Never silently accepts a malformed image. */
 export function pngColorType(png: Buffer): number {
@@ -55,95 +194,36 @@ export function pngColorType(png: Buffer): number {
   return png.readUInt8(PNG_COLOR_TYPE_OFFSET);
 }
 
-async function realpathIfExists(candidate: string): Promise<string> {
-  try {
-    return await fs.realpath(candidate);
-  } catch {
-    return path.resolve(candidate);
-  }
-}
-
-function localCaptureRoots(): string[] {
-  const roots = [getDataDir()];
-  const raw = process.env.FLUJO_BROWSER_LOCAL_CAPTURE_ROOTS?.trim();
-  if (raw) {
-    for (const entry of raw.split(path.delimiter)) {
-      const trimmed = entry.trim();
-      if (trimmed) roots.push(path.resolve(trimmed));
-    }
-  }
-  return roots;
-}
-
-function isLocalOrPrivateOrigin(url: URL): boolean {
-  if (url.protocol === 'file:') return true;
-  const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1'
-    || hostname.endsWith('.localhost') || hostname.endsWith('.local');
-}
-
-/** Gates 1-3 of the local-capture ladder; gate 4 is `assertNavigationAllowed()` itself. */
-export async function assertLocalCaptureAllowed(resolvedPath: string, allowLocal: boolean): Promise<void> {
-  if (!allowLocal) {
-    throw new BrowserMcpError('NAVIGATION_BLOCKED', 'Local file/localhost capture requires allowLocal=true.');
-  }
-  if (!enabledEnv('FLUJO_BROWSER_ALLOW_LOCAL_CAPTURE')) {
-    throw new BrowserMcpError('NAVIGATION_BLOCKED', 'Local capture is disabled by policy (set FLUJO_BROWSER_ALLOW_LOCAL_CAPTURE=1 to enable).');
-  }
-  const real = await realpathIfExists(resolvedPath);
-  const roots = localCaptureRoots();
-  if (!roots.some((root) => isInside(root, real))) {
-    throw new BrowserMcpError('NAVIGATION_BLOCKED', 'The local path is outside the allowed capture roots.');
-  }
-}
-
 /**
- * Resolve exactly one of `url` / `html` / `filePath` into a `CaptureSource`,
- * applying local-source gating for `file://` and localhost/private-host
- * inputs and the ordinary `assertNavigationAllowed()` gate for everything
- * else.
+ * Resolve the compact `source` parameter while retaining the old url/html/
+ * filePath aliases. If a caller supplies several aliases, choose the clearest
+ * one and report the adjustment instead of failing the whole tool call.
  */
 export async function resolveCaptureSource(args: {
+  source?: unknown;
   url?: string;
   html?: string;
   filePath?: string;
   allowLocal?: boolean;
 }): Promise<CaptureSource> {
-  const provided = [args.url, args.html, args.filePath].filter((value) => typeof value === 'string' && value.length > 0);
-  if (provided.length !== 1) {
-    throw new BrowserMcpError('INVALID_ARGUMENT', 'Provide exactly one of url, html, or filePath.');
+  const warnings: string[] = [];
+  const compact = typeof args.source === 'string' && args.source.trim() ? args.source.trim() : undefined;
+  const html = typeof args.html === 'string' && args.html.length > 0 ? args.html : undefined;
+  const filePath = typeof args.filePath === 'string' && args.filePath.trim() ? args.filePath.trim() : undefined;
+  const url = typeof args.url === 'string' && args.url.trim() ? args.url.trim() : undefined;
+  const count = [compact, html, filePath, url].filter(Boolean).length;
+  if (count === 0) {
+    throw new BrowserMcpError('INVALID_ARGUMENT', 'Provide source, or omit it while supplying an active sessionId.');
   }
-  if (typeof args.html === 'string') {
-    return { kind: 'html', html: args.html };
-  }
-  const allowLocal = args.allowLocal === true;
-  if (typeof args.filePath === 'string') {
-    const resolved = path.resolve(args.filePath);
-    await assertLocalCaptureAllowed(resolved, allowLocal);
-    return { kind: 'url', url: pathToFileURL(resolved).href };
-  }
-  const raw = args.url as string;
-  let parsed: URL;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    throw new BrowserMcpError('NAVIGATION_BLOCKED', 'The URL is malformed.');
-  }
-  if (parsed.protocol === 'file:') {
-    await assertLocalCaptureAllowed(fileURLToPath(parsed), allowLocal);
-    return { kind: 'url', url: parsed.href };
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new BrowserMcpError('NAVIGATION_BLOCKED', 'Only HTTP, HTTPS, and file:// URLs are allowed.');
-  }
-  if (isLocalOrPrivateOrigin(parsed)) {
-    await assertLocalCaptureAllowed(raw, allowLocal);
-    return { kind: 'url', url: parsed.href };
-  }
-  // Gate 4: ordinary navigation policy, byte-for-byte unchanged, for anything
-  // that is not a local/private destination.
-  const allowedUrl = await assertNavigationAllowed(raw);
-  return { kind: 'url', url: allowedUrl.href };
+  if (count > 1) warnings.push('Several capture sources were supplied; source/html/filePath/url precedence was applied.');
+
+  const chosen = compact ?? html ?? filePath ?? url!;
+  const isHtml = compact
+    ? /^\s*(?:<!doctype\s+html|<html|<body|<svg|<[A-Za-z][^>]*>)/i.test(compact)
+    : html !== undefined && chosen === html;
+  if (isHtml) return { kind: 'html', html: chosen, warnings };
+  const target = await assertNavigationAllowed(chosen);
+  return { kind: 'url', url: target.href, warnings };
 }
 
 function looksLikeJsPredicate(expression: string): boolean {
@@ -165,13 +245,13 @@ export type CapturePageOptions = {
  */
 export async function captureDeterministicPng(
   page: Page,
-  source: CaptureSource,
+  source: CaptureSource | undefined,
   options: CapturePageOptions,
 ): Promise<{ png: Buffer; colorType: number }> {
   const timeout = options.timeoutMs;
-  if (source.kind === 'html') {
+  if (source?.kind === 'html') {
     await page.setContent(source.html, { waitUntil: 'load', timeout });
-  } else {
+  } else if (source) {
     await page.goto(source.url, { waitUntil: 'load', timeout });
   }
   await page.waitForLoadState('load', { timeout }).catch(() => undefined);
@@ -230,13 +310,13 @@ export type CaptureRegion = { x: number; y: number; width: number; height: numbe
 /** Region capture is a clipped `page.screenshot()`, not a manual pixel crop, so DPR/scroll never drift the result. */
 export async function captureRegionPng(
   page: Page,
-  source: CaptureSource,
+  source: CaptureSource | undefined,
   region: CaptureRegion,
   timeoutMs: number,
 ): Promise<{ png: Buffer; colorType: number }> {
-  if (source.kind === 'html') {
+  if (source?.kind === 'html') {
     await page.setContent(source.html, { waitUntil: 'load', timeout: timeoutMs });
-  } else {
+  } else if (source) {
     await page.goto(source.url, { waitUntil: 'load', timeout: timeoutMs });
   }
   await page.waitForLoadState('load', { timeout: timeoutMs }).catch(() => undefined);
