@@ -37,6 +37,7 @@ import {
   createStatisticsEvent,
   recordStatisticsEvent,
 } from '@/backend/services/statistics';
+import { applyPresetArguments } from '@/backend/utils/resolveDynamicReferences';
 
 const log = createLogger('backend/services/model/adapters/codexAdapter');
 
@@ -275,11 +276,9 @@ export class CodexAdapter implements CompletionAdapter {
       resolveRejectedUi?: (reason: string) => Promise<ToolUi | undefined>,
     ): Promise<CallToolResult | null> => {
       if (!requestToolApproval) return null;
-      const { approved, feedback } = await requestToolApproval({ id: callId, name, args });
+      const approved = await requestToolApproval({ id: callId, name, args });
       if (approved) return null;
-      const rejectionText = feedback
-        ? `User rejected this tool call: ${feedback}`
-        : 'Tool call rejected by the user.';
+      const rejectionText = 'tool denied';
       const ui = await resolveRejectedUi?.(rejectionText);
       recordToolResult({
         id: callId,
@@ -392,6 +391,8 @@ export class CodexAdapter implements CompletionAdapter {
           nodeId: callerNodeId,
           annotations,
           uiResourceUri,
+          presetArgs,
+          context,
         } = decoded!;
         const readableName = buildReadableName(server, originalTool, usedNames);
         return {
@@ -407,6 +408,7 @@ export class CodexAdapter implements CompletionAdapter {
             // reaches FLUJO instead of after their result is available, with the
             // arguments paced into the card while they are still being read (#337).
             await streamToolCall({ id: callId, name: readableName, argsJson });
+            const effectiveArgs = await applyPresetArguments(args ?? {}, presetArgs, context);
             const denied = await gate(
               callId,
               readableName,
@@ -430,7 +432,7 @@ export class CodexAdapter implements CompletionAdapter {
             const result = await mcpService.callTool(
               server,
               originalTool,
-              args ?? {},
+              effectiveArgs,
               timeout ?? DEFAULT_TOOL_CALL_TIMEOUT_SECONDS,
               onToolProgress
                 ? (progress) => onToolProgress({
@@ -660,7 +662,7 @@ export class CodexAdapter implements CompletionAdapter {
         developer_instructions: CODEX_FLUJO_INSTRUCTIONS,
         // Do not expose Codex's built-in shell. FLUJO filesystem operations
         // must go through the bridged MCP tools so they remain observable and
-        // subject to FLUJO's approval and protected-path policies.
+        // subject to FLUJO's approval setting.
         features: {
           shell_tool: false,
         },

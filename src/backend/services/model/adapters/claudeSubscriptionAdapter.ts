@@ -35,6 +35,7 @@ import {
 } from './claudeSessionStore';
 import { prepareClaudeRuntimeEnvironment } from './claudeRuntimeHome';
 import { DEFAULT_AGENTIC_MAX_TURNS } from '@/shared/types/model/model';
+import { applyPresetArguments } from '@/backend/utils/resolveDynamicReferences';
 import {
   classifyStatisticsError,
   createStatisticsEvent,
@@ -382,6 +383,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       serverName: string;
       toolName: string;
       advertisedUri?: string;
+      presetArgs?: Record<string, unknown>;
+      context?: import('@/backend/execution/flow/types').ToolReferenceContext;
     }>();
     // Spawn-with-brief (issue #156): a routing model may call handoff tools
     // SEVERAL times — in one turn (parallel tool_use blocks) or one per turn,
@@ -581,12 +584,16 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           timeout,
           nodeId: callerNodeId,
           uiResourceUri,
+          presetArgs,
+          context,
         } = decoded!;
         const readableName = buildReadableName(server, originalTool, usedNames);
         mcpToolUiByReadableName.set(readableName, {
           serverName: server,
           toolName: originalTool,
           advertisedUri: uiResourceUri,
+          presetArgs,
+          context,
         });
         return tool(readableName, description, schemaShape, async (args: Record<string, unknown>): Promise<CallToolResult> => {
           log.debug('Claude subscription tool call', { server, tool: originalTool, exposedAs: readableName });
@@ -594,10 +601,11 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           const toolStartedAt = Date.now();
           // Same timeout policy as the OpenAI-path tool loop: the MCP node's
           // toolTimeout (seconds, -1 = none), defaulting to 5 minutes.
+          const effectiveArgs = await applyPresetArguments(args ?? {}, presetArgs, context);
           const result = await mcpService.callTool(
             server,
             originalTool,
-            args ?? {},
+            effectiveArgs,
             timeout ?? DEFAULT_TOOL_CALL_TIMEOUT_SECONDS,
             onToolProgress
               ? (progress) => onToolProgress({
@@ -798,7 +806,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           // Human-in-the-loop: when an approval gate is wired, block until the
           // user decides (surfaced to FLUJO's tool-approval UI). Otherwise auto-allow.
           if (requestToolApproval) {
-            const { approved, feedback } = await requestToolApproval({
+            const linkedTool = mcpToolUiByReadableName.get(readableName);
+            const approved = await requestToolApproval({
               id: opts.toolUseID,
               name: readableName,
               args,
@@ -806,18 +815,13 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             if (approved) {
               return { behavior: 'allow', updatedInput: input };
             }
-            // Issue #247: carry the optional rejection reason back to the model
-            // so it can adjust; otherwise keep the original fixed rejection text.
-            const rejectionText = feedback
-              ? `User rejected this tool call: ${feedback}`
-              : 'Tool call rejected by the user.';
+            const rejectionText = 'tool denied';
             const queued = queuedToolCalls.get(readableName);
             if (queued) {
               const index = queued.findIndex(entry => entry.id === opts.toolUseID);
               if (index >= 0) queued.splice(index, 1);
               if (queued.length === 0) queuedToolCalls.delete(readableName);
             }
-            const linkedTool = mcpToolUiByReadableName.get(readableName);
             const uiLink = linkedTool
               ? await resolveInvokedToolUiLink(
                   linkedTool.serverName,

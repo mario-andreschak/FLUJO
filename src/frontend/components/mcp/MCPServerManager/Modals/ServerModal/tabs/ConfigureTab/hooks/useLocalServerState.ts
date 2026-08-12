@@ -43,7 +43,6 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
     args: [],
     env: {},
     disabled: false,
-    autoApprove: [],
     rootPath: '',
     transport: 'stdio',
     _buildCommand: '',
@@ -87,7 +86,6 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
       setLocalConfig(prev => ({
         name: prev.name,
         disabled: prev.disabled,
-        autoApprove: prev.autoApprove,
         rootPath: prev.rootPath,
         env: prev.env,
         _buildCommand: prev._buildCommand,
@@ -96,6 +94,7 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
         roots: prev.roots,
         exposeAsMcpServer: prev.exposeAsMcpServer,
         sampling: prev.sampling,
+        toolParameterPresets: prev.toolParameterPresets,
         transport: 'websocket',
         websocketUrl: websocketUrl
       } as MCPWebSocketConfig));
@@ -104,7 +103,6 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
       setLocalConfig(prev => ({
         name: prev.name,
         disabled: prev.disabled,
-        autoApprove: prev.autoApprove,
         rootPath: prev.rootPath,
         env: prev.env,
         _buildCommand: prev._buildCommand,
@@ -113,6 +111,7 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
         roots: prev.roots,
         exposeAsMcpServer: prev.exposeAsMcpServer,
         sampling: prev.sampling,
+        toolParameterPresets: prev.toolParameterPresets,
         transport: 'sse',
         serverUrl: serverUrl,
         // Preserve any custom headers when switching between HTTP-based transports
@@ -123,7 +122,6 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
       setLocalConfig(prev => ({
         name: prev.name,
         disabled: prev.disabled,
-        autoApprove: prev.autoApprove,
         rootPath: prev.rootPath,
         env: prev.env,
         _buildCommand: prev._buildCommand,
@@ -132,6 +130,7 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
         roots: prev.roots,
         exposeAsMcpServer: prev.exposeAsMcpServer,
         sampling: prev.sampling,
+        toolParameterPresets: prev.toolParameterPresets,
         transport: 'streamable',
         serverUrl: serverUrl,
         // Preserve any custom headers when switching between HTTP-based transports
@@ -144,7 +143,6 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
         command: isStdioConfig(prev) ? prev.command : '',
         args: isStdioConfig(prev) ? prev.args : [],
         disabled: prev.disabled,
-        autoApprove: prev.autoApprove,
         rootPath: prev.rootPath,
         env: prev.env,
         _buildCommand: prev._buildCommand,
@@ -153,6 +151,7 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
         roots: prev.roots,
         exposeAsMcpServer: prev.exposeAsMcpServer,
         sampling: prev.sampling,
+        toolParameterPresets: prev.toolParameterPresets,
         transport: 'stdio'
       } as MCPStdioConfig));
     }
@@ -228,7 +227,6 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
       args: [],
       env: {},
       disabled: false,
-      autoApprove: [],
       rootPath: '',
       transport: 'stdio',
       _buildCommand: '',

@@ -73,6 +73,7 @@ import {
   parseDataUrl,
 } from '@/backend/services/model/adapters/messageUtils';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { applyPresetArguments } from '@/backend/utils/resolveDynamicReferences';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { appendRawForState } from '@/backend/execution/flow/conversationLog';
 import { registerPendingApproval, listPendingToolCalls } from '@/backend/execution/flow/toolApprovalRegistry';
@@ -81,7 +82,6 @@ import { loadItem } from '@/utils/storage/backend';
 import { StorageKey, type Settings } from '@/shared/types/storage/storage';
 import { normaliseOllamaRoot, withOllamaLock, getLoadedModel, setLoadedModel } from '@/backend/services/ollama/modelRegistry';
 import { unloadModel } from '@/backend/services/ollama';
-import { evaluatePermission, extractResource } from '@/backend/execution/flow/permissionEngine';
 import { v4 as uuidv4 } from 'uuid'; // Import uuid
 import {
   classifyStatisticsError,
@@ -1089,33 +1089,8 @@ export class ModelHandler {
 
     const requestToolApproval =
       requireToolApproval && emit && conversationId
-        ? async (call: { id: string; name: string; args: Record<string, unknown> }): Promise<{ approved: boolean; feedback?: string }> => {
-            const safeMeetingSynthetic = input.meetingToolsEnabled && (
-              isMeetingToolName(call.name)
-              || call.name === 'handoff'
-              || call.name.startsWith('handoff_to_')
-            );
-            if (safeMeetingSynthetic) return { approved: true };
-
+        ? async (call: { id: string; name: string; args: Record<string, unknown> }): Promise<boolean> => {
             if (input.onApprovalRequired === 'fail') {
-              const decoded = decodeToolName(call.name, toolNameMap);
-              if (decoded) {
-                const effect = evaluatePermission(
-                  input.permissionRules ?? [],
-                  input.savedPermissionRules ?? [],
-                  decoded.server,
-                  decoded.tool,
-                  extractResource(call.args ?? {}),
-                );
-                if (effect === 'allow') return { approved: true };
-                if (effect === 'deny') {
-                  return {
-                    approved: false,
-                    feedback: `Tool "${decoded.tool}" is denied by this flow's permission rules.`,
-                  };
-                }
-              }
-
               // Self-orchestrating adapters own the tool loop, so waiting on
               // the ordinary approval registry would deadlock an unattended
               // meeting. Throwing aborts the participant turn without running
@@ -1130,10 +1105,8 @@ export class ModelHandler {
               type: 'function',
               function: { name: call.name, arguments: JSON.stringify(call.args ?? {}) },
             };
-            // Issue #247: surface the optional rejection feedback the /respond
-            // route may pass so the adapter can carry it back to the model.
-            return new Promise<{ approved: boolean; feedback?: string }>((resolve) => {
-              registerPendingApproval(conversationId, toolCall, (approved, feedback) => resolve({ approved, feedback }));
+            return new Promise<boolean>((resolve) => {
+              registerPendingApproval(conversationId, toolCall, resolve);
               emit({ type: 'run:awaiting_approval', pendingToolCalls: listPendingToolCalls(conversationId) });
             });
           }
@@ -1639,7 +1612,7 @@ export class ModelHandler {
         id: string;
         name: string;
         args: Record<string, unknown>;
-      }) => Promise<{ approved: boolean; feedback?: string }>;
+      }) => Promise<boolean>;
       onTranscriptMessage?: (message: FlujoChatMessage) => void;
       consumeSteeringMessages?: () => FlujoChatMessage[];
       onModelDelta?: (delta: ModelStreamDelta) => void;
@@ -2694,7 +2667,7 @@ export class ModelHandler {
             return;
           }
           // Parse the arguments
-          const args = JSON.parse(argsString);
+          let args = JSON.parse(argsString) as Record<string, unknown>;
           log.info("trying to call tool", name)
           // Check if it's a handoff tool
           if (name.startsWith('handoff_to_') || name === 'handoff') {
@@ -2972,48 +2945,10 @@ export class ModelHandler {
             return;
           }
 
-          // Phase 3 (issue #246): per-call permission gate.
-          // Evaluate configured + saved rules before dispatching to mcpService.
-          const permRules = input.permissionRules ?? [];
-          const savedRules = input.savedPermissionRules ?? [];
-          if (permRules.length > 0 || savedRules.length > 0) {
-            let callArgs: Record<string, unknown> = {};
-            try { callArgs = JSON.parse(argsString); } catch { /* best effort */ }
-            const resource = extractResource(callArgs);
-            const permEffect = evaluatePermission(permRules, savedRules, serverName, toolName, resource);
-            if (permEffect === 'deny') {
-              log.info('Permission denied by rule for tool invocation', { toolName, serverName });
-              const deniedContent = `Permission denied: the active ruleset does not allow calling ${toolName} on ${serverName} (resource: ${resource}).`;
-              emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
-              emit?.({
-                type: 'tool:result',
-                toolCallId: id,
-                name,
-                result: deniedContent,
-                isError: true,
-              });
-              const uiLink = await ModelHandler.resolveToolUiLink(
-                serverName,
-                toolName,
-                undefined,
-                decoded.uiResourceUri,
-                invocationArgsForUi,
-              );
-              toolCallMessages.push({
-                id: uuidv4(),
-                role: 'tool',
-                tool_call_id: id,
-                content: deniedContent,
-                timestamp: Date.now(),
-                ...(uiLink
-                  ? { ui: { ...uiLink, cancelledReason: deniedContent, isError: true } }
-                  : {}),
-              });
-              processedToolCalls.push({ name, args: callArgs, id, result: deniedContent });
-              return;
-            }
-            // 'allow' or 'ask' → fall through to normal dispatch.
-          }
+          // Fixed server/node arguments are resolved only at dispatch time and
+          // win over anything the model attempted to provide. They were removed
+          // from the advertised schema, so the model never sees or controls them.
+          args = await applyPresetArguments(args, decoded.presetArgs, decoded.context);
 
           emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
 

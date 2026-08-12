@@ -378,6 +378,15 @@ export const MCPNodePropertiesModal = ({
               onToggle={handleToolToggle}
               onActivateAll={() => setAllToolsEnabled(true)}
               onDeactivateAll={() => setAllToolsEnabled(false)}
+              parameterPresets={nodeData.properties?.toolParameterPresets}
+              onParameterPresetsChange={(toolParameterPresets) => handlePropertyChange('toolParameterPresets', toolParameterPresets)}
+              workspaceRoots={nodeData.properties?.roots?.length
+                ? nodeData.properties.roots
+                : selectedServerConfig?.roots?.length
+                  ? selectedServerConfig.roots
+                  : selectedServerConfig?.rootPath
+                    ? [selectedServerConfig.rootPath]
+                    : []}
             />
           )}
         </>

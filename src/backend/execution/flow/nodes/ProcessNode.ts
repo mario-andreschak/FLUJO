@@ -13,7 +13,6 @@ import {
   buildMeetingTools,
   isMeetingToolName,
 } from '../handlers/meetingTools';
-import { isWhollyDenied } from '../permissionEngine';
 import { buildListMCPResourcesTool, LIST_MCP_RESOURCES_TOOL_NAME } from '../handlers/mcpResourceTools';
 import { RUN_RESOURCE_SCHEME } from '@/shared/types/runResources';
 import { buildNodeContext, scopeMessagesForInput, collapseNodeOutputs, deriveModelInputView } from '../buildNodeContext';
@@ -24,10 +23,8 @@ import { buildSubflowTool } from '../handlers/subflowToolInvocation';
 import { buildDetachedSubflowTool, SUBFLOW_DETACHED_TOOL_PREFIX } from '../handlers/subflowDetachedInvocation';
 import { flowService } from '@/backend/services/flow/index';
 import { modelService } from '@/backend/services/model';
-import { loadServerConfigs } from '@/backend/services/mcp/config';
 import { FlowNode } from '@/shared/types/flow';
 import { FEATURES } from '@/config/features'; // Import feature flags
-import { PermissionRule } from '@/shared/types/permissions';
 import {
   SharedState,
   ProcessNodeParams,
@@ -45,7 +42,7 @@ import {
 import { FlujoChatMessage } from '@/shared/types/chat'; // Import FlujoChatMessage
 import { evaluateCondition, selectConditionText } from '@/utils/shared/edgeConditions';
 import { resolveRunVars } from '@/utils/shared/resolveRunVars';
-import { resolveNonSecretGlobalVars } from '@/backend/utils/resolveGlobalVars';
+import { resolvePromptDynamicReferences } from '@/backend/utils/resolveDynamicReferences';
 import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { resolveKvNodeRefs, captureKvValue, type KvFlowContext } from '../resolveKvNodeRefs';
 import { withMcpAppModelContext } from '@/backend/mcpApps/modelContext';
@@ -367,6 +364,7 @@ export class ProcessNode extends BaseNode {
     const excludeModelPrompt = node_params?.properties?.excludeModelPrompt || false;
     const excludeStartNodePrompt = node_params?.properties?.excludeStartNodePrompt || false;
     const excludeSystemPrompt = node_params?.properties?.excludeSystemPrompt || false;
+    const currentAppId = node_params?.properties?.mcpNodes?.[0]?.properties?.boundServer;
 
     log.debug('Extracted properties', {
       nodeId,
@@ -418,7 +416,13 @@ export class ProcessNode extends BaseNode {
     // Resolve configuration globals at execution time. The prompt-safe resolver
     // deliberately leaves secret globals as `${global:NAME}` so their values are
     // never sent to the model.
-    completePrompt = await resolveNonSecretGlobalVars(completePrompt) as string;
+    completePrompt = await resolvePromptDynamicReferences(completePrompt, {
+      conversationId: sharedState.conversationId,
+      flowId,
+      nodeId,
+      modelId: boundModel,
+      appId: currentAppId,
+    }) as string;
 
     // Tier 4 (persistent kv): inject `${kv:NAME}` cross-run values AFTER vars
     // and resources. Scope needs the flow's folder, fetched once (lazily) and
@@ -480,47 +484,6 @@ export class ProcessNode extends BaseNode {
     // Issue #239: store mcpNodes for resource-tool dispatch at tool-call time.
     sharedState.currentMCPNodes = mcpNodes.length > 0 ? mcpNodes : undefined;
 
-    // Issue #246: Build merged permission rules from flow-level rules + autoApprove
-    // desugaring. Stored in SharedState so ModelHandler can evaluate them per-call.
-    // Done once per node visit (prep re-runs on tool loop iterations, which is fine
-    // since the rules are idempotent).
-    {
-      let flowLevelRules: PermissionRule[] = [];
-      try {
-        const flowForPermissions = await flowService.getFlow(flowId);
-        flowLevelRules = flowForPermissions?.permissionRules ?? [];
-      } catch (err) {
-        log.warn('Could not load flow for permission rules', { err });
-      }
-
-      // Desugar autoApprove from each bound MCP server's config:
-      // autoApprove: ['tool1', 'tool2'] → [{action:'tool1',resource:'*',effect:'allow'}, ...]
-      const autoApproveRules: PermissionRule[] = [];
-      if (mcpNodes.length > 0) {
-        try {
-          const allConfigs = await loadServerConfigs();
-          if (Array.isArray(allConfigs)) {
-            for (const mcpNode of mcpNodes) {
-              const serverName = mcpNode.properties.boundServer;
-              if (!serverName) continue;
-              const serverConfig = allConfigs.find(c => c.name === serverName);
-              if (serverConfig?.autoApprove?.length) {
-                for (const toolName of serverConfig.autoApprove) {
-                  autoApproveRules.push({ action: toolName, resource: '*', effect: 'allow' });
-                }
-              }
-            }
-          }
-        } catch (err) {
-          log.warn('Could not load MCP server configs for autoApprove desugaring', { err });
-        }
-      }
-
-      // Merge: autoApprove first (lower priority), flow-level rules after (higher priority).
-      // Flow-level deny rules beat any autoApprove allows (last-match-wins semantics).
-      sharedState.permissionRules = [...autoApproveRules, ...flowLevelRules];
-    }
-
     if (sharedState.mcpContext && sharedState.mcpContext.availableTools && sharedState.mcpContext.availableTools.length > 0) {
       // Use tools already processed by MCPNode
       log.info('Using MCP tools from shared state', {
@@ -533,12 +496,7 @@ export class ProcessNode extends BaseNode {
           mcpNodesCount: mcpNodes.length
         });
 
-        // Phase 2 (issue #246): build merged permission rules before fetching tools
-        // so wholly-denied tools are dropped from the advertised list.
-        const mcpResult = await ToolHandler.processMCPNodes({
-          mcpNodes,
-          permissionRules: sharedState.permissionRules,
-        });
+        const mcpResult = await ToolHandler.processMCPNodes({ mcpNodes });
 
         if (!mcpResult.success) {
           log.error('Failed to process MCP nodes', { error: mcpResult.error });
@@ -575,11 +533,7 @@ export class ProcessNode extends BaseNode {
     // offered iff enabled, so flows that don't use it keep a byte-identical tool
     // set (preserving the #89 prefix-cache) and unattended flows can leave it
     // off entirely.
-    // A flow-level `deny` rule for action `question` (isWhollyDenied) removes it
-    // even when the node opted in — satisfies AC#3 (disable for unattended /
-    // headless), mirroring how MCP tools are dropped in ToolHandler.
-    const questionDenied = isWhollyDenied(sharedState.permissionRules ?? [], QUESTION_TOOL_NAME);
-    if (node_params?.properties?.allowQuestion === true && !questionDenied &&
+    if (node_params?.properties?.allowQuestion === true &&
         !availableTools.some((t) => t.name === QUESTION_TOOL_NAME)) {
       availableTools = [...availableTools, buildQuestionTool()];
     }
@@ -587,10 +541,8 @@ export class ProcessNode extends BaseNode {
     // Todo tool (issue #259): offer the synthetic `todo` tool only when this
     // Process node opts in (`enableTodoTool`). Like the question tool, it is
     // offered iff enabled (not sticky-armed), so flows that don't use it keep a
-    // byte-identical tool set (preserving the #89 prefix-cache). A flow-level
-    // `deny` rule for action `todo` removes it even when the node opted in.
-    const todoDenied = isWhollyDenied(sharedState.permissionRules ?? [], TODO_TOOL_NAME);
-    if (node_params?.properties?.enableTodoTool === true && !todoDenied &&
+    // byte-identical tool set (preserving the #89 prefix-cache).
+    if (node_params?.properties?.enableTodoTool === true &&
         !availableTools.some((t) => t.name === TODO_TOOL_NAME)) {
       availableTools = [...availableTools, buildTodoTool()];
     }
@@ -612,6 +564,13 @@ export class ProcessNode extends BaseNode {
     sharedState.toolNameMap = sharedState.toolNameMap || {};
     for (const tool of availableTools) {
       if (tool.server && tool.originalName) {
+        tool.context = {
+          conversationId: sharedState.conversationId,
+          flowId,
+          nodeId,
+          modelId: boundModel,
+          appId: tool.server,
+        };
         // Issue #255: carry the advertise-time identity (client generation +
         // schema hash) so a stale dispatch after a reconnect is rejected.
         sharedState.toolNameMap[tool.name] = {
@@ -623,6 +582,8 @@ export class ProcessNode extends BaseNode {
           schemaHash: tool.schemaHash,
           annotations: tool.annotations,
           uiResourceUri: tool.uiResourceUri,
+          presetArgs: tool.presetArgs,
+          context: tool.context,
         };
       }
     }
@@ -650,9 +611,6 @@ export class ProcessNode extends BaseNode {
     },
     requireToolApproval: sharedState.requireApproval ?? false,
     onApprovalRequired: sharedState.onApprovalRequired,
-    permissionRules: sharedState.permissionRules,
-    savedPermissionRules: sharedState.savedPermissionRules,
-    meetingToolsEnabled: Boolean(sharedState.meetingParticipant && sharedState.meetingTurn),
     // Issue #258: carry the resolved unattended flag so execCore can pass it to
     // the model call (the synthetic `question` tool degrades in unattended runs).
     unattended: sharedState.unattended,
@@ -780,7 +738,7 @@ export class ProcessNode extends BaseNode {
     if (wireBase.some((message) =>
       message.role === 'user'
       && typeof message.content === 'string'
-      && message.content.includes('${')
+      && (message.content.includes('${') || message.content.includes('@'))
     )) {
       wireBase = await Promise.all(wireBase.map(async (message): Promise<FlujoChatMessage> => {
         if (message.role !== 'user' || typeof message.content !== 'string') return message;
@@ -800,6 +758,13 @@ export class ProcessNode extends BaseNode {
           sharedState.emit,
           { nodeId },
         );
+        content = await resolvePromptDynamicReferences(content, {
+          conversationId: sharedState.conversationId,
+          flowId,
+          nodeId,
+          modelId: boundModel,
+          appId: currentAppId,
+        }) as string;
         return content === message.content
           ? message
           : { ...message, content } as FlujoChatMessage;
@@ -829,7 +794,13 @@ export class ProcessNode extends BaseNode {
           )
         : isolatedPrompt;
       if (typeof resolvedIsolatedPrompt === 'string') {
-        resolvedIsolatedPrompt = await resolveNonSecretGlobalVars(resolvedIsolatedPrompt) as string;
+        resolvedIsolatedPrompt = await resolvePromptDynamicReferences(resolvedIsolatedPrompt, {
+          conversationId: sharedState.conversationId,
+          flowId,
+          nodeId,
+          modelId: boundModel,
+          appId: currentAppId,
+        }) as string;
       }
       // Tier 4: `${kv:NAME}` in the isolated prompt too (wire-only text).
       if (typeof resolvedIsolatedPrompt === 'string' && resolvedIsolatedPrompt.includes('${kv:')) {
@@ -1060,6 +1031,8 @@ export class ProcessNode extends BaseNode {
             schemaHash: t.schemaHash,
             annotations: t.annotations,
             uiResourceUri: t.uiResourceUri,
+            presetArgs: t.presetArgs,
+            context: t.context,
           };
         }
       }
@@ -1138,9 +1111,6 @@ export class ProcessNode extends BaseNode {
             onCodexSessionChange: prepResult.onCodexSessionChange,
             requireToolApproval: prepResult.requireToolApproval, // Gate tool calls on user approval
             onApprovalRequired: prepResult.onApprovalRequired,
-            permissionRules: prepResult.permissionRules,
-            savedPermissionRules: prepResult.savedPermissionRules,
-            meetingToolsEnabled: prepResult.meetingToolsEnabled,
             mcpNodes: node_params?.properties?.mcpNodes, // Issue #239: for native resource tools
             unattended: prepResult.unattended, // Issue #258: degrade the question tool in unattended runs
           });

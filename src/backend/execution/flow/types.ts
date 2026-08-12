@@ -3,8 +3,8 @@ import { NodeExecutionTrackerEntry } from '@/shared/types/flow/response';
 import { FlujoChatMessage, type McpAppModelContextMap } from '@/shared/types/chat';
 import { EmitFn, RecoveryLaneIdentity, RecoveryRecord, UsageTotals } from '@/shared/types/execution/events';
 import { EdgeCondition } from '@/utils/shared/edgeConditions';
-import { PermissionRule, SavedPermissionRule } from '@/shared/types/permissions';
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
+import type { MCPToolParameterPresets } from '@/shared/types/mcp';
 import OpenAI from 'openai';
 import type { VisualCompactionDiagnostic } from '@/shared/types/visualArchive';
 import type { ModelMediaPart } from '@/shared/types/model/media';
@@ -250,8 +250,7 @@ export interface ProcessNodeProperties {
     outputMode?: 'full-conversation' | 'latest-message';
     /** Issue #258: opt in to the synthetic `question` tool so this node's model
      *  can ask the user a structured multiple-choice question mid-run and keep
-     *  working with the answer. Off by default; leave off for unattended flows
-     *  (or deny action `question` via permissionRules). */
+     *  working with the answer. Off by default; leave off for unattended flows. */
     allowQuestion?: boolean;
     /** Issue #259: opt in to the synthetic `todo` tool so this node's model can
      *  maintain a run-scoped task list (SharedState.todos) across a multi-turn
@@ -347,6 +346,8 @@ export interface MCPNodeProperties {
     nameIsCustom?: boolean;
     boundServer?: string;
     enabledTools?: string[];
+    /** Per-node overrides for server-wide fixed MCP tool arguments. */
+    toolParameterPresets?: MCPToolParameterPresets;
     /**
      * @deprecated Never applied. MCP connections are singletons keyed by server
      * name (shared across all nodes/flows) and a stdio server's process env is
@@ -769,6 +770,8 @@ export interface MCPNodeReference {
     properties: {
         boundServer?: string;
         enabledTools?: string[];
+        /** Per-node overrides for server-wide fixed MCP tool arguments. */
+        toolParameterPresets?: MCPToolParameterPresets;
         /** @deprecated Never applied — see MCPNodeProperties.env (issue #63). Set env
          *  on the MCP server config instead. Retained only for back-compat loading. */
         env?: Record<string, string>;
@@ -1079,20 +1082,6 @@ export interface SharedState {
      *  Read by the chat loop (OpenAI path) and by self-orchestrating adapters
      *  (Claude subscription) to gate tool calls. */
     requireApproval?: boolean;
-    /**
-     * Tool permission rules (issue #246): merged at ProcessNode.prep() from the
-     * flow's `permissionRules` + per-server `autoApprove` desugaring. Evaluated
-     * per-call in ModelHandler.processToolCalls() to allow/deny/ask before
-     * dispatching. Reset on each node transition (re-merged from the flow).
-     */
-    permissionRules?: PermissionRule[];
-    /**
-     * Saved "always" permission rules (issue #246): user choices from "Always
-     * Allow" / "Always Deny" approval prompts. Scoped to this conversation;
-     * persisted with the conversation state. Evaluated after `permissionRules`
-     * but cannot override a flow-level deny.
-     */
-    savedPermissionRules?: SavedPermissionRule[];
     /** Unattended execution (issue #218/#339), derived for this run solely from
      *  its invocation source. When true, a Process node that ends its turn on
      *  plain text is driven forward along its single non-returning successor
@@ -1145,7 +1134,7 @@ export interface SharedState {
      * `timeout` is the source MCP node's per-call timeout in seconds (-1 = none;
      * unset = 5-minute default).
      */
-    toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string; clientGeneration?: number; schemaHash?: string; annotations?: ToolAnnotations; uiResourceUri?: string }>;
+    toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string; clientGeneration?: number; schemaHash?: string; annotations?: ToolAnnotations; uiResourceUri?: string; presetArgs?: Record<string, unknown>; context?: ToolReferenceContext }>;
 
     /**
      * Maps each handoff tool's model-facing name (`handoff_to_<slug>`, see
@@ -1301,6 +1290,18 @@ export interface ToolDefinition {
     annotations?: ToolAnnotations;
     /** MCP Apps UI resource declared on this tool definition. */
     uiResourceUri?: string;
+    /** Fixed arguments hidden from the model-facing input schema. */
+    presetArgs?: Record<string, unknown>;
+    context?: ToolReferenceContext;
+}
+
+/** Execution context used to resolve dynamic references in fixed tool args. */
+export interface ToolReferenceContext {
+    conversationId?: string;
+    flowId?: string;
+    nodeId?: string;
+    modelId?: string;
+    appId?: string;
 }
 
 // MCP Context
@@ -1363,13 +1364,8 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     /** Whether tool calls require user approval (mirrors the run's requireApproval).
      *  Self-orchestrating adapters (Claude subscription) consult this in canUseTool. */
     requireToolApproval?: boolean;
-    /** Approval behavior and resolved permission context forwarded to adapters
-     *  which execute their own tool loop. */
+    /** Approval behavior forwarded to adapters which execute their own tool loop. */
     onApprovalRequired?: 'auto' | 'fail' | 'pause';
-    permissionRules?: PermissionRule[];
-    savedPermissionRules?: SavedPermissionRule[];
-    /** True only while MeetingEngine owns this participant turn. */
-    meetingToolsEnabled?: boolean;
     /** Unattended run (issue #258): forwarded so the synthetic `question` tool
      *  degrades to a tool-error instead of blocking for an answer. */
     unattended?: boolean;

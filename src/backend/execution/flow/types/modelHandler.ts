@@ -5,10 +5,10 @@ import {
   ToolCallInfo,
   MCPNodeReference,
   CodexSessionMetadata,
+  ToolReferenceContext,
 } from '../types';
 import { FlujoChatMessage } from '@/shared/types/chat'; // Correct import path
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
-import { PermissionRule, SavedPermissionRule } from '@/shared/types/permissions';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import type { VisualCompactionDiagnostic } from '@/shared/types/visualArchive';
 
@@ -56,7 +56,7 @@ export interface ModelCallInput {
    * can dispatch tool calls to mcpService. Built from SharedState.toolNameMap.
    * `timeout` is the source MCP node's per-call timeout in seconds.
    */
-  toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string; clientGeneration?: number; schemaHash?: string; annotations?: ToolAnnotations; uiResourceUri?: string }>;
+  toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string; clientGeneration?: number; schemaHash?: string; annotations?: ToolAnnotations; uiResourceUri?: string; presetArgs?: Record<string, unknown>; context?: ToolReferenceContext }>;
   /** Conversation id — lets self-orchestrating adapters surface mid-run tool
    *  approval prompts on the conversation's event stream. */
   conversationId?: string;
@@ -68,11 +68,6 @@ export interface ModelCallInput {
   requireToolApproval?: boolean;
   /** Headless approval behavior for self-orchestrating adapters. */
   onApprovalRequired?: 'auto' | 'fail' | 'pause';
-  /** Permission rules used to resolve allow/deny before requesting approval. */
-  permissionRules?: PermissionRule[];
-  savedPermissionRules?: SavedPermissionRule[];
-  /** True only for a coordinator-owned participant turn. */
-  meetingToolsEnabled?: boolean;
   /** Issue #239: bound MCP node references for native resource tools. Forwarded to
    *  localToolExecutors so self-orchestrating adapters can execute list_mcp_resources
    *  and native-URI read_resource in-loop. */
@@ -119,7 +114,7 @@ export interface ToolCallProcessingInput {
    * falls back to the legacy `_-_-_SERVER_-_-_TOOL` scheme. `timeout` is the
    * source MCP node's per-call timeout in seconds (-1 = none; unset = default).
    */
-  toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string; clientGeneration?: number; schemaHash?: string; annotations?: ToolAnnotations; uiResourceUri?: string }>;
+  toolNameMap?: Record<string, { server: string; tool: string; timeout?: number; nodeId?: string; clientGeneration?: number; schemaHash?: string; annotations?: ToolAnnotations; uiResourceUri?: string; presetArgs?: Record<string, unknown>; context?: ToolReferenceContext }>;
   /**
    * Live-event emitter for the run. When present, each MCP call is bracketed by
    * tool:call / tool:result events and server progress notifications become
@@ -158,19 +153,6 @@ export interface ToolCallProcessingInput {
    *  native-URI read_resource). When present, synthetic resource tool calls are dispatched
    *  via executeMCPResourceTool / executeNativeReadResource. */
   mcpNodes?: MCPNodeReference[];
-  /**
-   * Flow-level + autoApprove permission rules (issue #246). When provided, each
-   * tool call is evaluated against these rules BEFORE dispatch:
-   *   'deny'  → synthetic "Permission denied" tool result (no MCP call).
-   *   'allow' → execute immediately, bypassing the requireApproval gate.
-   *   'ask'   → existing approval-gate behaviour.
-   */
-  permissionRules?: PermissionRule[];
-  /**
-   * User "always" saved rules for this conversation (issue #246). Evaluated
-   * after permissionRules but cannot override a flow-level deny.
-   */
-  savedPermissionRules?: SavedPermissionRule[];
   /**
    * Unattended run (issue #218/#258). When true, the synthetic `question` tool
    * degrades to a clear tool-error instead of blocking the turn for a user

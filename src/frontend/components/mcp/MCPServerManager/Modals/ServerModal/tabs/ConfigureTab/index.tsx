@@ -41,6 +41,8 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { McpTroubleshootPatch } from '@/shared/types/mcp/assistant';
 import McpInstallTroubleshooter from './McpInstallTroubleshooter';
+import ToolParameterPresetsEditor from '@/frontend/components/mcp/ToolParameterPresetsEditor';
+import { useServerTools } from '@/frontend/hooks/useServerTools';
 
 /**
  * The single configure-and-verify sink for every transport and every
@@ -110,6 +112,8 @@ const ConfigureTab: React.FC<TabProps> = ({
     initialConfig,
     isOpen: true // Always pass true here since we're already in the component
   });
+  const presetServerName = initialConfig?.name || (runCompleted ? localConfig.name : '');
+  const { tools: presetTools, isLoading: isLoadingPresetTools } = useServerTools(presetServerName);
   
   // Check if we're coming from GitHub tab with empty fields
   useEffect(() => {
@@ -690,6 +694,21 @@ const ConfigureTab: React.FC<TabProps> = ({
                       roots={localConfig.roots || []}
                       onChange={(roots) => setLocalConfig(prev => ({ ...prev, roots }))}
                     />
+                  </Box>
+
+                  <Box>
+                    {isLoadingPresetTools ? (
+                      <Typography variant="body2" color="text.secondary">Loading tool parameters…</Typography>
+                    ) : (
+                      <ToolParameterPresetsEditor
+                        tools={presetTools}
+                        value={localConfig.toolParameterPresets}
+                        onChange={(toolParameterPresets) => setLocalConfig((previous) => ({ ...previous, toolParameterPresets }))}
+                        workspaceRoots={localConfig.roots?.length ? localConfig.roots : [localConfig.rootPath]}
+                        title="Server-wide tool parameters"
+                        description="These fixed values apply everywhere this server is used. An MCP node can override individual parameters."
+                      />
+                    )}
                   </Box>
 
                   <Box>

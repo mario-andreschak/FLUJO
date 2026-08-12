@@ -21,6 +21,8 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import SearchIcon from '@mui/icons-material/Search';
 import type { MCPToolResponse } from '@/shared/types/mcp';
+import type { MCPToolParameterPresets } from '@/shared/types/mcp';
+import ToolParameterPresetsEditor from '@/frontend/components/mcp/ToolParameterPresetsEditor';
 import { extractUiResourceUri } from '@/shared/utils/mcpApps';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n/messages';
@@ -37,6 +39,9 @@ interface MCPNodeToolListProps {
   onToggle: (toolName: string) => void;
   onActivateAll: () => void;
   onDeactivateAll: () => void;
+  parameterPresets?: MCPToolParameterPresets;
+  onParameterPresetsChange?: (value: MCPToolParameterPresets) => void;
+  workspaceRoots?: string[];
 }
 
 const sectionColor: Record<MCPToolSectionKey, 'success' | 'error' | 'warning'> = {
@@ -71,6 +76,9 @@ const MCPNodeToolList: React.FC<MCPNodeToolListProps> = ({
   onToggle,
   onActivateAll,
   onDeactivateAll,
+  parameterPresets,
+  onParameterPresetsChange,
+  workspaceRoots,
 }) => {
   const { t } = useI18n();
   const [search, setSearch] = useState('');
@@ -281,6 +289,19 @@ const MCPNodeToolList: React.FC<MCPNodeToolListProps> = ({
             );
           })}
         </Stack>
+      )}
+      {onParameterPresetsChange && (
+        <>
+          <Divider sx={{ my: 3 }} />
+          <ToolParameterPresetsEditor
+            tools={tools.filter((tool) => enabledSet.has(tool.name))}
+            value={parameterPresets}
+            onChange={onParameterPresetsChange}
+            workspaceRoots={workspaceRoots}
+            title="Step-specific tool parameters"
+            description="These values apply only to this MCP node and override matching server-wide values. Fixed parameters are hidden from the model."
+          />
+        </>
       )}
     </Box>
   );

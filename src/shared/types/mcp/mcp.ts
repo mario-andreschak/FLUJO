@@ -33,6 +33,13 @@ export type EnvVarValue = string | {
 export type MCPHeaderValue = EnvVarValue;
 
 /**
+ * Parameters fixed by the user before an MCP tool is advertised to a model.
+ * The outer key is the server tool name and the inner key is a top-level input
+ * parameter. Values may be literals, `${global:NAME}`, or dynamic `@` refs.
+ */
+export type MCPToolParameterPresets = Record<string, Record<string, unknown>>;
+
+/**
  * How an MCP server was installed (#193). A machine-readable, discriminated
  * record of each server's install-origin, so downstream features (notably the
  * by-reference package export, #192) can serialize *installation instructions*
@@ -59,7 +66,6 @@ export type MCPServerSource =
  */
 export type MCPHostPathAccessConfig = {
   environmentRootVariables: string[];
-  protectedPaths: boolean;
   snapshots: boolean;
 };
 
@@ -79,7 +85,6 @@ export type MCPServerIcon = {
 export type MCPManagerConfig = {
   name: string;
   disabled: boolean;
-  autoApprove: string[];
   rootPath: string;
   env: Record<string, EnvVarValue>
   _buildCommand: string;
@@ -96,8 +101,6 @@ export type MCPManagerConfig = {
   icons?: MCPServerIcon[];
   /** Name-independent host-path security metadata supplied by an installer. */
   hostPathAccess?: MCPHostPathAccessConfig;
-  /** Package-level protected-path policy; legacy Settings remains a read fallback. */
-  protectedPathsEnabled?: boolean;
   /**
    * When true, FLUJO re-exposes this server's tools to external MCP clients at
    * `/mcp-proxy/<name>` (#17A). Opt-in per server; defaults to false/undefined.
@@ -163,6 +166,8 @@ export type MCPManagerConfig = {
    * (DEFAULT_TOOL_CALL_CONCURRENCY). Config-only for now (no dedicated UI).
    */
   maxConcurrency?: number;
+  /** Server-wide tool argument defaults. A node may override individual keys. */
+  toolParameterPresets?: MCPToolParameterPresets;
 }
 
 export type MCPElicitationPolicy = {

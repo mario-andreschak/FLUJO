@@ -20,6 +20,7 @@
  */
 
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
+import type { ToolReferenceContext } from '../types';
 
 const MAX_NAME_LEN = 64;
 const PREFIX = 'mcp';
@@ -97,6 +98,10 @@ export interface DecodedTool {
    * the app without re-listing tools after the call.
    */
   uiResourceUri?: string;
+  /** Fixed arguments that the model never sees or controls. */
+  presetArgs?: Record<string, unknown>;
+  /** Context for resolving dynamic references inside presetArgs. */
+  context?: ToolReferenceContext;
 }
 
 export type ToolNameMap = Record<string, DecodedTool>;

@@ -31,6 +31,7 @@ describe('GlobalReferenceEditor (#318)', () => {
 
   it('detects ordinary-text @ queries and filters grouped reference suggestions', () => {
     expect(findAtCompletion('before @rea')).toEqual({ query: 'rea', start: 7, end: 11 });
+    expect(findAtCompletion('before @@repo')).toEqual({ query: '@repo', start: 7, end: 13 });
     expect(findAtCompletion('email@example.com')).toBeNull();
     expect(findAtCompletion('${global:@name')).toBeNull();
 

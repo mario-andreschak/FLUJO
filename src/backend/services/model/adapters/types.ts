@@ -3,7 +3,7 @@ import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { Model } from '@/shared/types/model';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { RunResourceEntry } from '@/shared/types/runResources';
-import type { CodexSessionMetadata } from '@/backend/execution/flow/types';
+import type { CodexSessionMetadata, ToolReferenceContext } from '@/backend/execution/flow/types';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 
 /**
@@ -131,6 +131,8 @@ export interface CompletionInput {
     schemaHash?: string;
     annotations?: ToolAnnotations;
     uiResourceUri?: string;
+    presetArgs?: Record<string, unknown>;
+    context?: ToolReferenceContext;
   }>;
   /**
    * Executors for caller-defined "virtual" tools (entries in `tools` that are
@@ -158,7 +160,7 @@ export interface CompletionInput {
     id: string;
     name: string;
     args: Record<string, unknown>;
-  }) => Promise<{ approved: boolean; feedback?: string }>;
+  }) => Promise<boolean>;
   /**
    * Cancellation signal for the in-flight provider call. Wired by ModelHandler
    * to the conversation's isCancelled flag (own or ancestor), so pressing Stop
