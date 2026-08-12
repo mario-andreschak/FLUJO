@@ -35,6 +35,10 @@ import remarkGfm from 'remark-gfm';
 import { v4 as uuidv4 } from 'uuid';
 
 import { useAskFlujo } from '@/frontend/contexts/AskFlujoContext';
+import { ToolCallTimeline } from '@/frontend/components/Chat/ChatMessages';
+import type { ChatMessage } from '@/frontend/components/Chat';
+import type { ToolCallPair } from '@/frontend/components/Chat/toolCallPairing';
+import { groupToolCallsByAnchor } from '@/frontend/components/Chat/toolCallPairing';
 import { chatService } from '@/frontend/services/chat';
 import { mcpService } from '@/frontend/services/mcp';
 import { modelService } from '@/frontend/services/model';
@@ -68,6 +72,8 @@ interface DockMessage {
   rawText: string;
   scopeId: string;
   actions?: AskFlujoUiAction[];
+  toolCallPairs?: ToolCallPair<ChatMessage>[];
+  conversationId?: string;
 }
 
 const SYSTEM_PROMPT = `You are Ask FLUJO, the context-aware copilot embedded in the FLUJO application.
@@ -309,6 +315,10 @@ export default function AskFlujoDock() {
         if (!actionMap.has(semanticKey)) actionMap.set(semanticKey, action);
       }
       const actions = [...actionMap.values()];
+      const groupedToolCalls = groupToolCallsByAnchor(turnMessages as ChatMessage[]);
+      const toolCallPairs = groupedToolCalls.groups.flatMap(
+        group => groupedToolCalls.pairsByAnchorId.get(group.anchorId) ?? [],
+      );
       if (!raw && actions.length === 0) {
         throw new Error('The model completed without an assistant message.');
       }
@@ -319,6 +329,8 @@ export default function AskFlujoDock() {
         rawText: raw || 'UI action proposed through FLUJO MCP.',
         scopeId: context.scopeId,
         actions,
+        toolCallPairs,
+        conversationId,
       };
       setMessages(current => [...current, assistantMessage]);
       for (const action of actions.filter(candidate => candidate.type === 'highlight')) {
@@ -475,7 +487,16 @@ export default function AskFlujoDock() {
                   }}
                 >
                   {message.role === 'assistant' ? (
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown>
+                    <>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown>
+                      {message.toolCallPairs && message.toolCallPairs.length > 0 && (
+                        <ToolCallTimeline
+                          pairs={message.toolCallPairs}
+                          messageId={message.id}
+                          conversationId={message.conversationId}
+                        />
+                      )}
+                    </>
                   ) : (
                     <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{message.text}</Typography>
                   )}
