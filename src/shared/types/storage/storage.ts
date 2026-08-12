@@ -162,6 +162,30 @@ export interface OnboardingSettings {
   dashboardCardsHidden?: boolean;
   /** Dashboard cards the user dismissed individually via their X control. */
   dashboardDismissedCards?: DashboardCardId[];
+  /** Progress for the first hands-on tutorial that follows onboarding. */
+  tutorials?: TutorialSettings;
+}
+
+export type TutorialStatus = 'active' | 'paused' | 'completed' | 'cancelled';
+
+/**
+ * Durable tutorial state. Step ids, rather than array indexes, make a paused
+ * tutorial safe to resume after copy or step-order changes. The optional
+ * nested id is also used as the visual parent for a short prerequisite tour.
+ */
+export interface TutorialProgress {
+  status: TutorialStatus;
+  stepId: string;
+  flowId?: string;
+  processNodeId?: string;
+  taskPrompt?: string;
+  conversationId?: string;
+  recommendedServerName?: string;
+  nestedTutorialId?: 'install-web-app' | 'enable-web-app';
+}
+
+export interface TutorialSettings {
+  bigTutorialStage1?: TutorialProgress;
 }
 
 /**

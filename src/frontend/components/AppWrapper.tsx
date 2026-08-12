@@ -76,6 +76,11 @@ const TelemetryNotice = dynamic(() => import('./TelemetryNotice'), {
   loading: () => null
 });
 
+const BigTutorialOverlay = dynamic(() => import('./Tour/BigTutorialOverlay'), {
+  ssr: false,
+  loading: () => null,
+});
+
 const AskFlujoDock = dynamic(() => import('./AskFlujo/AskFlujoDock'), {
   ssr: false,
   loading: () => null,
@@ -206,6 +211,7 @@ function LocalizedAppShell({ children }: { children: React.ReactNode }) {
           route changes, so a live iframe/bridge is never reparented or lost. */}
       <GlobalMcpAppsHost />
       <TourOverlay />
+      <BigTutorialOverlay />
     </div>
   );
 }

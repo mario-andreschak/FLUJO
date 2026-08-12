@@ -160,7 +160,7 @@ const ServerModal: React.FC<ServerModalProps> = ({
               sx={{ px: { xs: 1, sm: 2 } }}
             >
               <Tab label={t('mcp.modal.spotlight')} value="spotlight" />
-              <Tab label={t('mcp.modal.marketplace')} value="marketplace" />
+              <Tab data-tour="mcp-marketplace-tab" label={t('mcp.modal.marketplace')} value="marketplace" />
               <Tab label={t('mcp.modal.github')} value="github" />
               <Tab label={t('mcp.modal.local')} value="configure" />
               <Tab label={t('mcp.modal.remote')} value="remote" />

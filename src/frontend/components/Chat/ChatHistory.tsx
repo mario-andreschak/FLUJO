@@ -1153,6 +1153,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
         <Button
           variant="contained"
           color="primary"
+          data-tour="chat-new-conversation"
           startIcon={<AddIcon />}
           onClick={onNewConversation}
           size="small"

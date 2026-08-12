@@ -312,7 +312,7 @@ const FlowCard = ({
   };
 
   return (
-    <StyledCard selected={selected}>
+    <StyledCard selected={selected} data-tutorial-flow-id={flow.id}>
       {selectionMode && (
         <Checkbox
           checked={selected}
@@ -489,6 +489,7 @@ const FlowCard = ({
             )}
 
             <Button
+              data-tutorial-edit-flow-id={flow.id}
               size="small"
               variant="outlined"
               startIcon={<EditIcon fontSize="small" />}

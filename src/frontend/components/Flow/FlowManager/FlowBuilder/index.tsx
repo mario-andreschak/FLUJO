@@ -46,6 +46,11 @@ import { Flow, FlowNode, HistoryEntry, NodeType } from '@/shared/types/flow';
 import { flowService } from '@/frontend/services/flow';
 import { mcpService } from '@/frontend/services/mcp';
 import { modelService } from '@/frontend/services/model';
+import {
+  BIG_TUTORIAL_EVENT,
+  emitBigTutorialEvent,
+  isBigTutorialEvent,
+} from '@/frontend/components/Tour/bigTutorialEvents';
 import { createEdgeFromConnection, validateConnection } from './Canvas/utils/edgeUtils';
 import { defaultTargetHandleFor } from './Canvas/utils/connectionRules';
 import { computeAutoLayout } from './Canvas/utils/autoLayout';
@@ -282,6 +287,23 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
 
   const [nodes, setNodes] = useState<FlowNode[]>(initialFlow?.nodes || []);
   // Initialize with the *filtered* edges (same rule the init effect applies)
+
+  useEffect(() => {
+    const listener = (event: Event) => {
+      if (!isBigTutorialEvent(event) || event.detail.type !== 'prepare-app-picker') return;
+      const { processNodeId, query } = event.detail;
+      setNodes(current => current.map(node => ({
+        ...node,
+        selected: node.id === processNodeId,
+      })));
+      window.setTimeout(() => emitBigTutorialEvent({
+        type: 'filter-app-picker',
+        query,
+      }), 150);
+    };
+    window.addEventListener(BIG_TUTORIAL_EVENT, listener);
+    return () => window.removeEventListener(BIG_TUTORIAL_EVENT, listener);
+  }, []);
   // so the very first render already matches what history is seeded with —
   // otherwise an unfiltered→filtered diff could itself mark the flow dirty.
   const [edges, setEdges] = useState<Edge[]>(
@@ -1961,7 +1983,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   }, []);
 
   return (
-    <FlowBuilderContainer>
+    <FlowBuilderContainer data-tour="flow-builder" data-tutorial-save-status={saveStatus}>
       {authoringMode === 'advanced' && !isMobileBuilder && (
         <Box sx={{ flex: '0 0 auto', height: '100%', minHeight: 0 }}>
           <NodePalette authoringMode={authoringMode} onAddNode={handleQuickAddNode} />
@@ -2124,6 +2146,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
             )}
 
             {(authoringMode === 'advanced' || (initialFlow && !isDraft)) && (
+              data-tour="flow-save"
               <>
                 <Tooltip title={t('flows.builder.moreCommands')}>
                   <IconButton
@@ -2292,6 +2315,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
                 setAssistanceFocus('review');
                 setAssistanceOpen(true);
               }}
+              onOpenNode={(node) => openNodeProperties(node)}
               currentFlowId={initialFlow?.id ?? fallbackFlowId.current}
               availableAgents={allFlows}
               mcpConnectionsByNode={mcpConnectionsByProcess}

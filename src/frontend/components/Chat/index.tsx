@@ -84,6 +84,11 @@ import {
   type SubflowRecoveryScope,
 } from '@/frontend/services/chat';
 import { createLogger } from '@/utils/logger';
+import {
+  BIG_TUTORIAL_EVENT,
+  emitBigTutorialEvent,
+  isBigTutorialEvent,
+} from '@/frontend/components/Tour/bigTutorialEvents';
 // Correctly import SharedState here
 import {
   ChatCompletionMetadata,
@@ -1540,6 +1545,7 @@ const Chat: React.FC = () => {
       });
       setIsLoadingDetails(false); // Ensure loading is off for the new view
       setDetailsError(null); // Clear any previous errors
+      emitBigTutorialEvent({ type: 'conversation-created', conversationId: createdConversationSummary.id });
 
     } catch (err) {
       log.error('Error creating conversation on backend:', err);
@@ -2884,6 +2890,7 @@ const Chat: React.FC = () => {
       setDebugState(null);
       setDebugSessionActive(false);
       setBreakpoints([]);
+      emitBigTutorialEvent({ type: 'chat-run-status', status: data.status });
     } else {
        // For other statuses ('running', 'awaiting_tool_approval'), keep the debugger panel state as is.
        log.debug(`API Response: Status is '${data.status}'. Debugger panel visibility unchanged (currently ${isDebugPaused ? 'visible' : 'hidden'}).`, { conversationId });
@@ -3297,6 +3304,16 @@ const Chat: React.FC = () => {
   // only replaces that app's wire context for a future turn.
   const handleSendMessageRef = useRef(handleSendMessage);
   handleSendMessageRef.current = handleSendMessage;
+  useEffect(() => {
+    const listener = (event: Event) => {
+      if (!isBigTutorialEvent(event) || event.detail.type !== 'send-example') return;
+      if (!currentConversationIdRef.current) return;
+      emitBigTutorialEvent({ type: 'chat-run-status', status: 'running' });
+      void handleSendMessageRef.current(event.detail.message);
+    };
+    window.addEventListener(BIG_TUTORIAL_EVENT, listener);
+    return () => window.removeEventListener(BIG_TUTORIAL_EVENT, listener);
+  }, []);
   const appCallbackConversationId = currentConversationId;
   const handleAppMessage = useCallback((text: string): boolean => {
     if (
@@ -4541,6 +4558,12 @@ const Chat: React.FC = () => {
 
   return (
     <Box
+      data-tutorial-conversation-id={currentConversationId ?? undefined}
+      data-tutorial-chat-status={
+        viewedConversationRunning
+          ? 'running'
+          : currentConversationSummary?.status ?? undefined
+      }
       sx={{
         display: 'flex',
         height: `calc(
@@ -4808,6 +4831,7 @@ const Chat: React.FC = () => {
                       return (
                         <Tooltip title={t('chat.page.openAgent')}>
                           <IconButton
+                            data-tour="chat-open-agent"
                             size="small"
                             color="primary"
                             onClick={() => router.push(`/flows?flow=${encodeURIComponent(builderFlowId)}`)}
@@ -4973,6 +4997,7 @@ const Chat: React.FC = () => {
                 </Box>
               ) : (
                 <>
+              <Box data-tour="chat-messages">
               <ChatMessages
                 messages={detailedConversation.messages} // Pass messages from detailed state
                 pendingToolCalls={pendingToolCalls}
@@ -5012,6 +5037,7 @@ const Chat: React.FC = () => {
                   stopped: viewedConversationStopped,
                 }))}
               />
+              </Box>
 
               {/* Completion banner: shown once the run has reached a Finish node
                   (status 'completed'). Driven by the same status the sidebar dot
