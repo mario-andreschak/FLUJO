@@ -240,8 +240,24 @@ describe('ClaudeSubscriptionAdapter — built-in tool suppression (#166)', () =>
       CLAUDE_CONFIG_DIR: 'C:\\flujo\\db\\claude-runtime',
       CLAUDE_SECURESTORAGE_CONFIG_DIR: 'C:\\flujo\\db\\claude-runtime',
       CLAUDE_CODE_OAUTH_TOKEN: 'oauth-token',
+      MAX_MCP_OUTPUT_TOKENS: String(256 * 1024),
     });
     expect((options.env as Record<string, unknown>).ANTHROPIC_API_KEY).toBeUndefined();
+  });
+
+  it('raises the SDK persistence limit to FLUJO\'s configured inline boundary', async () => {
+    const { getRunResourceSettings } = jest.requireMock('@/backend/services/runResources') as {
+      getRunResourceSettings: jest.Mock;
+    };
+    getRunResourceSettings.mockResolvedValueOnce({ toolResultMaxBytes: 900_000 });
+
+    await new ClaudeSubscriptionAdapter().createCompletion(baseInput({
+      conversationId: 'conv-1',
+      tools: [],
+    }));
+
+    const env = capturedOptions().env as Record<string, string>;
+    expect(env.MAX_MCP_OUTPUT_TOKENS).toBe('900000');
   });
 
   it('disables all built-in tools on the query options for a tools-less node', async () => {

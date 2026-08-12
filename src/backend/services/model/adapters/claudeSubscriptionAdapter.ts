@@ -17,6 +17,11 @@ import {
 } from '@/backend/mcpApps/toolUi';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import { FlujoChatMessage } from '@/shared/types/chat';
+import {
+  DEFAULT_RUN_RESOURCE_SETTINGS,
+  DEFAULT_TOOL_RESULT_MAX_BYTES,
+  type RunResourceSettings,
+} from '@/shared/types/runResources';
 import { CompletionAdapter, CompletionInput, CompletionResult, ToolResourceMarker } from './types';
 import {
   extractMediaParts,
@@ -88,6 +93,24 @@ const CLAUDE_BUILTIN_TOOLS = [
 // Keep tool names under Anthropic's 128-char limit with room for the
 // `mcp__flujo__` prefix the SDK adds.
 const MAX_TOOL_NAME_LEN = 110;
+
+// Claude Code otherwise persists MCP results after roughly 10k tokens (~50 KB)
+// and gives the model a private runtime path that FLUJO's read_resource cannot
+// resolve. FLUJO owns this boundary via boundToolResult. Raise the SDK valve to
+// at least FLUJO's configured BYTE limit: content below the FLUJO limit remains
+// inline, while content at/above it is replaced by FLUJO with a registered URI.
+// A byte can tokenize to at most one byte-level token, so using the byte count
+// as a token count is deliberately conservative. If the FLUJO byte dimension is
+// disabled, effectively disable the SDK valve too; the configured line bound
+// (if any) remains authoritative.
+const MIN_CLAUDE_MCP_OUTPUT_TOKENS = 64 * 1024;
+const DISABLED_CLAUDE_MCP_OUTPUT_TOKENS = 2_147_483_647;
+
+function claudeMcpOutputTokens(settings: RunResourceSettings | undefined): number {
+  const maxBytes = settings?.toolResultMaxBytes ?? DEFAULT_TOOL_RESULT_MAX_BYTES;
+  if (!Number.isFinite(maxBytes) || maxBytes <= 0) return DISABLED_CLAUDE_MCP_OUTPUT_TOKENS;
+  return Math.max(MIN_CLAUDE_MCP_OUTPUT_TOKENS, Math.ceil(maxBytes));
+}
 
 // Compatibility export for callers that use the Claude-specific historical name.
 export const isMalformedClaudeToolCallProse = isMalformedToolCallProse;
@@ -313,6 +336,15 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // references the adapter factory.
     const { query, createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk');
     const runtime = await prepareClaudeRuntimeEnvironment();
+    let runResourceSettings: RunResourceSettings | undefined;
+    if (conversationId) {
+      try {
+        runResourceSettings = await getRunResourceSettings();
+      } catch (error) {
+        log.warn('Could not load run-resource settings before Claude tool setup; using defaults', error);
+        runResourceSettings = DEFAULT_RUN_RESOURCE_SETTINGS;
+      }
+    }
 
     // The FULL flatten of the whole history. `systemPrompt` is the hoisted,
     // prefix-stable system block (unchanged turn to turn for a given node); its
@@ -660,7 +692,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             // results to a run resource and show a head+tail preview instead.
             if (conversationId) {
               try {
-                const settings = await getRunResourceSettings();
+                const settings = runResourceSettings ?? await getRunResourceSettings();
                 const bounded = await boundToolResult({
                   conversationId,
                   toolCallId: callId,
@@ -724,6 +756,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // ANTHROPIC_API_KEY so it can't take precedence.
     const childEnv: Record<string, string | undefined> = { ...runtime.env };
     childEnv.CLAUDE_CODE_OAUTH_TOKEN = apiKey;
+    childEnv.MAX_MCP_OUTPUT_TOKENS = String(claudeMcpOutputTokens(runResourceSettings));
     delete childEnv.ANTHROPIC_API_KEY;
 
     const hasImages = typeof userContent !== 'string';

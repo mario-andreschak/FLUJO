@@ -18,6 +18,7 @@ const mockListServerResources = jest.fn();
 const mockListServerResourceTemplates = jest.fn();
 const mockReadResource = jest.fn();
 const mockWriteRunResource = jest.fn();
+const mockListRunResources = jest.fn();
 
 jest.mock('@/backend/services/mcp', () => ({
   mcpService: {
@@ -29,6 +30,7 @@ jest.mock('@/backend/services/mcp', () => ({
 
 jest.mock('@/backend/services/runResources', () => ({
   writeRunResource: (...args: unknown[]) => mockWriteRunResource(...args),
+  listRunResources: (...args: unknown[]) => mockListRunResources(...args),
 }));
 
 // DEFAULT_RUN_RESOURCE_SETTINGS mock
@@ -68,6 +70,7 @@ beforeEach(() => {
   // Default: no resources
   mockListServerResources.mockResolvedValue({ resources: [] });
   mockListServerResourceTemplates.mockResolvedValue({ resourceTemplates: [] });
+  mockListRunResources.mockResolvedValue([]);
 });
 
 // ---------------------------------------------------------------------------
@@ -174,6 +177,52 @@ describe('executeMCPResourceTool(list_mcp_resources)', () => {
     const serverB = data.servers.find((s) => s.server === 'server-b');
     expect(serverA?.resources).toHaveLength(1);
     expect(serverB?.resources).toHaveLength(1);
+  });
+
+  it('advertises concrete run-resource URIs under the flujo server', async () => {
+    mockListRunResources.mockResolvedValue([{
+      id: 'res-1',
+      uri: 'flujo://run/conv-1/res-1',
+      conversationId: 'conv-1',
+      kind: 'text',
+      encoding: 'utf8',
+      size: 80_000,
+      createdAt: 2,
+      producedBy: { source: 'tool-result', server: 'web', toolName: 'fetch' },
+      readBy: [],
+    }]);
+
+    const result = await executeMCPResourceTool(LIST_MCP_RESOURCES_TOOL_NAME, {}, {
+      conversationId: 'conv-1',
+      mcpNodes: [],
+    });
+
+    expect(result.success).toBe(true);
+    expect(mockListRunResources).toHaveBeenCalledWith('conv-1');
+    expect(result.data).toMatchObject({
+      servers: [{
+        server: 'flujo',
+        resources: [{ uri: 'flujo://run/conv-1/res-1', size: 80_000 }],
+        templates: [],
+      }],
+    });
+  });
+
+  it('lists only the current run when filtering for flujo resources', async () => {
+    mockListRunResources.mockResolvedValue([]);
+
+    const result = await executeMCPResourceTool(
+      LIST_MCP_RESOURCES_TOOL_NAME,
+      { server_filter: 'flujo' },
+      { conversationId: 'conv-1', mcpNodes: [mcpRef('server-a', 'all')] },
+    );
+
+    expect(result.success).toBe(true);
+    expect(mockListRunResources).toHaveBeenCalledWith('conv-1');
+    expect(mockListServerResources).not.toHaveBeenCalled();
+    expect(result.data).toEqual({
+      servers: [{ server: 'flujo', resources: [], templates: [] }],
+    });
   });
 
   it('applies server_filter arg', async () => {
@@ -358,6 +407,7 @@ describe('buildListMCPResourcesTool byte-stability', () => {
 
     expect(def.description).toContain('server-a');
     expect(def.description).not.toContain('server-b');
+    expect(def.description).toContain('flujo');
   });
 
   it('rebuilds a definition identical to the one the probing path emits', async () => {

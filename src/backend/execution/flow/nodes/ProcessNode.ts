@@ -881,8 +881,13 @@ export class ProcessNode extends BaseNode {
     // succeeding on turn 1 (arming list_mcp_resources) and throwing on turn 2,
     // which would otherwise drop the tool and rewrite the block.
     const armed = new Set(sharedState.armedSyntheticTools ?? []);
-    if (shouldArmReadResource) armed.add(READ_RESOURCE_TOOL_NAME);
-    if (hasNativeResources) armed.add(LIST_MCP_RESOURCES_TOOL_NAME);
+    if (shouldArmReadResource) {
+      armed.add(READ_RESOURCE_TOOL_NAME);
+      // Any step that can mint a run resource must also be able to enumerate
+      // the concrete URI afterwards. This is front-loaded alongside
+      // read_resource so the provider tool block remains byte-stable.
+      armed.add(LIST_MCP_RESOURCES_TOOL_NAME);
+    }
 
     // prepResult.availableTools is the same array reference, so these are picked
     // up by execCore's toolNameMap build and the model call.
@@ -890,7 +895,7 @@ export class ProcessNode extends BaseNode {
         !availableTools.some((t) => t.name === READ_RESOURCE_TOOL_NAME)) {
       availableTools.push(buildReadResourceTool());
     }
-    if (armed.has(LIST_MCP_RESOURCES_TOOL_NAME) && mcpNodes.length > 0 &&
+    if (armed.has(LIST_MCP_RESOURCES_TOOL_NAME) &&
         !availableTools.some((t) => t.name === LIST_MCP_RESOURCES_TOOL_NAME)) {
       // Rebuilt from configuration only (no re-probe), so the bytes match the
       // definition emitted on the turn that armed it.

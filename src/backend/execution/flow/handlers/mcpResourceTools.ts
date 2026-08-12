@@ -21,7 +21,7 @@
 import { createLogger } from '@/utils/logger';
 import { MCPNodeReference, ToolDefinition } from '../types';
 import { mcpService } from '@/backend/services/mcp';
-import { writeRunResource } from '@/backend/services/runResources';
+import { listRunResources, writeRunResource } from '@/backend/services/runResources';
 import { DEFAULT_RUN_RESOURCE_SETTINGS } from '@/shared/types/runResources';
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
 import type { MCPResource, MCPResourceTemplate, MCPReadResourceResult } from '@/shared/types/mcp';
@@ -29,6 +29,7 @@ import type { MCPResource, MCPResourceTemplate, MCPReadResourceResult } from '@/
 const log = createLogger('backend/flow/execution/handlers/mcpResourceTools');
 
 export const LIST_MCP_RESOURCES_TOOL_NAME = 'list_mcp_resources';
+const INTERNAL_RUN_RESOURCE_SERVER = 'flujo';
 
 /** Max total entries returned by list_mcp_resources (resources + templates combined). */
 const LIST_MCP_RESOURCES_CAP = 200;
@@ -107,7 +108,10 @@ export function isMCPResourceToolName(name: string): boolean {
  * Configuration is flow-static, so this list is stable for the life of a run.
  */
 function eligibleResourceServers(mcpNodes: MCPNodeReference[]): string[] {
-  const names = new Set<string>();
+  // Run resources are part of the same discovery surface as native MCP
+  // resources. Advertising `flujo` up front is deterministic and lets a model
+  // discover concrete URIs created by a tool call earlier in the same loop.
+  const names = new Set<string>([INTERNAL_RUN_RESOURCE_SERVER]);
   for (const mcpNode of mcpNodes ?? []) {
     const { boundServer, enabledResources } = mcpNode.properties;
     if (!boundServer) continue;
@@ -129,7 +133,8 @@ export function buildListMCPResourcesTool(mcpNodes: MCPNodeReference[]): ToolDef
   return {
     name: LIST_MCP_RESOURCES_TOOL_NAME,
     description:
-      `List the native MCP resources and resource templates available from bound servers (${serverList}). ` +
+      `List resources and resource templates available from servers (${serverList}). ` +
+      'The flujo server contains concrete run-resource URIs captured during the current run. ' +
       'Returns a JSON object with a "servers" array, each entry containing the server name, its ' +
       '"resources" list (uri, name, description, mimeType) and its "templates" list (uriTemplate, name, ' +
       'description, mimeType). Once you have a resource URI call read_resource to fetch its content.',
@@ -220,6 +225,43 @@ async function executeListMCPResources(
 
   let totalCount = 0;
   let truncated = false;
+
+  // FLUJO-generated resources do not come from a bound MCP node, so querying
+  // only ctx.mcpNodes (the old behavior) made their concrete URIs invisible.
+  // Keep this list conversation-scoped: read_resource enforces the same owner
+  // boundary, and models do not need resources from unrelated runs.
+  if (
+    ctx.conversationId
+    && !ctx.ephemeral
+    && (!serverFilter || serverFilter === INTERNAL_RUN_RESOURCE_SERVER)
+  ) {
+    try {
+      const entries = await listRunResources(ctx.conversationId);
+      const resources: MCPResource[] = [...entries]
+        .sort((left, right) => right.createdAt - left.createdAt)
+        .slice(0, LIST_MCP_RESOURCES_CAP)
+        .map((entry) => ({
+          uri: entry.uri,
+          name: entry.name ?? `${entry.kind}-${entry.id.slice(0, 8)}`,
+          description: entry.producedBy.toolName
+            ? `Captured ${entry.producedBy.source} from ${entry.producedBy.server ?? 'unknown'}/${entry.producedBy.toolName}`
+            : `Captured ${entry.producedBy.source} run resource`,
+          mimeType: entry.mimeType,
+          size: entry.size,
+        }));
+      if (entries.length > resources.length) truncated = true;
+      totalCount += resources.length;
+      // Include the internal server even before its first spill. This makes the
+      // advertised server list truthful and tells the model where later URIs
+      // will appear without changing the tool definition mid-conversation.
+      result.push({ server: INTERNAL_RUN_RESOURCE_SERVER, resources, templates: [] });
+    } catch (err) {
+      log.warn('executeListMCPResources: failed to list current run resources', {
+        conversationId: ctx.conversationId,
+        err,
+      });
+    }
+  }
 
   for (const mcpNode of ctx.mcpNodes) {
     const { boundServer, enabledResources } = mcpNode.properties;

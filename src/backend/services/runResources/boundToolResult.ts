@@ -1,5 +1,9 @@
 import { createLogger } from '@/utils/logger';
-import { RunResourceSettings } from '@/shared/types/runResources';
+import {
+  DEFAULT_TOOL_RESULT_MAX_BYTES,
+  DEFAULT_TOOL_RESULT_MAX_LINES,
+  RunResourceSettings,
+} from '@/shared/types/runResources';
 import { writeRunResource } from './index';
 
 /**
@@ -97,8 +101,8 @@ function buildPreview(
 
 export async function boundToolResult(input: BoundToolResultInput): Promise<BoundToolResultOutcome> {
   const { conversationId, toolCallId, server, toolName, nodeId, content, settings } = input;
-  const maxLines = settings.toolResultMaxLines ?? 2000;
-  const maxBytes = settings.toolResultMaxBytes ?? 50 * 1024;
+  const maxLines = settings.toolResultMaxLines ?? DEFAULT_TOOL_RESULT_MAX_LINES;
+  const maxBytes = settings.toolResultMaxBytes ?? DEFAULT_TOOL_RESULT_MAX_BYTES;
 
   // Both dimensions disabled → bounding is off entirely.
   if (maxLines <= 0 && maxBytes <= 0) return { content, spilled: false };
