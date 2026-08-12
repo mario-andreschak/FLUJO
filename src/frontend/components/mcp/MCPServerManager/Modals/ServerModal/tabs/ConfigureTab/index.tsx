@@ -141,8 +141,35 @@ const ConfigureTab: React.FC<TabProps> = ({
     }
   }, [initialConfig, setExpandedSections, setMessage, t]);
 
+  // Folder pickers browse the BACKEND filesystem (the machine running FLUJO
+  // and the MCP servers) via /api/browse — the browser's own directory picker
+  // can neither browse a remote backend nor return real absolute paths.
+  const [rootPickerOpen, setRootPickerOpen] = useState(false);
+  const [argPickerIndex, setArgPickerIndex] = useState<number | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [installError, setInstallError] = useState<string | null>(null);
+  const [buildError, setBuildError] = useState<string | null>(null);
+  const [testRunError, setTestRunError] = useState<string | null>(null);
+
+  // A new handoff/configuration must not inherit failures from the server that
+  // previously occupied this tab (including repeat Marketplace installs).
+  useEffect(() => {
+    setFormError(null);
+    setAuthError(null);
+    setInstallError(null);
+    setBuildError(null);
+    setTestRunError(null);
+  }, [handoffId, initialConfig?.name]);
+
+  const setFormOperationMessage = (nextMessage: MessageState | null) => {
+    setMessage(nextMessage);
+    setFormError(nextMessage?.type === 'error' ? nextMessage.text : null);
+  };
+
   // Event handlers that use the form handlers utility functions
   const onSubmit = (e: React.FormEvent) => {
+    setFormError(null);
     handleSubmit(
       e,
       localConfig,
@@ -150,7 +177,7 @@ const ConfigureTab: React.FC<TabProps> = ({
       serverUrl,
       buildCommand,
       installCommand,
-      setMessage,
+      setFormOperationMessage,
       onAdd,
       onUpdate,
       initialConfig,
@@ -158,12 +185,6 @@ const ConfigureTab: React.FC<TabProps> = ({
       t
     );
   };
-
-  // Folder pickers browse the BACKEND filesystem (the machine running FLUJO
-  // and the MCP servers) via /api/browse — the browser's own directory picker
-  // can neither browse a remote backend nor return real absolute paths.
-  const [rootPickerOpen, setRootPickerOpen] = useState(false);
-  const [argPickerIndex, setArgPickerIndex] = useState<number | null>(null);
 
   const onRootPathSelect = async () => {
     setRootPickerOpen(true);
@@ -174,10 +195,11 @@ const ConfigureTab: React.FC<TabProps> = ({
   };
 
   const onParseClipboard = async () => {
+    setFormError(null);
     await handleParseClipboard(
       localConfig,
       setLocalConfig,
-      setMessage,
+      setFormOperationMessage,
       setBuildCommand,
       setInstallCommand,
       setWebsocketUrl,
@@ -187,30 +209,33 @@ const ConfigureTab: React.FC<TabProps> = ({
   };
 
   const onParseEnvClipboard = async () => {
+    setFormError(null);
     await handleParseEnvClipboard(
       localConfig,
       setLocalConfig,
-      setMessage,
+      setFormOperationMessage,
       setIsParsingEnv,
       t
     );
   };
 
   const onParseEnvExample = async () => {
+    setFormError(null);
     await handleParseEnvExample(
       localConfig,
       setLocalConfig,
-      setMessage,
+      setFormOperationMessage,
       setIsParsingEnv,
       t
     );
   };
 
   const onParseReadme = async () => {
+    setFormError(null);
     await handleParseReadme(
       localConfig,
       setLocalConfig,
-      setMessage,
+      setFormOperationMessage,
       setIsParsingReadme,
       setBuildCommand,
       setInstallCommand,
@@ -221,11 +246,15 @@ const ConfigureTab: React.FC<TabProps> = ({
   };
 
   const onInstall = async () => {
+    setInstallError(null);
     await handleInstall(
       localConfig,
       installCommand,
       setIsInstalling,
-      setBuildMessage,
+      (nextMessage) => {
+        setBuildMessage(nextMessage);
+        setInstallError(nextMessage?.type === 'error' ? nextMessage.text : null);
+      },
       setConsoleTitle,
       setIsConsoleVisible,
       setConsoleOutput,
@@ -235,11 +264,15 @@ const ConfigureTab: React.FC<TabProps> = ({
   };
 
   const onBuild = async () => {
+    setBuildError(null);
     await handleBuild(
       localConfig,
       buildCommand,
       setIsBuilding,
-      setBuildMessage,
+      (nextMessage) => {
+        setBuildMessage(nextMessage);
+        setBuildError(nextMessage?.type === 'error' ? nextMessage.text : null);
+      },
       setConsoleTitle,
       setIsConsoleVisible,
       setConsoleOutput,
@@ -254,6 +287,10 @@ const ConfigureTab: React.FC<TabProps> = ({
   const [isAuthenticating, setIsAuthenticating] = useState(false);
 
   const onRun = async () => {
+    // A new attempt is no longer the previously completed green run. Resetting
+    // this also lets a later success transition collapse the section again.
+    setRunCompleted(false);
+    setTestRunError(null);
     await handleRun(
       localConfig,
       websocketUrl,
@@ -262,7 +299,10 @@ const ConfigureTab: React.FC<TabProps> = ({
       setConsoleTitle,
       setConsoleOutput,
       setIsConsoleVisible,
-      setMessage,
+      (nextMessage) => {
+        setMessage(nextMessage);
+        setTestRunError(nextMessage?.type === 'error' ? nextMessage.text : null);
+      },
       setRunCompleted,
       // Pass the pre-edit server name so masked secret headers hydrate from the saved
       // config on Test Connection, even after a rename (#137).
@@ -277,8 +317,11 @@ const ConfigureTab: React.FC<TabProps> = ({
   // open until the popup resolves. Collapses save → find-the-card → click-Authenticate.
   const onSaveAndAuthenticateClick = async () => {
     if (!onSaveAndAuthenticate) return;
+    setAuthError(null);
     if (!localConfig.name || !serverUrl) {
-      setMessage({ type: 'error', text: t('mcp.local.auth.missingDetails') });
+      const errorText = t('mcp.local.auth.missingDetails');
+      setMessage({ type: 'error', text: errorText });
+      setAuthError(errorText);
       return;
     }
     const finalConfig = buildFinalConfig(localConfig, websocketUrl, serverUrl, buildCommand, installCommand);
@@ -292,11 +335,15 @@ const ConfigureTab: React.FC<TabProps> = ({
           text: result.error || t('mcp.local.auth.credentialsRequired')
         });
       } else if (result.status === 'error') {
-        setMessage({ type: 'error', text: result.error || t('mcp.local.auth.failed') });
+        const errorText = result.error || t('mcp.local.auth.failed');
+        setMessage({ type: 'error', text: errorText });
+        setAuthError(errorText);
       }
       // 'authorized' → the manager closes the modal; nothing more to do here.
     } catch (error) {
-      setMessage({ type: 'error', text: t('mcp.local.auth.failedWithError', { error: error instanceof Error ? error.message : t('mcp.server.unknownError') }) });
+      const errorText = t('mcp.local.auth.failedWithError', { error: error instanceof Error ? error.message : t('mcp.server.unknownError') });
+      setMessage({ type: 'error', text: errorText });
+      setAuthError(errorText);
     } finally {
       setIsAuthenticating(false);
     }
@@ -340,6 +387,16 @@ const ConfigureTab: React.FC<TabProps> = ({
     setBuildCompleted(true);
     onRun();
   }, [autoTestRun, handoffId, initialConfig, localConfig.name]);
+
+  // Successful runs are already summarized by the green accordion header. Keep
+  // the detailed controls out of the way after the transition, including the
+  // automatic first run used by Marketplace installs. Users can still reopen it.
+  useEffect(() => {
+    if (!runCompleted) return;
+    setExpandedSections((current) => current.run
+      ? { ...current, run: false }
+      : current);
+  }, [runCompleted, setExpandedSections]);
 
   // Handle accordion expansion
   const handleAccordionChange = (panel: string) => (event: React.SyntheticEvent, isExpanded: boolean) => {
@@ -433,9 +490,43 @@ const ConfigureTab: React.FC<TabProps> = ({
     if (patch.buildCommand !== undefined) setBuildCommand(patch.buildCommand);
     setMessage({ type: 'warning', text: t('mcp.troubleshoot.reviewApplied') });
   };
+
+  const troubleshootErrors = [
+    formError ? `Form/configuration: ${formError}` : null,
+    authError ? `Authentication: ${authError}` : null,
+    installError ? `Install: ${installError}` : null,
+    buildError ? `Build: ${buildError}` : null,
+    testRunError ? `Test run: ${testRunError}` : null,
+  ].filter((error): error is string => Boolean(error));
+  const showTroubleshooter = troubleshootErrors.length > 0;
+  const troubleshootError = troubleshootErrors.join('\n');
   
   return (
     <Box component="form" onSubmit={onSubmit} sx={{ width: '100%' }}>
+      {showTroubleshooter && (
+        <McpInstallTroubleshooter
+          context={{
+            config: {
+              name: localConfig.name,
+              transport: localConfig.transport,
+              ...(localConfig.transport === 'stdio'
+                ? { command: localConfig.command, args: localConfig.args }
+                : {}),
+              ...(localConfig.transport === 'sse' || localConfig.transport === 'streamable'
+                ? { serverUrl, headerNames: Object.keys((localConfig as MCPSSEConfig | MCPStreamableConfig).headers || {}) }
+                : {}),
+              rootPath: localConfig.rootPath,
+              envNames: Object.keys(localConfig.env || {}),
+              installCommand,
+              buildCommand,
+            },
+            error: troubleshootError,
+            consoleOutput,
+          }}
+          onApplyPatch={applyTroubleshootPatch}
+        />
+      )}
+
       <Grid container spacing={2}>
         {/* Phone/tablet layouts keep the form full width and push the console
             below it; the 8/4 split only applies from `md` up (#394). */}
@@ -670,7 +761,10 @@ const ConfigureTab: React.FC<TabProps> = ({
                     serverName={localConfig.name}
                     consoleOutput={consoleOutput}
                     message={message}
-                    setMessage={setMessage}
+                    setMessage={(nextMessage) => {
+                      setMessage(nextMessage);
+                      setTestRunError(nextMessage?.type === 'error' ? nextMessage.text : null);
+                    }}
                     oauthCapable={oauthCapable}
                     onSaveAndAuthenticate={onSaveAndAuthenticate ? onSaveAndAuthenticateClick : undefined}
                     isAuthenticating={isAuthenticating}
@@ -757,28 +851,6 @@ const ConfigureTab: React.FC<TabProps> = ({
           </Alert>
         </Box>
       )}
-
-      <McpInstallTroubleshooter
-        context={{
-          config: {
-            name: localConfig.name,
-            transport: localConfig.transport,
-            ...(localConfig.transport === 'stdio'
-              ? { command: localConfig.command, args: localConfig.args }
-              : {}),
-            ...(localConfig.transport === 'sse' || localConfig.transport === 'streamable'
-              ? { serverUrl, headerNames: Object.keys((localConfig as MCPSSEConfig | MCPStreamableConfig).headers || {}) }
-              : {}),
-            rootPath: localConfig.rootPath,
-            envNames: Object.keys(localConfig.env || {}),
-            installCommand,
-            buildCommand,
-          },
-          error: [buildMessage?.text, message?.text].filter(Boolean).join('\n'),
-          consoleOutput,
-        }}
-        onApplyPatch={applyTroubleshootPatch}
-      />
 
       <Box sx={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 1, mt: 3 }}>
         <Button
