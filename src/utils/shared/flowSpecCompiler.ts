@@ -70,8 +70,20 @@ function clamp(value: number | undefined, min: number, max: number, fallback: nu
  * `src/backend/**`. Keep the two definitions in sync if the runtime shape changes.
  */
 export type FlowSpecStaticEntry =
-  | { kind: 'message'; role: 'system' | 'user' | 'assistant'; content: string }
-  | { kind: 'toolCall'; toolName: string; argumentsJson: string; result: string };
+  | {
+      kind: 'message';
+      role: 'system' | 'user' | 'assistant';
+      content: string;
+      attachments?: Array<Record<string, unknown>>;
+    }
+  | {
+      kind: 'toolCall';
+      toolName: string;
+      argumentsJson: string;
+      result: string;
+      executionMode?: 'mock' | 'real';
+      serverName?: string;
+    };
 
 /** An MCP server a process step may call tools on. */
 export interface FlowSpecServerRef {
@@ -113,7 +125,7 @@ export interface FlowSpecNode {
   prompt?: string;
   /** process only: model id OR displayName/name — resolved against the context. */
   model?: string;
-  /** process only: MCP servers this step may use (each becomes an MCP node + mcp edge). */
+  /** process/static: MCP servers this node may use (each becomes an MCP node + mcp edge). */
   servers?: FlowSpecServerRef[];
   /**
    * process only: per-node cap on agentic turns (self-orchestrating tool loop). Clamped to
@@ -554,12 +566,12 @@ function resourceEdge(source: FlowNode, target: FlowNode): Edge {
 }
 
 /** An MCP tool-wiring edge, shaped exactly like `createEdgeFromConnection`'s MCP branch. */
-function mcpEdge(processNode: FlowNode, mcpNode: FlowNode): Edge {
-  const sourceHandle = 'process-right-mcp';
+function mcpEdge(consumerNode: FlowNode, mcpNode: FlowNode): Edge {
+  const sourceHandle = consumerNode.type === 'static' ? 'static-right-mcp' : 'process-right-mcp';
   const targetHandle = 'mcp-left';
   return {
-    id: `${processNode.id}:${sourceHandle}->${mcpNode.id}:${targetHandle}`,
-    source: processNode.id,
+    id: `${consumerNode.id}:${sourceHandle}->${mcpNode.id}:${targetHandle}`,
+    source: consumerNode.id,
     sourceHandle,
     target: mcpNode.id,
     targetHandle,
@@ -634,7 +646,7 @@ export function compileFlowSpec(
     // --- Pass 1: nodes -------------------------------------------------------
     const nodesByKey = new Map<string, FlowNode>();
     const flowNodes: FlowNode[] = [];
-    const mcpAttachments: Array<{ processKey: string; mcpNode: FlowNode }> = [];
+    const mcpAttachments: Array<{ consumerKey: string; mcpNode: FlowNode }> = [];
     // Spec-node-by-key map used for handoff pill resolution under keepPills.
     const specNodesByKey = new Map<string, FlowSpecNode>(
       specNodes.filter((n) => n?.key && typeof n.key === 'string').map((n) => [n.key, n])
@@ -864,7 +876,25 @@ export function compileFlowSpec(
             const role = entry.role;
             const content = entry.content;
             if ((role === 'system' || role === 'user' || role === 'assistant') && typeof content === 'string') {
-              clean.push({ kind: 'message', role, content });
+              const attachments = Array.isArray(entry.attachments)
+                ? entry.attachments.flatMap((candidate) => {
+                    if (!candidate || typeof candidate !== 'object') return [];
+                    const item = candidate as Record<string, unknown>;
+                    if (
+                      (item.type !== 'document' && item.type !== 'audio' && item.type !== 'image' && item.type !== 'video')
+                      || typeof item.content !== 'string'
+                    ) return [];
+                    return [{
+                      type: item.type,
+                      content: item.content,
+                      ...(typeof item.id === 'string' ? { id: item.id } : {}),
+                      ...(typeof item.originalName === 'string' ? { originalName: item.originalName } : {}),
+                      ...(typeof item.mimeType === 'string' ? { mimeType: item.mimeType } : {}),
+                      ...(typeof item.transcript === 'string' ? { transcript: item.transcript } : {}),
+                    }];
+                  })
+                : [];
+              clean.push({ kind: 'message', role, content, ...(attachments.length > 0 ? { attachments } : {}) });
             } else {
               warn('static-invalid-entry', `Node "${key}": message entry #${i + 1} has an invalid role/content; dropped.`, key);
             }
@@ -873,7 +903,21 @@ export function compileFlowSpec(
             const argumentsJson = entry.argumentsJson;
             const result = entry.result;
             if (typeof toolName === 'string' && toolName.trim() && typeof argumentsJson === 'string' && typeof result === 'string') {
-              clean.push({ kind: 'toolCall', toolName, argumentsJson, result });
+              const executionMode = entry.executionMode === 'real' ? 'real' : 'mock';
+              const serverName = typeof entry.serverName === 'string' ? entry.serverName.trim() : '';
+              if (executionMode === 'real' && !serverName) {
+                warn('static-real-toolcall-missing-server', `Node "${key}": real tool-call entry #${i + 1} needs a serverName; kept as a mock.`, key);
+                clean.push({ kind: 'toolCall', toolName, argumentsJson, result, executionMode: 'mock' });
+              } else {
+                clean.push({
+                  kind: 'toolCall',
+                  toolName,
+                  argumentsJson,
+                  result,
+                  ...(entry.executionMode === 'real' || entry.executionMode === 'mock' ? { executionMode } : {}),
+                  ...(serverName ? { serverName } : {}),
+                });
+              }
               if (argumentsJson.trim()) {
                 try {
                   JSON.parse(argumentsJson);
@@ -918,10 +962,28 @@ export function compileFlowSpec(
       nodesByKey.set(key, node);
       flowNodes.push(node);
 
-      // --- MCP attachments (process only) ---
-      if (type === 'process' && Array.isArray(specNode.servers)) {
+      // --- MCP attachments (Process tool access or Static real tool calls) ---
+      const attachmentRefs: FlowSpecServerRef[] = Array.isArray(specNode.servers)
+        ? specNode.servers.map((ref) => ({ ...ref, ...(Array.isArray(ref.tools) ? { tools: [...ref.tools] } : {}) }))
+        : [];
+      if (type === 'static') {
+        for (const staticEntry of (properties.entries ?? []) as FlowSpecStaticEntry[]) {
+          if (staticEntry.kind !== 'toolCall' || staticEntry.executionMode !== 'real' || !staticEntry.serverName) continue;
+          const existing = attachmentRefs.find((ref) => ref.name === staticEntry.serverName);
+          if (!existing) {
+            attachmentRefs.push({ name: staticEntry.serverName, tools: [staticEntry.toolName] });
+          } else if (!Array.isArray(existing.tools)) {
+            // Static real calls must remain runnable even when the server is
+            // currently offline and the compiler cannot expand "all tools".
+            existing.tools = [staticEntry.toolName];
+          } else if (!existing.tools.includes(staticEntry.toolName)) {
+            existing.tools.push(staticEntry.toolName);
+          }
+        }
+      }
+      if ((type === 'process' || type === 'static') && attachmentRefs.length > 0) {
         const seenServers = new Set<string>();
-        for (const ref of specNode.servers) {
+        for (const ref of attachmentRefs) {
           const serverName = ref?.name;
           if (!serverName || typeof serverName !== 'string') {
             warn('server-missing-name', `Node "${key}": a server reference is missing its "name"; skipped.`, key);
@@ -958,10 +1020,10 @@ export function compileFlowSpec(
             },
           };
           flowNodes.push(mcpNode);
-          mcpAttachments.push({ processKey: key, mcpNode });
+          mcpAttachments.push({ consumerKey: key, mcpNode });
         }
-      } else if (type !== 'process' && Array.isArray(specNode.servers) && specNode.servers.length > 0) {
-        warn('servers-on-non-process', `Node "${key}": only process nodes can have "servers"; ignored.`, key);
+      } else if (type !== 'process' && type !== 'static' && attachmentRefs.length > 0) {
+        warn('servers-on-unsupported-node', `Node "${key}": only process and static nodes can have "servers"; ignored.`, key);
       }
     }
 
@@ -1088,9 +1150,9 @@ export function compileFlowSpec(
     }
 
     // MCP edges after control edges (order is cosmetic; grouping aids debugging).
-    for (const { processKey, mcpNode } of mcpAttachments) {
-      const processNode = nodesByKey.get(processKey)!;
-      edges.push(mcpEdge(processNode, mcpNode));
+    for (const { consumerKey, mcpNode } of mcpAttachments) {
+      const consumerNode = nodesByKey.get(consumerKey)!;
+      edges.push(mcpEdge(consumerNode, mcpNode));
     }
 
     // --- Pass 3: layout ------------------------------------------------------
@@ -1403,12 +1465,13 @@ export function flowToSpec(flow: Flow): FlowSpec {
   const mcpById = new Map<string, FlowNode>();
   for (const n of nodes) if (n.type === 'mcp') mcpById.set(n.id, n);
 
-  // process node id → server refs, reconstructed from the MCP edges leaving it.
-  const serversByProcess = new Map<string, FlowSpecServerRef[]>();
+  // Tool-consumer node id → server refs, independent of authored edge direction.
+  const serversByConsumer = new Map<string, FlowSpecServerRef[]>();
   for (const e of edges) {
     if ((e.data as { edgeType?: string } | undefined)?.edgeType !== 'mcp') continue;
-    const mcp = mcpById.get(e.target);
+    const mcp = mcpById.get(e.target) ?? mcpById.get(e.source);
     if (!mcp) continue;
+    const consumerId = mcp.id === e.target ? e.source : e.target;
     const props = (mcp.data?.properties ?? {}) as Record<string, unknown>;
     const name =
       typeof props.boundServer === 'string' && props.boundServer ? props.boundServer : mcp.data?.label;
@@ -1416,9 +1479,9 @@ export function flowToSpec(flow: Flow): FlowSpec {
     const tools = Array.isArray(props.enabledTools)
       ? (props.enabledTools.filter((t): t is string => typeof t === 'string' && !!t))
       : undefined;
-    const list = serversByProcess.get(e.source) ?? [];
+    const list = serversByConsumer.get(consumerId) ?? [];
     list.push({ name, ...(tools ? { tools } : {}) });
-    serversByProcess.set(e.source, list);
+    serversByConsumer.set(consumerId, list);
   }
 
   const specNodes: FlowSpecNode[] = [];
@@ -1455,7 +1518,7 @@ export function flowToSpec(flow: Flow): FlowSpec {
       if (typeof props.captureVariable === 'string' && props.captureVariable) specNode.captureVariable = props.captureVariable;
       if (typeof props.captureResource === 'string' && props.captureResource) specNode.captureResource = props.captureResource;
       if (typeof props.captureKv === 'string' && props.captureKv) specNode.captureKv = props.captureKv;
-      const servers = serversByProcess.get(node.id);
+      const servers = serversByConsumer.get(node.id);
       if (servers && servers.length > 0) specNode.servers = servers;
     } else if (type === 'subflow') {
       // Parallel fan-out (issue #102) takes precedence over the single-child target.
@@ -1524,6 +1587,8 @@ export function flowToSpec(flow: Flow): FlowSpec {
       // Issue #358/#380: round-trip entries so AI-Improve never drops static nodes.
       if (Array.isArray(props.entries) && props.entries.length > 0) specNode.entries = props.entries;
       if (props.injectOnce === true) specNode.injectOnce = true;
+      const servers = serversByConsumer.get(node.id);
+      if (servers && servers.length > 0) specNode.servers = servers;
     }
     // finish: no properties to carry.
     specNodes.push(specNode);
@@ -1591,7 +1656,7 @@ function layout(
   flowNodes: FlowNode[],
   nodesByKey: Map<string, FlowNode>,
   edges: Edge[],
-  mcpAttachments: Array<{ processKey: string; mcpNode: FlowNode }>,
+  mcpAttachments: Array<{ consumerKey: string; mcpNode: FlowNode }>,
   positions?: Record<string, { x: number; y: number }>
 ): void {
   const controlAdj = new Map<string, string[]>();
@@ -1649,10 +1714,10 @@ function layout(
 
   // MCP nodes: to the right of their process node, stacked.
   const mcpCounters = new Map<string, number>();
-  for (const { processKey, mcpNode } of mcpAttachments) {
-    const processNode = nodesByKey.get(processKey)!;
-    const idx = mcpCounters.get(processKey) ?? 0;
-    mcpCounters.set(processKey, idx + 1);
+  for (const { consumerKey, mcpNode } of mcpAttachments) {
+    const processNode = nodesByKey.get(consumerKey)!;
+    const idx = mcpCounters.get(consumerKey) ?? 0;
+    mcpCounters.set(consumerKey, idx + 1);
     mcpNode.position = {
       x: processNode.position.x + MCP_X_OFFSET,
       y: processNode.position.y + idx * MCP_Y_SPACING,

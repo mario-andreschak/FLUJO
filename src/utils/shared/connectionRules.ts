@@ -49,7 +49,7 @@ export function isAttachmentEdge(edge: { data?: { edgeType?: unknown } | null })
  * it is:
  * - nothing may connect INTO a Start node or OUT OF a Finish node
  * - anything involving an MCP node or an MCP handle must link an MCP node
- *   with a Process node (the tool-wiring relationship); MCP handles cannot
+ *   with a Process or Static node (the tool-wiring relationship); MCP handles cannot
  *   be used for flow control between other node types
  * - anything involving a Resource node or a resource handle must link a
  *   Resource node with a Process node via resource handles (the data-wiring
@@ -98,15 +98,20 @@ export function getConnectionError(
   if (mcpInvolved) {
     const mcpPair =
       (sourceType === 'mcp' && targetType === 'process') ||
-      (sourceType === 'process' && targetType === 'mcp');
+      (sourceType === 'process' && targetType === 'mcp') ||
+      (sourceType === 'mcp' && targetType === 'static') ||
+      (sourceType === 'static' && targetType === 'mcp');
     if (!mcpPair) {
-      return 'MCP connections must link an MCP node to a Process node via MCP handles';
+      return 'MCP connections must link an MCP node to a Process or Static node via MCP handles';
     }
     // From the Process side, MCP wiring uses the dedicated left/right MCP
     // handles — the bottom flow-control handle is not an MCP attachment
     // point. (From the MCP side every handle is an MCP handle already.)
     if (sourceType === 'process' && !isMcpHandle(sourceHandleId)) {
       return "Connect MCP nodes from the Process node's left/right MCP handles";
+    }
+    if (sourceType === 'static' && !isMcpHandle(sourceHandleId)) {
+      return "Connect MCP nodes from the Static node's left/right MCP handles";
     }
     return null;
   }
@@ -147,6 +152,7 @@ export function defaultTargetHandleFor(nodeType: NodeType, sourceHandleId?: stri
   if (nodeType === 'resource') return 'resource-in';
   if (nodeType === 'process' && isResourceHandle(sourceHandleId)) return 'process-left-resource';
   if (nodeType === 'process' && isMcpHandle(sourceHandleId)) return 'process-left-mcp';
+  if (nodeType === 'static' && isMcpHandle(sourceHandleId)) return 'static-left-mcp';
   // Trigger nodes connect to the dedicated start-top handle (issue #241).
   if (nodeType === 'start') return 'start-top';
   return `${nodeType}-top`;

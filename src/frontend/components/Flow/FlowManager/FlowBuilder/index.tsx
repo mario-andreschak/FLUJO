@@ -56,6 +56,7 @@ import { defaultTargetHandleFor } from './Canvas/utils/connectionRules';
 import { computeAutoLayout } from './Canvas/utils/autoLayout';
 import { computeTidyLayout } from './Canvas/utils/tidyLayout';
 import { migrateHandoffPills } from './utils/handoffPillMigration';
+import { reconcileStaticToolConnections } from './utils/staticToolConnections';
 import { Canvas } from './Canvas/index';
 import { NodePalette } from './NodePalette';
 import { getNodeTypes } from './nodeTypeCatalog';
@@ -1702,6 +1703,28 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setNodeToEdit(null);
     log.debug(`handleNodeUpdate: Closed property modals`);
   }, [updateNodeData]);
+
+  const handleStaticNodeUpdate = useCallback((nodeId: string, data: FlowNode['data']) => {
+    const renamedNodes = nodes.map((candidate) => candidate.id === nodeId
+      ? { ...candidate, data }
+      : candidate);
+    const updatedNodes = migrateHandoffPills(nodes, renamedNodes, edges);
+    const reconciled = reconcileStaticToolConnections({
+      staticNodeId: nodeId,
+      entries: Array.isArray(data.properties?.entries) ? data.properties.entries : [],
+      nodes: updatedNodes,
+      edges,
+      createMcpNode: (serverName, position) => {
+        const created = flowService.createNode('mcp', position);
+        created.data.label = serverName;
+        return created;
+      },
+    });
+    setNodes(reconciled.nodes);
+    setEdges(reconciled.edges);
+    setStaticModalOpen(false);
+    setNodeToEdit(null);
+  }, [edges, nodes]);
   
   // Connect-a-server shortcut from the Process node properties modal: create
   // an MCP node bound to the server, place it next to the process node, and
@@ -2530,7 +2553,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         open={staticModalOpen}
         node={nodeToEdit}
         onClose={() => setStaticModalOpen(false)}
-        onSave={handleNodeUpdate}
+        onSave={handleStaticNodeUpdate}
       />
 
       <TriggerNodePropertiesModal

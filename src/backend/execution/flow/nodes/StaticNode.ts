@@ -7,11 +7,14 @@ import { FlujoFunctionToolCall } from '@/shared/types/openai';
 import { resolveRunVars } from '@/utils/shared/resolveRunVars';
 import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { FEATURES } from '@/config/features';
+import { mcpService } from '@/backend/services/mcp';
+import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
+import type { ModelMediaPart } from '@/shared/types/model/media';
 
 const log = createLogger('backend/flow/execution/nodes/StaticNode');
 
 /**
- * Static node (issue #358) — a deterministic, non-LLM, pass-through node that
+ * Static node (issue #358) — a non-LLM, pass-through node that
  * INJECTS pre-authored entries into the conversation when execution traverses
  * it, then hands off to its first successor unchanged.
  *
@@ -23,11 +26,11 @@ const log = createLogger('backend/flow/execution/nodes/StaticNode');
  *
  * Entry kinds:
  *  - `message`  → one message with the authored role/content.
- *  - `toolCall` → TWO messages: a synthetic `assistant` turn carrying a
- *    `tool_calls` entry, immediately followed by the matching `role: 'tool'`
- *    result with the same `tool_call_id`. Well-formed pairing is mandatory,
- *    otherwise provider adapters reject the history — invalid `argumentsJson`
- *    therefore fails loudly at execution time.
+ *  - `toolCall` → executes the connected MCP tool when `executionMode` is
+ *    `real`, or uses the authored deterministic result for `mock`/legacy
+ *    entries. It then appends a paired assistant tool-call and tool-result
+ *    message. Well-formed pairing is mandatory, otherwise provider adapters
+ *    reject the history — invalid `argumentsJson` therefore fails loudly.
  *
  * Text fields support `${var:NAME}` (run scratchpad, Tier 2c) and `${res:NAME}`
  * (run resources, Tier 3), resolved in the same order as ProcessNode.
@@ -99,9 +102,33 @@ export class StaticNode extends BaseNode {
       const messages: FlujoChatMessage[] = [];
       for (const entry of prepResult.entries) {
         if (entry.kind === 'message') {
+          let content = await resolve(entry.content);
+          const media: ModelMediaPart[] = [];
+          for (const attachment of entry.attachments ?? []) {
+            if (
+              attachment.type === 'document'
+              && typeof attachment.content === 'string'
+              && !attachment.content.startsWith('data:')
+            ) {
+              const documentText = await resolve(attachment.content);
+              content += `${content ? '\n\n' : ''}[DOCUMENT${attachment.originalName ? `: ${attachment.originalName}` : ''}]\n${documentText}`;
+              continue;
+            }
+
+            const match = /^data:([^;,]+);base64,([\s\S]*)$/.exec(attachment.content ?? '');
+            if (!match) continue;
+            media.push({
+              type: attachment.type === 'document' ? 'file' : attachment.type,
+              mimeType: attachment.mimeType || match[1],
+              data: match[2],
+              name: attachment.originalName,
+              transcript: attachment.transcript,
+            });
+          }
           messages.push({
             role: entry.role,
-            content: await resolve(entry.content),
+            content,
+            ...(media.length > 0 ? { media } : {}),
             id: crypto.randomUUID(),
             timestamp: Date.now(),
           } as FlujoChatMessage);
@@ -129,17 +156,50 @@ export class StaticNode extends BaseNode {
             function: { name: toolName, arguments: argumentsJson },
           };
 
+          const executionMode = entry.executionMode === 'real' ? 'real' : 'mock';
+          const serverName = (entry.serverName ?? '').trim();
+          let resultContent = executionMode === 'mock' ? await resolve(entry.result ?? '') : '';
+
+          if (executionMode === 'real') {
+            if (!serverName) {
+              throw new Error(`Static node ${nodeId}: real tool call "${toolName}" requires an MCP server.`);
+            }
+            const binding = node_params?.properties?.mcpNodes?.find(
+              (candidate) => candidate.properties?.boundServer === serverName,
+            );
+            if (!binding || !binding.properties.enabledTools?.includes(toolName)) {
+              throw new Error(
+                `Static node ${nodeId}: real tool call "${toolName}" is not enabled on its connected MCP server "${serverName}".`,
+              );
+            }
+            const args = JSON.parse(argumentsJson) as Record<string, unknown>;
+            const callResult = await mcpService.callTool(
+              serverName,
+              toolName,
+              args,
+              binding.properties.toolTimeout ?? DEFAULT_TOOL_CALL_TIMEOUT_SECONDS,
+              undefined,
+              nodeId,
+            );
+            resultContent = callResult.success
+              ? JSON.stringify(callResult.data ?? null)
+              : `Error: ${callResult.error || `Tool ${toolName} failed`}`;
+          }
+
           messages.push({
             role: 'assistant',
             content: '',
             tool_calls: [toolCall],
+            ...(serverName ? {
+              mcpToolCalls: { [toolCallId]: { serverName, toolName } },
+            } : {}),
             id: crypto.randomUUID(),
             timestamp: Date.now(),
           } as FlujoChatMessage);
           messages.push({
             role: 'tool',
             tool_call_id: toolCallId,
-            content: await resolve(entry.result ?? ''),
+            content: resultContent,
             id: crypto.randomUUID(),
             timestamp: Date.now(),
           } as FlujoChatMessage);

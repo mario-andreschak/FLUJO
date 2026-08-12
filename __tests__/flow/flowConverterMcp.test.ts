@@ -64,4 +64,35 @@ describe('FlowConverter MCP attachment derivation', () => {
     expect((source.nodes.find(({ id }) => id === 'proc')!.data.properties as { mcpNodes: unknown[] }).mcpNodes)
       .toEqual([{ id: 'stale', properties: { boundServer: 'old' } }]);
   });
+
+  it('derives MCP references for static real-tool consumers too', () => {
+    const source = buildFlow();
+    source.nodes.splice(2, 0, {
+      id: 'static', type: 'static', position: { x: 0, y: 150 },
+      data: {
+        label: 'static', type: 'static',
+        properties: {
+          entries: [{ kind: 'toolCall', executionMode: 'real', serverName: 'current', toolName: 'get_me', argumentsJson: '{}', result: '' }],
+          mcpNodes: [{ id: 'stale', properties: { boundServer: 'old' } }],
+        },
+      },
+    } as any);
+    source.edges.push({ id: 'static->mcp', source: 'static', target: 'mcp', data: { edgeType: 'mcp' } } as any);
+    source.edges = source.edges.map((edge) => edge.id === 'proc->finish'
+      ? { ...edge, target: 'static' }
+      : edge);
+    source.edges.push({ id: 'static->finish', source: 'static', target: 'finish', data: { edgeType: 'standard' } } as any);
+
+    const converted = FlowConverter.convert(source);
+    const proc = processNode(converted);
+    const stat = [...proc.successors.values()][0] as BaseNode;
+
+    expect(stat.node_params.type).toBe('static');
+    expect(stat.node_params.properties.mcpNodes).toEqual([{
+      id: 'mcp',
+      properties: expect.objectContaining({ boundServer: 'current', enabledTools: ['get_me'] }),
+    }]);
+    expect((source.nodes.find(({ id }) => id === 'static')!.data.properties as any).mcpNodes)
+      .toEqual([{ id: 'stale', properties: { boundServer: 'old' } }]);
+  });
 });

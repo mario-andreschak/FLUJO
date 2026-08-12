@@ -707,20 +707,41 @@ export interface StaticNodeParams extends BaseNodeParams<StaticNodeProperties> {
     type: 'static';
 }
 
+export interface StaticAttachment {
+    id?: string;
+    type: 'document' | 'audio' | 'image' | 'video';
+    content: string;
+    originalName?: string;
+    mimeType?: string;
+    transcript?: string;
+}
+
 /**
- * Static node (issue #358): a deterministic, non-LLM, pass-through node that
- * INJECTS pre-authored entries into the conversation when traversed. Each entry
- * is either a plain message (system/user/assistant) or a synthetic assistant
- * tool-call plus its matching tool result (two messages).
+ * Static node entries. A missing executionMode on a tool call is the legacy
+ * mock behavior, preserving existing flows byte-for-byte at runtime.
  */
 export type StaticEntry =
-    | { kind: 'message'; role: 'system' | 'user' | 'assistant'; content: string }
-    | { kind: 'toolCall'; toolName: string; argumentsJson: string; result: string };
+    | {
+        kind: 'message';
+        role: 'system' | 'user' | 'assistant';
+        content: string;
+        attachments?: StaticAttachment[];
+      }
+    | {
+        kind: 'toolCall';
+        toolName: string;
+        argumentsJson: string;
+        result: string;
+        executionMode?: 'mock' | 'real';
+        serverName?: string;
+      };
 
 export interface StaticNodeProperties {
     name?: string;
     /** Entries injected, in order, onto sharedState.messages. Defaults to []. */
     entries?: StaticEntry[];
+    /** MCP attachments derived from static↔MCP graph edges at conversion time. */
+    mcpNodes?: MCPNodeReference[];
     /**
      * Re-entry semantics. Default (`false`/omitted): append entries on every traversal,
      * so a looping node re-injects each iteration with freshly resolved `${var:…}` values.

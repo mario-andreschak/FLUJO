@@ -408,12 +408,12 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
       }
     }
 
-    // An MCP node wired to no Process node contributes nothing to the flow.
-    const wiredToProcess = edges.some(
+    // An MCP node wired to no executable tool consumer contributes nothing.
+    const wiredToConsumer = edges.some(
       (e) => isMcpEdge(e) && (e.source === node.id || e.target === node.id)
     );
-    if (!wiredToProcess) {
-      add('warning', 'mcp-node-unconnected', `MCP node "${getNodeLabel(node)}" is not connected to any Process node.`, node);
+    if (!wiredToConsumer) {
+      add('warning', 'mcp-node-unconnected', `MCP node "${getNodeLabel(node)}" is not connected to any Process or Static node.`, node);
     }
   }
 
@@ -610,6 +610,36 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
           `Static node "${getNodeLabel(node)}": tool-call entry #${index + 1} has no tool name.`,
           node
         );
+      }
+      if (entry.executionMode === 'real') {
+        const serverName = typeof entry.serverName === 'string' ? entry.serverName.trim() : '';
+        if (!serverName) {
+          add(
+            'error',
+            'static-real-toolcall-missing-server',
+            `Static node "${getNodeLabel(node)}": real tool-call entry #${index + 1} has no MCP server.`,
+            node,
+          );
+        } else {
+          const matchingMcp = edges.flatMap((edge) => {
+            if (!isMcpEdge(edge)) return [];
+            const otherId = edge.source === node.id ? edge.target : edge.target === node.id ? edge.source : null;
+            if (!otherId) return [];
+            const candidate = nodes.find((flowNode) => flowNode.id === otherId && getNodeType(flowNode) === 'mcp');
+            return candidate ? [candidate] : [];
+          }).find((candidate) => candidate.data?.properties?.boundServer === serverName);
+          const enabledTools = Array.isArray(matchingMcp?.data?.properties?.enabledTools)
+            ? matchingMcp.data.properties.enabledTools
+            : [];
+          if (!matchingMcp || (toolName && !enabledTools.includes(toolName))) {
+            add(
+              'error',
+              'static-real-toolcall-not-wired',
+              `Static node "${getNodeLabel(node)}": real tool-call entry #${index + 1} is not connected to server "${serverName}" with tool "${toolName || '(missing)'}" enabled.`,
+              node,
+            );
+          }
+        }
       }
       const args = typeof entry.argumentsJson === 'string' ? entry.argumentsJson.trim() : '';
       if (args && STATIC_PLACEHOLDER_PATTERN.test(args)) {

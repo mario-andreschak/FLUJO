@@ -165,7 +165,11 @@ const QUICK_CONNECT_HANDLES: Record<NodeType, QuickConnectHandle[]> = {
   resource: [{ handleId: 'resource-out', side: 'right' }],
   signal: [{ handleId: 'signal-bottom', side: 'bottom' }],
   trigger: [{ handleId: 'trigger-bottom', side: 'bottom' }],
-  static: [{ handleId: 'static-bottom', side: 'bottom' }],
+  static: [
+    { handleId: 'static-bottom', side: 'bottom' },
+    { handleId: 'static-left-mcp', side: 'left', anchor: '50%' },
+    { handleId: 'static-right-mcp', side: 'right', anchor: '50%' },
+  ],
 };
 
 const quickConnectRotation: Record<QuickConnectSide, number> = {
@@ -502,6 +506,18 @@ const CustomNode = ({ id, data, nodeType, selected }: CustomNodeProps & { select
             position={Position.Bottom}
             style={getProcessHandleStyle(theme)}
           />
+          <Handle
+            id="static-left-mcp"
+            type="source"
+            position={Position.Left}
+            style={{ ...getMCPConnectionHandleStyle(theme), top: '50%' }}
+          />
+          <Handle
+            id="static-right-mcp"
+            type="source"
+            position={Position.Right}
+            style={{ ...getMCPConnectionHandleStyle(theme), top: '50%' }}
+          />
         </>
       );
     } else if (nodeType === 'trigger') {
@@ -580,7 +596,7 @@ const CustomNode = ({ id, data, nodeType, selected }: CustomNodeProps & { select
             </IconButton>
           );
 
-          if (nodeType === 'process' && quickConnect.anchor) {
+          if ((nodeType === 'process' || nodeType === 'static') && quickConnect.anchor) {
             if (!hoverReady) return null;
             return (
               <Box

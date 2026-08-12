@@ -100,6 +100,74 @@ describe('compile: static nodes', () => {
     expect(st.data!.properties!.entries).toHaveLength(1);
   });
 
+  it('creates one MCP attachment for real static calls and round-trips its enabled tools', () => {
+    const realContext = {
+      ...context,
+      servers: [{ name: 'files' }],
+      serverTools: { files: ['read_file', 'write_file'] },
+    } as any;
+    const result = compileFlowSpec(staticSpec({
+      entries: [
+        { kind: 'toolCall', executionMode: 'real', serverName: 'files', toolName: 'read_file', argumentsJson: '{"path":"a"}', result: '' },
+        { kind: 'toolCall', executionMode: 'real', serverName: 'files', toolName: 'write_file', argumentsJson: '{"path":"b"}', result: '' },
+      ],
+    }), realContext);
+
+    const flow = result.flow!;
+    const stat = flow.nodes.find((node) => node.type === 'static')!;
+    const mcp = flow.nodes.find((node) => node.type === 'mcp')!;
+    expect(mcp.data.properties).toMatchObject({ boundServer: 'files', enabledTools: ['read_file', 'write_file'] });
+    expect(flow.edges.filter((edge) => edge.data?.edgeType === 'mcp')).toEqual([
+      expect.objectContaining({
+        source: stat.id,
+        sourceHandle: 'static-right-mcp',
+        target: mcp.id,
+        targetHandle: 'mcp-left',
+      }),
+    ]);
+
+    const back = flowToSpec(flow);
+    const backStatic = back.nodes.find((node) => node.type === 'static')!;
+    expect(backStatic.servers).toEqual([{ name: 'files', tools: ['read_file', 'write_file'] }]);
+    expect(backStatic.entries).toEqual((stat.data.properties as any).entries);
+
+    const reversed = {
+      ...flow,
+      edges: flow.edges.map((edge) => edge.data?.edgeType === 'mcp'
+        ? { ...edge, source: edge.target, target: edge.source }
+        : edge),
+    };
+    expect(flowToSpec(reversed).nodes.find((node) => node.type === 'static')?.servers).toEqual([
+      { name: 'files', tools: ['read_file', 'write_file'] },
+    ]);
+  });
+
+  it('keeps the required real tool enabled when an offline server ref omits its tools', () => {
+    const result = compileFlowSpec(staticSpec({
+      servers: [{ name: 'offline-files' }],
+      entries: [
+        { kind: 'toolCall', executionMode: 'real', serverName: 'offline-files', toolName: 'read_file', argumentsJson: '{}', result: '' },
+      ],
+    }), context);
+
+    const mcp = result.flow!.nodes.find((node) => node.type === 'mcp')!;
+    expect(mcp.data.properties).toMatchObject({
+      boundServer: 'offline-files',
+      enabledTools: ['read_file'],
+    });
+  });
+
+  it('downgrades malformed real calls without a server to safe mocks', () => {
+    const result = compileFlowSpec(staticSpec({
+      entries: [{ kind: 'toolCall', executionMode: 'real', toolName: 'search', argumentsJson: '{}', result: 'captured' }],
+    }), context);
+
+    expect(result.issues.some((issue) => issue.code === 'static-real-toolcall-missing-server')).toBe(true);
+    expect(result.flow!.nodes.find((node) => node.type === 'static')!.data.properties?.entries).toEqual([{
+      kind: 'toolCall', executionMode: 'mock', toolName: 'search', argumentsJson: '{}', result: 'captured',
+    }]);
+  });
+
   it('flowToSpec round-trips a static node (AI-Improve data-loss guard)', () => {
     const entries = [
       { kind: 'message', role: 'system', content: 'Prime the model.' },
