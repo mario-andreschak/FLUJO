@@ -581,6 +581,9 @@ export interface SubflowLanePlan {
     laneId?: string;
     /** Stable child conversation id reused by every recovery attempt. */
     conversationId?: string;
+    /** Resolved per-key session handle for this job. Reusing the same key in a
+     *  later visit resumes this lane's child conversation as a new turn. */
+    sessionKey?: string;
 }
 
 /** The outcome of one queued child job, kept in request order. */
@@ -597,6 +600,8 @@ export interface SubflowLaneResult {
     laneTitle?: string;
     laneId?: string;
     conversationId?: string;
+    /** Stable caller-visible handle for a resumable keyed child conversation. */
+    sessionKey?: string;
 }
 
 export type SubflowInvocationLaneStatus =
@@ -649,6 +654,10 @@ export interface SubflowInvocation {
     concurrencyLimit: number;
     joinSeparator: string;
     errorStrategy: 'fail-fast' | 'collect-all';
+    /** Session configuration frozen with this durable visit so crash recovery
+     *  cannot silently fall back to per-visit behavior. */
+    sessionScope?: 'per-visit' | 'per-run' | 'per-key';
+    sessionInputMode?: 'resume' | 'summary';
     /** Shared node input stored once for fan-out lanes. Per-lane briefs/items
      *  remain on the lane itself, avoiding N copies of a full chat transcript. */
     sharedInput?: { prompt: string } | { messages: FlujoChatMessage[] };
@@ -1054,6 +1063,9 @@ export interface SharedState {
          *  the node's `subflowId`; concurrencyLimit controls only active workers.
          *  Single-shot and node-id-scoped like `prompt`. */
         tasks?: string[];
+        /** Per-task session handles aligned by index with `tasks`. `null` means
+         *  that call did not provide a handle. Used only by keyed Subflows. */
+        sessionKeys?: Array<string | null>;
         /** Legacy Phase 4 (issue #130): caller-chosen fan-out target flow ids.
          *  No handoff tool exposes this parameter anymore (superseded by the
          *  spawn-with-brief `task` calls above — issue #156), but the capture

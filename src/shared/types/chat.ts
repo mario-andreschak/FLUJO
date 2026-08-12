@@ -196,5 +196,7 @@ export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
     laneCount: number;
     status: 'completed' | 'error';
     conversationId?: string;
+    /** Stable handle the parent can reuse for a follow-up handoff. */
+    sessionKey?: string;
   };
 };

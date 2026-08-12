@@ -21,10 +21,9 @@ visits"**.
 
 The toggle is a **global switch** (`experimental.subflowSessions`, off by default). It
 does not by itself change any flow's behaviour — a Subflow node must *also* be
-configured with a `sessionScope` of `per-run` (see below) before resumption happens.
+configured with a resumable `sessionScope` (`per-run` or `per-key`; see below) before resumption happens.
 Turning the toggle off at any time instantly restores today's default behaviour (a fresh
-child conversation on every visit), even for nodes that have `sessionScope: 'per-run'`
-configured.
+child conversation on every visit), even for nodes that have a resumable scope configured.
 
 ## Session scope options
 
@@ -32,7 +31,7 @@ configured.
 |---|---|---|
 | `per-visit` (default) | Every handoff/queue visit starts a brand-new child run with no memory of any prior visit. | Available |
 | `per-run` | All visits to this Subflow node within one parent run share **one** child conversation; the second and later visits resume it. | Available (behind the `experimental.subflowSessions` flag) |
-| `per-key` | One conversation per resolved `sessionKey` (e.g. one conversation per scene in a multi-scene flow), rather than one per node. | **Not yet implemented** (#363 Phase 2) |
+| `per-key` | One conversation per `sessionKey`. An incoming Process handoff may choose the key; reusing it sends the new task as a follow-up turn to that finished child conversation. Different keys remain independent. | Available (behind the `experimental.subflowSessions` flag) |
 
 ## Session input mode
 
@@ -45,10 +44,14 @@ currently behaves exactly like `resume`.** This will be revisited in a future ph
 
 ## Configuring a node
 
-There is currently no properties-modal control for `sessionScope` in the FlowBuilder UI
-(`SubflowNodePropertiesModal.tsx`). Setting it is an **interim, hand-edit-the-flow-JSON**
-step: add `sessionScope: "per-run"` to the Subflow node's properties in the flow's JSON
-definition, e.g.:
+In the Subflow properties modal, use **Child conversation memory**:
+
+- **Fresh every visit** is the default and stores no `sessionScope` property.
+- **One per parent run** stores `sessionScope: "per-run"`.
+- **One per session key** stores `sessionScope: "per-key"`. Leave the fixed-key field
+  blank when the calling Process should choose `sessionKey` on each handoff.
+
+The equivalent JSON for the per-run mode is:
 
 ```json
 {
@@ -62,6 +65,23 @@ definition, e.g.:
 
 Combined with the experimental flag being enabled, every visit to this node within the
 same parent run will now resume the same child conversation.
+
+For caller-addressed child chats, configure `"sessionScope": "per-key"` and leave
+`sessionKey` absent. With the experiment enabled, an incoming Process node then receives
+this additional handoff-tool argument:
+
+```json
+{
+  "task": "Apply the review notes to section 2",
+  "sessionKey": "writer-main"
+}
+```
+
+The first use of `writer-main` creates a saved child conversation. A later handoff with
+the same key appends its `task` as a new user turn, restarts the child flow at its Start
+node, and keeps the child's full prior transcript. A different key creates an independent
+child conversation. Keys are 1–128 characters and may contain letters, numbers, `.`,
+`_`, `:`, and `-`.
 
 ## Worked example
 
@@ -89,9 +109,9 @@ genuinely redundant.
   child model's context limit. Very long-running retry loops are not yet a great fit.
 - **Concurrent lanes are NOT isolated under `per-run`:** if a Subflow node is invoked as
   multiple parallel lanes (e.g. a fan-out queue), all lanes under the same `per-run`
-  node share **one** conversation. `per-run` scope is intended for a single retry loop,
-  not for parallel fan-out work — `per-key` scope (not yet implemented) is the intended
-  answer for that case.
+  node share **one** conversation and are serialized by the per-conversation execution
+  lock. `per-run` scope is intended for a single retry loop. Use distinct `per-key`
+  handles for parallel independent work; repeated uses of the same key are serialized.
 - **How to spot reuse:** each subflow invocation lane now records `sessionIdentity` (the
   registry key it resolved to) and `resumedVisit` (`true` once a visit reused a prior
   conversation rather than creating a new one). A debug log line —
@@ -105,10 +125,9 @@ genuinely redundant.
 
 ## Limitations
 
-- **N1 — No UI to set `sessionScope`.** See "Configuring a node" above; exposing it in
-  `SubflowNodePropertiesModal.tsx` is tracked as a stretch item on #391.
-- **N2 — `per-key` scope is not implemented.** Tracked as #363 Phase 2.
-- **N3 — `summary` session input mode is not implemented.** Tracked as #363 Phase 3.
-- **N4 — `list_conversations` (MCP) has no session filter yet**, so resumed subflow
+- **N1 — `summary` session input mode is not implemented.** Tracked as #363 Phase 3.
+- **N2 — Session keys live only for the current logical parent run.** A later top-level
+  user turn starts a new registry; this prevents accidental cross-run memory leakage.
+- **N3 — `list_conversations` (MCP) has no session filter yet**, so resumed subflow
   sessions are not distinguishable from ordinary conversations through that tool.
   Tracked as a future phase of #363.

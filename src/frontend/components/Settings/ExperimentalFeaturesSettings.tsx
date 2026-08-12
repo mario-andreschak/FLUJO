@@ -558,7 +558,7 @@ export default function ExperimentalFeaturesSettings() {
           label={t('settings.experimental.subflowSessions')}
         />
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          {t('settings.experimental.subflowSessionsDescription')}
+          {t('settings.experimental.subflowSessionsDescriptionV2')}
         </Typography>
       </FormControl>
 

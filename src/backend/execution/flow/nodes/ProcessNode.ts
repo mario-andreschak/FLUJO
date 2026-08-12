@@ -170,6 +170,14 @@ export class ProcessNode extends BaseNode {
     const subflowDetachedInvocationEnabled = hasSubflowTargets
       ? await ModelHandler.isSubflowDetachedInvocationEnabled()
       : false;
+    const hasKeyedSessionTarget = targets.some((target) => {
+      if (target.type !== 'subflow') return false;
+      const props = flowNodesById?.get(target.id)?.data?.properties as SubflowNodeProperties | undefined;
+      return props?.sessionScope === 'per-key' && props.saveConversation !== false;
+    });
+    const subflowSessionsEnabled = hasKeyedSessionTarget
+      ? await ModelHandler.isSubflowSessionsEnabled()
+      : false;
     const subflowToolTargetIds = new Set(
       subflowToolInvocationEnabled
         ? targets
@@ -258,7 +266,7 @@ export class ProcessNode extends BaseNode {
       // isolated message (promptTemplate for a subflow, isolatedPrompt for a
       // process node) is used as the default (see SubflowNode.prep /
       // ProcessNode.prep).
-      const targetProps = flowNode?.data?.properties as { inputMode?: string; allowCallerPrompt?: boolean; promptTemplate?: string; isolatedPrompt?: string } | undefined;
+      const targetProps = flowNode?.data?.properties as (SubflowNodeProperties & { isolatedPrompt?: string }) | undefined;
       // Every Subflow is a queue-backed sub-agent. The routing model may call the
       // same handoff tool any number of times in ONE turn; each call contributes
       // one job for this node's single child flow. `concurrencyLimit` on the
@@ -286,6 +294,12 @@ export class ProcessNode extends BaseNode {
         acceptsCallerSpawn &&
         targetProps?.inputMode === 'isolated' &&
         !(authoredIsolatedMessage?.trim());
+      const acceptsCallerSessionKey =
+        subflowSessionsEnabled &&
+        target.type === 'subflow' &&
+        targetProps?.sessionScope === 'per-key' &&
+        targetProps?.saveConversation !== false &&
+        !(targetProps.sessionKey?.trim());
 
       const paramProps: Record<string, unknown> = {};
       const requiredParams: string[] = [];
@@ -323,6 +337,26 @@ export class ProcessNode extends BaseNode {
           descExtras.push('You MUST pass a "prompt" argument instructing the target node — it has no authored message of its own.');
         } else {
           descExtras.push('Optionally pass a "prompt" argument to instruct the target node; omit it to use its default prompt.');
+        }
+      }
+      if (acceptsCallerSessionKey) {
+        paramProps.sessionKey = {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$',
+          description: 'Stable child-conversation handle. Use a new value to start a new child chat; reuse the exact same value to send this task as a follow-up to that finished child chat.'
+        };
+        const knownKeys = Object.values(sharedState.subflowSessions ?? {})
+          .filter((session) => session.nodeId === target.id && !!session.sessionKey)
+          .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+          .slice(0, 20)
+          .map((session) => session.sessionKey as string);
+        descExtras.push(
+          'PERSISTENT CHILD CHAT: pass a stable "sessionKey". A new key creates a child conversation; reusing that key appends "task" as a follow-up to the same finished child conversation, preserving its transcript. Omit the key for a fresh one-off child.',
+        );
+        if (knownKeys.length > 0) {
+          descExtras.push(`Existing resumable session keys for this sub-agent: ${knownKeys.map((key) => JSON.stringify(key)).join(', ')}.`);
         }
       }
       const hasParams = Object.keys(paramProps).length > 0;

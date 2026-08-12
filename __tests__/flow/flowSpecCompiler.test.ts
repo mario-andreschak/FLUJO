@@ -431,6 +431,28 @@ describe('compileFlowSpec — subflow resolution', () => {
     const { issues } = compileFlowSpec(subflowSpec(undefined), context);
     expect(issues).toContainEqual(expect.objectContaining({ code: 'subflow-missing-flow', severity: 'error' }));
   });
+
+  it('round-trips keyed child-conversation persistence', () => {
+    const spec = subflowSpec('flow-1');
+    Object.assign(spec.nodes[1], {
+      sessionScope: 'per-key',
+      sessionKey: 'writer-${var:topic}',
+    });
+
+    const { flow, issues } = compileFlowSpec(spec, context);
+    expect(issues).not.toContainEqual(expect.objectContaining({ code: 'invalid-session-scope' }));
+    const properties = flow!.nodes.find((node) => node.type === 'subflow')!.data.properties!;
+    expect(properties).toMatchObject({
+      sessionScope: 'per-key',
+      sessionKey: 'writer-${var:topic}',
+    });
+
+    const serialized = flowToSpec(flow!);
+    expect(serialized.nodes.find((node) => node.type === 'subflow')).toMatchObject({
+      sessionScope: 'per-key',
+      sessionKey: 'writer-${var:topic}',
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

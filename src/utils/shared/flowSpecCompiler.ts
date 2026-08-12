@@ -266,6 +266,12 @@ export interface FlowSpecNode {
    * Only applies to parallel/spawn/fan-out/map-over-list executions.
    */
   resultPresentation?: 'separate' | 'joined';
+  /** Subflow child-conversation memory. `per-key` exposes a `sessionKey`
+   *  argument on incoming handoff tools when the experiment is enabled. */
+  sessionScope?: 'per-visit' | 'per-run' | 'per-key';
+  /** Optional authored key/template for `per-key`; when absent the caller may
+   *  choose the key on each handoff. */
+  sessionKey?: string;
 }
 
 export interface FlowSpecEdge {
@@ -729,7 +735,6 @@ export function compileFlowSpec(
         if (typeof specNode.allowCallerPrompt === 'boolean') {
           properties.allowCallerPrompt = specNode.allowCallerPrompt;
         }
-
         if (specNode.outputMode !== undefined) {
           if (VALID_PROCESS_OUTPUT_MODES.has(specNode.outputMode)) {
             properties.outputMode = specNode.outputMode;
@@ -811,6 +816,18 @@ export function compileFlowSpec(
         // the parallel target set via the handoff tool.
         if (typeof specNode.allowCallerFanout === 'boolean') {
           properties.allowCallerFanout = specNode.allowCallerFanout;
+        }
+        if (
+          specNode.sessionScope === 'per-visit'
+          || specNode.sessionScope === 'per-run'
+          || specNode.sessionScope === 'per-key'
+        ) {
+          if (specNode.sessionScope !== 'per-visit') properties.sessionScope = specNode.sessionScope;
+        } else if (specNode.sessionScope !== undefined) {
+          warn('invalid-session-scope', `Node "${key}": sessionScope "${String(specNode.sessionScope)}" is not valid (per-visit | per-run | per-key); omitted.`, key);
+        }
+        if (typeof specNode.sessionKey === 'string' && specNode.sessionKey.trim()) {
+          properties.sessionKey = specNode.sessionKey.trim();
         }
         // captureVariable (Tier 2c): save the subflow's folded output into a named run var.
         if (typeof specNode.captureVariable === 'string' && specNode.captureVariable.trim()) {
@@ -1565,6 +1582,8 @@ export function flowToSpec(flow: Flow): FlowSpec {
       if (typeof props.promptTemplate === 'string' && props.promptTemplate) specNode.prompt = props.promptTemplate;
       if (props.allowCallerPrompt === true) specNode.allowCallerPrompt = true;
       if (props.allowCallerFanout === true) specNode.allowCallerFanout = true;
+      if (props.sessionScope === 'per-run' || props.sessionScope === 'per-key') specNode.sessionScope = props.sessionScope;
+      if (typeof props.sessionKey === 'string' && props.sessionKey.trim()) specNode.sessionKey = props.sessionKey.trim();
       if (typeof props.captureVariable === 'string' && props.captureVariable) specNode.captureVariable = props.captureVariable;
       if (typeof props.captureResource === 'string' && props.captureResource) specNode.captureResource = props.captureResource;
       if (typeof props.captureKv === 'string' && props.captureKv) specNode.captureKv = props.captureKv;

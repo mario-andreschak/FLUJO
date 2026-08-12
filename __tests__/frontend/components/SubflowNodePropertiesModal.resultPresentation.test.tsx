@@ -58,3 +58,25 @@ describe('SubflowNodePropertiesModal result presentation', () => {
     expect(screen.queryByText('Parallel results')).not.toBeInTheDocument();
   });
 });
+
+describe('SubflowNodePropertiesModal child conversation memory', () => {
+  it('defaults legacy nodes to a fresh child on every visit', async () => {
+    renderModal({});
+
+    expect(await screen.findByRole('radio', { name: /fresh every visit/i })).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('saves a caller-addressable keyed session and optional fixed key', async () => {
+    const saved = renderModal({});
+    fireEvent.click(await screen.findByRole('radio', { name: /one per session key/i }));
+    fireEvent.change(screen.getByRole('textbox', { name: /fixed session key/i }), {
+      target: { value: 'writer-main' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(saved.data.properties).toMatchObject({
+      sessionScope: 'per-key',
+      sessionKey: 'writer-main',
+    });
+  });
+});

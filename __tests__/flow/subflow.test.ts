@@ -58,6 +58,8 @@ jest.mock('@/backend/services/flow/index', () => ({
 
 import { SubflowNode, FinishNode } from '@/backend/execution/flow/nodes';
 import { runFlow } from '@/backend/execution/flow/runFlow';
+import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 
 const runFlowMock = runFlow as jest.Mock;
 
@@ -333,6 +335,56 @@ describe('SubflowNode', () => {
     expect(call.prompt).toBe('default task');
     // Not addressed to this node, so it stays for its real target.
     expect(state.handoffInput).toBe(stale);
+  });
+
+  it('reuses a caller-addressed keyed child as a real follow-up turn', async () => {
+    const sessionGate = jest.spyOn(ModelHandler, 'isSubflowSessionsEnabled').mockResolvedValue(true);
+    const sessionIdentity = 'run-1::sub-node::writer-a';
+    const node = makeNode({
+      subflowId: 'inner-flow',
+      inputMode: 'isolated',
+      sessionScope: 'per-key',
+      saveConversation: true,
+    }, 'edge-next');
+    const state = makeState({
+      logicalRunId: 'run-1',
+      handoffInput: {
+        targetNodeId: 'sub-node',
+        prompt: 'Apply the review notes',
+        tasks: ['Apply the review notes'],
+        sessionKeys: ['writer-a'],
+      },
+      subflowSessions: {
+        [sessionIdentity]: {
+          version: 1,
+          conversationId: 'saved-child-conversation',
+          nodeId: 'sub-node',
+          sessionKey: 'writer-a',
+          visits: 1,
+          lastUsedAt: 1,
+          status: 'idle',
+        },
+      },
+    });
+    FlowExecutor.conversationStates.set('parent-conv', state);
+
+    try {
+      await node.run(state);
+    } finally {
+      FlowExecutor.conversationStates.delete('parent-conv');
+      sessionGate.mockRestore();
+    }
+
+    expect(runFlowMock.mock.calls[0][0]).toMatchObject({
+      conversationId: 'saved-child-conversation',
+      prompt: 'Apply the review notes',
+      resumeAsNewTurn: true,
+      source: 'subflow',
+    });
+    expect(state.subflowSessions?.[sessionIdentity]).toMatchObject({
+      visits: 2,
+      status: 'idle',
+    });
   });
 
   it("an explicit inputMode wins over a leftover promptTemplate (history is used, prompt ignored)", async () => {

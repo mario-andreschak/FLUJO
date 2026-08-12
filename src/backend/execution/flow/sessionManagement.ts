@@ -3,7 +3,21 @@
  * Handles per-run and per-key session identity resolution, registry lookup, and updates.
  */
 
-import { SharedState, SubflowInvocationLane } from './types';
+import { SharedState } from './types';
+
+export const SESSION_KEY_MAX_LENGTH = 128;
+const SESSION_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+
+/** Normalize a model/authored session handle. Invalid values deliberately do
+ *  not acquire a session, so malformed input falls back to a fresh child. */
+export function normalizeSessionKey(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const key = value.trim();
+  if (!key || key.length > SESSION_KEY_MAX_LENGTH || !SESSION_KEY_PATTERN.test(key)) {
+    return undefined;
+  }
+  return key;
+}
 
 /** Resolve session identity for a lane based on session scope. */
 export function resolveSessionIdentity(
@@ -12,14 +26,15 @@ export function resolveSessionIdentity(
   sessionScope: 'per-visit' | 'per-run' | 'per-key' | undefined,
   sessionKey: string | undefined,
 ): string | undefined {
-  if (!sessionScope || sessionScope === 'per-visit') return undefined;
+  if (!parentRunId || !nodeId || !sessionScope || sessionScope === 'per-visit') return undefined;
 
   if (sessionScope === 'per-run') {
     return `${parentRunId}::${nodeId}::`;
   }
 
-  if (sessionScope === 'per-key' && sessionKey) {
-    return `${parentRunId}::${nodeId}::${sessionKey}`;
+  const normalizedKey = normalizeSessionKey(sessionKey);
+  if (sessionScope === 'per-key' && normalizedKey) {
+    return `${parentRunId}::${nodeId}::${normalizedKey}`;
   }
 
   return undefined;
@@ -43,6 +58,8 @@ export function resolveSessionConversationId(
   // Look up in registry
   const session = parentState.subflowSessions?.[sessionIdentity];
   if (session && session.conversationId) {
+    session.lastUsedAt = Date.now();
+    session.status = 'running';
     // Reuse existing session
     return {
       conversationId: session.conversationId,
@@ -60,10 +77,10 @@ export function resolveSessionConversationId(
     version: 1,
     conversationId: newConversationId,
     nodeId,
-    sessionKey,
-    visits: 1,
+    sessionKey: normalizeSessionKey(sessionKey),
+    visits: 0,
     lastUsedAt: Date.now(),
-    status: 'idle',
+    status: 'running',
   };
 
   return {
