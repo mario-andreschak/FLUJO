@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { TabProps, MessageState } from '../../types';
 import {
   RegistryListResponse,
@@ -18,6 +18,12 @@ import {
 } from '@/utils/mcp/registry';
 import { InstallOptionList } from '../../components/InstallOptionPicker';
 import useRegistryInstall from '../../hooks/useRegistryInstall';
+import {
+  DEFAULT_MARKETPLACE_FILTERS,
+  filterMarketplaceResults,
+  hasActiveMarketplaceFilters,
+  type MarketplaceSearchFilters,
+} from './search';
 import { useTheme } from '@mui/material/styles';
 import {
   Alert,
@@ -34,11 +40,15 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  FormControl,
   FormControlLabel,
   Grid,
   IconButton,
   InputAdornment,
+  InputLabel,
   Link,
+  MenuItem,
+  Select,
   Stack,
   TextField,
   Typography
@@ -52,6 +62,7 @@ import ClearIcon from '@mui/icons-material/Clear';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import StarIcon from '@mui/icons-material/Star';
 import DownloadIcon from '@mui/icons-material/Download';
+import TuneIcon from '@mui/icons-material/Tune';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import Trans from '@/frontend/components/shared/Trans';
 
@@ -72,6 +83,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
   const [message, setMessage] = useState<MessageState | null>(null);
+  const [filters, setFilters] = useState<MarketplaceSearchFilters>(DEFAULT_MARKETPLACE_FILTERS);
   // The trust gate lives in the shared install pipeline: install actions stay
   // disabled until the user explicitly confirms they trust the server, and the
   // confirmation is reset every time the details dialog opens (#392).
@@ -80,6 +92,11 @@ const MarketplaceTab: React.FC<TabProps> = ({
   const trustConfirmed = registryInstall.trustConfirmed;
   // Monotonic id so stale fetch responses (rapid re-searches) can't clobber newer ones
   const fetchIdRef = useRef(0);
+  const visibleResults = useMemo(
+    () => filterMarketplaceResults(results, filters),
+    [filters, results],
+  );
+  const filtersActive = hasActiveMarketplaceFilters(filters);
 
   const openServerDetails = useCallback((server: RegistryServer) => {
     registryInstall.open(server);
@@ -152,6 +169,25 @@ const MarketplaceTab: React.FC<TabProps> = ({
     setResults([]);
     setNextCursor(null);
     setMessage(null);
+  };
+
+  const handleSearch = () => {
+    const term = searchInput.trim();
+    if (!term) {
+      handleClearSearch();
+    } else if (term === activeSearch) {
+      // Same term committed again — re-run it (e.g. retry after an error).
+      fetchServers(term);
+    } else {
+      setActiveSearch(term);
+    }
+  };
+
+  const updateFilter = <Key extends keyof MarketplaceSearchFilters>(
+    key: Key,
+    value: MarketplaceSearchFilters[Key],
+  ) => {
+    setFilters(current => ({ ...current, [key]: value }));
   };
 
   const handleInstall = (server: RegistryServer, option: InstallOption) => {
@@ -237,43 +273,121 @@ const MarketplaceTab: React.FC<TabProps> = ({
           />
         </Typography>
 
-        <TextField
-          fullWidth
-          size="small"
-          value={searchInput}
-          onChange={e => setSearchInput(e.target.value)}
-          onKeyDown={e => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              const term = searchInput.trim();
-              if (!term) {
-                // Committing an empty search clears the results instead of fetching
-                handleClearSearch();
-              } else if (term === activeSearch) {
-                // Same term committed again — re-run it (e.g. retry after an error)
-                fetchServers(term);
-              } else {
-                setActiveSearch(term);
-              }
-            }
+        <Box
+          component="form"
+          role="search"
+          onSubmit={event => {
+            event.preventDefault();
+            handleSearch();
           }}
-          placeholder={t('mcp.marketplace.search')}
-          variant="outlined"
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon />
-              </InputAdornment>
-            ),
-            endAdornment: searchInput ? (
-              <InputAdornment position="end">
-                <IconButton size="small" onClick={handleClearSearch} aria-label={t('mcp.marketplace.clearSearch')}>
-                  <ClearIcon fontSize="small" />
-                </IconButton>
-              </InputAdornment>
-            ) : undefined
+          sx={{ display: 'flex', gap: 1, alignItems: 'stretch' }}
+        >
+          <TextField
+            fullWidth
+            size="small"
+            value={searchInput}
+            onChange={e => setSearchInput(e.target.value)}
+            placeholder={t('mcp.marketplace.search')}
+            variant="outlined"
+            inputProps={{ 'aria-label': t('mcp.marketplace.searchLabel') }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon />
+                </InputAdornment>
+              ),
+              endAdornment: searchInput ? (
+                <InputAdornment position="end">
+                  <IconButton size="small" onClick={handleClearSearch} aria-label={t('mcp.marketplace.clearSearch')}>
+                    <ClearIcon fontSize="small" />
+                  </IconButton>
+                </InputAdornment>
+              ) : undefined
+            }}
+          />
+          <Button
+            type="submit"
+            variant="contained"
+            startIcon={<SearchIcon />}
+            disabled={!searchInput.trim() || isLoading}
+            sx={{ flexShrink: 0, px: { xs: 2, sm: 3 } }}
+          >
+            {t('mcp.marketplace.searchAction')}
+          </Button>
+        </Box>
+
+        <Box
+          aria-label={t('mcp.marketplace.filters')}
+          sx={{
+            display: 'grid',
+            gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', md: 'repeat(4, minmax(0, 1fr)) auto' },
+            gap: 1,
+            alignItems: 'center',
           }}
-        />
+        >
+          <FormControl size="small">
+            <InputLabel id="marketplace-transport-filter-label">{t('mcp.marketplace.filterType')}</InputLabel>
+            <Select
+              labelId="marketplace-transport-filter-label"
+              value={filters.transport}
+              label={t('mcp.marketplace.filterType')}
+              onChange={event => updateFilter('transport', event.target.value as MarketplaceSearchFilters['transport'])}
+            >
+              <MenuItem value="all">{t('mcp.marketplace.filterAnyType')}</MenuItem>
+              <MenuItem value="local">{t('mcp.marketplace.filterLocal')}</MenuItem>
+              <MenuItem value="remote">{t('mcp.marketplace.filterRemote')}</MenuItem>
+            </Select>
+          </FormControl>
+          <FormControl size="small">
+            <InputLabel id="marketplace-setup-filter-label">{t('mcp.marketplace.filterSetup')}</InputLabel>
+            <Select
+              labelId="marketplace-setup-filter-label"
+              value={filters.setup}
+              label={t('mcp.marketplace.filterSetup')}
+              onChange={event => updateFilter('setup', event.target.value as MarketplaceSearchFilters['setup'])}
+            >
+              <MenuItem value="all">{t('mcp.marketplace.filterAnySetup')}</MenuItem>
+              <MenuItem value="automatic">{t('mcp.marketplace.filterAutomatic')}</MenuItem>
+              <MenuItem value="manual">{t('mcp.marketplace.filterManual')}</MenuItem>
+            </Select>
+          </FormControl>
+          <FormControl size="small">
+            <InputLabel id="marketplace-verification-filter-label">{t('mcp.marketplace.filterTrust')}</InputLabel>
+            <Select
+              labelId="marketplace-verification-filter-label"
+              value={filters.verification}
+              label={t('mcp.marketplace.filterTrust')}
+              onChange={event => updateFilter('verification', event.target.value as MarketplaceSearchFilters['verification'])}
+            >
+              <MenuItem value="all">{t('mcp.marketplace.filterAnyTrust')}</MenuItem>
+              <MenuItem value="verified">{t('mcp.marketplace.filterVerified')}</MenuItem>
+              <MenuItem value="unverified">{t('mcp.marketplace.unverified')}</MenuItem>
+            </Select>
+          </FormControl>
+          <FormControl size="small">
+            <InputLabel id="marketplace-sort-label">{t('mcp.marketplace.sort')}</InputLabel>
+            <Select
+              labelId="marketplace-sort-label"
+              value={filters.sort}
+              label={t('mcp.marketplace.sort')}
+              onChange={event => updateFilter('sort', event.target.value as MarketplaceSearchFilters['sort'])}
+            >
+              <MenuItem value="relevance">{t('mcp.marketplace.sortRelevance')}</MenuItem>
+              <MenuItem value="stars">{t('mcp.marketplace.sortStars')}</MenuItem>
+              <MenuItem value="downloads">{t('mcp.marketplace.sortDownloads')}</MenuItem>
+              <MenuItem value="name">{t('mcp.marketplace.sortName')}</MenuItem>
+            </Select>
+          </FormControl>
+          <Button
+            size="small"
+            startIcon={<TuneIcon />}
+            disabled={!filtersActive}
+            onClick={() => setFilters(DEFAULT_MARKETPLACE_FILTERS)}
+            sx={{ whiteSpace: 'nowrap', justifySelf: { xs: 'start', md: 'stretch' } }}
+          >
+            {t('mcp.marketplace.resetFilters')}
+          </Button>
+        </Box>
 
         {message && (
           <Alert severity={message.type} onClose={() => setMessage(null)}>
@@ -287,9 +401,17 @@ const MarketplaceTab: React.FC<TabProps> = ({
           </Box>
         ) : (
           <>
-            {results.length === 0 && !message && (
+            {results.length > 0 && (
+              <Typography variant="caption" color="text.secondary" aria-live="polite">
+                {t('mcp.marketplace.resultCount', { shown: visibleResults.length, loaded: results.length })}
+              </Typography>
+            )}
+
+            {visibleResults.length === 0 && !message && (
               <Typography variant="body1" color="text.secondary" sx={{ textAlign: 'center', my: 4 }}>
-                {activeSearch ? (
+                {results.length > 0 && filtersActive ? (
+                  <>{t('mcp.marketplace.noFilteredResults')}</>
+                ) : activeSearch ? (
                   <>{t('mcp.marketplace.noResults', { search: activeSearch })}</>
                 ) : (
                   <>{t('mcp.marketplace.startSearch')}</>
@@ -298,7 +420,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
             )}
 
             <Grid container spacing={2}>
-              {results.map(result => {
+              {visibleResults.map(result => {
                 const server = result.server;
                 // Launch-and-connect entries are visible but not one-click
                 // installable, so they still read as "manual setup".
