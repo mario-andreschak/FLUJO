@@ -343,18 +343,6 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
     });
   });
 
-  it('defaults protected paths to off', () => {
-    mockStorageValue = {
-      settings: { speech: { enabled: true } },
-      settingsHydrated: true,
-      updateSettings: mockUpdateSettings,
-    };
-    render(<ExperimentalFeaturesSettings />);
-    expect(
-      screen.getByRole('checkbox', { name: /Protect sensitive home-directory paths/i })
-    ).not.toBeChecked();
-  });
-
   it('defaults MCP App click gating and MCP roots confinement to off', () => {
     mockStorageValue = {
       settings: { speech: { enabled: true } },
@@ -492,31 +480,6 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
         enabled: true,
         mcpBetaProtocol: true,
         snapshotsEnabled: false,
-      },
-    });
-  });
-
-  it('persists the protected-path opt-in without dropping other settings', () => {
-    mockStorageValue = {
-      settings: {
-        speech: { enabled: true },
-        experimental: { enabled: true, mcpBetaProtocol: true },
-      },
-      settingsHydrated: true,
-      updateSettings: mockUpdateSettings,
-    };
-    render(<ExperimentalFeaturesSettings />);
-
-    fireEvent.click(
-      screen.getByRole('checkbox', { name: /Protect sensitive home-directory paths/i })
-    );
-
-    expect(mockUpdateSettings).toHaveBeenCalledWith({
-      speech: { enabled: true },
-      experimental: {
-        enabled: true,
-        mcpBetaProtocol: true,
-        protectedPathsEnabled: true,
       },
     });
   });

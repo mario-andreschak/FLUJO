@@ -58,7 +58,6 @@ function streamableServer(name: string, oauthTokens: Record<string, unknown> | u
     transport: 'streamable',
     serverUrl: 'https://mcp.example.com/mcp',
     disabled: false,
-    autoApprove: [],
     rootPath: '',
     env: {},
     oauthScopes: ['read'],

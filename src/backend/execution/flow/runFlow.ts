@@ -38,7 +38,6 @@ import { FlujoChatMessage } from '@/shared/types/chat';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { requireFunctionToolCalls } from '@/shared/types/openai';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
-import { isMeetingToolName } from '@/backend/execution/flow/handlers/meetingTools';
 import { isInternalToolName } from '@/backend/execution/flow/handlers/toolNamespace';
 import { emitErrorOnce, emitNormalizedErrorOnce, deriveLastErrorFromLastResponse } from '@/backend/execution/flow/normalizeError';
 import { flowService } from '@/backend/services/flow/index';
@@ -52,7 +51,6 @@ import { MAX_SUBFLOW_DEPTH } from '@/backend/execution/flow/constants';
 import { isCancelledByAncestry, isConversationDeleted } from '@/backend/execution/flow/cancellation';
 import { buildConversationTitle, isDefaultConversationTitle, DEFAULT_CONVERSATION_TITLE } from '@/utils/shared/conversationTitle';
 import { setElicitationContext, clearElicitationContext } from '@/backend/services/mcp/elicitationContext';
-import { evaluatePermission, extractResource } from '@/backend/execution/flow/permissionEngine';
 import { decodeToolName } from '@/backend/execution/flow/handlers/toolNamespace';
 import { GRACEFUL_CAP_SUMMARY_INSTRUCTION, GRACEFUL_CAP_TOOL_RESULT } from '@/backend/execution/flow/handlers/gracefulCap';
 import { DEFAULT_AGENTIC_MAX_TURNS } from '@/shared/types/model/model';
@@ -1832,7 +1830,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
 
           // Without approvals, the next Step executes exactly this captured
           // batch and pauses after its results. With approvals enabled, retain
-          // the action instead so resuming still passes through the permission /
+          // the action instead so resuming still passes through the approval
           // approval gate rather than accidentally bypassing it.
           if (!transparentControlHandoff) {
             if (pendingCalls?.length && !requireApproval) {
@@ -2023,61 +2021,14 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
               }
               // --- Flujo=true: Handle optional approval ---
               if (requireApproval) {
-                // Issue #246: Before pausing, filter tool calls through the permission
-                // rules. Calls with effect 'deny' or 'allow' are handled immediately;
-                // only 'ask' calls are queued for the approval gate.
-                const toolCallsForApproval: OpenAI.ChatCompletionMessageFunctionToolCall[] = [];
-                const toolCallsToProcessNow: OpenAI.ChatCompletionMessageFunctionToolCall[] = [];
-                const permRules = sharedState.permissionRules ?? [];
-                const savedRules = sharedState.savedPermissionRules ?? [];
-
-                if (permRules.length > 0 || savedRules.length > 0) {
-                  for (const tc of lastAssistantMsg.tool_calls) {
-                    // Meeting controls are local coordinator operations, not
-                    // external side effects, so they never need a human
-                    // approval prompt. All ordinary tools still follow the
-                    // flow's permission rules below.
-                    if (isMeetingToolName(tc.function.name)) {
-                      toolCallsToProcessNow.push(tc);
-                      continue;
-                    }
-                    const decoded = decodeToolName(tc.function.name, sharedState.toolNameMap);
-                    if (!decoded) {
-                      // Undecodable (handoff, synthetic) — pass through to approval
-                      toolCallsForApproval.push(tc);
-                      continue;
-                    }
-                    let callArgs: Record<string, unknown> = {};
-                    try { callArgs = JSON.parse(tc.function.arguments); } catch { /* best effort */ }
-                    const resource = extractResource(callArgs);
-                    const effect = evaluatePermission(permRules, savedRules, decoded.server, decoded.tool, resource);
-                    if (effect === 'deny' || effect === 'allow') {
-                      toolCallsToProcessNow.push(tc);
-                    } else {
-                      toolCallsForApproval.push(tc);
-                    }
-                  }
-                } else {
-                  // With no explicit rules, only coordinator-owned meeting
-                  // controls bypass the approval gate.
-                  for (const tc of lastAssistantMsg.tool_calls) {
-                    if (isMeetingToolName(tc.function.name)) toolCallsToProcessNow.push(tc);
-                    else toolCallsForApproval.push(tc);
-                  }
-                }
-
-                if (
-                  sharedState.onApprovalRequired === 'fail'
-                  && toolCallsForApproval.length > 0
-                ) {
-                  // Headless fail-fast (#115): at least one call still needs a
-                  // human decision after permission evaluation. Execute
-                  // nothing from this batch and return a structured error.
-                  const firstCall = toolCallsForApproval[0];
+                if (sharedState.onApprovalRequired === 'fail') {
+                  // Headless fail-fast (#115): approval was explicitly required,
+                  // but this run has no interactive approver. Execute nothing.
+                  const firstCall = lastAssistantMsg.tool_calls[0];
                   const toolName = firstCall?.function.name ?? 'unknown';
                   log.info(`[flujo=true, onApprovalRequired=fail] Failing fast for tool "${toolName}" (conv ${effectiveConvId})`);
                   sharedState.status = 'error';
-                  sharedState.pendingToolCalls = toolCallsForApproval;
+                  sharedState.pendingToolCalls = lastAssistantMsg.tool_calls;
                   sharedState.lastResponse = {
                     success: false,
                     error: `Headless run requires approval for tool "${toolName}" but no approver is available (approvalPolicy: fail).`,
@@ -2091,58 +2042,9 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
                   break;
                 }
 
-                // Process immediately-resolved (allow/deny) calls
-                if (toolCallsToProcessNow.length > 0) {
-                  const immediateResult = await processToolCallsRecoverably({
-                    toolCalls: toolCallsToProcessNow,
-                    toolNameMap: sharedState.toolNameMap,
-                    emit,
-                    conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
-                    runId: logicalRunId,
-                    node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined,
-                    shouldAbort: runCancelled,
-                    mcpNodes: sharedState.currentMCPNodes,
-                    permissionRules: permRules,
-                    savedPermissionRules: savedRules,
-                    unattended: sharedState.unattended, // Issue #258
-                  });
-                  if (immediateResult.success) {
-                    const immediateMessages = immediateResult.value.toolCallMessages.map(msg => ({
-                      ...msg,
-                      id: crypto.randomUUID(),
-                      timestamp: Date.now(),
-                      processNodeId: sharedState.currentNodeId,
-                    }));
-                    sharedState.messages.push(...immediateMessages);
-                    emitNewMessages();
-                    await commitToolCheckpoint(storageKey, sharedState, toolCallsToProcessNow, 'completed', recoveryEmit);
-                  }
-                }
-
-                // If no calls need approval, continue the loop
-                if (toolCallsForApproval.length === 0) {
-                  FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
-                  const afterToolBoundary: BoundaryDetails = {
-                    operation: 'tool',
-                    phase: 'after',
-                    nodeId: sharedState.currentNodeId,
-                    toolCalls: toolCallsToProcessNow,
-                    ...(toolNodeIdsFor(toolCallsToProcessNow)
-                      ? { toolNodeIds: toolNodeIdsFor(toolCallsToProcessNow) }
-                      : {}),
-                    nextOperation: 'model',
-                  };
-                  const attachedAfterTool = await pauseForAttachAtSafePoint('after-tool', afterToolBoundary);
-                  if (singleStep && !attachedAfterTool) {
-                    pauseForDebug({ phase: 'after-tool', boundary: afterToolBoundary });
-                  }
-                  if (singleStep || attachedAfterTool) break;
-                  continue;
-                }
-
                 log.info(`[flujo=true, requireApproval=true] Pausing execution for tool approval for conv ${effectiveConvId}`);
                 sharedState.status = 'awaiting_tool_approval';
-                sharedState.pendingToolCalls = toolCallsForApproval;
+                sharedState.pendingToolCalls = lastAssistantMsg.tool_calls;
                 sharedState.lastResponse = undefined;
                 FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
                 try {
@@ -2170,8 +2072,6 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
                   node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined,
                   shouldAbort: runCancelled,
                   mcpNodes: sharedState.currentMCPNodes, // Issue #239: native resource tools
-                  permissionRules: sharedState.permissionRules, // Issue #246
-                  savedPermissionRules: sharedState.savedPermissionRules, // Issue #246
                   unattended: sharedState.unattended, // Issue #258
                 });
 

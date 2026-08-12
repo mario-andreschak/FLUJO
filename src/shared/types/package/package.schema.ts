@@ -162,7 +162,6 @@ export const packagedMcpServerSchema = z
     name: z.string().min(1),
     transport: z.enum(['stdio', 'sse', 'streamable', 'websocket']),
     disabled: z.boolean().optional(),
-    autoApprove: z.array(z.string()).optional(),
     folder: z.string().optional(),
     installOrigin: mcpInstallOriginSchema,
     envDeclarations: z.array(envDeclarationSchema),

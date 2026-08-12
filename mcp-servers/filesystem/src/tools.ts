@@ -14,10 +14,7 @@
  *    as a HARD CEILING an operator sets — no path may ever escape it, and
  *  - user-configured roots persisted via the MCP manager UI (issue #170), which
  *    may only narrow WITHIN the env ceiling (never widen it).
- * When neither is set the server has full host access. An optional experimental
- * deny layer (issue #260, see protectedPaths.ts) can additionally block a
- * hardcoded set of sensitive home locations regardless of configured roots. It
- * is disabled by default.
+ * When neither is set the server has full host access.
  *
  * Every tool returns a machine-readable JSON envelope both as MCP
  * `structuredContent` and as a single text content block (for backward-compat
@@ -29,12 +26,9 @@ import { createHash } from 'node:crypto';
 import readline from 'node:readline';
 import type { Tool, CallToolResult, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import {
-  ALLOW_PROTECTED_PATHS_ENV,
   createLogger,
   getDataDir,
   isInside,
-  isProtected,
-  isProtectedPathsEnabled,
   loadEffectiveRoots,
 } from '@flujo-ai/mcp-shared';
 import { recordTouchedFile } from './resources.js';
@@ -135,18 +129,6 @@ async function resolvePath(input: unknown, roots: string[]): Promise<string> {
   if (!raw) throw new Error('Provide "path".');
   const dataDir = getDataDir();
   const resolved = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(dataDir, raw);
-
-  // Optional defense-in-depth layer (issue #260). Configured roots win by
-  // default; users can opt into this stricter policy under Experimental Features.
-  if (await isProtectedPathsEnabled()) {
-    const prot = isProtected(resolved);
-    if (prot.denied) {
-      throw new Error(
-        `Path "${resolved}" is within a protected location (${prot.matchedRoot}) and is blocked by the FLUJO built-in server protected-path policy. ` +
-          `Disable "Protect sensitive home-directory paths" in Experimental Features or set ${ALLOW_PROTECTED_PATHS_ENV}=1 to override.`
-      );
-    }
-  }
 
   if (roots.length === 0 || !roots.some((root) => isInside(root, resolved))) {
     throw new Error(`Path "${resolved}" is outside the configured filesystem roots.`);

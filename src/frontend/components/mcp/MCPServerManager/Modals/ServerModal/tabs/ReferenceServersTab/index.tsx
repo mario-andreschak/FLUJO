@@ -535,7 +535,6 @@ const ReferenceServersTab: React.FC<TabProps> = ({
         args: args,
         env: {},
         disabled: false,
-        autoApprove: [],
         transport: 'stdio',
         _buildCommand: buildCommand,
         _installCommand: installCommand,

@@ -42,7 +42,6 @@ const config: MCPStdioConfig = {
     NPM_CONFIG_CACHE: '/host/npm-cache',
   },
   disabled: false,
-  autoApprove: [],
   rootPath: '',
   _buildCommand: '',
   _installCommand: '',

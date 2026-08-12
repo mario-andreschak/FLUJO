@@ -79,7 +79,6 @@ describe('flowUsesAdvancedFeatures', () => {
     ['process capture', { nodes: [node('process', { captureVariable: 'result' })], edges: [] }],
     ['subflow fanout', { nodes: [node('subflow', { allowCallerFanout: true })], edges: [] }],
     ['conditional edge', { nodes: [], edges: [{ data: { condition: { kind: 'always' } } }] }],
-    ['permissions', { nodes: [], edges: [], permissionRules: [] }],
   ])('detects %s as advanced', (_label, flow) => {
     expect(flowUsesAdvancedFeatures(flow as never)).toBe(true);
   });

@@ -180,22 +180,11 @@ export function parseServerConfig(text: string, parseEnvVars: boolean = true, kn
       : [];
     console.log('parseServerConfig: Extracted args:', args);
 
-    console.log('parseServerConfig: Extracting disabled and autoApprove settings');
+    console.log('parseServerConfig: Extracting disabled setting');
     // Extract disabled (boolean) - even if we didn't find a full server config
     const disabledMatch = configText.match(/"disabled"\s*:\s*(true|false)/);
     const disabled = disabledMatch ? disabledMatch[1] === 'true' : false;
     console.log('parseServerConfig: Extracted disabled:', disabled);
-
-    // Extract autoApprove (array) - even if we didn't find a full server config
-    const autoApproveMatch = configText.match(/"autoApprove"\s*:\s*\[([\s\S]*?)\]/);
-    const autoApprove = autoApproveMatch
-      ? autoApproveMatch[1]
-          .split(',')
-          .map(item => item.trim())
-          .map(item => item.replace(/^"(.*)"$/, '$1'))
-          .filter(item => item.length > 0)
-      : [];
-    console.log('parseServerConfig: Extracted autoApprove:', autoApprove);
 
     // Start with existing env variables if any
     const env: Record<string, string> = {};
@@ -257,7 +246,6 @@ export function parseServerConfig(text: string, parseEnvVars: boolean = true, kn
       args: processedArgs, // Use the processed args
       env,
       disabled,
-      autoApprove,
       _buildCommand: buildCommand,
       _installCommand: installCommand
     }

@@ -945,7 +945,7 @@ export class SubflowNode extends BaseNode {
       // persistConversationState call-site bypass). Default stays ephemeral.
       mode: prepResult.persistConversation ? 'conversation' : 'ephemeral',
       flujo: true,
-      requireApproval: false, // headless: subflows never pause for approval
+      requireApproval: false,
       debug: false,
       depth: prepResult.depth,
       chainDepth: prepResult.chainDepth,

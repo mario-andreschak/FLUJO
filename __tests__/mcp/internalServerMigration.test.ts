@@ -125,7 +125,7 @@ describe('shipped MCP package migration (#347)', () => {
       disabled: true,
       roots: ['/workspace'],
       source: { type: 'marketplace', id: '@mario.andreschak/mcp-bash' },
-      hostPathAccess: { snapshots: true, protectedPaths: true },
+      hostPathAccess: { snapshots: true },
     });
     expect(shell).not.toHaveProperty('internalPackage');
     expect(shell).not.toHaveProperty('packageCapabilities');

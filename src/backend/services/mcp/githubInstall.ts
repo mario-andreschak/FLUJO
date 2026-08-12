@@ -22,7 +22,6 @@ export interface GithubInstallInput {
   secretEnvNames?: string[];
   argTemplates?: McpArgTemplate[];
   disabled?: boolean;
-  autoApprove?: string[];
   folder?: string;
 }
 
@@ -392,7 +391,6 @@ export async function installGithubServer(input: GithubInstallInput): Promise<Gi
       rootPath: workingDirectory,
       env: persistedEnv,
       disabled: input.disabled ?? false,
-      autoApprove: input.autoApprove ?? [],
       folder: input.folder,
       source,
       _installCommand: installCommand,

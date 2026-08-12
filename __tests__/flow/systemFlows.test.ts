@@ -57,16 +57,6 @@ describe('vendored Flow Generator', () => {
       'install_best_mcp_server',
     ]));
     expect(stages.every((stage) => stage.data.properties?.boundModel === undefined)).toBe(true);
-    expect(flow.permissionRules?.map((rule) => rule.action)).toEqual(expect.arrayContaining([
-      'list_flow_building_blocks',
-      'get_flow_authoring_guide',
-      'draft_generated_flow',
-      'find_mcp_server',
-      'find_best_mcp_server',
-    ]));
-    expect(flow.permissionRules?.map((rule) => rule.action)).not.toEqual(
-      expect.arrayContaining(['install_mcp_server', 'install_best_mcp_server'])
-    );
   });
 
   // #338/A3: generated flows must hand values over with run-scoped ${var:}
@@ -135,8 +125,6 @@ describe('vendored Flow Generator', () => {
     expect(snapshot.nodes
       .filter((node) => node.type === 'mcp')
       .flatMap((node) => node.data.properties?.enabledTools ?? []))
-      .not.toEqual(expect.arrayContaining(['install_mcp_server', 'install_best_mcp_server']));
-    expect(snapshot.permissionRules?.map((rule) => rule.action))
       .not.toEqual(expect.arrayContaining(['install_mcp_server', 'install_best_mcp_server']));
     expect(snapshot.nodes.find((node) => node.type === 'start')
       ?.data.properties?.promptTemplate).toContain('NOT opted in');

@@ -231,7 +231,6 @@ describe('installPackage — GitHub servers', () => {
         envDeclarations: [
           { name: 'API_TOKEN', isSecret: true, secretRef: 'TOKEN' },
         ],
-        autoApprove: ['search'],
       },
     ],
     models: [],
@@ -270,7 +269,6 @@ describe('installPackage — GitHub servers', () => {
       secretEnvNames: ['API_TOKEN'],
       argTemplates: undefined,
       disabled: undefined,
-      autoApprove: ['search'],
       folder: 'github-pkg',
     });
   });

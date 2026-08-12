@@ -84,7 +84,6 @@ export interface PackagedMcpServer {
   name: string;
   transport: PackagedMcpTransport;
   disabled?: boolean;
-  autoApprove?: string[];
   folder?: string;
   installOrigin: McpInstallOrigin;
   envDeclarations: EnvDeclaration[];

@@ -14,7 +14,7 @@ import { workspaceCacheKey } from '@/utils/workspace';
  */
 interface PendingApproval {
   toolCall: OpenAI.ChatCompletionMessageFunctionToolCall;
-  resolve: (approved: boolean, feedback?: string) => void;
+  resolve: (approved: boolean) => void;
 }
 
 const globalForRegistry = globalThis as unknown as {
@@ -27,7 +27,7 @@ const registry: Map<string, Map<string, PendingApproval>> =
 export function registerPendingApproval(
   conversationId: string,
   toolCall: OpenAI.ChatCompletionMessageFunctionToolCall,
-  resolve: (approved: boolean, feedback?: string) => void
+  resolve: (approved: boolean) => void
 ): void {
   const key = workspaceCacheKey(conversationId);
   let perConv = registry.get(key);
@@ -47,7 +47,6 @@ export function resolvePendingApproval(
   conversationId: string,
   toolCallId: string,
   approved: boolean,
-  feedback?: string   // Issue #247: optional rejection feedback for the model
 ): boolean {
   const key = workspaceCacheKey(conversationId);
   const perConv = registry.get(key);
@@ -55,7 +54,7 @@ export function resolvePendingApproval(
   if (!perConv || !pending) return false;
   perConv.delete(toolCallId);
   if (perConv.size === 0) registry.delete(key);
-  pending.resolve(approved, feedback);
+  pending.resolve(approved);
   return true;
 }
 

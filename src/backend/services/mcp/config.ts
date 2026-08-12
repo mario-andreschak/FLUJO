@@ -178,7 +178,6 @@ export async function loadServerConfigs(): Promise<MCPServerConfig[] | MCPServic
       const defaults = {
         name,
         disabled: false,
-        autoApprove: [],
         rootPath: '',
         env: {},
         _buildCommand: '',

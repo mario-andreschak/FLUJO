@@ -88,8 +88,6 @@ interface InspectorPanelProps {
   onFlowDescriptionChange: (value: string) => void;
   authoringMode: FlowAuthoringMode;
   onAuthoringModeChange: (mode: FlowAuthoringMode) => void;
-  permissionRuleCount: number;
-  onOpenPermissionRules: () => void;
   beginnerMode?: boolean;
   onSuggestTools?: (node: FlowNode) => void;
   onSuggestAgents?: (node: FlowNode) => void;
@@ -142,8 +140,6 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onFlowDescriptionChange,
   authoringMode,
   onAuthoringModeChange,
-  permissionRuleCount,
-  onOpenPermissionRules,
   beginnerMode = false,
   onSuggestTools,
   onSuggestAgents,
@@ -636,18 +632,6 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   : t('flows.inspector.guidedHelp')}
               </Typography>
             </Box>
-            )}
-
-            {authoringMode === 'advanced' && (
-              <Button
-                variant="outlined"
-                onClick={onOpenPermissionRules}
-                startIcon={<SettingsSuggestRoundedIcon />}
-              >
-                {permissionRuleCount
-                  ? tp('flows.inspector.permissionRules', permissionRuleCount)
-                  : t('flows.inspector.permissionRules')}
-              </Button>
             )}
 
             {!beginnerMode && (

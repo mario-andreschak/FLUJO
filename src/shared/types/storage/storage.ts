@@ -301,13 +301,6 @@ export interface ExperimentalSettings {
    */
   restrictMcpFilesystemToRoots?: boolean;
   /**
-   * When true, installed filesystem and bash MCP packages block sensitive
-   * home-directory locations even when a configured root would otherwise allow
-   * them. Off by default: configured roots are an explicit user grant and take
-   * precedence unless this additional defense-in-depth layer is opted into.
-   */
-  protectedPathsEnabled?: boolean;
-  /**
    * When false, filesystem snapshots and snapshot-based revert are disabled.
    * Missing values default to true to preserve existing installations.
    */

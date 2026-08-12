@@ -367,11 +367,10 @@ async function runParticipantTurn(
         messages: [...previousMessages, turnMessage],
         processNodeId: startNodeId,
         flujo: true,
-        requireApproval: true,
+        requireApproval: false,
         debug: false,
         userTurn: true,
         source: 'meeting',
-        onApprovalRequired: 'fail',
         abortSignal: handle.abortController.signal,
         meetingParticipant: {
           protocolVersion: 1,

@@ -1,5 +1,4 @@
 import path from 'path';
-import os from 'os';
 
 /**
  * Central resolver for the two directories FLUJO cares about at runtime.
@@ -30,15 +29,6 @@ import os from 'os';
  */
 export function getAppDir(): string {
   return process.cwd();
-}
-
-/**
- * The current user's home directory. A thin wrapper around `os.homedir()` so the
- * protected-path denylist (issue #260) has a single, mockable source of truth for
- * where the operator's personal files live.
- */
-export function getHomeDir(): string {
-  return os.homedir();
 }
 
 /**

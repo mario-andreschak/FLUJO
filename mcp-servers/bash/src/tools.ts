@@ -37,13 +37,9 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { spawn as spawnPty, type IPty } from '@lydell/node-pty';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import {
-  ALLOW_PROTECTED_PATHS_ENV,
   createLogger,
   getDataDir,
-  getHomeDir,
   isInside,
-  isProtected,
-  isProtectedPathsEnabled,
   killProcessTree,
   loadEffectiveRoots,
 } from '@flujo-ai/mcp-shared';
@@ -819,18 +815,6 @@ async function resolveCwd(input: unknown, roots: string[]): Promise<string> {
   const raw = typeof input === 'string' ? input.trim() : '';
   const resolved = raw ? (path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(dataDir, raw)) : dataDir;
 
-  // Optional defense-in-depth layer (issue #260). Configured roots win by
-  // default; users can opt into this stricter policy under Experimental Features.
-  if (await isProtectedPathsEnabled()) {
-    const prot = isProtected(resolved);
-    if (prot.denied) {
-      throw new Error(
-        `cwd "${resolved}" is within a protected location (${prot.matchedRoot}) and is blocked by the FLUJO built-in server protected-path policy. ` +
-          `Disable "Protect sensitive home-directory paths" in Experimental Features or set ${ALLOW_PROTECTED_PATHS_ENV}=1 to override.`
-      );
-    }
-  }
-
   if (roots.length === 0 || !roots.some((root) => isInside(root, resolved))) {
     throw new Error(`cwd "${resolved}" is outside the configured bash roots.`);
   }
@@ -845,142 +829,11 @@ async function resolveOutputFile(input: unknown, cwd: string, roots: string[]): 
   const raw = typeof input === 'string' ? input.trim() : '';
   if (!raw) throw new Error('"outputFile" must be a non-empty path.');
   const resolved = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(cwd, raw);
-  if (await isProtectedPathsEnabled()) {
-    const prot = isProtected(resolved);
-    if (prot.denied) {
-      throw new Error(`outputFile "${resolved}" is within a protected location (${prot.matchedRoot}).`);
-    }
-  }
   if (roots.length === 0 || !roots.some((root) => isInside(root, resolved))) {
     throw new Error(`outputFile "${resolved}" is outside the configured bash roots.`);
   }
   await fs.promises.mkdir(path.dirname(resolved), { recursive: true });
   return resolved;
-}
-
-/**
- * Best-effort advisory scan (issue #260, item 4) of a command string for
- * absolute-looking paths that point OUTSIDE the configured roots or INTO a
- * protected location. Returns human-readable warning strings; it NEVER blocks —
- * a shell can reach anywhere regardless, so this is honest advice, not a
- * boundary. Known limitation: shell variable expansions (e.g. `$HOME/AppData`)
- * are not resolved.
- */
-function maskGlobOptionValues(command: string): string {
-  const chars = [...command];
-  const tokens = [...command.matchAll(/"(?:\\.|[^"\\])*"|'[^']*'|[^\s]+/g)];
-  let maskNext = false;
-  for (const match of tokens) {
-    const raw = match[0];
-    const start = match.index ?? 0;
-    const unquoted = raw.length >= 2 && ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'")))
-      ? raw.slice(1, -1)
-      : raw;
-    let valueOffset = 0;
-    if (maskNext) {
-      maskNext = false;
-    } else if (unquoted === '-g' || unquoted === '--glob' || unquoted === '--iglob') {
-      maskNext = true;
-      continue;
-    } else {
-      if (!/^(?:--glob|--iglob)=/.test(unquoted)) continue;
-      valueOffset = raw.indexOf('=') + 1;
-    }
-    for (let i = start + valueOffset; i < start + raw.length; i += 1) chars[i] = ' ';
-  }
-  return chars.join('');
-}
-
-/**
- * Windows utilities that take `/x`-style switches (issue #314, item D). A slash
- * token is only demoted from "absolute path" to "switch" when one of these
- * appears EARLIER IN THE SAME command segment, so `cd … && dir /b && rg …` and
- * `echo dir /b` stay quiet while `echo /.git/config` keeps its advisory.
- * Deliberately excludes names that are also common POSIX utilities (`find`,
- * `sort`, `type`, `more`, `mkdir`, `rmdir`) — suppressing their arguments would
- * silence genuine path advisories such as `find /etc -name passwd`.
- */
-const WINDOWS_SWITCH_UTILITIES = new Set([
-  'dir', 'xcopy', 'robocopy', 'copy', 'move', 'del', 'erase', 'attrib', 'icacls', 'takeown',
-  'findstr', 'tasklist', 'taskkill', 'sc', 'reg', 'net', 'subst', 'where', 'ren', 'rename',
-  'md', 'rd', 'tree', 'fc', 'comp', 'cacls', 'schtasks', 'chkdsk', 'sfc', 'shutdown',
-  'wmic', 'diskpart', 'label', 'vol', 'mklink', 'assoc', 'ftype', 'gpupdate', 'powercfg',
-]);
-
-/**
- * A cmd-style switch: `/b`, `/ad`, `/mir`, `/e:on`. Never matches a nested path
- * (no interior separator), so `/etc/passwd` is untouched.
- */
-const WINDOWS_SWITCH_RE = /^\/[A-Za-z][A-Za-z0-9?*-]{0,15}(?::[^\s"']*)?$/;
-
-/** Text of the command segment (split on shell separators) preceding `index`. */
-function segmentTextBefore(command: string, index: number): string {
-  const separators = /&&|\|\||[|;&\n]/g;
-  let start = 0;
-  let match: RegExpExecArray | null;
-  while ((match = separators.exec(command)) !== null) {
-    if (match.index >= index) break;
-    start = match.index + match[0].length;
-  }
-  return command.slice(start, index);
-}
-
-/** True when a slash-switch utility heads the segment containing `index`. */
-function windowsSwitchUtilityPrecedes(command: string, index: number): boolean {
-  for (const word of segmentTextBefore(command, index).match(/[^\s"'<>()]+/g) ?? []) {
-    const name = word.replace(/^.*[\\/]/, '').toLowerCase().replace(/\.(?:exe|com|bat|cmd)$/, '');
-    if (WINDOWS_SWITCH_UTILITIES.has(name)) return true;
-  }
-  return false;
-}
-
-async function scanCommandForExternalPaths(command: string, cwd: string, roots: string[]): Promise<string[]> {
-  const warnings: string[] = [];
-  const protectedPathsEnabled = await isProtectedPathsEnabled();
-  const seen = new Set<string>();
-  // Ripgrep glob values are patterns, not filesystem paths. Mask only option
-  // values so a real path elsewhere in the same command is still inspected.
-  const commandForPathScan = maskGlobOptionValues(command);
-  // Absolute-looking tokens: Windows drive (X:\ or X:/), UNC (\\host\share),
-  // POSIX (/foo), and ~-prefixed home paths.
-  const tokenRe = /(?:[A-Za-z]:[\\/][^\s"']*|\\\\[^\s"']+|~\/[^\s"']*|(?<![\w.])\/[^\s"']+)/g;
-  const matches = [...commandForPathScan.matchAll(tokenRe)]
-    .filter((match) => {
-      if (process.platform !== 'win32') return true;
-      // Two independent conditions must hold before a token is dropped: it must
-      // LOOK like a cmd switch, and a slash-switch utility must appear earlier
-      // in the SAME segment (`… && dir /b && …`). This keeps `/etc/passwd` and
-      // other genuine POSIX paths advisory.
-      if (!WINDOWS_SWITCH_RE.test(match[0])) return true;
-      return !windowsSwitchUtilityPrecedes(commandForPathScan, match.index ?? 0);
-    })
-    .map((match) => match[0]);
-  const home = (() => {
-    try {
-      return getHomeDir();
-    } catch {
-      return '';
-    }
-  })();
-  for (const rawToken of matches) {
-    let token = rawToken;
-    if (token.startsWith('~/') && home) token = path.join(home, token.slice(2));
-    let resolved: string;
-    try {
-      resolved = path.isAbsolute(token) ? path.resolve(token) : path.resolve(cwd, token);
-    } catch {
-      continue;
-    }
-    if (seen.has(resolved)) continue;
-    seen.add(resolved);
-    const prot = protectedPathsEnabled ? isProtected(resolved) : { denied: false };
-    if (prot.denied) {
-      warnings.push(`Command references "${rawToken}", which is inside a protected location (${prot.matchedRoot}).`);
-    } else if (roots.length > 0 && !roots.some((root) => isInside(root, resolved))) {
-      warnings.push(`Command references "${rawToken}", which is outside the configured working roots.`);
-    }
-  }
-  return warnings;
 }
 
 /**
@@ -2010,8 +1863,6 @@ async function runTool(
   }
 
   const cwd = await resolveCwd(args.cwd, roots);
-  const warnings = await scanCommandForExternalPaths(command, cwd, roots);
-  const warn = warnings.length ? { warnings } : {};
   const normalize = args.normalizeNewlines === true;
   const timeoutMs = resolveCommandTimeoutMs(args.timeout);
   const maxOutputChars = resolveMaxOutputChars(args.maxOutputChars);
@@ -2103,7 +1954,6 @@ async function runTool(
         ...dialect,
         ...substitution,
         ...auto,
-        ...warn,
       }, true), true);
     };
     const finish = async (result: CallToolResult, keepKillEscalation = false) => {
@@ -2140,7 +1990,6 @@ async function runTool(
           ...dialect,
           ...substitution,
           ...auto,
-          ...warn,
         }, true), true);
       }, timeoutMs);
     }
@@ -2182,7 +2031,6 @@ async function runTool(
         ...missingExecutableHint(code, dialectWarnings),
         ...substitution,
         ...auto,
-        ...warn,
       }, code !== 0));
     });
     if (context?.signal?.aborted) onAbort();
@@ -2254,8 +2102,6 @@ async function startTool(
   }
 
   const cwd = await resolveCwd(args.cwd, roots);
-  const warnings = await scanCommandForExternalPaths(command, cwd, roots);
-  const warn = warnings.length ? { warnings } : {};
   const maxOutputChars = resolveMaxOutputChars(args.maxOutputChars);
   let outputFilePath: string | undefined;
   if (args.outputFile !== undefined) {
@@ -2350,7 +2196,6 @@ async function startTool(
     ...(selection.autoSelected ? { shellAutoSelected: true } : {}),
     ...(dialectWarnings.length ? { dialectWarnings } : {}),
     ...(outputFilePath ? { outputFile: outputFilePath } : {}),
-    ...warn,
   });
 }
 

@@ -30,7 +30,6 @@ const launchServer = (): MCPStreamableConfig => ({
   headers: {},
   env: {},
   disabled: false,
-  autoApprove: [],
   rootPath: '.',
   source: { type: 'registry', registryName: 'io.github.example/weather-mcp' },
   launch: {
@@ -78,7 +77,6 @@ describe('launch spec persistence', () => {
       args: ['-y', '@example/mcp'],
       env: {},
       disabled: false,
-      autoApprove: [],
       rootPath: '.',
     } as unknown as MCPServerConfig;
     const loaded = await roundTrip(stdio);

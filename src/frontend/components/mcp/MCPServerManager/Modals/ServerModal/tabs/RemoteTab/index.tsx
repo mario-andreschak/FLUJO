@@ -72,7 +72,6 @@ const RemoteTab: React.FC<TabProps> = ({
       serverUrl: url,
       rootPath: `mcp-servers/${serverName}`,
       disabled: false,
-      autoApprove: [],
       env: {},
       _buildCommand: '',
       _installCommand: '',

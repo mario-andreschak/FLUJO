@@ -1,5 +1,4 @@
 import { Node, Edge } from '@xyflow/react';
-import { PermissionRule } from '@/shared/types/permissions';
 
 export interface HistoryEntry {
   nodes: FlowNode[];
@@ -47,15 +46,6 @@ export interface Flow {
    * (falls back to createdAt). Optional for the same reasons as createdAt.
    */
   updatedAt?: number;
-  /**
-   * Flow-level permission rules for MCP tool calls (issue #246).
-   * Evaluated last-match-wins. A `deny` rule drops the tool from the
-   * advertised list and/or blocks execution; an `allow` rule bypasses the
-   * approval gate; an `ask` rule (default) keeps the existing approval prompt.
-   * These rules are merged with per-server `autoApprove` desugaring at run
-   * start in ProcessNode.prep().
-   */
-  permissionRules?: PermissionRule[];
   nodes: FlowNode[];
   edges: Edge[];
   input?: NodeType;

@@ -466,7 +466,6 @@ export function validateMcpSelection(
       name: config.name,
       transport: config.transport,
       ...(config.disabled ? { disabled: true } : {}),
-      ...(config.autoApprove && config.autoApprove.length ? { autoApprove: config.autoApprove } : {}),
       ...(config.folder ? { folder: config.folder } : {}),
       installOrigin,
       envDeclarations: declarationsFrom(config.env, isSecretEnvVar),

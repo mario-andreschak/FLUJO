@@ -34,7 +34,6 @@ export const SHIPPED_MCP_SERVERS: readonly ShippedMcpServerDescriptor[] = [
     icons: [{ src: '/mcp-icons/filesystem.svg', mimeType: 'image/svg+xml' }],
     hostPathAccess: {
       environmentRootVariables: ['FLUJO_FS_ROOTS'],
-      protectedPaths: true,
       snapshots: true,
     },
   },
@@ -46,7 +45,6 @@ export const SHIPPED_MCP_SERVERS: readonly ShippedMcpServerDescriptor[] = [
     enableMcpApps: true,
     hostPathAccess: {
       environmentRootVariables: ['FLUJO_BASH_ROOTS', 'FLUJO_FS_ROOTS'],
-      protectedPaths: true,
       snapshots: true,
     },
   },
@@ -92,12 +90,10 @@ export function shippedServerEnv(
     forwarded.add('FLUJO_SYSTEM_SCREENSHOT_ENABLED');
   } else if (descriptor.defaultName === 'filesystem') {
     forwarded.add('FLUJO_FS_ROOTS');
-    forwarded.add('FLUJO_ALLOW_PROTECTED_PATHS');
   } else if (descriptor.defaultName === 'bash') {
     forwarded.add('FLUJO_BASH_ROOTS');
     forwarded.add('FLUJO_FS_ROOTS');
     forwarded.add('FLUJO_BASH_INHERIT_ENV');
-    forwarded.add('FLUJO_ALLOW_PROTECTED_PATHS');
     if (/^(1|true|yes|on)$/i.test(env.FLUJO_BASH_INHERIT_ENV?.trim() ?? '')) {
       for (const [key, value] of Object.entries(env)) {
         if (typeof value === 'string') result[key] = value;
@@ -199,7 +195,6 @@ export function createShippedServerConfig(
     env: shippedServerEnv(descriptor, env),
     cwd: appRoot,
     disabled: descriptor.disabledByDefault?.(env) ?? false,
-    autoApprove: [],
     rootPath: path.join(appRoot, 'mcp-servers', descriptor.packageDirectory),
     roots: [],
     _buildCommand: '',

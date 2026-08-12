@@ -22,14 +22,3 @@ Before executing, Bash MCP emits advisory `dialectWarnings` for command heads th
 
 A requested `bash` must resolve to a real POSIX interpreter such as Git Bash. WSL relay launchers are not considered usable Bash interpreters because a machine can have the launcher but no installed Linux distribution. The unavailable-shell result tells callers to use `shell_info`; install Git for Windows or provision a WSL distro if Bash is required.
 
-## Advisory path warnings and Windows switches
-
-Every command is scanned for absolute-looking paths that point outside the configured working roots or into a protected location. The scan is purely advisory — it never blocks a command — and it deliberately ignores cmd-style switches so that `dir /b`, `dir /ad /s`, `xcopy /s /e` or `robocopy … /mir` do not produce a bogus “outside the configured working roots” warning.
-
-A `/…` token is only treated as a switch when **both** conditions hold:
-
-1. it looks like a switch — a single leading slash, no interior separator, optionally `:value` (`/b`, `/ad`, `/mir`, `/e:on`); and
-2. a Windows utility that uses slash switches (`dir`, `xcopy`, `robocopy`, `attrib`, `findstr`, `reg`, …) appears earlier in the **same command segment**, where segments are split on `&&`, `||`, `|`, `;` and newlines.
-
-This is why `cd … && dir /b && rg -n "x" .` no longer warns about `/b`, while `echo /etc/passwd` — and `dir /b && echo /etc/passwd` — still do. Utility names that are also common POSIX commands (`find`, `sort`, `type`, `mkdir`, …) are intentionally excluded from the suppression list so genuine path advisories are preserved.
-

@@ -216,17 +216,6 @@ export default function ExperimentalFeaturesSettings() {
     });
   };
 
-  const handleProtectedPathsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    log.debug(`Protected paths toggled: ${event.target.checked}`);
-    updateSettings({
-      ...settings,
-      experimental: {
-        ...experimental,
-        protectedPathsEnabled: event.target.checked,
-      },
-    });
-  };
-
   const handleSubflowToolInvocationChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     log.debug(`Subflow tool invocation toggled: ${event.target.checked}`);
     updateSettings({
@@ -522,22 +511,6 @@ export default function ExperimentalFeaturesSettings() {
         />
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
           {t('settings.experimental.flowGeneratorDescription')}
-        </Typography>
-      </FormControl>
-
-      <FormControl fullWidth sx={{ mb: 2 }}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={experimental.protectedPathsEnabled ?? false}
-              onChange={handleProtectedPathsChange}
-              name="protectedPathsEnabled"
-            />
-          }
-          label={t('settings.experimental.protectedPaths')}
-        />
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          {t('settings.experimental.protectedPathsDescription')}
         </Typography>
       </FormControl>
 

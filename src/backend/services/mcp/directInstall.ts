@@ -324,7 +324,6 @@ function normalizeConfig(
   const common = {
     name,
     disabled: false,
-    autoApprove: [],
     env: { ...stringRecord(raw.env), ...(input.env ?? {}) },
     _buildCommand: '',
     _installCommand: '',

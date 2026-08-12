@@ -41,11 +41,6 @@ interface ApprovalActionBody {
   answers?: string[][];
   /** Optional: resolve one specific pending tool call. Omit to resolve all. */
   toolCallId?: string;
-  /** Issue #246: when true, save an "always" rule so future calls to the same
-   *  tool are auto-resolved without user intervention. */
-  always?: boolean;
-  /** Issue #247: optional rejection feedback carried back to the model. */
-  feedback?: string;
 }
 
 function pendingToolCallsMeta(state: SharedState): Array<{ id: string; name: string }> {
@@ -154,7 +149,7 @@ async function POST_handler(
 
     const appendedMessages: FlujoChatMessage[] = [];
     for (const toolCallId of targetIds) {
-      const decision = await applyApprovalDecision(state, toolCallId, mappedAction, body.always, body.feedback);
+      const decision = await applyApprovalDecision(state, toolCallId, mappedAction);
       if (decision.outcome === 'tool_not_found') {
         if (body.toolCallId) {
           return json({ error: `Pending tool call with ID ${toolCallId} not found` }, 404);

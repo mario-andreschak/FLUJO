@@ -41,8 +41,7 @@ const ADVANCED_SUBFLOW_PROPERTIES = new Set([
 ]);
 
 /** True when Guided mode would hide authored behavior on this flow. */
-export function flowUsesAdvancedFeatures(flow: Pick<Flow, 'nodes' | 'edges' | 'permissionRules'>): boolean {
-  if (flow.permissionRules !== undefined) return true;
+export function flowUsesAdvancedFeatures(flow: Pick<Flow, 'nodes' | 'edges'>): boolean {
   const nodeById = new Map((flow.nodes ?? []).map(node => [node.id, node]));
   const guidedSubagentPairs = new Set(
     getGuidedSubagentLinks(flow.nodes ?? [], flow.edges ?? [])

@@ -8,7 +8,7 @@
  *     final answer) and usage maps into the OpenAI shape with the cached split.
  *   - FLUJO tools are exposed through the bridge; an MCP dispatch records the
  *     assistant(tool_call)+tool(result) pair; a rejected approval never runs
- *     the tool and surfaces the #247 feedback text.
+ *     the tool and returns the fixed denial result.
  *   - a plain handoff ends the run and surfaces as a routing tool_call.
  */
 import type OpenAI from 'openai';
@@ -856,8 +856,8 @@ describe('CodexAdapter — tool bridging', () => {
     expect(transcript!.filter(m => m.role === 'tool')).toHaveLength(1);
   });
 
-  it('a rejected approval never dispatches and surfaces the feedback (#247)', async () => {
-    const approvals = jest.fn(async () => ({ approved: false, feedback: 'wrong target' }));
+  it('a rejected approval never dispatches and returns the fixed denial result', async () => {
+    const approvals = jest.fn(async () => false);
     runStreamedMock.mockImplementationOnce(async () => ({
       events: (async function* () {
         const res = await capturedBridgeTools[0].handler({ q: 'x' });
@@ -891,12 +891,12 @@ describe('CodexAdapter — tool bridging', () => {
     const toolMsg = transcript!.find(m => m.role === 'tool')!;
     expect(callMsg?.tool_calls).toHaveLength(1);
     expect(toolMsg.role === 'tool' ? toolMsg.tool_call_id : undefined).toBe(callMsg?.tool_calls?.[0].id);
-    expect(toolMsg.content).toContain('User rejected this tool call: wrong target');
+    expect(toolMsg.content).toBe('tool denied');
     expect(toolMsg.ui).toEqual({
       uri: 'ui://advertised-dashboard',
       serverName: 'my-server',
       toolName: 'list_things',
-      cancelledReason: 'User rejected this tool call: wrong target',
+      cancelledReason: 'tool denied',
       isError: true,
     });
   });

@@ -3,12 +3,11 @@
  * calls collected on a German-locale Windows machine without PowerShell 7,
  * without `rg`/`head`, and with only the WSL `bash.exe` relay.
  *
- * Each report is pinned here so the four root causes cannot come back:
+ * Each report is pinned here so the three remaining root causes cannot come back:
  *  A) an explicitly requested shell silently downgraded to another dialect
  *     (`shellFallback: {requestedShell: "pwsh", usedShell: "default"}`),
  *  B) missing third-party binaries surfacing only as a localized shell message,
- *  C) the System32 WSL launcher being selected as "bash",
- *  D) cmd switches (`dir /b`) being reported as paths outside the roots.
+ *  C) the System32 WSL launcher being selected as "bash".
  */
 import { promises as fsp } from 'fs';
 import os from 'os';
@@ -214,34 +213,6 @@ describe('issue #314 — the WSL bash relay is never selected as "bash"', () => 
     } finally {
       await fsp.rm(tempDir, { recursive: true, force: true });
     }
-  });
-});
-
-describe('issue #314 — Windows switches are not reported as external paths', () => {
-  it.each([
-    'dir /b',
-    'cd . && dir /b',
-    'echo dir /b',
-    'dir /ad /s',
-    'xcopy /s /e src dst',
-    'robocopy src dst /mir',
-    'attrib /d /s file',
-  ])('produces no root warning for: %s', async (command) => {
-    if (!isWin) return;
-    mockCompletedChild();
-    const r = await bashCallTool('run', { command });
-    expect(parse(r).warnings).toBeUndefined();
-  });
-
-  it.each([
-    'echo /etc/passwd',
-    'type C:\\Windows\\System32\\drivers\\etc\\hosts',
-    'dir /b && echo /etc/passwd',
-  ])('keeps the genuine advisory for: %s', async (command) => {
-    if (!isWin) return;
-    mockCompletedChild();
-    const warnings = parse(await bashCallTool('run', { command })).warnings as string[] | undefined;
-    expect(warnings?.length).toBeGreaterThan(0);
   });
 });
 

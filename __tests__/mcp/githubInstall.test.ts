@@ -133,7 +133,6 @@ describe('installGithubServer', () => {
       env: { API_TOKEN: 'super-secret', LOG_LEVEL: 'debug' },
       secretEnvNames: ['API_TOKEN'],
       disabled: true,
-      autoApprove: ['search'],
       folder: 'package-folder',
     });
 
@@ -172,7 +171,6 @@ describe('installGithubServer', () => {
         command: 'node',
         args: ['./dist/server.js'],
         disabled: true,
-        autoApprove: ['search'],
         folder: 'package-folder',
         env: {
           API_TOKEN: { value: 'super-secret', metadata: { isSecret: true } },

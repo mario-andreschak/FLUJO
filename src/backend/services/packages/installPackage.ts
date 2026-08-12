@@ -140,7 +140,6 @@ export interface PackageServerInfo {
   /** The package ships this server disabled. */
   disabled: boolean;
   folder?: string;
-  autoApprove: string[];
   /** Positional argument templates the origin declares (no secret values). */
   argTemplates: Array<{ index: number; value: string }>;
   env: PackageDeclarationInfo[];
@@ -1155,7 +1154,6 @@ function buildServerDetails(
       ...(origin.url ? { url: origin.url } : {}),
       disabled: server.disabled === true,
       ...(server.folder ? { folder: server.folder } : {}),
-      autoApprove: server.autoApprove ?? [],
       argTemplates: (server.argTemplates ?? []).map((a) => ({ index: a.index, value: a.value })),
       env: describeDeclarations(server.envDeclarations ?? [], manifest, secretProvided),
       headers: describeDeclarations(server.headerDeclarations ?? [], manifest, secretProvided),
@@ -1629,7 +1627,6 @@ async function installServer(
       secretEnvNames: [...env.secretNames],
       argTemplates: server.argTemplates,
       disabled: server.disabled,
-      autoApprove: server.autoApprove,
       folder: ctx.packageFolder,
     });
     summary.servers.push({
@@ -1829,7 +1826,6 @@ function buildRemoteServerConfig(
     name: server.name,
     folder: packageFolder,
     disabled,
-    autoApprove: server.autoApprove ?? [],
     rootPath: '',
     env: Object.fromEntries(
       Object.entries(env).map(([k, v]) => [

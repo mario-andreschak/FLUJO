@@ -33,7 +33,6 @@ export interface ClaudeServerEntry {
   serverUrl?: string;
   websocketUrl?: string;
   disabled?: boolean;
-  autoApprove?: string[];
 }
 
 export interface ClaudeConfig {
@@ -245,7 +244,6 @@ export function fromClaudeFormat(input: string | object): ImportResult {
       name,
       env,
       disabled: entry.disabled ?? false,
-      autoApprove: Array.isArray(entry.autoApprove) ? entry.autoApprove : [],
       rootPath: '',
       _buildCommand: '',
       _installCommand: '',

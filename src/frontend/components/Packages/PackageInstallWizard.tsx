@@ -165,7 +165,6 @@ export default function PackageInstallWizard({
             : 'stdio',
         sourceType,
         disabled: false,
-        autoApprove: [],
         argTemplates: [],
         env: [],
         headers: [],

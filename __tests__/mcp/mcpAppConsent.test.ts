@@ -29,7 +29,6 @@ const external = (name = 'acme'): MCPServerConfig => ({
   args: [],
   env: {},
   disabled: false,
-  autoApprove: [],
   rootPath: '',
   _buildCommand: '',
   _installCommand: '',

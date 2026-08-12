@@ -5,14 +5,13 @@ import { MCPServerConfig } from '@/shared/types/mcp';
 const baseFields = {
   env: {},
   disabled: false,
-  autoApprove: [],
   rootPath: '',
   _buildCommand: '',
   _installCommand: '',
 };
 
 describe('clineFormat — export (toClineFormat)', () => {
-  it('emits stdio servers with command/args/env, disabled, autoApprove, timeout and no type', () => {
+  it('emits stdio servers with command/args/env, disabled, timeout and no type', () => {
     const servers = [
       { ...baseFields, name: 'fs', transport: 'stdio', command: 'node', args: ['s.js'], env: { K: 'v' } },
     ] as unknown as MCPServerConfig[];
@@ -23,7 +22,6 @@ describe('clineFormat — export (toClineFormat)', () => {
       args: ['s.js'],
       env: { K: 'v' },
       disabled: false,
-      autoApprove: [],
       timeout: 60,
     });
     expect('type' in out.mcpServers.fs).toBe(false);
@@ -37,7 +35,6 @@ describe('clineFormat — export (toClineFormat)', () => {
         serverUrl: 'https://abap-mcp.example/mcp',
         headers: { Authorization: 'Basic xxx', 'X-Client': '100' },
         disabled: true,
-        autoApprove: [],
         rootPath: '',
         env: {},
         _buildCommand: '',
@@ -51,7 +48,6 @@ describe('clineFormat — export (toClineFormat)', () => {
       url: 'https://abap-mcp.example/mcp',
       headers: { Authorization: 'Basic xxx', 'X-Client': '100' },
       disabled: true,
-      autoApprove: [],
       timeout: 60,
     });
   });
@@ -65,7 +61,6 @@ describe('clineFormat — export (toClineFormat)', () => {
         args: [],
         exposeAsMcpServer: true,
         disabled: true,
-        autoApprove: [],
         env: { SECRET: 'x' },
         rootPath: '',
         _buildCommand: '',
@@ -78,7 +73,6 @@ describe('clineFormat — export (toClineFormat)', () => {
       type: 'streamableHttp',
       url: 'http://localhost:4200/mcp-proxy/test-flujo',
       disabled: true,
-      autoApprove: [],
       timeout: 60,
     });
   });
@@ -96,7 +90,6 @@ describe('clineFormat — import (fromClineFormat)', () => {
           headers: { Authorization: 'Basic xxx', 'X-SAP-Client': '100' },
         },
         'test-flujo-everything': {
-          autoApprove: [],
           disabled: false,
           timeout: 60,
           type: 'streamableHttp',

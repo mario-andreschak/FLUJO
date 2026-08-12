@@ -1,6 +1,6 @@
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 import path from 'node:path';
-import { Settings, StorageKey } from '@/shared/types/storage';
+import { StorageKey } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
 import { loadItem, saveItem } from '@/utils/storage/backend';
 import { getCurrentWorkspace } from '@/utils/workspace';
@@ -163,7 +163,6 @@ function isLegacyShippedRecord(
 function normalizedInstalledRecord(
   stored: StoredServer,
   descriptor: ShippedMcpServerDescriptor,
-  legacyProtectedPaths: boolean | undefined,
 ): StoredServer {
   const expected = persistedConfig(createShippedServerConfig(descriptor));
   const ordinary = { ...stored };
@@ -190,11 +189,6 @@ function normalizedInstalledRecord(
       : expected.enableMcpApps,
     ...(expected.hostPathAccess ? { hostPathAccess: expected.hostPathAccess } : {}),
   };
-  if (
-    descriptor.hostPathAccess?.protectedPaths === true
-    && typeof next.protectedPathsEnabled !== 'boolean'
-    && typeof legacyProtectedPaths === 'boolean'
-  ) next.protectedPathsEnabled = legacyProtectedPaths;
   return next;
 }
 
@@ -208,8 +202,6 @@ async function runOrdinaryStdioMigration(): Promise<void> {
   if (completed === true) return;
 
   const loaded = await loadItem<StoredServers>(StorageKey.MCP_SERVERS, {});
-  const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
-  const legacyProtectedPaths = settings?.experimental?.protectedPathsEnabled;
   const nextServers = { ...(loaded && typeof loaded === 'object' ? loaded : {}) };
   let changed = false;
 
@@ -218,7 +210,7 @@ async function runOrdinaryStdioMigration(): Promise<void> {
       isLegacyShippedRecord(stored, candidate)
     );
     if (!descriptor) continue;
-    const normalized = normalizedInstalledRecord(stored, descriptor, legacyProtectedPaths);
+    const normalized = normalizedInstalledRecord(stored, descriptor);
     if (JSON.stringify(normalized) !== JSON.stringify(stored)) {
       nextServers[recordName] = normalized;
       changed = true;
@@ -274,7 +266,7 @@ async function runBrowserRecordRepairMigration(): Promise<void> {
     const expected = persistedConfig(createShippedServerConfig(descriptor));
     for (const [recordName, stored] of Object.entries(nextServers)) {
       if (!isInstalledPackage(stored, descriptor)) continue;
-      const repaired = normalizedInstalledRecord(stored, descriptor, undefined);
+      const repaired = normalizedInstalledRecord(stored, descriptor);
       repaired.rootPath = expected.rootPath;
       const repairedEnv = repaired.env && typeof repaired.env === 'object' && !Array.isArray(repaired.env)
         ? repaired.env as Record<string, unknown>

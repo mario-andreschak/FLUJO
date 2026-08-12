@@ -108,7 +108,7 @@ export const meetingsMessageRows = {
   'meetings.review.parallel': m('At once'),
   'meetings.review.consensus': m('Finish vote'),
   'meetings.review.startHelp': m('Agents work in parallel from a shared snapshot. Their published answers appear here in a stable order.'),
-  'meetings.review.unattendedTools': m('Meeting controls run automatically. Normal flow tools run only when existing permission rules allow them; anything requiring approval stops that participant’s turn.'),
+  'meetings.review.unattendedTools': m('Meeting controls and participant flow tools run automatically.'),
   'meetings.review.start': m('Create & start meeting', 'Crear e iniciar', 'Erstellen & starten', 'Créer et démarrer', 'Crea e avvia', 'Criar e iniciar', '创建并开始会议'),
   'meetings.review.starting': m('Opening the room…'),
 

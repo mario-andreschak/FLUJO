@@ -31,7 +31,7 @@ Advanced is opt-in and preserves the complete FlowSpec and builder surface:
 - Variables, subflow resource capture, persistent KV state, and explicit
   Process → Resource artifact production.
 - Subflow child-job queues and their maximum simultaneous-child setting.
-- Unattended execution and flow-level permission rules.
+- Unattended execution.
 
 The builder preference is stored under `flujo-ui:flow-builder:mode`. When a flow
 contains advanced behavior while Guided is selected, the builder shows a

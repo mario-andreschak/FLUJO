@@ -542,7 +542,6 @@ function baseConfig(server: RegistryServer): Partial<MCPServerConfig> {
   return {
     name: sanitizeServerName(server.name),
     disabled: false,
-    autoApprove: [],
     env: {},
     _buildCommand: '',
     _installCommand: '',

@@ -52,7 +52,6 @@ function stdioConfig(overrides: Record<string, unknown> = {}): MCPServerConfig {
     args: ["dist/index.js"],
     env: {},
     disabled: false,
-    autoApprove: [],
     rootPath: "C:/servers/wa-test",
     _buildCommand: "",
     _installCommand: "",

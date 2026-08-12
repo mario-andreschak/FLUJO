@@ -802,10 +802,7 @@ describe('ClaudeSubscriptionAdapter — MCP App transcript lifecycle', () => {
             uiResourceUri: 'ui://advertised-dashboard',
           },
         },
-        requestToolApproval: jest.fn(async () => ({
-          approved: false,
-          feedback: 'wrong target',
-        })),
+        requestToolApproval: jest.fn(async () => false),
       }),
     );
 
@@ -815,7 +812,7 @@ describe('ClaudeSubscriptionAdapter — MCP App transcript lifecycle', () => {
       uri: 'ui://advertised-dashboard',
       serverName: 'my-server',
       toolName: 'list_things',
-      cancelledReason: 'User rejected this tool call: wrong target',
+      cancelledReason: 'tool denied',
       isError: true,
     });
   });

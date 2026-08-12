@@ -53,8 +53,6 @@ const baseProps = {
   onFlowDescriptionChange: jest.fn(),
   authoringMode: 'guided' as const,
   onAuthoringModeChange: jest.fn(),
-  permissionRuleCount: 0,
-  onOpenPermissionRules: jest.fn(),
 };
 
 describe('FlowBuilder InspectorPanel', () => {

@@ -193,20 +193,6 @@ describe('bash run (foreground)', () => {
     expect(parse(r).output as string).toMatch(/^ripgrep \d+/);
   });
 
-  it.each([
-    "rg needle -g '/.git/**' .",
-    "rg needle --glob '!/.git/**' .",
-    "rg needle --glob='/.git/**' .",
-    "rg needle --iglob '/.git/**' .",
-  ])('does not treat a ripgrep glob as an external path: %s', async (command) => {
-    const r = await bashCallTool('run', { command });
-    expect(parse(r).warnings).toBeUndefined();
-  });
-
-  it('continues warning about genuine absolute paths', async () => {
-    const r = await bashCallTool('run', { command: 'echo /.git/config' });
-    expect(parse(r).warnings).toBeDefined();
-  });
 });
 
 describe('bash shell selection (issues #225, #327)', () => {
@@ -618,28 +604,6 @@ describe('bash shell selection (issues #225, #327)', () => {
     }
   });
 
-  it.each([
-    'echo dir /b',
-    'cd . && dir /b',
-    'dir /ad',
-    'xcopy /s /e src dst',
-    'robocopy src dst /mir',
-  ])('does not report a Windows switch as an external path: %s', async (command) => {
-    if (!isWin) return;
-    // The child is mocked: only the advisory scan is under test here.
-    mockCompletedChild('ok');
-    const r = await bashCallTool('run', { command });
-    expect(parse(r).warnings).toBeUndefined();
-  });
-
-  it('still warns about a genuine path in a segment without a Windows utility', async () => {
-    if (!isWin) return;
-    mockCompletedChild('ok');
-    const r = await bashCallTool('run', { command: 'dir /b && echo /etc/passwd' });
-    expect(parse(r).warnings).toEqual([
-      expect.stringContaining('/etc/passwd'),
-    ]);
-  });
 });
 
 describe('bash background sessions', () => {

@@ -208,7 +208,6 @@ const GitHubTab: React.FC<TabProps> = ({
           args: [],
           env: envFromExample, // Start with env from .env.example
           disabled: false,
-          autoApprove: [],
           rootPath: repoPath,
           _buildCommand: '',
           _installCommand: '',

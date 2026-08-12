@@ -42,19 +42,6 @@ describe('toolApprovalRegistry', () => {
     expect(listPendingToolCalls('conv-B')).toEqual([]);
   });
 
-  it('passes rejection feedback through to the resolve callback (issue #247)', async () => {
-    let receivedApproved: boolean | undefined;
-    let receivedFeedback: string | undefined;
-    registerPendingApproval('conv-fb', mkCall('call-fb'), (approved, feedback) => {
-      receivedApproved = approved;
-      receivedFeedback = feedback;
-    });
-    expect(resolvePendingApproval('conv-fb', 'call-fb', false, 'write to dist/ instead')).toBe(true);
-    expect(receivedApproved).toBe(false);
-    expect(receivedFeedback).toBe('write to dist/ instead');
-    expect(listPendingToolCalls('conv-fb')).toEqual([]);
-  });
-
   it('clearPendingApprovals rejects every pending call for the conversation', async () => {
     const decision = new Promise<boolean>(resolve =>
       registerPendingApproval('conv-C', mkCall('x'), resolve)

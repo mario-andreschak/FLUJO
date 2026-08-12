@@ -214,7 +214,7 @@ describe('tool breakpoints pause a normal (non-single-step) run', () => {
     expect(state.status).not.toBe('paused_debug');
   });
 
-  it('pauses before the permission/approval gate when approvals are enabled', async () => {
+  it('pauses before the approval gate when approvals are enabled', async () => {
     seedRunningState([ANY_TOOL_BREAKPOINT]);
     await processChatCompletion(request, true, true, false, CONV_ID, false, false);
 

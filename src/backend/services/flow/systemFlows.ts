@@ -126,9 +126,8 @@ export function buildVendoredFlowGenerator(): Flow {
   compiled.flow.id = FLOW_GENERATOR_ID;
   compiled.flow.name = 'Experimental Flow Generator';
   compiled.flow.folder = 'System';
-  // The saved/editable system Flow is safe to run manually: it can discover
-  // marketplace options but cannot install. An opted-in session snapshot adds
-  // the install tools and permission rules below.
+  // The saved/editable system Flow can discover marketplace options but cannot
+  // install. An opted-in session snapshot adds the install tools below.
   const installNames = new Set<string>(INSTALL_AUTHORING_TOOLS);
   for (const node of compiled.flow.nodes.filter((candidate) => candidate.type === 'mcp')) {
     const enabled = node.data?.properties?.enabledTools;
@@ -139,11 +138,6 @@ export function buildVendoredFlowGenerator(): Flow {
       };
     }
   }
-  compiled.flow.permissionRules = SAFE_AUTHORING_TOOLS.map((action) => ({
-    action,
-    resource: '*',
-    effect: 'allow' as const,
-  }));
   const stages = compiled.flow.nodes.filter((node) => node.type === 'process');
   if (stages.length !== 2) {
     throw new Error('Bundled Flow Generator must contain architect and compiler stages');
@@ -234,13 +228,6 @@ export async function buildFlowGeneratorSnapshot(
         enabledTools: [...new Set([...enabled, ...INSTALL_AUTHORING_TOOLS])],
       };
     }
-    const existingActions = new Set((snapshot.permissionRules ?? []).map((rule) => rule.action));
-    snapshot.permissionRules = [
-      ...(snapshot.permissionRules ?? []),
-      ...INSTALL_AUTHORING_TOOLS
-        .filter((action) => !existingActions.has(action))
-        .map((action) => ({ action, resource: '*', effect: 'allow' as const })),
-    ];
   } else {
     for (const node of snapshot.nodes.filter((candidate) => candidate.type === 'mcp')) {
       const enabled = node.data?.properties?.enabledTools;
@@ -251,8 +238,6 @@ export async function buildFlowGeneratorSnapshot(
         };
       }
     }
-    snapshot.permissionRules = (snapshot.permissionRules ?? [])
-      .filter((rule) => !installNames.has(rule.action));
   }
 
   const start = snapshot.nodes.find((node) => node.type === 'start');

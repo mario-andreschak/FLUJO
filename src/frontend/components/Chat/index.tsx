@@ -3796,9 +3796,9 @@ const Chat: React.FC = () => {
     splitConversationAtMessage(messageId, 'tail');
 
   // Handle Approve/Reject Tool Call
-  const handleToolResponse = async (action: 'approve' | 'reject', toolCallId: string, always?: boolean, feedback?: string) => {
+  const handleToolResponse = async (action: 'approve' | 'reject', toolCallId: string) => {
     if (!currentConversationId) return;
-    log.info(`Handling tool response: ${action}`, { conversationId: currentConversationId, toolCallId, always });
+    log.info(`Handling tool response: ${action}`, { conversationId: currentConversationId, toolCallId });
 
     setPendingToolCalls(null);
     setIsLoading(true); // Indicate processing and potentially restart polling
@@ -3815,7 +3815,7 @@ const Chat: React.FC = () => {
       // returns the next natural stop point — another approval prompt, a debug
       // pause, completion, or error — which we hand to the shared response
       // handler. Live updates also arrive over the already-open SSE stream.
-      const data = await chatService.respondToToolCall(currentConversationId, action, toolCallId, always, feedback);
+      const data = await chatService.respondToToolCall(currentConversationId, action, toolCallId);
       log.debug(`Tool response successful`, { conversationId: currentConversationId, action, toolCallId });
       handleApiResponse(data, currentConversationId);
 
@@ -3842,12 +3842,12 @@ const Chat: React.FC = () => {
     }
   };
 
-  const handleApproveToolCall = (toolCallId: string, always?: boolean) => {
-    handleToolResponse('approve', toolCallId, always);
+  const handleApproveToolCall = (toolCallId: string) => {
+    handleToolResponse('approve', toolCallId);
   };
 
-  const handleRejectToolCall = (toolCallId: string, always?: boolean, feedback?: string) => {
-    handleToolResponse('reject', toolCallId, always, feedback);
+  const handleRejectToolCall = (toolCallId: string) => {
+    handleToolResponse('reject', toolCallId);
   };
 
   /**
