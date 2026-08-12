@@ -48,8 +48,8 @@ export interface RepoInfo {
 export interface TabProps {
   initialConfig?: MCPServerConfig | null;
   onAdd: (config: MCPServerConfig) => void;
-  // options.autoTestRun marks a handoff whose config is ready to run as-is
-  // (marketplace one-click install): the local tab then skips straight to a test run
+  // options.autoTestRun marks a streamlined source handoff. Configure prepares a
+  // cloned GitHub source when needed, then advances directly through the test run.
   onUpdate?: (config: MCPServerConfig, options?: { autoTestRun?: boolean }) => void;
   onClose: () => void;
   onRestartAfterUpdate?: (serverName: string) => void;
@@ -61,7 +61,7 @@ export interface TabProps {
    * prop pair (#392).
    */
   onHandoff?: (handoff: TabHandoff) => void;
-  /** When true (registry handoff), collapse define/build as done and auto-start a test run */
+  /** Collapse supplied setup, prepare a GitHub clone if needed, and auto-start its test run. */
   autoTestRun?: boolean;
   /**
    * Identity of the inbound handoff. Bumped on every handoff so the configure

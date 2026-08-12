@@ -81,9 +81,15 @@ const RemoteTab: React.FC<TabProps> = ({
       ...(samplingPolicy ? { sampling: samplingPolicy } : {}),
     };
 
-    // Hand the config to the configure-and-verify sink; the modal switches tabs
+    // The URL is already a complete runnable config. Use the same streamlined
+    // handoff as Marketplace: Configure collapses the prefilled sections, tests
+    // immediately, then leaves Save as the only action when the probe succeeds.
     if (onHandoff) {
-      onHandoff({ to: 'configure', config: remoteConfig as MCPServerConfig });
+      onHandoff({
+        to: 'configure',
+        config: remoteConfig as MCPServerConfig,
+        autoTestRun: true,
+      });
     }
   };
 

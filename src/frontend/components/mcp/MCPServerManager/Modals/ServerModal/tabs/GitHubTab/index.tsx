@@ -281,9 +281,22 @@ const GitHubTab: React.FC<TabProps> = ({
       setParsedConfig(finalConfig);
       setMessage(finalMessage); // Set the final message state
 
-      // Hand the config to the configure-and-verify sink; the modal switches tabs
+      // A runnable detected config can continue through install/build/test without
+      // making the user reopen three already-understood sections. Incomplete
+      // detection deliberately keeps the manual Configure experience expanded.
       if (onHandoff && finalConfig.name) { // Ensure name is present before handing off
-        onHandoff({ to: 'configure', config: finalConfig as MCPServerConfig });
+        const canAutoTest = finalConfig.transport === 'stdio'
+          ? Boolean(finalConfig.command)
+          : finalConfig.transport === 'websocket'
+            ? Boolean(finalConfig.websocketUrl)
+            : finalConfig.transport === 'sse' || finalConfig.transport === 'streamable'
+              ? Boolean(finalConfig.serverUrl)
+              : false;
+        onHandoff({
+          to: 'configure',
+          config: finalConfig as MCPServerConfig,
+          ...(canAutoTest ? { autoTestRun: true } : {}),
+        });
       }
       
       setCloneCompleted(true);

@@ -245,9 +245,9 @@ const ConfigureTab: React.FC<TabProps> = ({
     );
   };
 
-  const onInstall = async () => {
+  const runInstall = async (): Promise<boolean> => {
     setInstallError(null);
-    await handleInstall(
+    return handleInstall(
       localConfig,
       installCommand,
       setIsInstalling,
@@ -263,9 +263,13 @@ const ConfigureTab: React.FC<TabProps> = ({
     );
   };
 
-  const onBuild = async () => {
+  const onInstall = async (): Promise<void> => {
+    await runInstall();
+  };
+
+  const runBuild = async (): Promise<boolean> => {
     setBuildError(null);
-    await handleBuild(
+    return handleBuild(
       localConfig,
       buildCommand,
       setIsBuilding,
@@ -279,6 +283,10 @@ const ConfigureTab: React.FC<TabProps> = ({
       setBuildCompleted,
       t
     );
+  };
+
+  const onBuild = async (): Promise<void> => {
+    await runBuild();
   };
 
   // Whether the last Test Run found a reachable OAuth (RFC 9728) streamable server, and
@@ -362,10 +370,12 @@ const ConfigureTab: React.FC<TabProps> = ({
     updateConsole: setConsoleOutput
   } = useConsoleOutput();
   
-  // Marketplace handoff: the config arrives ready to run — no install/build step
-  // (npx/uvx/docker fetch the package on first run). Collapse the first two
-  // sections as done and start the test run immediately, so the installation
-  // begins without another click.
+  // Streamlined source handoff: collapse configuration the source already supplied
+  // and advance automatically until something needs attention. Registry/remote
+  // configs are runnable as-is. A cloned GitHub source first runs its detected
+  // install/build commands, keeping those details collapsed unless a command fails.
+  // Once preparation succeeds, Test Run opens only while active and its success
+  // effect below collapses it again, leaving Save as the primary remaining action.
   // Keyed by handoff identity, not a bare boolean: installing the same server
   // twice in a row is two handoffs and must auto-run twice (#392).
   const autoRunStartedForRef = useRef<number | null>(null);
@@ -378,19 +388,49 @@ const ConfigureTab: React.FC<TabProps> = ({
     // otherwise the run would see the empty default config
     if (localConfig.name !== initialConfig.name) return;
     autoRunStartedForRef.current = handoffKey;
+    const prepareGitHubSource = initialConfig.source?.type === 'github';
     setExpandedSections({
       define: false,
       build: false,
-      run: true
+      run: !prepareGitHubSource
     });
-    setInstallCompleted(true);
-    setBuildCompleted(true);
-    onRun();
-  }, [autoTestRun, handoffId, initialConfig, localConfig.name]);
+
+    const prepareAndRun = async () => {
+      if (prepareGitHubSource) {
+        const installSucceeded = installCommand.trim()
+          ? await runInstall()
+          : true;
+        setInstallCompleted(installSucceeded);
+        if (!installSucceeded) {
+          setExpandedSections(current => ({ ...current, build: true }));
+          return;
+        }
+
+        const buildSucceeded = buildCommand.trim()
+          ? await runBuild()
+          : true;
+        setBuildCompleted(buildSucceeded);
+        if (!buildSucceeded) {
+          setExpandedSections(current => ({ ...current, build: true }));
+          return;
+        }
+
+        setExpandedSections(current => ({ ...current, run: true }));
+      } else {
+        // Remote and registry handoffs have no local preparation stage.
+        setInstallCompleted(true);
+        setBuildCompleted(true);
+      }
+
+      await onRun();
+    };
+
+    void prepareAndRun();
+  }, [autoTestRun, handoffId, initialConfig, localConfig.name, installCommand, buildCommand]);
 
   // Successful runs are already summarized by the green accordion header. Keep
-  // the detailed controls out of the way after the transition, including the
-  // automatic first run used by Marketplace installs. Users can still reopen it.
+  // the detailed controls out of the way after the transition, including runs
+  // started by source handoffs. Users can still reopen it.
   useEffect(() => {
     if (!runCompleted) return;
     setExpandedSections((current) => current.run

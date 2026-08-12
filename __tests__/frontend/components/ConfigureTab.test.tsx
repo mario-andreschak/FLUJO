@@ -144,11 +144,17 @@ describe('ConfigureTab run and troubleshooting behavior', () => {
     ) => setMessage({ type: 'error', text: 'Unrelated save validation error' }));
     handleInstallMock.mockImplementation(async (...args: unknown[]) => {
       const setBuildMessage = args[3] as (message: { type: 'success'; text: string }) => void;
+      const setInstallCompleted = args[7] as (completed: boolean) => void;
       setBuildMessage({ type: 'success', text: 'Installed' });
+      setInstallCompleted(true);
+      return true;
     });
     handleBuildMock.mockImplementation(async (...args: unknown[]) => {
       const setBuildMessage = args[3] as (message: { type: 'success'; text: string }) => void;
+      const setBuildCompleted = args[7] as (completed: boolean) => void;
       setBuildMessage({ type: 'success', text: 'Built' });
+      setBuildCompleted(true);
+      return true;
     });
     handleRunMock.mockImplementation(async (...args: unknown[]) => {
       const setMessage = args[7] as (message: { type: 'success'; text: string }) => void;
@@ -165,6 +171,54 @@ describe('ConfigureTab run and troubleshooting behavior', () => {
     const runHeader = container.querySelector('#run-header');
     await waitFor(() => expect(runHeader).toHaveAttribute('aria-expanded', 'false'));
     expect(screen.queryByTestId('install-troubleshooter')).not.toBeInTheDocument();
+  });
+
+  it('prepares a GitHub handoff and collapses every successful section', async () => {
+    const githubConfig: MCPServerConfig = {
+      ...initialConfig,
+      name: 'github-server',
+      source: { type: 'github', repositoryUrl: 'https://github.com/example/server' },
+      _installCommand: 'npm install',
+      _buildCommand: 'npm run build',
+    };
+    const { container } = renderTab(
+      { autoTestRun: true, handoffId: 8 },
+      githubConfig,
+    );
+
+    await waitFor(() => expect(handleInstallMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(handleBuildMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(handleRunMock).toHaveBeenCalledTimes(1));
+    expect(handleInstallMock.mock.invocationCallOrder[0]).toBeLessThan(handleBuildMock.mock.invocationCallOrder[0]);
+    expect(handleBuildMock.mock.invocationCallOrder[0]).toBeLessThan(handleRunMock.mock.invocationCallOrder[0]);
+
+    for (const id of ['#define-server-header', '#build-header', '#run-header']) {
+      await waitFor(() => expect(container.querySelector(id)).toHaveAttribute('aria-expanded', 'false'));
+    }
+  });
+
+  it('reopens GitHub preparation when install fails and does not attempt later stages', async () => {
+    handleInstallMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const setBuildMessage = args[3] as (message: { type: 'error'; text: string }) => void;
+      setBuildMessage({ type: 'error', text: 'Install script failed' });
+      return false;
+    });
+    const githubConfig: MCPServerConfig = {
+      ...initialConfig,
+      name: 'github-server',
+      source: { type: 'github', repositoryUrl: 'https://github.com/example/server' },
+      _installCommand: 'npm install',
+      _buildCommand: 'npm run build',
+    };
+    const { container } = renderTab(
+      { autoTestRun: true, handoffId: 9 },
+      githubConfig,
+    );
+
+    await waitFor(() => expect(handleInstallMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(container.querySelector('#build-header')).toHaveAttribute('aria-expanded', 'true'));
+    expect(handleBuildMock).not.toHaveBeenCalled();
+    expect(handleRunMock).not.toHaveBeenCalled();
   });
 
   it('shows the helper at the top for form and test-run errors', async () => {

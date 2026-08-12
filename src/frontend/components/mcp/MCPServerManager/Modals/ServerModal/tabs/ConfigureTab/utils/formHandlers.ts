@@ -438,13 +438,13 @@ export const handleInstall = async (
   setConsoleOutput: (output: string | ((prev: string) => string)) => void,
   setInstallCompleted: (completed: boolean) => void,
   t: Translator = englishTranslator
-) => {
+): Promise<boolean> => {
   if (!localConfig.name) {
     setBuildMessage({
       type: 'error',
       text: t('mcp.local.messages.serverNameFirst')
     });
-    return;
+    return false;
   }
   
   setIsInstalling(true);
@@ -489,6 +489,7 @@ export const handleInstall = async (
   }
   
   setIsInstalling(false);
+  return result.success;
 };
 
 export const handleBuild = async (
@@ -501,13 +502,13 @@ export const handleBuild = async (
   setConsoleOutput: (output: string | ((prev: string) => string)) => void,
   setBuildCompleted: (completed: boolean) => void,
   t: Translator = englishTranslator
-) => {
+): Promise<boolean> => {
   if (!localConfig.name) {
     setBuildMessage({
       type: 'error',
       text: t('mcp.local.messages.serverNameFirst')
     });
-    return;
+    return false;
   }
   
   setIsBuilding(true);
@@ -553,6 +554,7 @@ export const handleBuild = async (
   }
   
   setIsBuilding(false);
+  return result.success;
 };
 
 export const handleRun = async (
