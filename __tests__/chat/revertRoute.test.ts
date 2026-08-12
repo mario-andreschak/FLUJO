@@ -5,15 +5,17 @@ jest.mock('@/utils/encryption/lockGate', () => ({
   assertUnlocked: (...args: unknown[]) => assertUnlockedMock(...(args as [])),
 }));
 
-jest.mock('@/config/features', () => ({
-  FEATURES: { ENABLE_REVERT_TO_HERE: true },
-}));
-
 const readConversationLogMock = jest.fn();
 const projectMessagesMock = jest.fn();
+const appendRawForStateMock = jest.fn(async (_state: unknown, _raws: unknown[]) => undefined);
 jest.mock('@/backend/execution/flow/conversationLog', () => ({
   readConversationLog: (...args: unknown[]) => readConversationLogMock(...args),
   projectMessages: (...args: unknown[]) => projectMessagesMock(...args),
+  appendRawForState: (state: unknown, raws: unknown[]) => appendRawForStateMock(state, raws),
+}));
+
+jest.mock('@/utils/http/localRequest', () => ({
+  assertLocalRequest: jest.fn(() => undefined),
 }));
 
 const loadConversationStateMock = jest.fn();
@@ -36,15 +38,20 @@ jest.mock('@/backend/services/snapshot/ShadowRepoService', () => ({
     diff: (...args: unknown[]) => diffMock(...args),
     revert: (...args: unknown[]) => revertMock(...args),
   },
+  snapshotsEnabled: jest.fn(async () => true),
 }));
 
-import { GET } from '@/app/v1/chat/conversations/[conversationId]/revert/route';
+import { GET, POST } from '@/app/v1/chat/conversations/[conversationId]/revert/route';
 
 const CONVERSATION_ID = 'conversation-1';
 const ROOT = 'C:\\repo';
 
-function message(id: string) {
-  return { type: 'message', message: { id } };
+function chatMessage(id: string, role: 'user' | 'assistant' = 'assistant') {
+  return { id, role, content: id, timestamp: id === 'm1' ? 1 : 2 };
+}
+
+function message(id: string, role: 'user' | 'assistant' = 'assistant') {
+  return { type: 'message', message: chatMessage(id, role) };
 }
 
 function changedFiles(startSnapshot: string, endSnapshot: string, files: string[], root = ROOT) {
@@ -66,15 +73,27 @@ function preview(messageId: string) {
   );
 }
 
+function restore(body: Record<string, unknown>) {
+  return POST(
+    { json: async () => body } as unknown as NextRequest,
+    { params: Promise.resolve({ conversationId: CONVERSATION_ID }) },
+  );
+}
+
 beforeEach(() => {
   assertUnlockedMock.mockClear();
   readConversationLogMock.mockReset();
   projectMessagesMock.mockReset();
+  appendRawForStateMock.mockClear();
   loadConversationStateMock.mockReset();
   diffMock.mockReset();
   revertMock.mockReset();
-  loadConversationStateMock.mockResolvedValue({ conversationId: CONVERSATION_ID });
-  projectMessagesMock.mockReturnValue([{ id: 'm1' }, { id: 'm2' }]);
+  loadConversationStateMock.mockResolvedValue({
+    conversationId: CONVERSATION_ID,
+    messages: [chatMessage('m1', 'user'), chatMessage('m2')],
+    status: 'completed',
+  });
+  projectMessagesMock.mockReturnValue([chatMessage('m1', 'user'), chatMessage('m2')]);
   diffMock.mockResolvedValue('combined diff');
 });
 
@@ -116,7 +135,7 @@ describe('conversation revert route', () => {
     expect(diffMock).toHaveBeenCalledWith(ROOT, 'snapshot-before-m2');
   });
 
-  it('rejects ambiguous forward changes spanning multiple roots', async () => {
+  it('keeps chat restore available when file changes span multiple roots', async () => {
     readConversationLogMock.mockResolvedValue([
       message('m1'),
       changedFiles('snapshot-before-m1', 'snapshot-after-m1', ['first.ts']),
@@ -125,7 +144,90 @@ describe('conversation revert route', () => {
 
     const response = await preview('m1');
 
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      fileRestoreAvailable: false,
+      fileRestoreUnavailableReason: 'multiple-roots',
+    });
     expect(diffMock).not.toHaveBeenCalled();
+  });
+
+  it('restores only chat without touching files', async () => {
+    readConversationLogMock.mockResolvedValue([message('m1', 'user'), message('m2')]);
+    const previewResponse = await preview('m1');
+    const restorePreview = await previewResponse.json();
+
+    const response = await restore({
+      messageId: 'm1',
+      previewId: restorePreview.previewId,
+      mode: 'chat-only',
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ restoredChat: true, restoredFiles: false });
+    expect(revertMock).not.toHaveBeenCalled();
+    expect(appendRawForStateMock).toHaveBeenCalledWith(
+      expect.objectContaining({ messages: [] }),
+      [
+        { type: 'message:removed', messageId: 'm1' },
+        { type: 'message:removed', messageId: 'm2' },
+      ],
+    );
+  });
+
+  it('restores only files while leaving chat messages intact', async () => {
+    readConversationLogMock.mockResolvedValue([
+      message('m1', 'user'),
+      changedFiles('before', 'after', ['file.ts']),
+      message('m2'),
+    ]);
+    revertMock.mockResolvedValue('undo-files');
+    const restorePreview = await (await preview('m1')).json();
+    const state = await loadConversationStateMock.mock.results[0]?.value;
+
+    const response = await restore({
+      messageId: 'm1',
+      previewId: restorePreview.previewId,
+      mode: 'files-only',
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ restoredChat: false, restoredFiles: true });
+    expect(revertMock).toHaveBeenCalledWith(ROOT, 'before', ['file.ts']);
+    expect(appendRawForStateMock).not.toHaveBeenCalled();
+    expect(state.messages).toHaveLength(2);
+  });
+
+  it('restores chat and files together and can undo both immediately', async () => {
+    const events = [
+      message('m1', 'user'),
+      changedFiles('before', 'after', ['file.ts']),
+      message('m2'),
+    ];
+    readConversationLogMock.mockResolvedValue(events);
+    revertMock.mockResolvedValueOnce('undo-files').mockResolvedValueOnce('redo-files');
+    const restorePreview = await (await preview('m1')).json();
+
+    const response = await restore({
+      messageId: 'm1',
+      previewId: restorePreview.previewId,
+      mode: 'chat-and-files',
+    });
+    const result = await response.json();
+    expect(result).toMatchObject({ restoredChat: true, restoredFiles: true });
+
+    // Undo is allowed only while the projected chat still equals the restored head.
+    projectMessagesMock.mockReturnValueOnce([]);
+    const undoResponse = await restore({ action: 'undo', operationId: result.operationId });
+
+    expect(undoResponse.status).toBe(204);
+    expect(revertMock).toHaveBeenNthCalledWith(2, ROOT, 'undo-files', ['file.ts']);
+    expect(appendRawForStateMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ conversationId: CONVERSATION_ID }),
+      [
+        { type: 'message', message: chatMessage('m1', 'user') },
+        { type: 'message', message: chatMessage('m2') },
+      ],
+    );
   });
 });

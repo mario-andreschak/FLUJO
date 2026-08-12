@@ -56,7 +56,16 @@ export interface RevertPreview {
   files: Array<{ path: string; status: string }>;
   diff: string;
   truncated: boolean;
+  fileRestoreAvailable: boolean;
+  fileRestoreUnavailableReason?:
+    | 'no-snapshotted-file-changes'
+    | 'multiple-roots'
+    | 'unsafe-path';
+  /** The selected message and every displayed message after it. */
+  chatMessageCount: number;
 }
+
+export type RestoreMode = 'chat-and-files' | 'files-only' | 'chat-only';
 
 export interface ConversationPage {
   items: ConversationListItem[];
@@ -523,13 +532,18 @@ class ChatService {
     return parse<RevertPreview>(response);
   }
 
-  async revertToMessage(id: string, messageId: string, previewId: string): Promise<{ operationId: string }> {
+  async revertToMessage(
+    id: string,
+    messageId: string,
+    previewId: string,
+    mode: RestoreMode,
+  ): Promise<{ operationId: string; restoredChat: boolean; restoredFiles: boolean }> {
     const response = await fetch(`${BASE}/${encodeURIComponent(id)}/revert`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messageId, previewId }),
+      body: JSON.stringify({ messageId, previewId, mode }),
     });
-    return parse<{ operationId: string }>(response);
+    return parse<{ operationId: string; restoredChat: boolean; restoredFiles: boolean }>(response);
   }
 
   async undoRevert(id: string, operationId: string): Promise<void> {

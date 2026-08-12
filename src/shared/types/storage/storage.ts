@@ -301,8 +301,8 @@ export interface ExperimentalSettings {
    */
   restrictMcpFilesystemToRoots?: boolean;
   /**
-   * When false, filesystem snapshots and snapshot-based revert are disabled.
-   * Missing values default to true to preserve existing installations.
+   * Enables filesystem snapshots plus the message-level restore UI/API.
+   * Missing values default to false: this experimental feature is opt-in.
    */
   snapshotsEnabled?: boolean;
   /**

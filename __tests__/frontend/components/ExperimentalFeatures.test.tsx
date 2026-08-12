@@ -447,7 +447,7 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
     });
   });
 
-  it('defaults filesystem snapshots to on', () => {
+  it('defaults filesystem snapshots and restore to off', () => {
     mockStorageValue = {
       settings: { speech: { enabled: true } },
       settingsHydrated: true,
@@ -455,15 +455,15 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
     };
     render(<ExperimentalFeaturesSettings />);
     expect(
-      screen.getByRole('checkbox', { name: /Enable filesystem snapshots/i })
-    ).toBeChecked();
+      screen.getByRole('checkbox', { name: /Enable filesystem snapshots and chat restore/i })
+    ).not.toBeChecked();
   });
 
   it('persists disabling snapshots without dropping other settings', () => {
     mockStorageValue = {
       settings: {
         speech: { enabled: true },
-        experimental: { enabled: true, mcpBetaProtocol: true },
+        experimental: { enabled: true, mcpBetaProtocol: true, snapshotsEnabled: true },
       },
       settingsHydrated: true,
       updateSettings: mockUpdateSettings,
@@ -471,7 +471,7 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
     render(<ExperimentalFeaturesSettings />);
 
     fireEvent.click(
-      screen.getByRole('checkbox', { name: /Enable filesystem snapshots/i })
+      screen.getByRole('checkbox', { name: /Enable filesystem snapshots and chat restore/i })
     );
 
     expect(mockUpdateSettings).toHaveBeenCalledWith({

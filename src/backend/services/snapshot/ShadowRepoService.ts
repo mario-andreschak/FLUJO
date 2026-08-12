@@ -54,14 +54,18 @@ export function _setShadowRepoDirForTests(dir: string | null): string | null {
 function resolveShadowRootDir(): string {
   if (shadowRootDir) return shadowRootDir;
   // Lazy require so importing this module never eagerly touches paths/env.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   // Snapshots are workspace-owned user data (#406).
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { getWorkspaceDataDir } = require('@/utils/workspace');
   return path.join(getWorkspaceDataDir(), 'snapshots');
 }
 
-/** Snapshots globally on unless the operator or user switches them off. */
-async function snapshotsEnabled(): Promise<boolean> {
+/**
+ * One authoritative gate for snapshot capture and restore UI/API availability.
+ * The operator can force the feature off; otherwise the user must explicitly
+ * opt in through Settings > Experimental.
+ */
+export async function snapshotsEnabled(): Promise<boolean> {
   const raw = (process.env.FLUJO_SNAPSHOTS || '').trim().toLowerCase();
   if (raw === '0' || raw === 'false' || raw === 'off') return false;
 
@@ -70,10 +74,10 @@ async function snapshotsEnabled(): Promise<boolean> {
       StorageKey.SPEECH_SETTINGS,
       undefined,
     );
-    return settings?.experimental?.snapshotsEnabled !== false;
+    return settings?.experimental?.snapshotsEnabled === true;
   } catch (error) {
-    log.warn('Could not load snapshot setting; keeping snapshots enabled', error);
-    return true;
+    log.warn('Could not load snapshot setting; disabling snapshots', error);
+    return false;
   }
 }
 

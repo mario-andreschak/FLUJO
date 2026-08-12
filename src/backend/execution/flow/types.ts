@@ -893,12 +893,16 @@ export interface SharedState {
     messages: FlujoChatMessage[];
     /** Codex SDK threads persisted with the conversation, keyed by Process node id. */
     codexSessions?: Record<string, CodexSessionMetadata>;
-    /** Server-owned anchors for undoing a confirmed per-message revert. */
+    /** Server-owned anchors for undoing a confirmed per-message restore. */
     revertOperations?: Record<string, {
         messageId: string;
-        root: string;
-        snapshotId: string;
-        paths: string[];
+        mode?: 'chat-and-files' | 'files-only' | 'chat-only';
+        root?: string;
+        snapshotId?: string;
+        paths?: string[];
+        /** Projection ids before/after a suffix restore; content stays in the log. */
+        chatHeadMessageIds?: string[];
+        chatTailMessageIds?: string[];
         createdAt: number;
         undoneAt?: number;
     }>;

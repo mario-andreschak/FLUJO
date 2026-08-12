@@ -518,7 +518,7 @@ export default function ExperimentalFeaturesSettings() {
         <FormControlLabel
           control={
             <Switch
-              checked={experimental.snapshotsEnabled ?? true}
+              checked={experimental.snapshotsEnabled ?? false}
               onChange={handleSnapshotsChange}
               name="snapshotsEnabled"
             />
