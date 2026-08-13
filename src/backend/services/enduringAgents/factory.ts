@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 
 import { validateFlowObjectForRun } from '@/backend/execution/flow/validateFlowForRun';
 import { flowService } from '@/backend/services/flow';
+import { modelService } from '@/backend/services/model';
 import type { Flow } from '@/shared/types/flow';
 import {
   BEHAVIOR_BINDING_SCHEMA_VERSION,
@@ -222,6 +223,20 @@ function firstBoundModel(flow?: Flow): string | undefined {
   ))?.data.properties?.boundModel as string | undefined;
 }
 
+async function resolveDefaultModelId(
+  roleVersion: RoleVersion,
+  coreTemplate: Flow,
+): Promise<string | undefined> {
+  const authoredDefault = roleVersion.defaultModelId ?? firstBoundModel(coreTemplate);
+  if (authoredDefault) return authoredDefault;
+
+  // A sole configured model is the only unambiguous workspace fallback. With
+  // zero or multiple models, provisioning must stay blocked rather than pick an
+  // arbitrary provider/model.
+  const models = await modelService.loadModels();
+  return models.length === 1 ? models[0].id : undefined;
+}
+
 async function requireRunnableGeneratedFlow(flow: Flow, label: string): Promise<Flow> {
   const readiness = await validateFlowObjectForRun(flow);
   if (!readiness.isRunnable) {
@@ -427,7 +442,7 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
       );
     }
 
-    const defaultModelId = roleVersion.defaultModelId ?? firstBoundModel(coreTemplate);
+    const defaultModelId = await resolveDefaultModelId(roleVersion, coreTemplate as Flow);
     const preparedCore = await requireRunnableGeneratedFlow(
       bindDefaultModel(coreTemplate as Flow, defaultModelId),
       'Core Flow',

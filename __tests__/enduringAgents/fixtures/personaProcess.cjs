@@ -62,6 +62,8 @@ const enduringAgents = require(path.join(
   'src/backend/services/enduringAgents/index.ts',
 ));
 const { flowService } = require(path.join(repositoryRoot, 'src/backend/services/flow/index.ts'));
+const { StorageKey } = require(path.join(repositoryRoot, 'src/shared/types/storage/index.ts'));
+const { saveItem } = require(path.join(repositoryRoot, 'src/utils/storage/backend.ts'));
 const { runWithWorkspace } = require(path.join(repositoryRoot, 'src/utils/workspace.ts'));
 
 function leaseFence(claim) {
@@ -79,6 +81,12 @@ async function execute(command) {
   return runWithWorkspace(workspaceId, async () => {
     switch (command.type) {
       case 'createPersona':
+        await saveItem(StorageKey.MODELS, [{
+          id: 'model-test',
+          name: 'test-model',
+          displayName: 'Test model',
+          provider: 'openai',
+        }]);
         if (!await flowService.getFlow(command.coreFlowRef)) {
           await flowService.saveFlow({
             id: command.coreFlowRef,
@@ -91,16 +99,34 @@ async function execute(command) {
                 data: { type: 'start', label: 'Start', properties: {} },
               },
               {
+                id: 'primary',
+                type: 'process',
+                position: { x: 240, y: 0 },
+                data: {
+                  type: 'process',
+                  label: 'Primary behavior',
+                  properties: {
+                    promptTemplate: 'Complete the assigned task using the supplied Persona context.',
+                    boundModel: 'model-test',
+                  },
+                },
+              },
+              {
                 id: 'finish',
                 type: 'finish',
-                position: { x: 240, y: 0 },
+                position: { x: 480, y: 0 },
                 data: { type: 'finish', label: 'Finish', properties: {} },
               },
             ],
             edges: [
               {
-                id: 'start-to-finish',
+                id: 'start-to-primary',
                 source: 'start',
+                target: 'primary',
+              },
+              {
+                id: 'primary-to-finish',
+                source: 'primary',
                 target: 'finish',
               },
             ],

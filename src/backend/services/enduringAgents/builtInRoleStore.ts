@@ -21,7 +21,7 @@ export interface BuiltInDeveloperRole {
 }
 
 /**
- * Idempotently seed Developer v1 in the selected workspace. The RoleVersion
+ * Idempotently seed the current Developer version in the selected workspace. The RoleVersion
  * store is immutable, so a conflicting record fails instead of silently
  * repinning or rewriting existing Personas.
  */
