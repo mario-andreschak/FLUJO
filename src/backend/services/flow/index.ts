@@ -334,6 +334,41 @@ export class FlowService { // Add export keyword here
   }
 
   /**
+   * Clone one canonical Flow into a distinct Persona-owned ordinary Flow.
+   * Nested callable Flows remain referenced normally and are frozen by the
+   * existing execution-snapshot closure when future Activities begin.
+   */
+  async cloneFlowForPersona(
+    sourceFlowId: string,
+    personaId: string,
+    name?: string,
+  ): Promise<{ success: boolean; flow?: Flow; error?: string }> {
+    const source = await this.getFlow(sourceFlowId);
+    if (!source) {
+      return { success: false, error: `Flow "${sourceFlowId}" not found.` };
+    }
+    if (source.personaOwnership && source.personaOwnership.personaId !== personaId) {
+      return { success: false, error: 'A Flow owned by another Persona cannot be copied.' };
+    }
+
+    const clone = JSON.parse(JSON.stringify(source)) as Flow;
+    clone.id = uuidv4();
+    clone.name = name?.trim() || `${source.name} · Persona copy`;
+    clone.favorite = undefined;
+    clone.folder = undefined;
+    clone.createdAt = undefined;
+    clone.updatedAt = undefined;
+    clone.personaOwnership = {
+      personaId,
+      sourceFlowId: source.personaOwnership?.sourceFlowId ?? source.id,
+    };
+    const saved = await this.saveFlow(clone);
+    return saved.success
+      ? { success: true, flow: clone }
+      : { success: false, error: saved.error || 'Failed to create Persona Flow copy.' };
+  }
+
+  /**
    * Rewrite persisted node bindings after an MCP server is renamed.
    *
    * MCP servers are currently identified by name, so every node stores the

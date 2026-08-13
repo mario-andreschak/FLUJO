@@ -11,7 +11,6 @@ import type { ReactNode } from 'react';
 
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { PersonaDetail } from '@/frontend/services/personas';
-import type { Persona } from '@/shared/types/enduringAgent';
 
 export default function PersonaSetup({
   detail,
@@ -21,9 +20,11 @@ export default function PersonaSetup({
   children?: ReactNode;
 }) {
   const { t } = useI18n();
-  const coreFlowRef = (
-    detail.persona as Persona & { coreFlowRef?: string }
-  ).coreFlowRef;
+  const coreFlowRef = detail.persona.composition?.coreBinding
+    ? (detail.persona.composition.coreBinding.mode === 'shared'
+      ? detail.persona.composition.coreBinding.sharedFlowRef
+      : detail.persona.composition.coreBinding.personaFlowRef)
+    : detail.persona.composition?.coreFlowRef;
   const facts = [
     {
       label: t('personas.setup.role'),

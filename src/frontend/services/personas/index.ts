@@ -6,6 +6,8 @@ import type {
   AssignPersonaWorkItemResult,
   BehaviorBinding,
   BehaviorRevision,
+  CopyPersonaFlowInput,
+  CopyPersonaFlowResult,
   CreatePersonaInput,
   CreatePersonaWorkItemInput,
   MemoryItem,
@@ -13,11 +15,13 @@ import type {
   PersonaActivity,
   PersonaAppGrant,
   PersonaAppLaunchDescriptor,
+  PersonaComposition,
   PersonaMailboxItem,
   PersonaPresentationSummary,
   PersonaWorkItem,
   RoleDefinition,
   RoleVersion,
+  UpdatePersonaCompositionInput,
   UpdatePersonaInput,
   UpdatePersonaWorkItemInput,
 } from '@/shared/types/enduringAgent';
@@ -158,6 +162,24 @@ class PersonasService {
 
   update(personaId: string, input: UpdatePersonaInput): Promise<Persona> {
     return jsonRequest(personaPath(personaId), 'PATCH', input);
+  }
+
+  getComposition(personaId: string): Promise<PersonaComposition> {
+    return parse(fetch(withWorkspaceUrl(personaPath(personaId, '/composition'))));
+  }
+
+  updateComposition(
+    personaId: string,
+    input: UpdatePersonaCompositionInput,
+  ): Promise<PersonaComposition> {
+    return jsonRequest(personaPath(personaId, '/composition'), 'PATCH', input);
+  }
+
+  copyCompositionFlow(
+    personaId: string,
+    input: CopyPersonaFlowInput,
+  ): Promise<CopyPersonaFlowResult> {
+    return jsonRequest(personaPath(personaId, '/composition/copy'), 'POST', input);
   }
 
   roles(): Promise<RolesResponse> {

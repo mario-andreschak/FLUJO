@@ -82,7 +82,7 @@ async function loadBinding(
 
 function matchesSelectedReference(
   revision: BehaviorRevision,
-  sourceFlowRef: string,
+  sourceFlowRef: string | undefined,
   overrideFlowRef: string | undefined,
   workspaceId: string,
   selectedFlowRef: string,
@@ -118,13 +118,17 @@ export async function resolveEffectiveBehaviorRevision(
     const { binding, revision: active } = await loadBinding(persona.id, slotKey);
     const composition = persona.composition?.behaviors
       ?.find((candidate) => candidate.ref === binding.id);
-    const sourceFlowRef = composition?.sourceFlowRef;
-    const overrideFlowRef = composition?.overrideFlowRef;
+    const sourceFlowRef = composition?.binding
+      ? composition.binding.sharedFlowRef
+      : composition?.sourceFlowRef;
+    const overrideFlowRef = composition?.binding?.mode === 'persona_copy'
+      ? composition.binding.personaFlowRef
+      : composition?.overrideFlowRef;
     const selectedFlowRef = overrideFlowRef ?? sourceFlowRef;
 
     // Legacy records with no durable authoring reference keep their embedded
     // immutable revision unchanged.
-    if (!selectedFlowRef || !sourceFlowRef) return { binding, revision: active };
+    if (!selectedFlowRef) return { binding, revision: active };
 
     const captured = await flowService.readFlowExecutionSnapshot(selectedFlowRef);
     if (!captured) {

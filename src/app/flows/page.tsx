@@ -67,6 +67,12 @@ const FlowsPage = () => {
   // a fresh deep link), so handleBackToDashboard knows whether `router.back()`
   // is safe or would leave the app entirely.
   const isEditing = searchParams.get('mode') === 'edit' && !!selectedFlow;
+  const requestedReturnTo = searchParams.get('returnTo');
+  const returnTo = requestedReturnTo
+    && requestedReturnTo.startsWith('/personas/')
+    && !requestedReturnTo.startsWith('//')
+    ? requestedReturnTo
+    : null;
   const pushedByUsRef = useRef(false);
   const flowBuilderRef = useRef<FlowBuilderHandle>(null);
 
@@ -703,6 +709,17 @@ const FlowsPage = () => {
       return (
         <Fade in={true} timeout={300}>
           <Box sx={{ height: { xs: 'auto', md: '100%' } }}>
+            {returnTo && (
+              <Box sx={{ px: 2, pt: 1 }}>
+                <Button
+                  size="small"
+                  startIcon={<ArrowBackIcon />}
+                  onClick={() => router.push(returnTo)}
+                >
+                  {t('personas.behaviors.backToSetup')}
+                </Button>
+              </Box>
+            )}
             <FlowBuilder
               key={selectedFlow}
               ref={flowBuilderRef}

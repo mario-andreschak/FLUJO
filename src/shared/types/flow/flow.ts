@@ -52,6 +52,14 @@ export interface Flow {
    * (falls back to createdAt). Optional for the same reasons as createdAt.
    */
   updatedAt?: number;
+  /**
+   * Server-authored ownership marker for a Persona-specific ordinary Flow copy.
+   * The source remains an independent shared Flow and is never mutated by copy edits.
+   */
+  personaOwnership?: {
+    personaId: string;
+    sourceFlowId?: string;
+  };
   /** Immutable execution policy carried by authored Persona behavior snapshots. */
   permissionRules?: PermissionRule[];
   nodes: FlowNode[];

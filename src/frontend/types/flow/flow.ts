@@ -27,6 +27,10 @@ export interface Flow {
    * (mirrors `folder?` #71).
    */
   favorite?: boolean;
+  personaOwnership?: {
+    personaId: string;
+    sourceFlowId?: string;
+  };
   nodes: FlowNode[];
   edges: Edge[];
   input?: NodeType;

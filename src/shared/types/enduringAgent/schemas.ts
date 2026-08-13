@@ -152,17 +152,54 @@ export const PersonaRoleCompositionSchema = z.object({
     .refine((refs) => new Set(refs).size === refs.length, 'App references must be unique.'),
 }).strict();
 
+export const PersonaFlowBindingSchema = z.discriminatedUnion('mode', [
+  z.object({
+    mode: z.literal('shared'),
+    sharedFlowRef: WorkspaceFlowRefSchema,
+  }).strict(),
+  z.object({
+    mode: z.literal('persona_copy'),
+    sharedFlowRef: WorkspaceFlowRefSchema.optional(),
+    personaFlowRef: WorkspaceFlowRefSchema,
+  }).strict(),
+]);
+
 export const PersonaBehaviorCompositionSchema = z.object({
   ref: EnduringAgentIdSchema,
+  slotKey: BehaviorSlotKeySchema.optional(),
   name: NonEmptyText(160),
+  description: z.string().trim().max(10_000).optional(),
+  order: z.number().int().min(0).max(63).optional(),
+  binding: PersonaFlowBindingSchema.optional(),
   sourceFlowRef: WorkspaceFlowRefSchema.optional(),
   overrideFlowRef: WorkspaceFlowRefSchema.optional(),
+}).strict();
+
+export const PersonaFlowReadinessSchema = z.object({
+  state: z.enum(['ready', 'invalid', 'missing']),
+  issues: z.array(z.string().max(2_000)).max(32),
+}).strict();
+
+export const PersonaFlowCardSchema = z.object({
+  binding: PersonaFlowBindingSchema,
+  effectiveFlowRef: WorkspaceFlowRefSchema,
+  flow: z.any().optional(),
+  readiness: PersonaFlowReadinessSchema,
+}).strict();
+
+export const PersonaBehaviorFlowCardSchema = PersonaFlowCardSchema.extend({
+  ref: EnduringAgentIdSchema,
+  slotKey: BehaviorSlotKeySchema,
+  name: NonEmptyText(160),
+  description: z.string().trim().max(10_000).optional(),
+  order: z.number().int().min(0).max(63),
 }).strict();
 
 export const PersonaCompositionPreferencesSchema = z.object({
   description: z.string().trim().max(10_000).optional(),
   role: PersonaRoleCompositionSchema.optional(),
   coreFlowRef: WorkspaceFlowRefSchema.optional(),
+  coreBinding: PersonaFlowBindingSchema.optional(),
   appRefs: z.array(PersonaAppRefSchema).max(128)
     .refine((refs) => new Set(refs).size === refs.length, 'App references must be unique.')
     .optional(),
@@ -170,6 +207,10 @@ export const PersonaCompositionPreferencesSchema = z.object({
   behaviors: z.array(PersonaBehaviorCompositionSchema).max(64)
     .refine((items) => new Set(items.map((item) => item.ref)).size === items.length,
       'Behavior references must be unique.')
+    .refine((items) => {
+      const orders = items.flatMap((item) => item.order === undefined ? [] : [item.order]);
+      return new Set(orders).size === orders.length;
+    }, 'Behavior order values must be unique.')
     .optional(),
 }).strict();
 
@@ -413,18 +454,42 @@ export const PersonaCompositionSchema = z.object({
   description: z.string().trim().max(10_000),
   role: PersonaRoleCompositionSchema,
   coreFlowRef: WorkspaceFlowRefSchema.optional(),
+  core: PersonaFlowCardSchema.optional(),
   appRefs: z.array(PersonaAppRefSchema).max(128),
   memories: z.array(PersonaCompositionMemorySchema).max(256),
   behaviors: z.array(PersonaBehaviorCompositionSchema).max(64),
+  behaviorCards: z.array(PersonaBehaviorFlowCardSchema).max(64),
   expectedUpdatedAt: TimestampSchema,
 }).strict();
 
 export const UpdatePersonaBehaviorCompositionSchema = z.object({
   ref: EnduringAgentIdSchema,
+  slotKey: BehaviorSlotKeySchema.optional(),
   name: NonEmptyText(160),
-  sourceFlowRef: WorkspaceFlowRefSchema,
+  description: z.string().trim().max(10_000).optional(),
+  order: z.number().int().min(0).max(63).optional(),
+  binding: PersonaFlowBindingSchema.optional(),
+  sourceFlowRef: WorkspaceFlowRefSchema.optional(),
   overrideFlowRef: WorkspaceFlowRefSchema.nullable().optional(),
-}).strict();
+}).strict().superRefine((value, context) => {
+  if (!value.binding && !value.sourceFlowRef) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'A Flow binding is required.' });
+  }
+});
+
+export const CopyPersonaFlowInputSchema = z.object({
+  expectedUpdatedAt: TimestampSchema,
+  target: z.enum(['core', 'behavior']),
+  behaviorRef: EnduringAgentIdSchema.optional(),
+  sourceFlowRef: WorkspaceFlowRefSchema,
+}).strict().superRefine((value, context) => {
+  if (value.target === 'behavior' && !value.behaviorRef) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'behaviorRef is required.' });
+  }
+  if (value.target === 'core' && value.behaviorRef) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'behaviorRef is only valid for Behaviors.' });
+  }
+});
 
 export const UpdatePersonaCompositionInputSchema = z.object({
   expectedUpdatedAt: TimestampSchema,
@@ -439,6 +504,10 @@ export const UpdatePersonaCompositionInputSchema = z.object({
   behaviors: z.array(UpdatePersonaBehaviorCompositionSchema).max(64)
     .refine((items) => new Set(items.map((item) => item.ref)).size === items.length,
       'Behavior references must be unique.')
+    .refine((items) => {
+      const orders = items.flatMap((item) => item.order === undefined ? [] : [item.order]);
+      return new Set(orders).size === orders.length;
+    }, 'Behavior order values must be unique.')
     .optional(),
 }).strict();
 

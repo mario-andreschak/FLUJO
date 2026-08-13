@@ -4,6 +4,7 @@ import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { Flow } from '@/shared/types/flow';
 import { flowService } from '@/backend/services/flow';
+import { listPersonas } from '@/backend/services/enduringAgents';
 import { json } from '../_helpers';
 
 const log = createLogger('app/api/flow/[id]/route');
@@ -56,7 +57,14 @@ async function PUT_handler(request: NextRequest, { params }: RouteContext) {
     }
 
     // The path segment is the source of truth for which flow is being updated.
-    const flow: Flow = { ...body, id };
+    const flow: Flow = {
+      ...body,
+      id,
+      // Ownership is server-authored and cannot be forged or removed by Builder saves.
+      ...(existing.personaOwnership
+        ? { personaOwnership: existing.personaOwnership }
+        : { personaOwnership: undefined }),
+    };
 
     const result = await flowService.saveFlow(flow);
     if (!result.success) {
@@ -84,6 +92,32 @@ async function DELETE_handler(_request: NextRequest, { params }: RouteContext) {
     const existing = await flowService.getFlow(id);
     if (!existing) {
       return json({ error: `Flow "${id}" not found` }, 404);
+    }
+
+    const personas = await listPersonas();
+    const referencedBy = personas.find((persona) => {
+      const composition = persona.composition;
+      if (!composition) return false;
+      const coreRefs = composition.coreBinding
+        ? composition.coreBinding.mode === 'shared'
+          ? [composition.coreBinding.sharedFlowRef]
+          : [composition.coreBinding.personaFlowRef, composition.coreBinding.sharedFlowRef]
+        : [composition.coreFlowRef];
+      const behaviorRefs = (composition.behaviors ?? []).flatMap((behavior) => {
+        if (behavior.binding) {
+          return behavior.binding.mode === 'shared'
+            ? [behavior.binding.sharedFlowRef]
+            : [behavior.binding.personaFlowRef, behavior.binding.sharedFlowRef];
+        }
+        return [behavior.sourceFlowRef, behavior.overrideFlowRef];
+      });
+      return [...coreRefs, ...behaviorRefs].includes(id);
+    });
+    if (referencedBy) {
+      return json({
+        error: `Flow "${id}" is used by Persona "${referencedBy.name}". Replace or remove that binding first.`,
+        code: 'PERSONA_FLOW_REFERENCED',
+      }, 409);
     }
 
     const result = await flowService.deleteFlow(id);

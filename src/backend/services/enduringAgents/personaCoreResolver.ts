@@ -60,7 +60,12 @@ export async function resolvePersonaCoreRevision(
       );
     }
 
-    const coreFlowRef = persona.composition?.coreFlowRef;
+    const coreBinding = persona.composition?.coreBinding;
+    const coreFlowRef = coreBinding
+      ? (coreBinding.mode === 'shared'
+        ? coreBinding.sharedFlowRef
+        : coreBinding.personaFlowRef)
+      : persona.composition?.coreFlowRef;
     if (!coreFlowRef) return active;
 
     const authoredFlow = await flowService.getFlow(coreFlowRef);

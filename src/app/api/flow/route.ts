@@ -43,6 +43,9 @@ async function POST_handler(request: NextRequest) {
       return json({ error: 'A flow with an id is required' }, 400);
     }
 
+    // Persona ownership is server-authored only through the scoped copy API.
+    flow.personaOwnership = undefined;
+
     const existing = await flowService.getFlow(flow.id);
     if (existing) {
       return json({ error: `A flow with id "${flow.id}" already exists` }, 409);
