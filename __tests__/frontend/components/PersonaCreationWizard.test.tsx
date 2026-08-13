@@ -73,7 +73,13 @@ const role = {
   version: 1,
   name: 'Helper',
   mission: 'Help with useful work.',
-  behaviorSlots: [],
+  behaviorSlots: [
+    {
+      key: 'primary',
+      name: 'Primary',
+      flowTemplate: flow,
+    },
+  ],
   createdAt: 1,
 };
 
@@ -128,7 +134,7 @@ describe('PersonaCreationWizard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'personas.create.back' }));
     expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('Mina');
 
-    for (let index = 0; index < 6; index += 1) {
+    for (let index = 0; index < 4; index += 1) {
       const next = await screen.findByRole('button', {
         name: /Next|personas.create.skip/,
       });
