@@ -1,4 +1,8 @@
-import type { RoleDefinition, RoleVersion } from '@/shared/types/enduringAgent';
+import {
+  RoleDefinitionSchema,
+  type RoleDefinition,
+  type RoleVersion,
+} from '@/shared/types/enduringAgent';
 
 import {
   BUILT_IN_DEVELOPER_ROLE_ID,
@@ -23,8 +27,23 @@ export interface BuiltInDeveloperRole {
  */
 export async function ensureBuiltInDeveloperRole(): Promise<BuiltInDeveloperRole> {
   const builtInDefinition = buildBuiltInDeveloperRoleDefinition();
-  const roleDefinition = await getRoleDefinition(BUILT_IN_DEVELOPER_ROLE_ID)
+  const existingDefinition = await getRoleDefinition(BUILT_IN_DEVELOPER_ROLE_ID);
+  const roleDefinition = existingDefinition
     ?? await saveRoleDefinition(builtInDefinition);
   const roleVersion = await createRoleVersion(buildBuiltInDeveloperRoleVersion());
-  return { roleDefinition, roleVersion };
+
+  if (roleDefinition.currentVersionId === roleVersion.id) {
+    return { roleDefinition, roleVersion };
+  }
+
+  const repairedDefinition = RoleDefinitionSchema.parse({
+    ...roleDefinition,
+    currentVersionId: roleVersion.id,
+    updatedAt: Math.max(Date.now(), roleDefinition.updatedAt + 1),
+  });
+
+  return {
+    roleDefinition: await saveRoleDefinition(repairedDefinition),
+    roleVersion,
+  };
 }

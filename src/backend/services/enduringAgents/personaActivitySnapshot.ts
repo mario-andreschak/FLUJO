@@ -34,8 +34,7 @@ export function createPersonaActivitySnapshot(input: {
   coreAppRefs: readonly string[];
   entryPointPayloadRef?: string;
 }): PersonaActivitySnapshot {
-  const context = PersonaInstructionContextSchema.parse(input.context)
-    as PersonaInstructionContext;
+  const context = PersonaInstructionContextSchema.parse(input.context);
   const { activity, revision } = input;
   if (
     !activity.behaviorId

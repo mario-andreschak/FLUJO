@@ -469,7 +469,7 @@ export const PersonaCompositionSchema = z.object({
   appRefs: z.array(PersonaAppRefSchema).max(128),
   memories: z.array(PersonaCompositionMemorySchema).max(256),
   behaviors: z.array(PersonaBehaviorCompositionSchema).max(64),
-  behaviorCards: z.array(PersonaBehaviorFlowCardSchema).max(64),
+  behaviorCards: z.array(PersonaBehaviorFlowCardSchema).max(64).default([]),
   expectedUpdatedAt: TimestampSchema,
 }).strict();
 
