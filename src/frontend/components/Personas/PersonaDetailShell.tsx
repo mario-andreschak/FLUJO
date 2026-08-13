@@ -1,7 +1,9 @@
 "use client";
 
 import {
+  AppsRounded,
   ArrowBackRounded,
+  AutoStoriesRounded,
   BoltRounded,
   ChatBubbleOutlineRounded,
   HubRounded,
@@ -32,20 +34,34 @@ import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import type { Persona } from '@/shared/types/enduringAgent';
 
 import {
-  PERSONA_AREAS,
   normalizePersonaArea,
   type PersonaArea,
   type PersonaAreaSubsection,
 } from './personaTypes';
 
+type PersonaNavigationArea = PersonaArea | 'behaviors' | 'apps';
+
+const PERSONA_NAVIGATION_AREAS = [
+  'overview',
+  'setup',
+  'behaviors',
+  'apps',
+  'memory',
+  'conversations',
+  'tasks',
+  'settings',
+] as const satisfies readonly PersonaNavigationArea[];
+
 const AREA_ICON = {
   overview: BoltRounded,
   setup: HubRounded,
+  behaviors: AutoStoriesRounded,
+  apps: AppsRounded,
   memory: MemoryRounded,
   conversations: ChatBubbleOutlineRounded,
   tasks: WorkOutlineRounded,
   settings: SettingsRounded,
-} satisfies Record<PersonaArea, typeof BoltRounded>;
+} satisfies Record<PersonaNavigationArea, typeof BoltRounded>;
 
 function lifecycleColor(
   state: Persona['lifecycleState'],
@@ -75,6 +91,10 @@ export default function PersonaDetailShell({
   const theme = useTheme();
   const [area, setArea] = useState<PersonaArea>('overview');
   const [subsection, setSubsection] = useState<PersonaAreaSubsection>(null);
+  const selectedNavigationArea: PersonaNavigationArea = area === 'setup'
+    && (subsection === 'behaviors' || subsection === 'apps')
+    ? subsection
+    : area;
   const lifecycleLabel = detail.persona.lifecycleState === 'busy'
     ? t('personas.status.working')
     : detail.persona.lifecycleState === 'waiting'
@@ -114,11 +134,19 @@ export default function PersonaDetailShell({
     return () => window.removeEventListener('popstate', syncFromLocation);
   }, [detail.persona.id, router]);
 
-  const selectArea = (next: PersonaArea) => {
-    setArea(next);
-    setSubsection(null);
+  const selectArea = (next: PersonaNavigationArea) => {
+    const nextArea: PersonaArea = next === 'behaviors' || next === 'apps'
+      ? 'setup'
+      : next;
+    const nextSubsection: PersonaAreaSubsection = next === 'behaviors' || next === 'apps'
+      ? next
+      : null;
+    const sectionQuery = nextSubsection ? `&section=${nextSubsection}` : '';
+    setArea(nextArea);
+    setSubsection(nextSubsection);
     router.replace(withWorkspaceUrl(
-      `/personas/${encodeURIComponent(detail.persona.id)}?area=${next}`,
+      `/personas/${encodeURIComponent(detail.persona.id)}`
+      + `?area=${nextArea}${sectionQuery}`,
     ));
   };
 
@@ -199,13 +227,13 @@ export default function PersonaDetailShell({
       </Paper>
       <Paper variant="outlined" sx={{ borderRadius: 3, overflow: 'hidden' }}>
         <Tabs
-          value={area}
-          onChange={(_event, value: PersonaArea) => selectArea(value)}
+          value={selectedNavigationArea}
+          onChange={(_event, value: PersonaNavigationArea) => selectArea(value)}
           variant="scrollable"
           scrollButtons="auto"
           aria-label={t('personas.title')}
         >
-          {PERSONA_AREAS.map((key) => {
+          {PERSONA_NAVIGATION_AREAS.map((key) => {
             const Icon = AREA_ICON[key];
             return (
               <Tab
