@@ -46,6 +46,7 @@
     "typecheck:mcp": "npm run typecheck --workspaces --if-present",
     "test:mcp": "jest --selectProjects node --runInBand __tests__/mcp",
     "test:mcp-process-boundary": "jest --selectProjects node --runInBand __tests__/mcp/processBoundary.test.ts __tests__/mcp/stdioServers.test.ts",
+    "test:persona-process-boundary": "jest --selectProjects node --runInBand __tests__/enduringAgents/personaProcessBoundary.test.ts",
     "validate:mcp-release": "node scripts/validate-mcp-release.mjs",
     "smoke:mcp-artifacts": "node scripts/smoke-mcp-artifacts.mjs",
     "start": "node scripts/launch-next.mjs start -p 4200",

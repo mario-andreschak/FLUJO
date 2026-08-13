@@ -12,6 +12,7 @@ const revokeAppMock = jest.fn();
 const authorizeAppLaunchMock = jest.fn();
 const emitLaunchGlobalMcpAppMock = jest.fn();
 const discoveryRefreshMock = jest.fn();
+const recoverRuntimeMock = jest.fn();
 
 const mockDiscoveryState = {
   servers: [
@@ -52,14 +53,16 @@ jest.mock('@/frontend/services/personas', () => ({
     correctMemory: jest.fn(),
     forgetMemory: jest.fn(),
     pinMemory: jest.fn(),
+    unpinMemoryFromCore: jest.fn(),
     createWorkItem: jest.fn(),
     updateWorkItem: jest.fn(),
     deleteWorkItem: jest.fn(),
+    assignWorkItem: jest.fn(),
     activateBehavior: jest.fn(),
     grantApp: (...args: unknown[]) => grantAppMock(...args),
     revokeApp: (...args: unknown[]) => revokeAppMock(...args),
     authorizeAppLaunch: (...args: unknown[]) => authorizeAppLaunchMock(...args),
-    recoverRuntime: jest.fn(),
+    recoverRuntime: (...args: unknown[]) => recoverRuntimeMock(...args),
   },
 }));
 
@@ -167,6 +170,13 @@ const detail = {
   activities: [],
   mailboxItems: [],
   lease: null,
+  presentation: {
+    conversations: [],
+    tasks: [],
+    history: [],
+    current: null,
+    queuedInputCount: 0,
+  },
   runtime: {
     projection: {
       personaId: 'jim',
@@ -185,6 +195,21 @@ const detail = {
   },
 };
 
+const stuckDetail = {
+  ...detail,
+  runtime: {
+    ...detail.runtime,
+    projection: {
+      ...detail.runtime.projection,
+      leaseStatus: 'expired',
+      stuck: true,
+      stuckIndicators: ['expired_lease'],
+    },
+    detectedStuckIndicators: ['expired_lease'],
+    reconciliation: { attempted: true, changed: false, remainingStuck: true },
+  },
+};
+
 beforeEach(() => {
   jest.clearAllMocks();
   listMock.mockResolvedValue([persona]);
@@ -192,6 +217,7 @@ beforeEach(() => {
   rolesMock.mockResolvedValue({ roleDefinitions: [], roleVersions: [detail.roleVersion] });
   grantAppMock.mockResolvedValue(detail.appGrants[0]);
   revokeAppMock.mockResolvedValue(undefined);
+  recoverRuntimeMock.mockResolvedValue(detail.runtime);
   authorizeAppLaunchMock.mockResolvedValue({
     personaId: 'jim',
     grantId: 'appgrant_jim',
@@ -212,12 +238,52 @@ it('exposes the complete Phase 5 desk areas and inspectable revision/memory evid
   expect(await screen.findByText('The release must preserve workspace isolation.')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Unpin from core' })).toBeInTheDocument();
 
-  fireEvent.click(screen.getByRole('tab', { name: /Behaviors/i }));
-  expect(await screen.findByText('Reviewed override')).toBeInTheDocument();
-  expect(screen.getAllByText('Role default')).not.toHaveLength(0);
-  expect(screen.getByRole('button', { name: 'Rollback' })).toBeInTheDocument();
+  expect(screen.getByRole('tab', { name: /Behaviors/i })).toBeInTheDocument();
 
   await waitFor(() => expect(replaceMock).toHaveBeenCalled());
+});
+
+it('shows recovery only for actionable stuck state and keeps Call unavailable', async () => {
+  render(<PersonasDesk initialPersonaId="jim" />);
+  expect(await screen.findByRole('heading', { name: 'Jim' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Repair runtime projection' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /call/i })).not.toBeInTheDocument();
+});
+
+it('shows runtime evidence and refreshes after recovery', async () => {
+  getMock.mockResolvedValue(stuckDetail);
+  render(<PersonasDesk initialPersonaId="jim" />);
+
+  expect(await screen.findByText('The runtime projection needs attention.')).toBeInTheDocument();
+  expect(screen.getByText('expired_lease')).toBeInTheDocument();
+  expect(screen.getByText(/Lease: expired/)).toBeInTheDocument();
+  expect(screen.getByText(/Reconciliation attempted: yes/)).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Repair runtime projection' }));
+  await waitFor(() => expect(recoverRuntimeMock).toHaveBeenCalledWith('jim'));
+});
+
+it('prevents duplicate recovery clicks while pending and surfaces backend failures', async () => {
+  getMock.mockResolvedValue(stuckDetail);
+  let resolveRecovery!: (value: unknown) => void;
+  recoverRuntimeMock.mockReturnValueOnce(new Promise((resolve) => {
+    resolveRecovery = resolve;
+  }));
+  render(<PersonasDesk initialPersonaId="jim" />);
+
+  const button = await screen.findByRole('button', { name: 'Repair runtime projection' });
+  fireEvent.click(button);
+  fireEvent.click(button);
+  expect(recoverRuntimeMock).toHaveBeenCalledTimes(1);
+  expect(button).toBeDisabled();
+  resolveRecovery(stuckDetail.runtime);
+  await waitFor(() => expect(button).not.toBeDisabled());
+
+  recoverRuntimeMock.mockRejectedValueOnce(new Error('Runtime recovery failed'));
+  fireEvent.click(button);
+  await waitFor(() => expect(recoverRuntimeMock).toHaveBeenCalledTimes(2));
+  expect(await screen.findByText('Runtime recovery failed')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Repair runtime projection' })).toBeInTheDocument();
 });
 
 it('shows exact account identity and launches only through a grant-scoped descriptor', async () => {

@@ -65,6 +65,8 @@ export const personasMessageRows = {
   'personas.now.empty': m('This Persona is idle and ready for work.'),
   'personas.now.recover': m('Repair runtime projection'),
   'personas.now.stuck': m('The runtime projection needs attention.'),
+  'personas.now.runtimeState': m('Lease: {lease}. Mailbox: {ready} ready, {queued} queued.'),
+  'personas.now.reconciliation': m('Reconciliation attempted: {attempted}; changed: {changed}; still stuck: {remaining}.'),
   'personas.now.scratch': m('Working context'),
   'personas.talk.title': m('Conversations'),
   'personas.talk.new': m('Start conversation'),

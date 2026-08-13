@@ -276,11 +276,47 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
   const { t, formatDate } = useI18n();
   const current = detail.presentation.current;
   const queuedTasks = detail.presentation.tasks.filter((task) => task.state === 'waiting');
+  const runtime = detail.runtime;
+  const actionableRecovery = runtime.projection.stuck && (
+    runtime.detectedStuckIndicators.length > 0
+    || runtime.reconciliation.remainingStuck
+    || runtime.projection.leaseStatus === 'expired'
+    || runtime.projection.leaseStatus === 'active'
+  );
   return (
     <Stack spacing={2}>
-      {detail.runtime.projection.stuck && (
-        <Alert severity="warning" action={<Button disabled={busy} onClick={() => void mutate(() => personasService.recoverRuntime(detail.persona.id))}>{t('personas.now.recover')}</Button>}>
-          {t('personas.now.stuck')}
+      {runtime.projection.stuck && (
+        <Alert
+          severity="warning"
+          action={actionableRecovery ? (
+            <Button
+              disabled={busy}
+              onClick={() => void mutate(() => personasService.recoverRuntime(detail.persona.id))}
+            >
+              {t('personas.now.recover')}
+            </Button>
+          ) : undefined}
+        >
+          <Stack spacing={0.5}>
+            <Typography>{t('personas.now.stuck')}</Typography>
+            {runtime.detectedStuckIndicators.map((indicator) => (
+              <Typography key={indicator} variant="body2">{indicator}</Typography>
+            ))}
+            <Typography variant="body2">
+              {t('personas.now.runtimeState', {
+                lease: runtime.projection.leaseStatus,
+                queued: runtime.projection.mailbox.queued,
+                ready: runtime.projection.mailbox.ready,
+              })}
+            </Typography>
+            <Typography variant="body2">
+              {t('personas.now.reconciliation', {
+                attempted: runtime.reconciliation.attempted ? 'yes' : 'no',
+                changed: runtime.reconciliation.changed ? 'yes' : 'no',
+                remaining: runtime.reconciliation.remainingStuck ? 'yes' : 'no',
+              })}
+            </Typography>
+          </Stack>
         </Alert>
       )}
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'minmax(0, 1.25fr) minmax(320px, .75fr)' }, gap: 2 }}>
