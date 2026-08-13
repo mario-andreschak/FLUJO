@@ -167,6 +167,8 @@ describe('easy agent creation deep link', () => {
     await waitFor(() => {
       expect(mockPush).toHaveBeenCalledWith('/flows?flow=draft-assistant&mode=edit');
     });
+    expect(window.location.pathname + window.location.search)
+      .toBe('/flows?flow=draft-assistant&mode=edit');
     expect(mockPush).not.toHaveBeenCalledWith(expect.stringMatching(/^\/chat/));
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Your new agent is ready. Give it a name, add a task, then try it.',
@@ -190,6 +192,8 @@ describe('easy agent creation deep link', () => {
     await waitFor(() => {
       expect(mockPush).toHaveBeenCalledWith('/flows?flow=draft-assistant&mode=edit');
     });
+    expect(window.location.pathname + window.location.search)
+      .toBe('/flows?flow=draft-assistant&mode=edit');
     expect(mockPush).not.toHaveBeenCalledWith(expect.stringMatching(/^\/chat/));
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Your new agent is ready in Expert view. Add and connect the nodes you need.',
