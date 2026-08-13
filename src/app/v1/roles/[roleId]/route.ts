@@ -77,6 +77,8 @@ async function DELETE_handler(request: NextRequest, { params }: RouteContext) {
 }
 
 export const GET = withWorkspaceRoute(GET_handler);
+const PUT_handler = PATCH_handler;
+
 export const PATCH = withWorkspaceRoute(PATCH_handler);
-export const PUT = withWorkspaceRoute(PATCH_handler);
+export const PUT = withWorkspaceRoute(PUT_handler);
 export const DELETE = withWorkspaceRoute(DELETE_handler);
