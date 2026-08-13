@@ -530,8 +530,10 @@ function installPersonaActivitySnapshot(
   sharedState.currentMCPNodes = undefined;
   sharedState.armedSyntheticTools = undefined;
   sharedState.toolNameMap = undefined;
-  sharedState.permissionRules = undefined;
-  sharedState.savedPermissionRules = undefined;
+  // The successor Activity starts from the immutable Behavior policy, never
+  // from stale graph-derived rules or an unguarded empty policy.
+  sharedState.permissionRules = structuredClone(flowDefinition.permissionRules ?? []);
+  sharedState.savedPermissionRules = structuredClone(flowDefinition.permissionRules ?? []);
   sharedState.frozenSystemPrompts = undefined;
   sharedState.codexSessions = undefined;
   sharedState.turnBudgets = undefined;

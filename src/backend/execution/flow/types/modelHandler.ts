@@ -6,11 +6,13 @@ import {
   MCPNodeReference,
   CodexSessionMetadata,
   ToolReferenceContext,
+  type FlowExecutionAuthority,
 } from '../types';
 import { FlujoChatMessage } from '@/shared/types/chat'; // Correct import path
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import type { VisualCompactionDiagnostic } from '@/shared/types/visualArchive';
+import type { PersonaAttribution } from '@/shared/types/enduringAgent';
 
 // Input for model call
 export interface ModelCallInput {
@@ -76,6 +78,12 @@ export interface ModelCallInput {
    *  localToolExecutor so a self-orchestrating adapter degrades it to a
    *  tool-error instead of blocking for an answer that will never come. */
   unattended?: boolean;
+  /** Runtime-only fencing authority. It is never copied into provider input. */
+  executionAuthority?: FlowExecutionAuthority;
+  personaAttribution?: PersonaAttribution;
+  /** Final authority checks immediately before external side effects. */
+  beforeModelDispatch?: () => Promise<void>;
+  beforeToolDispatch?: () => Promise<void>;
 }
 
 // Result of model call
@@ -159,6 +167,9 @@ export interface ToolCallProcessingInput {
    * answer that will never come.
    */
   unattended?: boolean;
+  executionAuthority?: FlowExecutionAuthority;
+  personaAttribution?: PersonaAttribution;
+  beforeToolDispatch?: () => Promise<void>;
 }
 
 // Tool call processing result

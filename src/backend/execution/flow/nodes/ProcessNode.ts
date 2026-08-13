@@ -45,6 +45,7 @@ import { resolveRunVars } from '@/utils/shared/resolveRunVars';
 import { resolvePromptDynamicReferences } from '@/backend/utils/resolveDynamicReferences';
 import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { resolveKvNodeRefs, captureKvValue, type KvFlowContext } from '../resolveKvNodeRefs';
+import { rethrowFlowExecutionAuthorityError } from '../executionAuthority';
 import { withMcpAppModelContext } from '@/backend/mcpApps/modelContext';
 import type { DecodedTool } from '../handlers/toolNamespace';
 import OpenAI from 'openai';
@@ -454,7 +455,12 @@ export class ProcessNode extends BaseNode {
       if (kvCtx) return kvCtx;
       let folder: string | undefined;
       try { folder = (await flowService.getFlow(flowId))?.folder; } catch { /* best effort */ }
-      kvCtx = { flowId, folder };
+      kvCtx = {
+        flowId,
+        folder,
+        executionAuthority: sharedState.executionAuthority,
+        personaAttribution: sharedState.personaAttribution,
+      };
       return kvCtx;
     };
     if (completePrompt.includes('${kv:')) {
@@ -555,9 +561,9 @@ export class ProcessNode extends BaseNode {
     // set (preserving the #89 prefix-cache) and unattended flows can leave it
     // off entirely.
     const questionDeniedBySnapshot = (sharedState.permissionRules ?? []).some(
-      (rule: any) => rule?.effect === 'deny'
-        && rule?.action === 'question'
-        && (rule?.resource === '*' || rule?.resource === undefined),
+      rule => rule.effect === 'deny'
+        && rule.action === 'question'
+        && (rule.resource === '*' || rule.resource === undefined),
     );
     if (node_params?.properties?.allowQuestion === true
         && !questionDeniedBySnapshot
@@ -641,6 +647,8 @@ export class ProcessNode extends BaseNode {
     // Issue #258: carry the resolved unattended flag so execCore can pass it to
     // the model call (the synthetic `question` tool degrades in unattended runs).
     unattended: sharedState.unattended,
+    executionAuthority: sharedState.executionAuthority,
+    personaAttribution: sharedState.personaAttribution,
   };
 
     // Prompt-cache stability (issue #249): FREEZE the assembled system prompt
@@ -1140,6 +1148,8 @@ export class ProcessNode extends BaseNode {
             onApprovalRequired: prepResult.onApprovalRequired,
             mcpNodes: node_params?.properties?.mcpNodes, // Issue #239: for native resource tools
             unattended: prepResult.unattended, // Issue #258: degrade the question tool in unattended runs
+            executionAuthority: prepResult.executionAuthority,
+            personaAttribution: prepResult.personaAttribution,
           });
 
         // Provider catalogues can tell us before the request that a model lacks
@@ -1554,13 +1564,19 @@ export class ProcessNode extends BaseNode {
       try {
         let folder: string | undefined;
         try { folder = (await flowService.getFlow(sharedState.flowId))?.folder; } catch { /* best effort */ }
-        const res = await captureKvValue(captureKv, execResult.content ?? '', { flowId: sharedState.flowId, folder });
+        const res = await captureKvValue(captureKv, execResult.content ?? '', {
+          flowId: sharedState.flowId,
+          folder,
+          executionAuthority: sharedState.executionAuthority,
+          personaAttribution: sharedState.personaAttribution,
+        });
         if ('skipped' in res) {
           log.warn('captureKv skipped', { captureKv, reason: res.skipped });
         } else {
           log.info('Captured node output into persistent kv', { captureKv, nodeId: node_params?.id });
         }
       } catch (error) {
+        rethrowFlowExecutionAuthorityError(error);
         log.error('captureKv failed; continuing run', error);
       }
     }

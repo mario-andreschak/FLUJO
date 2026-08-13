@@ -53,6 +53,12 @@ const FlowNodeSchema = z.object({
   }).passthrough(),
 }).passthrough();
 
+export const PermissionRuleSchema = z.object({
+  effect: z.enum(['allow', 'deny']),
+  action: NonEmptyText(256),
+  resource: z.string().trim().min(1).max(2_048).optional(),
+}).strict();
+
 const FlowEdgeSchema = z.object({
   id: z.string().min(1).max(512),
   source: z.string().min(1).max(256),
@@ -68,7 +74,7 @@ export const FlowSnapshotSchema = z.object({
   favorite: z.boolean().optional(),
   createdAt: TimestampSchema.optional(),
   updatedAt: TimestampSchema.optional(),
-  permissionRules: z.array(z.unknown()).max(10_000).optional(),
+  permissionRules: z.array(PermissionRuleSchema).max(10_000).optional(),
   nodes: z.array(FlowNodeSchema).max(10_000),
   edges: z.array(FlowEdgeSchema).max(50_000),
   input: z.string().max(64).optional(),

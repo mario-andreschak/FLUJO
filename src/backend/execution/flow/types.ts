@@ -981,6 +981,9 @@ export interface SharedState {
      * behaves like any flow-backed one.
      */
     flowSnapshot?: Flow;
+    /** Active policy is restored from the immutable Flow snapshot at boundaries. */
+    permissionRules?: Flow['permissionRules'];
+    savedPermissionRules?: Flow['permissionRules'];
     // Last response from the model
     lastResponse?: string | Record<string, unknown>;
     /** Issue #383: normalized terminal error, kept in sync with `lastResponse`

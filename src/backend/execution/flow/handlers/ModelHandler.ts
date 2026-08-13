@@ -3233,25 +3233,38 @@ export class ModelHandler {
               executionAuthorityFailure = error;
               throw error;
             }
-            result = await mcpService.callTool(
-              serverName,
-              toolName,
-              args,
-              timeout,
-              (progress) => emit?.({
-                type: 'tool:progress',
-                toolCallId: id,
-                name,
-                progress: progress.progress,
-                total: progress.total,
-                message: progress.message
-              }),
-              decoded.nodeId,
-              callSignal,
-              'model',
-              runOwnerScope,
-              conversationId ? { conversationId } : undefined,
-            );
+            const onProgress = (progress: { progress: number; total?: number; message?: string }) => emit?.({
+              type: 'tool:progress',
+              toolCallId: id,
+              name,
+              progress: progress.progress,
+              total: progress.total,
+              message: progress.message,
+            });
+            result = conversationId
+              ? await mcpService.callTool(
+                  serverName,
+                  toolName,
+                  args,
+                  timeout,
+                  onProgress,
+                  decoded.nodeId,
+                  callSignal,
+                  'model',
+                  runOwnerScope,
+                  { conversationId },
+                )
+              : await mcpService.callTool(
+                  serverName,
+                  toolName,
+                  args,
+                  timeout,
+                  onProgress,
+                  decoded.nodeId,
+                  callSignal,
+                  'model',
+                  runOwnerScope,
+                );
             // The MCP abort is cooperative.  A result may arrive after the
             // Persona lease/meeting generation was replaced; reject it before
             // statistics, resource capture, lineage, or result events observe it.

@@ -15,6 +15,12 @@ export interface FlowNode extends Node {
   selected?: boolean;
 }
 
+export interface PermissionRule {
+  effect: 'allow' | 'deny';
+  action: string;
+  resource?: string;
+}
+
 export interface Flow {
   id: string;
   name: string;
@@ -46,6 +52,8 @@ export interface Flow {
    * (falls back to createdAt). Optional for the same reasons as createdAt.
    */
   updatedAt?: number;
+  /** Immutable execution policy carried by authored Persona behavior snapshots. */
+  permissionRules?: PermissionRule[];
   nodes: FlowNode[];
   edges: Edge[];
   input?: NodeType;
