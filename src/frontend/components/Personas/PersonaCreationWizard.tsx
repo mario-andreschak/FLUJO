@@ -113,6 +113,7 @@ export default function PersonaCreationWizard({
     controller: null,
   });
   const lastRoleRefreshAtRef = useRef(0);
+  const hydratingDraftIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     tRef.current = t;
@@ -165,11 +166,15 @@ export default function PersonaCreationWizard({
     setStatus(null);
     setRoleRefreshError(null);
     setDraftRecord(null);
+    hydratingDraftIdRef.current = null;
     setIdempotencyKey(uuidv4());
   };
 
   useEffect(() => {
     if (!open || !draft) return;
+    // Effects below still see the pre-hydration render. Mark this draft before
+    // restoring state so default App synchronization skips that stale pass.
+    hydratingDraftIdRef.current = draft.id;
     setDraftRecord(draft);
     // Older seven-step drafts map safely into the five-step default flow.
     setStep(Math.min(draft.payload.step, 4));
@@ -272,7 +277,12 @@ export default function PersonaCreationWizard({
   }, [open, refreshRoles]);
 
   useEffect(() => {
-    if (!open || appsEdited) return;
+    if (!open) return;
+    if (draft && hydratingDraftIdRef.current === draft.id) {
+      hydratingDraftIdRef.current = null;
+      return;
+    }
+    if (appsEdited) return;
     const preferred = new Set(
       selectedRole?.capabilityRequirements?.preferredMcpServers ?? [],
     );
@@ -284,7 +294,7 @@ export default function PersonaCreationWizard({
         ? current
         : next
     ));
-  }, [appServers, appsEdited, open, selectedRole]);
+  }, [appServers, appsEdited, draft, open, selectedRole]);
 
   const refsToCheck = useMemo(
     () => [coreFlowRef, ...behaviorFlowRefs].filter(Boolean),

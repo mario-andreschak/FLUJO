@@ -45,16 +45,19 @@ jest.mock('@/frontend/services/flow', () => ({
   flowService: { loadFlows: (...args: unknown[]) => loadFlowsMock(...args) },
 }));
 
-jest.mock('@/frontend/components/mcp/useMcpAppsDiscovery', () => ({
-  useMcpAppsDiscovery: () => ({
-    servers: [{
-      name: 'calendar',
-      config: { rootPath: '/calendar', transport: 'stdio' },
-    }],
-    loading: false,
-    error: null,
-  }),
-}));
+jest.mock('@/frontend/components/mcp/useMcpAppsDiscovery', () => {
+  const servers = [{
+    name: 'calendar',
+    config: { rootPath: '/calendar', transport: 'stdio' },
+  }];
+  return {
+    useMcpAppsDiscovery: () => ({
+      servers,
+      loading: false,
+      error: null,
+    }),
+  };
+});
 
 jest.mock('@/frontend/contexts/I18nContext', () => {
   const t = (key: string, values?: Record<string, unknown>) => {
@@ -247,7 +250,7 @@ describe('PersonaCreationWizard', () => {
     expect(onCreated).toHaveBeenCalled();
   });
 
-  it('resumes every saved field and saves the exact current step', async () => {
+  it('preserves every hydrated field through explicit save at the current step', async () => {
     const onDraftSaved = jest.fn();
     render(wizard({
       draft: draftRecord(),
@@ -267,6 +270,31 @@ describe('PersonaCreationWizard', () => {
       payload: fullPayload,
       revision: 5,
     }));
+  });
+
+  it('keeps default Apps for a genuinely new, unedited wizard', async () => {
+    rolesMock.mockResolvedValue({
+      roleDefinitions: [],
+      roleVersions: [{
+        ...role,
+        capabilityRequirements: { preferredMcpServers: ['calendar'] },
+      }],
+    });
+    render(wizard());
+
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Name' }), {
+      target: { value: 'Mina' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await screen.findByText('Helper');
+    fireEvent.click(screen.getByRole('button', { name: 'personas.create.saveDraft' }));
+
+    await waitFor(() => expect(createDraftMock).toHaveBeenCalledTimes(1));
+    expect(createDraftMock.mock.calls[0][0].payload).toMatchObject({
+      step: 1,
+      appRefs: ['calendar'],
+      appsEdited: false,
+    });
   });
 
   it('retries a transient new-draft save with the same id and payload', async () => {
@@ -427,6 +455,10 @@ describe('PersonaCreationWizard', () => {
     fireEvent.click(finish);
 
     expect(await screen.findByText('Persona create failed')).toBeInTheDocument();
+    expect(createMock).toHaveBeenCalledWith(expect.objectContaining({
+      appRefs: ['calendar'],
+      idempotencyKey: fullPayload.idempotencyKey,
+    }));
     expect(deleteDraftMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'personas.create.saveDraft' }));
