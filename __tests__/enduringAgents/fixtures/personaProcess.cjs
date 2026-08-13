@@ -97,6 +97,8 @@ async function execute(command) {
         });
         return claim ? { ...claim, fence: leaseFence(claim) } : null;
       }
+      case 'release':
+        return enduringAgents.releasePersonaActivityLease(command.fence);
       case 'complete':
         return enduringAgents.completePersonaActivity(command.fence);
       case 'assertFence':

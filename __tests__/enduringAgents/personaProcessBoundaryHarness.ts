@@ -45,6 +45,7 @@ export type PersonaProcessCommand =
       };
     }
   | { type: 'claim'; personaId: string; ttlMs?: number }
+  | { type: 'release'; fence: PersonaLeaseFence }
   | { type: 'reconcile'; personaId: string }
   | { type: 'complete'; fence: PersonaLeaseFence }
   | { type: 'assertFence'; fence: PersonaLeaseFence }

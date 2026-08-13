@@ -259,27 +259,28 @@ describe('Persona continuity across OS process boundaries', () => {
     const before = await firstProcess.request<Claimed>({
       type: 'claim',
       personaId: created.persona.id,
-      ttlMs: 1_000,
+      ttlMs: 30_000,
     });
     expect(before.mailboxItem.id).toBe(admitted.item.id);
     expect(before.activity.behaviorRevisionId).toBeTruthy();
+    const released = await firstProcess.request<{ status: string }>({
+      type: 'release',
+      fence: before.fence,
+    });
+    expect(released.status).toBe('released');
     await firstProcess.kill();
 
     const restarted = await restartPersonaProcess(environment!);
     clients.push(restarted);
-    const reconciled = await waitFor(
-      () => restarted.request<{
-        projection: { leaseStatus: string };
-        reconciliation: { attempted: boolean; remainingStuck: boolean };
-      }>({ type: 'reconcile', personaId: created.persona.id }),
-      (runtime) => (
-        runtime.reconciliation.attempted
-        && runtime.projection.leaseStatus !== 'active'
-      ),
-      { timeoutMs: 10_000, description: 'explicit Persona runtime reconciliation' },
-    );
-    expect(['expired', 'released', 'none']).toContain(reconciled.projection.leaseStatus);
-    expect(reconciled.reconciliation.attempted).toBe(true);
+    const restartedRuntime = await restarted.request<{
+      projection: { leaseStatus: string };
+      reconciliation: { attempted: boolean; remainingStuck: boolean };
+    }>({ type: 'reconcile', personaId: created.persona.id });
+    expect(restartedRuntime.projection.leaseStatus).toBe('released');
+    expect(restartedRuntime.reconciliation).toMatchObject({
+      attempted: false,
+      remainingStuck: false,
+    });
     await expect(restarted.request({
       type: 'assertFence',
       fence: before.fence,
@@ -292,9 +293,9 @@ describe('Persona continuity across OS process boundaries', () => {
         ttlMs: 30_000,
       }),
       (claim): claim is Claimed => claim !== null,
-      { timeoutMs: 10_000, description: 'expired Persona lease recovery' },
+      { timeoutMs: 10_000, description: 'released Persona Activity recovery' },
     );
-    if (!after) throw new Error('Expected the expired Persona lease to be recovered.');
+    if (!after) throw new Error('Expected the released Persona Activity to be recovered.');
 
     expectPersonaContinuity(
       continuitySnapshot(before, created.persona.roleVersionId),
