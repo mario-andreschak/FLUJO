@@ -1,4 +1,7 @@
-import nextJest from "next/jest.js";
+// Resolve Next from this checkout explicitly. Bare package resolution walks up
+// parent directories, which made nested isolated worktrees silently borrow the
+// host FLUJO repository's Next/Jest toolchain when their own install was absent.
+import nextJest from "./node_modules/next/jest.js";
 import {
   jsdomTestMatch,
   nodeTestMatch,
