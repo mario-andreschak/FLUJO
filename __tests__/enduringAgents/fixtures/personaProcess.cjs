@@ -59,12 +59,14 @@ async function execute(command) {
               {
                 id: 'start',
                 type: 'start',
-                data: { type: 'start', properties: {} },
+                position: { x: 0, y: 0 },
+                data: { type: 'start', label: 'Start', properties: {} },
               },
               {
                 id: 'finish',
                 type: 'finish',
-                data: { type: 'finish', properties: {} },
+                position: { x: 240, y: 0 },
+                data: { type: 'finish', label: 'Finish', properties: {} },
               },
             ],
             edges: [
