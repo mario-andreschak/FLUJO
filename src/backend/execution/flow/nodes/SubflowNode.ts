@@ -39,10 +39,14 @@ import {
 import {
   acquireSessionExecution,
   normalizeSessionKey,
+  normalizeSessionTurnCap,
   resolveSessionIdentity,
   resolveSessionConversationId,
   updateSessionRegistry,
 } from '../sessionManagement';
+import {
+  prepareResumedSessionTranscript,
+} from '../sessionTranscriptPolicy';
 
 const log = createLogger('backend/execution/flow/nodes/SubflowNode');
 
@@ -322,6 +326,7 @@ function prepFromInvocation(
     invocationId: invocation.id,
     sessionScope: invocation.sessionScope,
     sessionInputMode: invocation.sessionInputMode,
+    sessionTurnCap: invocation.sessionTurnCap,
     ...(sharedInput && 'messages' in sharedInput ? { messages: structuredClone(sharedInput.messages) } : {}),
     ...(sharedInput && 'prompt' in sharedInput ? { inputText: sharedInput.prompt } : {}),
     lanes: invocation.lanes.map((lane) => ({
@@ -383,6 +388,7 @@ async function attachDurableInvocation(
     errorStrategy: prepResult.errorStrategy ?? 'collect-all',
     sessionScope: prepResult.sessionScope,
     sessionInputMode: prepResult.sessionInputMode,
+    sessionTurnCap: prepResult.sessionTurnCap,
     sharedInput: cloneInput(sharedInput),
     lanes: prepResult.lanes.map((lane, index, lanes) => ({
       ...lane,
@@ -762,6 +768,7 @@ export class SubflowNode extends BaseNode {
       sessionScope: node_params?.properties?.sessionScope,
       sessionKeyTemplate: node_params?.properties?.sessionKey,
       sessionInputMode: node_params?.properties?.sessionInputMode ?? 'resume',
+      sessionTurnCap: normalizeSessionTurnCap(node_params?.properties?.sessionTurnCap),
     };
     if (inputMode === 'isolated') {
       // Isolated mode sends a single authored prompt. When this node opted into
@@ -1507,6 +1514,10 @@ export async function runSubflowLanes(
       let laneConversationId: string | undefined;
       let resumedVisit = false;
       let sessionVisit: number | undefined;
+      let recoveryConversationId: string | undefined;
+      const priorSessionEntry = sessionIdentity && parentState?.subflowSessions?.[sessionIdentity]
+        ? structuredClone(parentState.subflowSessions[sessionIdentity])
+        : undefined;
       if (prepResult.persistConversation) {
         const result = resolveSessionConversationId(
           parentState,
@@ -1520,6 +1531,41 @@ export async function runSubflowLanes(
         // For non-session lanes, prefer durable lane ID
         if (!sessionIdentity) {
           laneConversationId = lane.conversationId ?? durableLane?.conversationId ?? laneConversationId;
+        }
+      }
+
+      // Issue #389: preparation stays inside the effective-session lock and
+      // completes before the incoming task is constructed. A missing/corrupt
+      // child is replaced speculatively; the parent registry is swapped only
+      // after runFlow has initialized a valid replacement state.
+      if (resumedVisit && laneConversationId) {
+        const preparation = await prepareResumedSessionTranscript({
+          conversationId: laneConversationId,
+          childFlowId: lane.subflowId,
+          inputMode: prepResult.sessionInputMode,
+          sessionTurnCap: prepResult.sessionTurnCap,
+          nodeId: prepResult.nodeId,
+          executionAuthority: prepResult.executionAuthority,
+        });
+        if (preparation.kind === 'recovery') {
+          if (sessionIdentity && parentState && priorSessionEntry) {
+            parentState.subflowSessions ??= {};
+            parentState.subflowSessions[sessionIdentity] = priorSessionEntry;
+          }
+          recoveryConversationId = crypto.randomUUID();
+          laneConversationId = recoveryConversationId;
+          resumedVisit = false;
+          log.warn('Recovering unusable Subflow child session with a fresh conversation', {
+            sessionIdentity,
+            reason: preparation.reason,
+            detail: preparation.detail,
+          });
+        } else if (preparation.summarized || preparation.trimmedTurns > 0) {
+          log.info('Prepared resumed Subflow transcript', {
+            sessionIdentity,
+            summarized: preparation.summarized,
+            trimmedTurns: preparation.trimmedTurns,
+          });
         }
       }
 
@@ -1634,6 +1680,25 @@ export async function runSubflowLanes(
           ...(prepResult.executionAuthority ? { executionAuthority: prepResult.executionAuthority } : {}),
           ...(emit ? { emit } : {}),
         });
+        if (
+          recoveryConversationId
+          && sessionIdentity
+          && parentState
+          && r.sharedState?.conversationId === recoveryConversationId
+        ) {
+          const previous = priorSessionEntry;
+          parentState.subflowSessions ??= {};
+          parentState.subflowSessions[sessionIdentity] = {
+            version: 1,
+            conversationId: recoveryConversationId,
+            nodeId: prepResult.nodeId,
+            sessionKey: normalizeSessionKey(lane.sessionKey),
+            visits: previous?.visits ?? 0,
+            lastUsedAt: Date.now(),
+            status: 'running',
+          };
+          if (durableLane) durableLane.conversationId = recoveryConversationId;
+        }
         const cancelled = Boolean(
           r.sharedState?.isCancelled || r.sharedState?.recovery?.classification === 'cancelled',
         );

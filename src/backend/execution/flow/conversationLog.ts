@@ -7,6 +7,8 @@ import {
 } from '@/shared/types/execution/events';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import { SharedState } from './types';
+import { persistConversationState } from './persistConversationState';
+import type { StorageKey } from '@/shared/types/storage';
 import { isConversationDeleted } from './cancellation';
 import { createLogger } from '@/utils/logger';
 import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
@@ -309,6 +311,79 @@ export async function appendRawForState(state: SharedState, raws: RawExecutionEv
 export function flushConversationLog(conversationId: string): Promise<void> {
   const pending = appendChains.get(ck(conversationId));
   return pending ? pending.then(() => undefined, () => undefined) : Promise.resolve();
+}
+
+/**
+ * Authoritatively replace a persisted conversation transcript while preserving
+ * the append-only audit log. The log receives removals for every prior projected
+ * message followed by the replacement in canonical order; the SharedState
+ * snapshot is then persisted. If snapshot persistence fails, both the log bytes
+ * and in-memory transcript are rolled back before the error is rethrown.
+ */
+export async function replaceConversationTranscript(
+  state: SharedState,
+  replacement: FlujoChatMessage[],
+): Promise<void> {
+  if (state.ephemeral) throw new Error('Cannot rewrite an ephemeral conversation transcript.');
+  const conversationId = state.conversationId;
+  if (!conversationId || !SAFE_ID.test(conversationId)) {
+    throw new Error('Cannot rewrite a transcript without a safe conversation id.');
+  }
+
+  await flushConversationLog(conversationId);
+  const file = logFilePath(conversationId);
+  let originalLog = '';
+  try {
+    originalLog = await fs.readFile(file, 'utf-8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+
+  const originalMessages = state.messages;
+  const existingEvents = originalLog
+    .split('\n')
+    .filter((line) => line.trim().length > 0)
+    .flatMap((line) => {
+      try { return [JSON.parse(line) as ExecutionEvent]; } catch { return []; }
+    });
+  const projected = projectMessages(existingEvents);
+  const baseline = projected.length > 0
+    ? projected
+    : originalMessages.filter((message) => message.role !== 'system');
+  const raws: RawExecutionEvent[] = [
+    ...baseline.map((message) => ({ type: 'message:removed' as const, messageId: message.id })),
+    ...replacement
+      .filter((message) => message.role !== 'system')
+      .map((message) => ({ type: 'message' as const, message })),
+  ];
+  const appended = raws
+    .map((raw) => serialize({
+      ...raw,
+      conversationId,
+      seq: allocateSeq(conversationId),
+      timestamp: Date.now(),
+    } as ExecutionEvent))
+    .join('');
+
+  await commitConversationWrite(state, () => chainWrite(conversationId, originalLog + appended));
+  state.messages = structuredClone(replacement);
+  try {
+    await persistConversationState(
+      `conversations/${conversationId}` as StorageKey,
+      state,
+    );
+  } catch (error) {
+    state.messages = originalMessages;
+    try {
+      await commitConversationWrite(state, () => chainWrite(conversationId, originalLog));
+    } catch (rollbackError) {
+      log.error('Failed to roll back conversation log after transcript rewrite failure', {
+        conversationId,
+        rollbackError,
+      });
+    }
+    throw error;
+  }
 }
 
 /**

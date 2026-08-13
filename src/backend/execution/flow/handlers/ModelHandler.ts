@@ -426,6 +426,31 @@ export class ModelHandler {
   }
 
   /**
+   * Summarize a validated persisted child-session transcript using the same
+   * provider adapter as ordinary Process execution. Kept narrow so session
+   * policy does not inherit the global automatic-compaction threshold.
+   */
+  static async summarizeSessionHistory(
+    modelId: string,
+    messages: FlujoChatMessage[],
+    prompt: { system: string; user: string },
+    executionAuthority?: import('../types').FlowExecutionAuthority,
+  ): Promise<string> {
+    const callMessages: FlujoChatMessage[] = [
+      { id: uuidv4(), role: 'system', content: prompt.system, timestamp: Date.now() } as FlujoChatMessage,
+      ...messages,
+      { id: uuidv4(), role: 'user', content: prompt.user, timestamp: Date.now() } as FlujoChatMessage,
+    ];
+    const response = await ModelHandler.generateCompletion(modelId, '', callMessages, undefined, {
+      maxTokens: 4000,
+      beforeModelDispatch: executionAuthority?.assertCurrent,
+      durableContext: { executionAuthority },
+    });
+    await executionAuthority?.assertCurrent();
+    return response.success ? (response.value.content ?? '') : '';
+  }
+
+  /**
    * Read the experimental `subflowSessions` flag (issue #391, gate for #363
    * Phase 1) from the persisted Settings blob. Gates whether `runSubflowLanes()`
    * honours a Subflow node's `sessionScope` and resumes a child conversation

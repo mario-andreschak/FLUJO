@@ -286,8 +286,7 @@ export interface ExperimentalSettings {
    * this stays opt-in until verified on real flows. Both `sessionScope:
    * 'per-run'` and `'per-key'` are functional; per-key sessions reuse one child
    * conversation for equal resolved keys and serialise same-key execution while
-   * allowing different keys to proceed concurrently (#388). `sessionInputMode:
-   * 'summary'` remains reserved for Phase 3 and currently behaves like `resume`.
+   * allowing different keys to proceed concurrently (#388). `sessionInputMode: 'summary'` compacts completed child turns before the next task; an optional positive `sessionTurnCap` enforces deterministic retention.
    * When off, reusable scopes silently fall back to `'per-visit'`, so flipping
    * this flag never breaks an existing flow. A missing value is treated as
    * disabled.

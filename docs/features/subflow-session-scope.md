@@ -35,12 +35,19 @@ child conversation on every visit), even for nodes that have a resumable scope c
 
 ## Session input mode
 
-A `sessionInputMode` field is reserved on the node's prep result: `resume` (the
-behaviour available today — the child sees its own prior transcript, unmodified) and
-`summary` (intended to inject a condensed summary of prior visits instead of the full
-transcript). **Only `resume` is implemented today; `summary` is not yet wired up and
-currently behaves exactly like `resume`.** This will be revisited in a future phase
-(#363 Phase 3) rather than documented as an aspiration here.
+A resumable node may use `sessionInputMode: "resume"` (the default) to append the
+new task to the full prior child transcript, or `sessionInputMode: "summary"` to
+compact completed visits before appending it. Summary mode operates only on an already
+valid child transcript; the incoming task is never included in the summarized slice.
+If summarization fails or returns empty output, the original history is retained and
+execution continues in resume mode.
+
+An optional positive integer `sessionTurnCap` bounds retained logical turns for each
+resolved session identity. A logical turn begins with one top-level child task and
+includes its assistant/tool exchange. Before a new task, at most `cap - 1` completed
+turns are retained, so `cap: 1` keeps metadata plus only the incoming task and its
+response. System messages and synthetic summary markers do not count. Tool calls and
+their results are never split.
 
 ## Configuring a node
 
@@ -62,6 +69,26 @@ The equivalent JSON for the per-run mode is:
   }
 }
 ```
+
+For example, summarized per-run memory retaining at most four turns is:
+
+```json
+{
+  "type": "subflow",
+  "properties": {
+    "subflowId": "your-child-flow-id",
+    "sessionScope": "per-run",
+    "sessionInputMode": "summary",
+    "sessionTurnCap": 4
+  }
+}
+```
+
+Session preparation is serialized per effective identity. Per-key templates are
+resolved from caller, run, and lane context before locking; equal effective keys reuse
+one child while different keys remain isolated. If a registered child conversation is
+missing or its transcript is corrupt, FLUJO initializes a fresh replacement and swaps
+only that registry entry after initialization succeeds.
 
 Combined with the experimental flag being enabled, every visit to this node within the
 same parent run will now resume the same child conversation.

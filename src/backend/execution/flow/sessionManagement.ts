@@ -21,6 +21,14 @@ export function normalizeSessionKey(value: unknown): string | undefined {
   return key;
 }
 
+/** Normalize optional transcript retention to a positive integer. Invalid values
+ * are omitted so legacy nodes and malformed imported JSON remain unbounded. */
+export function normalizeSessionTurnCap(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const cap = typeof value === 'number' ? value : Number(value);
+  return Number.isSafeInteger(cap) && cap > 0 ? cap : undefined;
+}
+
 type SessionCoordinatorEntry = {
   tail: Promise<void>;
   claims: number;

@@ -148,6 +148,14 @@ export const SubflowNodePropertiesModal = ({
         return;
       }
       const properties = { ...nodeData.properties };
+      const rawTurnCap = properties.sessionTurnCap;
+      const normalizedTurnCap = typeof rawTurnCap === 'number' ? rawTurnCap : Number(rawTurnCap);
+      if (rawTurnCap === undefined || rawTurnCap === '') delete properties.sessionTurnCap;
+      else if (Number.isSafeInteger(normalizedTurnCap) && normalizedTurnCap > 0) {
+        properties.sessionTurnCap = normalizedTurnCap;
+      } else {
+        return;
+      }
 
       // Data-flow capture (issue #203): set the trimmed value or REMOVE the key
       // when empty, so flowToSpec never emits an empty captureX and existing
@@ -198,6 +206,12 @@ export const SubflowNodePropertiesModal = ({
     nodeData.properties?.inputMode || (promptTemplate.trim() ? 'isolated' : 'full-history');
   const sessionScope: 'per-visit' | 'per-run' | 'per-key' =
     nodeData.properties?.sessionScope || 'per-visit';
+  const sessionInputMode: 'resume' | 'summary' =
+    nodeData.properties?.sessionInputMode || 'resume';
+  const sessionTurnCapValue = nodeData.properties?.sessionTurnCap ?? '';
+  const sessionTurnCapNumber = Number(sessionTurnCapValue);
+  const sessionTurnCapInvalid = sessionTurnCapValue !== ''
+    && (!Number.isSafeInteger(sessionTurnCapNumber) || sessionTurnCapNumber <= 0);
 
   return (
     <Dialog
@@ -487,6 +501,8 @@ export const SubflowNodePropertiesModal = ({
             onClick={() => {
               removeProperty('sessionScope');
               removeProperty('sessionKey');
+              removeProperty('sessionInputMode');
+              removeProperty('sessionTurnCap');
             }}
             icon={<ChatBubbleOutlineIcon />}
             title={t('flows.subflow.sessionPerVisit')}
@@ -522,6 +538,45 @@ export const SubflowNodePropertiesModal = ({
             margin="normal"
             helperText={t('flows.subflow.sessionKeyHelp')}
           />
+        )}
+        {sessionScope !== 'per-visit' && (
+          <>
+            <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>
+              {t('flows.subflow.sessionInputMode')}
+            </Typography>
+            <Box role="radiogroup" sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+              <OptionCard
+                selected={sessionInputMode === 'resume'}
+                onClick={() => removeProperty('sessionInputMode')}
+                icon={<HistoryIcon />}
+                title={t('flows.subflow.sessionResume')}
+                description={t('flows.subflow.sessionResumeHelp')}
+              />
+              <OptionCard
+                selected={sessionInputMode === 'summary'}
+                onClick={() => handlePropertyChange('sessionInputMode', 'summary')}
+                icon={<ShortTextIcon />}
+                title={t('flows.subflow.sessionSummary')}
+                description={t('flows.subflow.sessionSummaryHelp')}
+              />
+            </Box>
+            <TextField
+              fullWidth
+              type="number"
+              inputProps={{ min: 1, step: 1 }}
+              label={t('flows.subflow.sessionTurnCap')}
+              value={sessionTurnCapValue}
+              onChange={(event) => {
+                if (event.target.value === '') removeProperty('sessionTurnCap');
+                else handlePropertyChange('sessionTurnCap', event.target.value);
+              }}
+              margin="normal"
+              error={sessionTurnCapInvalid}
+              helperText={sessionTurnCapInvalid
+                ? t('flows.subflow.sessionTurnCapError')
+                : t('flows.subflow.sessionTurnCapHelp')}
+            />
+          </>
         )}
         {sessionScope !== 'per-visit' && nodeData.properties?.saveConversation === false && (
           <Alert severity="warning" sx={{ mt: 1 }}>
@@ -570,7 +625,7 @@ export const SubflowNodePropertiesModal = ({
 
       <DialogActions>
         <Button onClick={onClose}>{t('flows.modal.cancel')}</Button>
-        <Button onClick={handleSave} variant="contained" color="primary">
+        <Button onClick={handleSave} variant="contained" color="primary" disabled={sessionTurnCapInvalid}>
           {t('flows.modal.save')}
         </Button>
       </DialogActions>

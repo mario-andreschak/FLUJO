@@ -66,6 +66,38 @@ describe('SubflowNodePropertiesModal child conversation memory', () => {
     expect(await screen.findByRole('radio', { name: /fresh every visit/i })).toHaveAttribute('aria-checked', 'true');
   });
 
+  it('round-trips summarized session history and a positive turn cap', async () => {
+    const saved = renderModal({ sessionScope: 'per-run' });
+    fireEvent.click(await screen.findByRole('radio', { name: /summarized history/i }));
+    fireEvent.change(screen.getByRole('spinbutton', { name: /retained logical turns/i }), {
+      target: { value: '4' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(saved.data.properties).toMatchObject({
+      sessionScope: 'per-run',
+      sessionInputMode: 'summary',
+      sessionTurnCap: 4,
+    });
+  });
+
+  it('rejects invalid caps and removes session-only values when returning to per-visit', async () => {
+    const saved = renderModal({
+      sessionScope: 'per-run',
+      sessionInputMode: 'summary',
+      sessionTurnCap: 3,
+    });
+    const cap = await screen.findByRole('spinbutton', { name: /retained logical turns/i });
+    fireEvent.change(cap, { target: { value: '0' } });
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('radio', { name: /fresh every visit/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(saved.data.properties.sessionScope).toBeUndefined();
+    expect(saved.data.properties.sessionInputMode).toBeUndefined();
+    expect(saved.data.properties.sessionTurnCap).toBeUndefined();
+  });
+
   it('saves a caller-addressable keyed session and optional fixed key', async () => {
     const saved = renderModal({});
     fireEvent.click(await screen.findByRole('radio', { name: /one per session key/i }));

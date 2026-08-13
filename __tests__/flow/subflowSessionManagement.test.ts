@@ -2,6 +2,7 @@ import {
   acquireSessionExecution,
   activeSessionCoordinatorCount,
   normalizeSessionKey,
+  normalizeSessionTurnCap,
   resolveSessionConversationId,
   resolveSessionIdentity,
   updateSessionRegistry,
@@ -36,6 +37,17 @@ describe('resumable Subflow session registry', () => {
     expect(normalizeSessionKey('  ')).toBeUndefined();
     expect(normalizeSessionKey('{{scene_id}}')).toBeUndefined();
     expect(normalizeSessionKey('x'.repeat(129))).toBeUndefined();
+  });
+
+  it('normalizes only positive integer session turn caps', () => {
+    expect(normalizeSessionTurnCap(undefined)).toBeUndefined();
+    expect(normalizeSessionTurnCap('')).toBeUndefined();
+    expect(normalizeSessionTurnCap(1)).toBe(1);
+    expect(normalizeSessionTurnCap('4')).toBe(4);
+    expect(normalizeSessionTurnCap(0)).toBeUndefined();
+    expect(normalizeSessionTurnCap(-1)).toBeUndefined();
+    expect(normalizeSessionTurnCap(1.5)).toBeUndefined();
+    expect(normalizeSessionTurnCap('many')).toBeUndefined();
   });
 
   it('encodes opaque key components so delimiters and Unicode cannot collide', () => {

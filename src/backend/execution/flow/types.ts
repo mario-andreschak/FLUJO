@@ -588,6 +588,9 @@ export interface SubflowNodeProperties {
      *  Ignored if `sessionScope` is absent/per-visit. Do NOT write this into stored
      *  data unless the user explicitly changes it (issue #138). */
     sessionInputMode?: 'resume' | 'summary';
+    /** Maximum retained logical child turns for one resolved session. Positive
+     *  integers only; absence means unbounded. The incoming task counts as one. */
+    sessionTurnCap?: number;
     /** Callable-subflow invocation mode (issue #385, deferred Part B of #359):
      *    - 'handoff' (default/absent): today's behaviour — the routing model
      *      calls the node's `handoff_to_<slug>` tool, the engine TRANSITIONS to
@@ -714,6 +717,7 @@ export interface SubflowInvocation {
      *  cannot silently fall back to per-visit behavior. */
     sessionScope?: 'per-visit' | 'per-run' | 'per-key';
     sessionInputMode?: 'resume' | 'summary';
+    sessionTurnCap?: number;
     /** Shared node input stored once for fan-out lanes. Per-lane briefs/items
      *  remain on the lane itself, avoiding N copies of a full chat transcript. */
     sharedInput?: { prompt: string } | { messages: FlujoChatMessage[] };
@@ -1672,6 +1676,8 @@ export interface SubflowNodePrepResult extends BasePrepResult {
     /** Issue #363: how resumed children are re-entered.
      *  'resume' (default) | 'summary'. */
     sessionInputMode?: 'resume' | 'summary';
+    /** Normalized positive-integer logical-turn retention bound. */
+    sessionTurnCap?: number;
 }
 
 // Union type for all prep results
