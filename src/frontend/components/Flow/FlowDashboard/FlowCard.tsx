@@ -62,6 +62,10 @@ interface FlowCardProps {
    * the dashboard share the exact same card body without drifting.
    */
   pickerMode?: boolean;
+  /** The surrounding CardPickerGrid owns selection semantics and keyboard input. */
+  selectionManaged?: boolean;
+  /** Disabled picker cards stay visible without accepting selection. */
+  disabled?: boolean;
   /** Dashboard bulk-selection mode used by quick model replacement (#401). */
   selectionMode?: boolean;
 }
@@ -143,6 +147,8 @@ const FlowCard = ({
   folders = [],
   validation,
   pickerMode = false,
+  selectionManaged = false,
+  disabled = false,
   selectionMode = false,
 }: FlowCardProps) => {
   log.debug('Rendering FlowCard', { flowId: flow.id, flowName: flow.name });
@@ -177,6 +183,10 @@ const FlowCard = ({
     </Box>
   ) : null;
 
+  const handleSelect = () => {
+    if (!disabled) onSelect(flow.id);
+  };
+
   const handleDeleteClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (onDelete) onDelete(flow.id);
@@ -190,7 +200,7 @@ const FlowCard = ({
   const handleEditClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (onEdit) onEdit(flow.id);
-    else onSelect(flow.id);
+    else handleSelect();
   };
 
   const handleOpenInChatClick = (e: React.MouseEvent) => {
@@ -312,11 +322,17 @@ const FlowCard = ({
   };
 
   return (
-    <StyledCard selected={selected} data-tutorial-flow-id={flow.id}>
+    <StyledCard
+      selected={selected}
+      data-tutorial-flow-id={flow.id}
+      aria-disabled={disabled || undefined}
+      sx={{ opacity: disabled ? 0.58 : 1 }}
+    >
       {selectionMode && (
         <Checkbox
           checked={selected}
-          onChange={() => onSelect(flow.id)}
+          onChange={handleSelect}
+          disabled={disabled}
           onClick={(event) => event.stopPropagation()}
           inputProps={{ 'aria-label': t('flows.card.select', { name: flow.name }) }}
           sx={{
@@ -381,7 +397,9 @@ const FlowCard = ({
         </Tooltip>
       )}
       <CardActionArea
-        onClick={() => onSelect(flow.id)}
+        component={selectionManaged ? 'div' : 'button'}
+        tabIndex={selectionManaged ? -1 : undefined}
+        onClick={handleSelect}
         sx={{
           gridArea: 'title',
           display: 'block',
@@ -399,7 +417,9 @@ const FlowCard = ({
       </CardActionArea>
 
       <CardActionArea
-        onClick={() => onSelect(flow.id)}
+        component={selectionManaged ? 'div' : 'button'}
+        tabIndex={selectionManaged ? -1 : undefined}
+        onClick={handleSelect}
         aria-label={t('flows.card.open', { name: flow.name })}
         sx={{
           gridArea: 'preview',
@@ -415,7 +435,9 @@ const FlowCard = ({
       </CardActionArea>
 
       <CardActionArea
-        onClick={() => onSelect(flow.id)}
+        component={selectionManaged ? 'div' : 'button'}
+        tabIndex={selectionManaged ? -1 : undefined}
+        onClick={handleSelect}
         sx={{
           gridArea: 'details',
           gridRow: pickerMode || selectionMode ? '2 / 5' : undefined,

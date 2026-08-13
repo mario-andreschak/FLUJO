@@ -8,10 +8,12 @@ import {
   Button,
   Typography,
   Divider,
+  useMediaQuery,
 } from '@mui/material';
 import DialogHeaderActions from './DialogHeaderActions';
 import CardPickerGrid, { CardPickerGridProps } from './CardPickerGrid';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useTheme } from '@mui/material/styles';
 
 export interface CardPickerDialogProps extends CardPickerGridProps {
   open: boolean;
@@ -25,6 +27,8 @@ export interface CardPickerDialogProps extends CardPickerGridProps {
   maxWidth?: 'xs' | 'sm' | 'md' | 'lg' | 'xl';
   /** Let compact hosts use the full phone viewport instead of a cramped modal. */
   fullScreen?: boolean;
+  /** Optional exact trigger to restore focus to after the closing transition. */
+  restoreFocusRef?: React.RefObject<HTMLElement | null>;
 }
 
 /**
@@ -40,12 +44,33 @@ const CardPickerDialog: React.FC<CardPickerDialogProps> = ({
   ariaLabel,
   description,
   maxWidth = 'md',
-  fullScreen = false,
+  fullScreen,
+  restoreFocusRef,
   autoFocusSearch: autoFocusSearchProp,
   autoFocusDelayMs: autoFocusDelayMsProp,
   ...gridProps
 }) => {
   const { t } = useI18n();
+  const theme = useTheme();
+  const compactViewport = useMediaQuery(theme.breakpoints.down('sm'));
+  const resolvedFullScreen = fullScreen ?? compactViewport;
+  const titleId = React.useId();
+  const descriptionId = React.useId();
+  const openingTriggerRef = React.useRef<HTMLElement | null>(null);
+  const wasOpenRef = React.useRef(false);
+
+  React.useEffect(() => {
+    if (open && !wasOpenRef.current) {
+      openingTriggerRef.current = restoreFocusRef?.current
+        ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    }
+    wasOpenRef.current = open;
+  }, [open, restoreFocusRef]);
+
+  const restoreFocus = () => {
+    (restoreFocusRef?.current ?? openingTriggerRef.current)?.focus();
+  };
+
   // #372: re-trigger auto-focus every time this dialog opens; the delay lets
   // MUI's Dialog focus trap settle first so the two don't fight over focus.
   const autoFocusSearch = autoFocusSearchProp ?? open;
@@ -56,18 +81,21 @@ const CardPickerDialog: React.FC<CardPickerDialogProps> = ({
       onClose={onClose}
       maxWidth={maxWidth}
       fullWidth
-      fullScreen={fullScreen}
+      fullScreen={resolvedFullScreen}
+      aria-labelledby={!ariaLabel && title !== undefined && title !== null ? titleId : undefined}
+      aria-describedby={description ? descriptionId : undefined}
       PaperProps={ariaLabel ? { 'aria-label': ariaLabel } : undefined}
+      TransitionProps={{ onExited: restoreFocus }}
     >
       {title !== undefined && title !== null && (
         <>
-          <DialogHeaderActions title={title} onClose={onClose} />
+          <DialogHeaderActions title={<span id={titleId}>{title}</span>} onClose={onClose} />
           <Divider />
         </>
       )}
       <DialogContent sx={{ p: 3 }}>
         {description && (
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          <Typography id={descriptionId} variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             {description}
           </Typography>
         )}

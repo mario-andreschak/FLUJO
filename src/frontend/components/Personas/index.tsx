@@ -51,6 +51,7 @@ import {
   TextField,
   Tooltip,
   Typography,
+  useMediaQuery,
 } from '@mui/material';
 import { alpha, useTheme } from '@mui/material/styles';
 import Link from 'next/link';
@@ -60,6 +61,10 @@ import { v4 as uuidv4 } from 'uuid';
 
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useMcpAppsDiscovery } from '@/frontend/components/mcp/useMcpAppsDiscovery';
+import ServerCard from '@/frontend/components/mcp/MCPServerManager/ServerCard';
+import CardPickerGrid from '@/frontend/components/shared/CardPickerGrid';
+import FlowCard from '@/frontend/components/Flow/FlowDashboard/FlowCard';
+import RoleVersionCard from './RoleVersionCard';
 import {
   personasService,
   type PersonaBundle,
@@ -335,7 +340,7 @@ function PersonaList({
                     <Box minWidth={0} flex={1}>
                       <Typography variant="h5" fontWeight={760} noWrap>{persona.name}</Typography>
                       <Typography variant="body2" color="text.secondary" noWrap>
-                        {detail ? t('personas.role', { role: detail.roleVersion.name, version: detail.roleVersion.version }) : persona.roleVersionId}
+                        {detail ? t('personas.role', { role: detail.roleVersion.name, version: detail.roleVersion.version }) : t('common.loading')}
                       </Typography>
                     </Box>
                     <Chip size="small" color={lifecycleColor(persona.lifecycleState)} label={humanize(persona.lifecycleState)} />
@@ -679,9 +684,17 @@ function BehaviorsArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: 
           const revisions = detail.behaviorRevisions.filter((revision) => revision.behaviorId === binding.id).sort((a, b) => b.revision - a.revision);
           return <Card key={binding.id} variant="outlined" sx={{ borderRadius: 3 }}><CardContent>
             <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={1}><Box><Typography variant="h6" fontWeight={750}>{slot?.name ?? humanize(binding.slotKey)}</Typography><Typography color="text.secondary">{slot?.description ?? detail.roleVersion.mission}</Typography></Box><Chip color="primary" label={`${t('personas.behaviors.active')} · r${revisions.find((revision) => revision.id === binding.activeRevisionId)?.revision ?? '?'}`} /></Stack>
-            <Stack spacing={1.25} sx={{ mt: 2 }}>
-              {revisions.map((revision) => <BehaviorRevisionRow key={revision.id} revision={revision} binding={binding} busy={busy} activate={() => mutate(() => personasService.activateBehavior(detail.persona.id, binding.id, { revisionId: revision.id, expectedActiveRevisionId: binding.activeRevisionId }))} />)}
-            </Stack>
+            <Box sx={{ mt: 2 }}>
+              <CardPickerGrid
+                columns={{ xs: 12, sm: 12, md: 6 }}
+                items={revisions.map((revision) => ({
+                  key: revision.id,
+                  label: revision.flowSnapshot.name,
+                  selected: revision.id === binding.activeRevisionId,
+                  content: <BehaviorRevisionRow revision={revision} binding={binding} busy={busy} activate={() => mutate(() => personasService.activateBehavior(detail.persona.id, binding.id, { revisionId: revision.id, expectedActiveRevisionId: binding.activeRevisionId }))} />,
+                }))}
+              />
+            </Box>
           </CardContent></Card>;
         })}
       </Stack>
@@ -691,7 +704,7 @@ function BehaviorsArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: 
   function BehaviorRevisionRow({ revision, binding, busy: rowBusy, activate }: { revision: BehaviorRevision; binding: BehaviorBinding; busy: boolean; activate: () => Promise<void> }) {
     const active = revision.id === binding.activeRevisionId;
     const inherited = revision.source.kind === 'role_template';
-    return <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2.5, bgcolor: active ? 'action.selected' : undefined }}><Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" gap={1.5}><Box minWidth={0}><Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap><Chip size="small" color={active ? 'success' : 'default'} label={`r${revision.revision}${active ? ' · Active' : ''}`} /><Chip size="small" variant="outlined" label={inherited ? t('personas.behaviors.roleDefault') : t('personas.behaviors.override')} /></Stack><Typography fontWeight={700} sx={{ mt: 1 }}>{revision.flowSnapshot.name}</Typography><Typography variant="caption" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>{t('personas.behaviors.evidence')}: {revision.contentHash} · {revision.flowSnapshot.nodes.length} nodes · {formatDate(revision.createdAt, { dateStyle: 'medium', timeStyle: 'short' })}</Typography>{revision.source.kind === 'persona_override' && revision.source.evidenceRefs?.length ? <Typography variant="caption" display="block">{revision.source.evidenceRefs.join(' · ')}</Typography> : null}</Box>{!active && <Button disabled={rowBusy} startIcon={<ReplayRounded />} onClick={() => void activate()}>{revision.revision < Math.max(...detail.behaviorRevisions.filter((candidate) => candidate.behaviorId === binding.id).map((candidate) => candidate.revision)) ? t('personas.behaviors.rollback') : t('personas.behaviors.activate')}</Button>}</Stack></Paper>;
+    return <Stack spacing={1.25} sx={{ height: '100%' }}><FlowCard flow={revision.flowSnapshot} selected={active} pickerMode selectionManaged onSelect={() => {}} /><Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2.5, bgcolor: active ? 'action.selected' : undefined }}><Stack spacing={1}><Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap><Chip size="small" color={active ? 'success' : 'default'} label={`r${revision.revision}${active ? ' · Active' : ''}`} /><Chip size="small" variant="outlined" label={inherited ? t('personas.behaviors.roleDefault') : t('personas.behaviors.override')} /></Stack><Typography variant="caption" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>{t('personas.behaviors.evidence')}: {revision.contentHash} · {formatDate(revision.createdAt, { dateStyle: 'medium', timeStyle: 'short' })}</Typography>{revision.source.kind === 'persona_override' && revision.source.evidenceRefs?.length ? <Typography variant="caption" display="block">{revision.source.evidenceRefs.join(' · ')}</Typography> : null}{!active && <Button disabled={rowBusy} startIcon={<ReplayRounded />} onClick={() => void activate()}>{revision.revision < Math.max(...detail.behaviorRevisions.filter((candidate) => candidate.behaviorId === binding.id).map((candidate) => candidate.revision)) ? t('personas.behaviors.rollback') : t('personas.behaviors.activate')}</Button>}</Stack></Paper></Stack>;
   }
 }
 
@@ -744,20 +757,40 @@ function AppsArea({ detail, busy, mutate }: {
         {error && <Alert severity="warning">{error}</Alert>}
 
         <Paper variant="outlined" sx={{ p: 2, borderRadius: 3 }}>
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ sm: 'center' }}>
-            <TextField
-              select
-              fullWidth
-              size="small"
-              label={t('personas.apps.config')}
-              value={selectedConfig}
-              onChange={(event) => setSelectedConfig(event.target.value)}
-              disabled={loading || refreshing || availableServers.length === 0}
-            >
-              {availableServers.map((server) => (
-                <MenuItem key={server.name} value={server.name}>{server.name}</MenuItem>
-              ))}
-            </TextField>
+          <CardPickerGrid
+            searchable
+            stickySearch
+            selectionMode="single"
+            ariaLabel={t('personas.apps.config')}
+            isLoading={loading || refreshing}
+            error={error}
+            emptyMessage={t('personas.apps.noEligible')}
+            columns={{ xs: 12, sm: 6, md: 6 }}
+            items={availableServers.map((server) => ({
+              key: server.name,
+              label: server.name,
+              selected: selectedConfig === server.name,
+              disabled: busy,
+              searchText: `${server.name} ${server.config?.rootPath ?? ''}`,
+              onSelect: () => setSelectedConfig(server.name),
+              content: (
+                <ServerCard
+                  name={server.name}
+                  status={server.error ? 'error' : 'connected'}
+                  path={server.config?.rootPath ?? ''}
+                  enabled={server.config ? !server.config.disabled : true}
+                  transport={server.config?.transport ?? 'stdio'}
+                  pickerMode
+                  selectionManaged
+                  disabled={busy}
+                  selected={selectedConfig === server.name}
+                  serverConfig={server.config}
+                  onClick={() => {}}
+                />
+              ),
+            }))}
+          />
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ mt: 2 }}>
             <Button
               variant="contained"
               startIcon={<AddRounded />}
@@ -773,11 +806,6 @@ function AppsArea({ detail, busy, mutate }: {
               {t('personas.refresh')}
             </Button>
           </Stack>
-          {!loading && availableServers.length === 0 && (
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 1.25 }}>
-              {t('personas.apps.noEligible')}
-            </Typography>
-          )}
         </Paper>
 
         {detail.appGrants.length === 0 ? (
@@ -899,6 +927,8 @@ function SettingsArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: b
 
 function CreatePersonaDialog({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (detail: PersonaBundle) => void }) {
   const { t } = useI18n();
+  const theme = useTheme();
+  const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
   const [roles, setRoles] = useState<RolesResponse | null>(null);
   const [roleVersionId, setRoleVersionId] = useState('');
   const [name, setName] = useState('');
@@ -931,5 +961,5 @@ function CreatePersonaDialog({ open, onClose, onCreated }: { open: boolean; onCl
       setError(cause instanceof Error ? cause.message : t('personas.action.failed'));
     } finally { setSaving(false); }
   };
-  return <Dialog open={open} onClose={saving ? undefined : onClose} fullWidth maxWidth="sm"><DialogTitle>{t('personas.create.title')}</DialogTitle><DialogContent dividers><Stack spacing={2} sx={{ pt: 0.5 }}>{error && <Alert severity="error">{error}</Alert>}<TextField label={t('personas.create.name')} value={name} onChange={(event) => setName(event.target.value)} required autoFocus /><TextField select label={t('personas.create.role')} value={roleVersionId} onChange={(event) => setRoleVersionId(event.target.value)} disabled={!roles}>{roles?.roleVersions.map((role) => <MenuItem key={role.id} value={role.id}>{role.name} · v{role.version}</MenuItem>)}</TextField><TextField label={t('personas.create.mission')} value={mission} onChange={(event) => setMission(event.target.value)} multiline minRows={3} /><TextField label={t('personas.create.fact')} helperText={t('personas.create.factHelp')} value={fact} onChange={(event) => setFact(event.target.value)} multiline minRows={2} /></Stack></DialogContent><DialogActions><Button disabled={saving} onClick={onClose}>{t('personas.action.cancel')}</Button><Button variant="contained" disabled={saving || !name.trim()} onClick={() => void submit()}>{saving ? t('personas.action.saving') : t('personas.create')}</Button></DialogActions></Dialog>;
+  return <Dialog open={open} onClose={saving ? undefined : onClose} fullScreen={fullScreen} fullWidth maxWidth="md"><DialogTitle>{t('personas.create.title')}</DialogTitle><DialogContent dividers><Stack spacing={2} sx={{ pt: 0.5 }}>{error && <Alert severity="error">{error}</Alert>}<TextField label={t('personas.create.name')} value={name} onChange={(event) => setName(event.target.value)} required autoFocus /><Box><Typography variant="subtitle2" sx={{ mb: 1 }}>{t('personas.create.role')}</Typography><CardPickerGrid searchable selectionMode="single" ariaLabel={t('personas.create.role')} isLoading={!roles && !error} emptyMessage={t('cardPicker.empty')} columns={{ xs: 12, sm: 6, md: 6 }} items={(roles?.roleVersions ?? []).map((role) => ({ key: role.id, label: `${role.name} v${role.version}`, selected: roleVersionId === role.id, searchText: `${role.name} ${role.mission} v${role.version}`, onSelect: () => setRoleVersionId(role.id), content: <RoleVersionCard role={role} selected={roleVersionId === role.id} onSelect={() => {}} /> }))} /></Box><TextField label={t('personas.create.mission')} value={mission} onChange={(event) => setMission(event.target.value)} multiline minRows={3} /><TextField label={t('personas.create.fact')} helperText={t('personas.create.factHelp')} value={fact} onChange={(event) => setFact(event.target.value)} multiline minRows={2} /></Stack></DialogContent><DialogActions><Button disabled={saving} onClick={onClose}>{t('personas.action.cancel')}</Button><Button variant="contained" disabled={saving || !name.trim() || !roleVersionId} onClick={() => void submit()}>{saving ? t('personas.action.saving') : t('personas.create')}</Button></DialogActions></Dialog>;
 }

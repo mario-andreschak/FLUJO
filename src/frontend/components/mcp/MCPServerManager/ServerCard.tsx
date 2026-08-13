@@ -81,6 +81,10 @@ interface ServerCardProps {
    * the picker reuses the management card body without side effects.
    */
   pickerMode?: boolean;
+  /** The surrounding CardPickerGrid owns semantics and keyboard activation. */
+  selectionManaged?: boolean;
+  /** Disabled picker cards remain readable but cannot be activated. */
+  disabled?: boolean;
   error?: string; // Optional error message
   stderrOutput?: string; // Optional stderr output
   authorizationUrl?: string; // OAuth authorization URL
@@ -130,6 +134,8 @@ const ServerCard: React.FC<ServerCardProps> = ({
   onEdit = () => {},
   onAuthenticate,
   pickerMode = false,
+  selectionManaged = false,
+  disabled = false,
   error,
   stderrOutput,
   authorizationUrl,
@@ -644,7 +650,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
       <Box
         component="span"
         role="img"
-        tabIndex={0}
+        tabIndex={pickerMode ? -1 : 0}
         aria-label={statusLabel() ?? ""}
         data-testid="server-status-compact"
         sx={{
@@ -689,10 +695,13 @@ const ServerCard: React.FC<ServerCardProps> = ({
   return (
     <Card
       data-tutorial-server-name={name}
-      role={pickerMode ? "button" : undefined}
-      aria-pressed={pickerMode ? selected : undefined}
+      role={pickerMode && !selectionManaged ? "button" : undefined}
+      aria-pressed={pickerMode && !selectionManaged ? selected : undefined}
+      aria-disabled={disabled || undefined}
+      tabIndex={pickerMode && !selectionManaged && !disabled ? 0 : undefined}
       sx={{
-        cursor: "pointer",
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.58 : 1,
         position: "relative",
         display: modern ? "flex" : undefined,
         flexDirection: modern ? "column" : undefined,
@@ -739,9 +748,16 @@ const ServerCard: React.FC<ServerCardProps> = ({
         },
       }}
       onClick={() => {
+        if (disabled) return;
         log.debug(`Server card clicked: ${name}`);
         onClick();
       }}
+      onKeyDown={pickerMode && !selectionManaged && !disabled ? (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onClick();
+        }
+      } : undefined}
     >
       {/* Favorite star (#146): mirrors FlowCard — top-left, warning color when active. */}
       {onToggleFavorite && (

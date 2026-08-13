@@ -6,6 +6,8 @@ import {
   CardActionArea,
   CardContent,
   CardActions,
+  Checkbox,
+  Radio,
   Typography,
   IconButton,
   Box,
@@ -56,6 +58,10 @@ export interface ModelCardProps {
   selectable?: boolean;
   selected?: boolean;
   onSelect?: (modelId: string) => void;
+  /** Visual and accessibility semantics for one- or many-model selection. */
+  selectionMode?: 'single' | 'multiple';
+  /** Disabled models stay visible without accepting selection. */
+  disabled?: boolean;
   /**
    * Toggle this model's favorite flag (#146, mirrors flows #120). When provided,
    * a star button is shown (top-left) on both the management and picker cards.
@@ -73,6 +79,8 @@ export const ModelCard = ({
   selectable = false,
   selected = false,
   onSelect,
+  selectionMode = 'single',
+  disabled = false,
   onToggleFavorite,
 }: ModelCardProps) => {
   const { t, formatNumber } = useI18n();
@@ -403,11 +411,13 @@ export const ModelCard = ({
     return (
       <Card
         elevation={0}
-        role="radio"
+        role={selectionMode === 'multiple' ? 'checkbox' : 'radio'}
         aria-checked={selected}
-        sx={modern ? modernCardSx(selected) : {
+        aria-disabled={disabled || undefined}
+        sx={modern ? [modernCardSx(selected), { opacity: disabled ? 0.58 : 1 }] : {
             height: '100%',
             display: 'flex',
+            opacity: disabled ? 0.58 : 1,
             flexDirection: 'column',
             position: 'relative',
             border: (theme) => `1px solid ${selected ? theme.palette.primary.main : theme.palette.divider}`,
@@ -419,9 +429,15 @@ export const ModelCard = ({
             },
           }}
       >
+        <Box sx={{ position: 'absolute', top: 6, left: 6, zIndex: 2, pointerEvents: 'none' }}>
+          {selectionMode === 'multiple'
+            ? <Checkbox checked={selected} disabled={disabled} tabIndex={-1} />
+            : <Radio checked={selected} disabled={disabled} tabIndex={-1} />}
+        </Box>
         {favoriteButton}
         <CardActionArea
-          onClick={() => onSelect?.(model.id)}
+          disabled={disabled}
+          onClick={() => !disabled && onSelect?.(model.id)}
           sx={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'stretch' }}
         >
           {body}

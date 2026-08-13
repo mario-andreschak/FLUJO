@@ -109,4 +109,66 @@ describe('CardPickerGrid', () => {
     const stickyWrapper = input.closest('.MuiBox-root') as HTMLElement;
     expect(stickyWrapper).not.toHaveStyle({ position: 'sticky' });
   });
+
+  it('supports single selection with Enter and arrow-key navigation', () => {
+    const onFirst = jest.fn();
+    const onSecond = jest.fn();
+    render(
+      <CardPickerGrid
+        selectionMode="single"
+        ariaLabel="Role choices"
+        items={[
+          { key: '1', label: 'First role', selected: true, content: <div>First</div>, onSelect: onFirst },
+          { key: '2', label: 'Second role', content: <div>Second</div>, onSelect: onSecond },
+        ]}
+      />,
+    );
+
+    const first = screen.getByRole('radio', { name: 'First role' });
+    const second = screen.getByRole('radio', { name: 'Second role' });
+    expect(first).toHaveAttribute('aria-checked', 'true');
+    first.focus();
+    fireEvent.keyDown(first, { key: 'ArrowRight' });
+    expect(second).toHaveFocus();
+    fireEvent.keyDown(second, { key: 'Enter' });
+    expect(onSecond).toHaveBeenCalledWith('2');
+  });
+
+  it('uses checkbox semantics for multiple selection and ignores disabled items', () => {
+    const onSelect = jest.fn();
+    render(
+      <CardPickerGrid
+        selectionMode="multiple"
+        items={[
+          { key: '1', label: 'Available', selected: true, content: <div>Available</div>, onSelect },
+          { key: '2', label: 'Disabled', disabled: true, content: <div>Disabled</div>, onSelect },
+        ]}
+      />,
+    );
+
+    expect(screen.getByRole('checkbox', { name: 'Available' })).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Disabled' }));
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('keeps missing references visible with a separate repair action', () => {
+    const onRepair = jest.fn();
+    render(
+      <CardPickerGrid
+        items={[{
+          key: 'missing',
+          content: <div>Deleted app</div>,
+          missing: true,
+          missingLabel: 'App unavailable',
+          repairLabel: 'Remove grant',
+          onRepair,
+        }]}
+      />,
+    );
+
+    expect(screen.getByText('App unavailable')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove grant' }));
+    expect(onRepair).toHaveBeenCalledTimes(1);
+  });
+
 });

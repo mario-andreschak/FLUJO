@@ -38,6 +38,8 @@ export interface McpDiscoveredApp {
 
 export interface McpServerDiscovery {
   name: string;
+  /** Installed configuration retained so card pickers can reuse ServerCard. */
+  config?: MCPServerConfig;
   apps: McpDiscoveredApp[];
   error?: string;
 }
@@ -152,6 +154,7 @@ export function useMcpAppsDiscovery({
         if (resourceResult?.error && toolsByResource.size === 0) {
           return {
             name: server.name,
+            config: server,
             apps: [],
             error: readableError(resourceResult.error, t('mcp.apps.discoveryUnavailable')),
           };
@@ -198,6 +201,7 @@ export function useMcpAppsDiscovery({
 
         return {
           name: server.name,
+          config: server,
           apps: Array.from(appsByUri.values()),
         };
       }));

@@ -37,16 +37,13 @@ import {
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import {
-  AddRounded,
   AttachFileRounded,
   AutoAwesomeRounded,
-  CheckCircleRounded,
   CloseRounded,
   DescriptionRounded,
   GroupsRounded,
   HowToVoteRounded,
   PersonRounded,
-  RemoveCircleOutlineRounded,
   ShieldRounded,
 } from '@mui/icons-material';
 import type { Flow } from '@/shared/types/flow';
@@ -59,6 +56,7 @@ import type {
 import { flowService } from '@/frontend/services/flow';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import CardPickerGrid from '@/frontend/components/shared/CardPickerGrid';
+import FlowCard from '@/frontend/components/Flow/FlowDashboard/FlowCard';
 import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 
 interface MeetingWizardProps {
@@ -418,40 +416,33 @@ export default function MeetingWizard({
                 {t('meetings.participants.empty')}
               </Alert>
             ) : (
-              <Box sx={{ maxHeight: 310, overflowY: 'auto', pr: 0.5 }}>
+              <Box sx={{ maxHeight: 520, overflowY: 'auto', pr: 0.5 }}>
                 <CardPickerGrid
                   searchable
                   stickySearch
-                  columns={{ xs: 12, sm: 6, md: 6 }}
+                  selectionMode="multiple"
+                  ariaLabel={t('meetings.participants.title')}
+                  columns={{ xs: 12, sm: 12, md: 6 }}
                   searchPlaceholder={t('meetings.participants.search')}
                   items={flows.map((flow) => {
-                  const selected = participants.some((person) => person.flowId === flow.id);
-                  return { key: flow.id, searchText: `${flow.name} ${flow.description ?? ''}`, content: (
-                    <Card
-                      variant="outlined"
-                      sx={{
-                        borderColor: selected ? 'primary.main' : 'divider',
-                        bgcolor: selected ? alpha(theme.palette.primary.main, 0.07) : undefined,
-                        boxShadow: selected ? `0 0 0 1px ${alpha(theme.palette.primary.main, 0.24)}` : undefined,
-                      }}
-                    >
-                      <CardActionArea onClick={() => toggleFlow(flow)} sx={{ p: 1.6 }}>
-                        <Stack direction="row" spacing={1.4} alignItems="center">
-                          <Avatar sx={{ bgcolor: selected ? 'primary.main' : alpha(theme.palette.text.primary, 0.08) }}>
-                            {selected ? <CheckCircleRounded /> : <PersonRounded />}
-                          </Avatar>
-                          <Box sx={{ flex: 1, minWidth: 0 }}>
-                            <Typography fontWeight={700} noWrap>{flow.name}</Typography>
-                            <Typography variant="caption" color="text.secondary">
-                              {t('meetings.participants.steps', { count: flow.nodes.length })}
-                            </Typography>
-                          </Box>
-                          {selected ? <RemoveCircleOutlineRounded color="primary" /> : <AddRounded color="action" />}
-                        </Stack>
-                      </CardActionArea>
-                    </Card>
-                  ) };
-                })}
+                    const selected = participants.some((person) => person.flowId === flow.id);
+                    return {
+                      key: flow.id,
+                      label: flow.name,
+                      selected,
+                      searchText: `${flow.name} ${flow.description ?? ''}`,
+                      onSelect: () => toggleFlow(flow),
+                      content: (
+                        <FlowCard
+                          flow={flow}
+                          selected={selected}
+                          pickerMode
+                          selectionManaged
+                          onSelect={() => {}}
+                        />
+                      ),
+                    };
+                  })}
                 />
               </Box>
             )}
