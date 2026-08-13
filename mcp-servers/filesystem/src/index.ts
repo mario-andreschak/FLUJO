@@ -9,7 +9,11 @@ import {
   ReadResourceRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { configureRootsProvider } from '@flujo-ai/mcp-shared';
-import { filesystemCallTool, filesystemToolDefinitions } from './tools.js';
+import {
+  filesystemCallTool,
+  filesystemToolDefinitions,
+  shutdownFilesystemSearches,
+} from './tools.js';
 import {
   filesystemListResources,
   filesystemReadResource,
@@ -42,11 +46,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: filesystemToolDefinitions(),
 }));
 
-server.setRequestHandler(CallToolRequestSchema, async (request) =>
+server.setRequestHandler(CallToolRequestSchema, async (request, extra) =>
   filesystemCallTool(
     request.params.name,
     request.params.arguments ?? {},
     callerNodeIdOf(request.params._meta),
+    extra.signal,
   ),
 );
 
@@ -69,13 +74,18 @@ async function shutdown(): Promise<void> {
   if (closing) return;
   closing = true;
   configureRootsProvider(undefined);
+  shutdownFilesystemSearches();
   await server.close().catch(() => undefined);
 }
 process.once('SIGINT', () => void shutdown());
 process.once('SIGTERM', () => void shutdown());
 process.once('SIGHUP', () => void shutdown());
+process.stdin.once('end', () => void shutdown());
+process.stdin.once('close', () => void shutdown());
+server.onclose = () => void shutdown();
 
 server.connect(transport).catch((error) => {
+  shutdownFilesystemSearches();
   process.stderr.write(`@mario.andreschak/mcp-filesystem failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
   process.exitCode = 1;
 });

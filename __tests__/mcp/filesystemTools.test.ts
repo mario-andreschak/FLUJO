@@ -6,7 +6,15 @@
 import { promises as fsp } from 'fs';
 import os from 'os';
 import path from 'path';
+import { EventEmitter } from 'events';
+import { PassThrough } from 'stream';
+import { spawn, type ChildProcess } from 'node:child_process';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+
+jest.mock('node:child_process', () => {
+  const actual = jest.requireActual<typeof import('node:child_process')>('node:child_process');
+  return { ...actual, spawn: jest.fn(actual.spawn) };
+});
 
 jest.mock('@/backend/services/mcp/config', () => ({
   loadServerRoots: jest.fn(),
@@ -20,7 +28,11 @@ jest.mock('@modelcontextprotocol/ext-apps', () => ({
 }));
 
 import { loadServerRoots } from '@/backend/services/mcp/config';
-import { filesystemToolDefinitions, filesystemCallTool } from '@/backend/services/mcp/internal/filesystemTools';
+import {
+  filesystemToolDefinitions,
+  filesystemCallTool,
+  _setRipgrepExecutableForTests,
+} from '@/backend/services/mcp/internal/filesystemTools';
 import {
   filesystemListResources,
   isTouchedFileUri,
@@ -29,6 +41,7 @@ import {
 } from '@/backend/services/mcp/internal/filesystemResources';
 
 const mockedRoots = loadServerRoots as jest.Mock;
+const mockedSpawn = spawn as jest.MockedFunction<typeof spawn>;
 
 function text(r: CallToolResult): string {
   const first = r.content[0] as { text: string };
@@ -39,6 +52,60 @@ function parse(r: CallToolResult): Record<string, unknown> {
 }
 function structured(r: CallToolResult): Record<string, unknown> | undefined {
   return (r as { structuredContent?: Record<string, unknown> }).structuredContent;
+}
+
+function mockRipgrepMatches(records: Array<{ path: string; line: number; text: string }>): void {
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  const child = Object.assign(new EventEmitter(), {
+    stdout,
+    stderr,
+    stdin: null,
+    pid: 12_345,
+    killed: false,
+    kill: jest.fn(() => true),
+  }) as unknown as ChildProcess;
+  mockedSpawn.mockImplementationOnce((() => {
+    setImmediate(() => {
+      for (const record of records) {
+        stdout.write(`${JSON.stringify({
+          type: 'match',
+          data: {
+            path: { text: record.path },
+            lines: { text: `${record.text}\n` },
+            line_number: record.line,
+          },
+        })}\n`);
+      }
+      stdout.end();
+      stderr.end();
+      child.emit('close', records.length ? 0 : 1);
+    });
+    return child;
+  }) as typeof spawn);
+}
+
+function mockHangingRipgrep(): jest.Mock {
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  const child = Object.assign(new EventEmitter(), {
+    stdout,
+    stderr,
+    stdin: null,
+    pid: 12_346,
+    killed: false,
+  }) as unknown as ChildProcess;
+  const kill = jest.fn(() => {
+    setImmediate(() => {
+      stdout.end();
+      stderr.end();
+      child.emit('close', null);
+    });
+    return true;
+  });
+  (child as ChildProcess & { kill: typeof kill }).kill = kill;
+  mockedSpawn.mockImplementationOnce((() => child) as typeof spawn);
+  return kill;
 }
 
 describe('filesystem tool definitions', () => {
@@ -63,6 +130,13 @@ describe('filesystem tool definitions', () => {
   it('exposes get_allowed_directories', () => {
     const names = filesystemToolDefinitions().map((t) => t.name);
     expect(names).toContain('get_allowed_directories');
+  });
+
+  it('keeps the search interface limited to path, name, and content', () => {
+    const search = filesystemToolDefinitions().find((tool) => tool.name === 'search');
+    expect(Object.keys(search?.inputSchema.properties ?? {}).sort()).toEqual([
+      'content', 'namePattern', 'path',
+    ]);
   });
 
   it('advertises the read_file batch request form', () => {
@@ -104,6 +178,8 @@ describe('filesystem operations', () => {
     mockedRoots.mockResolvedValue([dir]);
   });
   afterEach(async () => {
+    _setRipgrepExecutableForTests(undefined);
+    mockedSpawn.mockClear();
     await fsp.rm(dir, { recursive: true, force: true });
     mockedRoots.mockReset();
   });
@@ -216,6 +292,75 @@ describe('filesystem operations', () => {
     expect((byName.matches as unknown[]).length).toBeGreaterThanOrEqual(1);
     const byContent = parse(await filesystemCallTool('search', { path: dir, content: 'foo' }));
     expect((byContent.matches as Array<{ line: number }>)[0].line).toBe(1);
+  });
+
+  it('search uses Dirent traversal and the portable Node fallback when ripgrep is unavailable', async () => {
+    _setRipgrepExecutableForTests(null);
+    await fsp.mkdir(path.join(dir, 'nested'));
+    await fsp.writeFile(path.join(dir, 'nested', 'fallback.txt'), 'alpha\nportable token\nomega');
+    const lstat = jest.spyOn(fsp, 'lstat');
+    try {
+      const out = parse(await filesystemCallTool('search', {
+        path: dir,
+        namePattern: 'fallback',
+        content: 'portable token',
+      }));
+      expect(out.matches).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: expect.stringContaining('fallback.txt') }),
+        expect.objectContaining({ path: expect.stringContaining('fallback.txt'), line: 2, text: 'portable token' }),
+      ]));
+      expect(lstat).not.toHaveBeenCalled();
+      expect(mockedSpawn).not.toHaveBeenCalled();
+    } finally {
+      lstat.mockRestore();
+    }
+  });
+
+  it('search uses ripgrep JSON as a transparent content fast path', async () => {
+    const executable = process.platform === 'win32' ? 'C:\\tools\\rg.exe' : '/tools/rg';
+    _setRipgrepExecutableForTests(executable);
+    mockRipgrepMatches([{ path: 'nested/doc.txt', line: 7, text: 'Fast TOKEN result' }]);
+
+    const out = parse(await filesystemCallTool('search', { path: dir, content: 'token' }));
+    expect(out).toEqual({
+      matches: [{ path: path.resolve(dir, 'nested/doc.txt'), line: 7, text: 'Fast TOKEN result' }],
+      truncated: false,
+    });
+    expect(mockedSpawn).toHaveBeenCalledWith(
+      executable,
+      expect.arrayContaining(['--json', '--fixed-strings', '--ignore-case', '--hidden', '--no-ignore', 'token', '.']),
+      expect.objectContaining({ cwd: dir, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }),
+    );
+  });
+
+  it('search enforces one global result budget in the Node fallback', async () => {
+    _setRipgrepExecutableForTests(null);
+    await Promise.all([
+      fsp.writeFile(path.join(dir, 'many-a.txt'), Array.from({ length: 700 }, () => 'shared token').join('\n')),
+      fsp.writeFile(path.join(dir, 'many-b.txt'), Array.from({ length: 700 }, () => 'shared token').join('\n')),
+    ]);
+    const out = parse(await filesystemCallTool('search', { path: dir, content: 'shared token' }));
+    expect(out.matches).toHaveLength(1_000);
+    expect(out.truncated).toBe(true);
+  });
+
+  it('search kills ripgrep when the MCP request is cancelled', async () => {
+    _setRipgrepExecutableForTests(process.platform === 'win32' ? 'C:\\tools\\rg.exe' : '/tools/rg');
+    const kill = mockHangingRipgrep();
+    const controller = new AbortController();
+    const pending = filesystemCallTool(
+      'search',
+      { path: dir, content: 'token' },
+      undefined,
+      controller.signal,
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    controller.abort();
+
+    const result = await pending;
+    expect(result.isError).toBe(true);
+    expect(parse(result).error).toContain('cancelled');
+    expect(kill).toHaveBeenCalled();
   });
 
   it('creates, moves and deletes', async () => {

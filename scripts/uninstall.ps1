@@ -5,7 +5,7 @@
 .DESCRIPTION
     Reverses what scripts\install.ps1 did:
       - Optionally removes the prerequisites it installed via winget (Git, Node.js,
-        Python, uv, and Ollama if it was installed). For each one it asks, defaulting
+        Python, uv, ripgrep, and Ollama if it was installed). For each one it asks, defaulting
         to YES when FLUJO installed it and NO when it was already on the system (read
         from the install manifest).
       - Removes the global 'flujo' command and its user-PATH entry.

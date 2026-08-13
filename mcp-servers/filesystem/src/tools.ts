@@ -22,6 +22,7 @@
  */
 import path from 'node:path';
 import { promises as fs, createReadStream } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import readline from 'node:readline';
 import type { Tool, CallToolResult, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
@@ -91,6 +92,32 @@ const SEARCH_CONCURRENCY = 16;
 const READ_PATTERN_CONTEXT = 2;
 /** #287: cap on matches returned by a single `read_file` pattern grep. */
 const MAX_READ_PATTERN_MATCHES = 200;
+
+type SearchMatch = { path: string; line?: number; text?: string };
+
+/**
+ * ripgrep is an installer-provided acceleration, not a runtime requirement.
+ * Cache by PATH value so a process whose environment is refreshed after an
+ * install can discover it without restarting. `undefined` means automatic,
+ * while `null` is a test-only forced fallback.
+ */
+let ripgrepCache: { pathValue: string; executable: string | null } | undefined;
+let ripgrepExecutableForTests: string | null | undefined;
+const activeRipgrepChildren = new Set<ReturnType<typeof spawn>>();
+
+/** Test seam: force a ripgrep executable, force the Node fallback with null, or reset with undefined. */
+export function _setRipgrepExecutableForTests(value: string | null | undefined): void {
+  ripgrepExecutableForTests = value;
+  ripgrepCache = undefined;
+}
+
+/** Kill external search accelerators before the filesystem MCP process exits. */
+export function shutdownFilesystemSearches(): void {
+  for (const child of activeRipgrepChildren) {
+    try { child.kill(); } catch { /* best-effort shutdown */ }
+  }
+  activeRipgrepChildren.clear();
+}
 
 /** SDK 1.29's exported CallToolResult predates `structuredContent`; widen locally. */
 type StructuredResult = CallToolResult & { structuredContent?: Record<string, unknown> };
@@ -1217,96 +1244,332 @@ async function dirTreeTool(args: Record<string, unknown>, roots: string[]): Prom
   return dualResult({ path: rootPath, depth, truncated, tree });
 }
 
+function pathEnvironmentValue(): string {
+  const entry = Object.entries(process.env).find(([name]) => name.toLowerCase() === 'path');
+  return entry?.[1] ?? '';
+}
+
+/** Locate the installer-provided ripgrep without invoking a shell. */
+async function resolveRipgrepExecutable(): Promise<string | null> {
+  if (ripgrepExecutableForTests !== undefined) return ripgrepExecutableForTests;
+  const pathValue = pathEnvironmentValue();
+  if (ripgrepCache?.pathValue === pathValue) return ripgrepCache.executable;
+
+  const names = process.platform === 'win32' ? ['rg.exe', 'rg'] : ['rg'];
+  let executable: string | null = null;
+  for (const rawDir of pathValue.split(path.delimiter)) {
+    const dir = rawDir.trim().replace(/^"(.*)"$/, '$1');
+    if (!dir) continue;
+    for (const name of names) {
+      const candidate = path.join(dir, name);
+      try {
+        if ((await fs.stat(candidate)).isFile()) {
+          executable = candidate;
+          break;
+        }
+      } catch {
+        /* not in this PATH directory */
+      }
+    }
+    if (executable) break;
+  }
+  ripgrepCache = { pathValue, executable };
+  return executable;
+}
+
 /**
- * #287: content-scan one file for `needle`. Skips oversized and likely-binary
- * files up front (a huge perf/robustness win over reading every file whole),
- * then streams it line-by-line so a match is found without buffering the file.
+ * Fast content search using ripgrep's machine-readable stream. Hidden and
+ * ignored paths remain included to preserve the filesystem tool's historical
+ * semantics; callers can still narrow the root path for a smaller search.
+ * Returning null asks the caller to use the portable Node fallback.
+ */
+async function searchContentWithRipgrep(
+  executable: string,
+  rootPath: string,
+  needle: string,
+  limit: number,
+  signal?: AbortSignal,
+): Promise<{ matches: SearchMatch[]; truncated: boolean } | null> {
+  if (limit <= 0) return { matches: [], truncated: true };
+  const args = [
+    '--json',
+    '--no-config',
+    '--fixed-strings',
+    '--ignore-case',
+    '--hidden',
+    '--no-ignore',
+    '--max-filesize', String(SEARCH_MAX_FILE_BYTES),
+    '--', needle, '.',
+  ];
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(executable, args, {
+      cwd: rootPath,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch {
+    return null;
+  }
+  activeRipgrepChildren.add(child);
+
+  let spawnError: Error | undefined;
+  let cancelled = false;
+  let stderr = '';
+  child.stderr?.on('data', (chunk: Buffer | string) => {
+    if (stderr.length < 8_000) stderr += String(chunk).slice(0, 8_000 - stderr.length);
+  });
+  const closed = new Promise<number | null>((resolve) => {
+    child.once('error', (error: Error) => {
+      spawnError = error;
+      activeRipgrepChildren.delete(child);
+      resolve(null);
+    });
+    child.once('close', (code: number | null) => {
+      activeRipgrepChildren.delete(child);
+      resolve(code);
+    });
+  });
+  const onAbort = () => {
+    cancelled = true;
+    child.kill();
+  };
+  if (signal?.aborted) onAbort();
+  else signal?.addEventListener('abort', onAbort, { once: true });
+  if (!child.stdout) {
+    child.kill();
+    await closed;
+    signal?.removeEventListener('abort', onAbort);
+    return null;
+  }
+
+  const matches: SearchMatch[] = [];
+  let truncated = false;
+  let parseFailed = false;
+  const lines = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
+  try {
+    for await (const line of lines) {
+      if (!line) continue;
+      let event: {
+        type?: string;
+        data?: {
+          path?: { text?: string };
+          lines?: { text?: string };
+          line_number?: number;
+        };
+      };
+      try {
+        event = JSON.parse(line) as typeof event;
+      } catch {
+        parseFailed = true;
+        break;
+      }
+      if (event.type !== 'match') continue;
+      const relativePath = event.data?.path?.text;
+      const text = event.data?.lines?.text;
+      const lineNumber = event.data?.line_number;
+      if (typeof relativePath !== 'string' || typeof text !== 'string' || typeof lineNumber !== 'number') {
+        continue;
+      }
+      matches.push({
+        path: path.isAbsolute(relativePath) ? path.resolve(relativePath) : path.resolve(rootPath, relativePath),
+        line: lineNumber,
+        text: text.replace(/\r?\n$/, '').slice(0, 400),
+      });
+      if (matches.length >= limit) {
+        truncated = true;
+        child.kill();
+        break;
+      }
+    }
+  } finally {
+    lines.close();
+  }
+  if (parseFailed) child.kill();
+  const exitCode = await closed;
+  signal?.removeEventListener('abort', onAbort);
+  if (cancelled) throw new Error('Filesystem search cancelled.');
+  // ripgrep uses 0 for matches and 1 for a clean no-match result. A deliberate
+  // limit kill is also successful because the requested result budget is full.
+  if (spawnError || parseFailed || (!truncated && exitCode !== 0 && exitCode !== 1)) {
+    log.debug('ripgrep search failed; using Node fallback', {
+      error: spawnError?.message,
+      exitCode,
+      stderr: stderr.trim(),
+    });
+    return null;
+  }
+  return { matches, truncated };
+}
+
+/**
+ * Portable one-file scanner. One file descriptor provides the stat, binary
+ * probe, and text stream; the previous implementation opened every candidate
+ * twice in addition to a separate path stat.
  */
 async function scanFileContent(
   full: string,
   needle: string,
-  remaining: number
-): Promise<Array<{ path: string; line: number; text: string }>> {
-  let st: import('fs').Stats;
+  onMatch: (match: SearchMatch) => boolean,
+  shouldStop: () => boolean,
+): Promise<void> {
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  let stream: ReturnType<Awaited<ReturnType<typeof fs.open>>['createReadStream']> | undefined;
+  let lines: readline.Interface | undefined;
   try {
-    st = await fs.stat(full);
-  } catch {
-    return [];
-  }
-  if (!st.isFile() || st.size > SEARCH_MAX_FILE_BYTES) return [];
-  // Binary sniff on the first chunk without loading the whole file.
-  try {
-    const fh = await fs.open(full, 'r');
-    try {
-      const probe = Buffer.alloc(Math.min(8000, st.size));
-      if (probe.length) await fh.read(probe, 0, probe.length, 0);
-      if (looksBinary(probe)) return [];
-    } finally {
-      await fh.close();
+    handle = await fs.open(full, 'r');
+    const st = await handle.stat();
+    if (!st.isFile() || st.size > SEARCH_MAX_FILE_BYTES || shouldStop()) return;
+    const probe = Buffer.alloc(Math.min(8_000, st.size));
+    if (probe.length) await handle.read(probe, 0, probe.length, 0);
+    if (looksBinary(probe) || shouldStop()) return;
+
+    const lower = needle.toLowerCase();
+    stream = handle.createReadStream({ encoding: 'utf8', start: 0, autoClose: false });
+    lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
+    let lineNo = 0;
+    for await (const line of lines) {
+      if (shouldStop()) break;
+      lineNo++;
+      if (line.toLowerCase().includes(lower)
+        && !onMatch({ path: full, line: lineNo, text: line.slice(0, 400) })) {
+        break;
+      }
     }
   } catch {
-    return [];
+    // Unreadable or concurrently removed files are skipped, matching the old search behavior.
+  } finally {
+    lines?.close();
+    stream?.destroy();
+    await handle?.close().catch(() => undefined);
   }
-  const { matches } = await grepFileLines(full, needle, Math.max(1, remaining));
-  return matches.map((m) => ({ path: full, line: m.line, text: m.text }));
 }
 
-async function searchTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
+/** Dirent traversal plus a bounded, globally-budgeted content worker pool. */
+async function searchWithNode(
+  rootPath: string,
+  namePattern: string,
+  contentPattern: string,
+  limit: number,
+  signal?: AbortSignal,
+): Promise<{ matches: SearchMatch[]; truncated: boolean }> {
+  const nameMatches: SearchMatch[] = [];
+  const contentMatches: SearchMatch[] = [];
+  const active = new Set<Promise<void>>();
+  let nameLimitReached = false;
+  let contentLimitReached = false;
+
+  const shouldStopContent = () => signal?.aborted === true || nameLimitReached || contentMatches.length >= limit;
+  const scheduleContentScan = async (full: string): Promise<void> => {
+    if (!contentPattern || shouldStopContent()) return;
+    while (active.size >= SEARCH_CONCURRENCY && !shouldStopContent()) {
+      await Promise.race(active);
+    }
+    if (shouldStopContent()) return;
+    const task = scanFileContent(
+      full,
+      contentPattern,
+      (match) => {
+        if (contentMatches.length >= limit) return false;
+        contentMatches.push(match);
+        if (contentMatches.length >= limit) {
+          contentLimitReached = true;
+          return false;
+        }
+        return !nameLimitReached;
+      },
+      shouldStopContent,
+    ).finally(() => active.delete(task));
+    active.add(task);
+  };
+
+  async function walk(dir: string): Promise<void> {
+    if (signal?.aborted || nameLimitReached || (!namePattern && contentLimitReached)) return;
+    let entries: import('node:fs').Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (signal?.aborted || nameLimitReached || (!namePattern && contentLimitReached)) return;
+      const full = path.join(dir, entry.name);
+      if (namePattern && entry.name.toLowerCase().includes(namePattern)) {
+        nameMatches.push({ path: full });
+        if (nameMatches.length >= limit) {
+          nameLimitReached = true;
+          return;
+        }
+      }
+
+      let isDirectory = entry.isDirectory();
+      let isFile = entry.isFile();
+      // Dirent normally carries the type on Windows/macOS/Linux. Fall back only
+      // for filesystems that report an unknown type; never follow symlinks.
+      if (!isDirectory && !isFile && !entry.isSymbolicLink()) {
+        const type = await entryType(full);
+        isDirectory = type === 'directory';
+        isFile = type === 'file';
+      }
+      if (isDirectory) {
+        await walk(full);
+      } else if (isFile && contentPattern && !contentLimitReached) {
+        await scheduleContentScan(full);
+      }
+    }
+  }
+
+  await walk(rootPath);
+  await Promise.all(active);
+  const matches = [...nameMatches, ...contentMatches].slice(0, limit);
+  return {
+    matches,
+    truncated: nameLimitReached || contentLimitReached || nameMatches.length + contentMatches.length >= limit,
+  };
+}
+
+async function searchTool(
+  args: Record<string, unknown>,
+  roots: string[],
+  signal?: AbortSignal,
+): Promise<CallToolResult> {
+  if (signal?.aborted) throw new Error('Filesystem search cancelled.');
   const rootPath = await resolvePath(args.path, roots);
   const namePattern = typeof args.namePattern === 'string' ? args.namePattern.toLowerCase() : '';
   const contentPattern = typeof args.content === 'string' ? args.content : '';
   if (!namePattern && !contentPattern) {
     return errorResult('Provide "namePattern" and/or "content" to search for.');
   }
-  const matches: Array<{ path: string; line?: number; text?: string }> = [];
-  let truncated = false;
 
-  // First pass: walk the tree collecting NAME matches immediately and gathering
-  // the list of candidate files for a (possibly parallel) content scan.
-  const files: string[] = [];
-  async function walk(dir: string): Promise<void> {
-    if (truncated) return;
-    let names: string[];
-    try {
-      names = await fs.readdir(dir);
-    } catch {
-      return;
-    }
-    for (const name of names) {
-      if (truncated) return;
-      const full = path.join(dir, name);
-      const type = await entryType(full);
-      if (namePattern && name.toLowerCase().includes(namePattern)) {
-        matches.push({ path: full });
-        if (matches.length >= MAX_SEARCH_RESULTS) { truncated = true; return; }
-      }
-      if (type === 'directory') {
-        await walk(full);
-      } else if (type === 'file' && contentPattern) {
-        files.push(full);
-      }
-    }
-  }
-  await walk(rootPath);
-
-  // Second pass: scan file contents with bounded concurrency and early stop.
-  if (contentPattern && !truncated) {
-    for (let i = 0; i < files.length && !truncated; i += SEARCH_CONCURRENCY) {
-      const batch = files.slice(i, i + SEARCH_CONCURRENCY);
-      const results = await Promise.all(
-        batch.map((full) => scanFileContent(full, contentPattern, MAX_SEARCH_RESULTS))
-      );
-      for (const fileMatches of results) {
-        for (const m of fileMatches) {
-          matches.push(m);
-          if (matches.length >= MAX_SEARCH_RESULTS) { truncated = true; break; }
-        }
-        if (truncated) break;
-      }
-    }
+  const ripgrep = contentPattern ? await resolveRipgrepExecutable() : null;
+  if (!ripgrep) {
+    const result = await searchWithNode(rootPath, namePattern, contentPattern, MAX_SEARCH_RESULTS, signal);
+    if (signal?.aborted) throw new Error('Filesystem search cancelled.');
+    return dualResult(result);
   }
 
-  return dualResult({ matches, truncated });
+  // Name matches retain their historical priority in the combined response.
+  const names = namePattern
+    ? await searchWithNode(rootPath, namePattern, '', MAX_SEARCH_RESULTS, signal)
+    : { matches: [] as SearchMatch[], truncated: false };
+  if (signal?.aborted) throw new Error('Filesystem search cancelled.');
+  if (names.truncated) return dualResult(names);
+
+  const remaining = MAX_SEARCH_RESULTS - names.matches.length;
+  const content = await searchContentWithRipgrep(ripgrep, rootPath, contentPattern, remaining, signal);
+  if (content) {
+    return dualResult({
+      matches: [...names.matches, ...content.matches],
+      truncated: content.truncated || names.matches.length + content.matches.length >= MAX_SEARCH_RESULTS,
+    });
+  }
+
+  const fallback = await searchWithNode(rootPath, '', contentPattern, remaining, signal);
+  if (signal?.aborted) throw new Error('Filesystem search cancelled.');
+  return dualResult({
+    matches: [...names.matches, ...fallback.matches],
+    truncated: fallback.truncated || names.matches.length + fallback.matches.length >= MAX_SEARCH_RESULTS,
+  });
 }
 
 async function getFileInfoTool(args: Record<string, unknown>, roots: string[]): Promise<CallToolResult> {
@@ -1350,7 +1613,12 @@ async function getAllowedDirectoriesTool(
   return dualResult({ directories: roots });
 }
 
-export async function filesystemCallTool(toolName: string, args: Record<string, unknown>, callerNodeId?: string): Promise<CallToolResult> {
+export async function filesystemCallTool(
+  toolName: string,
+  args: Record<string, unknown>,
+  callerNodeId?: string,
+  signal?: AbortSignal,
+): Promise<CallToolResult> {
   try {
     // MCP App launcher (#97): pure UI trigger — returns immediately without
     // touching the filesystem. The app renders in chat; the user's pick returns
@@ -1373,7 +1641,7 @@ export async function filesystemCallTool(toolName: string, args: Record<string, 
       case 'dir_tree':
         return await dirTreeTool(args, roots);
       case 'search':
-        return await searchTool(args, roots);
+        return await searchTool(args, roots, signal);
       case 'get_file_info':
         return await getFileInfoTool(args, roots);
       case 'create_directory':

@@ -32,6 +32,15 @@ node mcp-servers/browser/dist/index.js
 
 `mcp-flujo` is independently executable and uses `FLUJO_BASE_URL` to reach the running FLUJO instance. When the variable is absent it defaults to `http://127.0.0.1:4200`; FLUJO supplies the effective custom-port URL to managed child processes automatically.
 
+## Filesystem server
+
+The filesystem `search` tool keeps one small cross-platform interface for name
+and literal content matching. Directory traversal uses Node `Dirent` metadata to
+avoid a separate stat for every normal entry. Content search uses `ripgrep` when
+`rg` is available on `PATH`; normal FLUJO installers and the Docker image install
+it. Standalone package consumers without ripgrep transparently use a bounded,
+streaming Node fallback with the same result shape and binary/size guards.
+
 ## Release synchronization
 
 `flujo-ai`, `@mario.andreschak/mcp-flujo`, `@mario.andreschak/mcp-filesystem`, `@mario.andreschak/mcp-bash`, and `@mario.andreschak/mcp-browser` always share one version. `npm version` runs `scripts/sync-version.mjs`, which updates the package manifests, the exact production dependency pins, and the lockfile. `npm run release` builds and validates all packed binaries, publishes the four MCP packages first, publishes `flujo-ai` last, and only then pushes the release commit/tag. Do not publish one package independently.

@@ -3,7 +3,7 @@
     FLUJO installer / updater for Windows.
 
 .DESCRIPTION
-    Installs the prerequisites (Git, Node.js + npm, Python, uv) via winget,
+    Installs the prerequisites (Git, Node.js + npm, Python, uv, ripgrep) via winget,
     refreshes the environment (PATH + vars) for the current session so the new
     tools are usable immediately, clones (or updates) FLUJO, builds it, registers
     a global 'flujo' command (start FLUJO from any folder), and optionally starts
@@ -396,6 +396,7 @@ $prereqResults = @(
     Install-Prereq -CommandName 'node'   -WingetId 'OpenJS.NodeJS'      -DisplayName 'Node.js (includes npm)'
     Install-Prereq -CommandName 'python' -WingetId 'Python.Python.3.12' -DisplayName 'Python 3.12'
     Install-Prereq -CommandName 'uv'     -WingetId 'astral-sh.uv'       -DisplayName 'uv'
+    Install-Prereq -CommandName 'rg'     -WingetId 'BurntSushi.ripgrep.MSVC' -DisplayName 'ripgrep'
 )
 
 Update-SessionEnvironment
