@@ -280,10 +280,13 @@ describe('createPersonaFromRole', () => {
         trust: 'explicit_user',
         sourceRefs,
       });
-      expect(first.persona.coreMemoryItemIds).toEqual([]);
+      expect(first.persona.coreMemoryItemIds).toEqual([first.memoryItems[0].id]);
+      expect(first.persona.composition?.memoryRefs).toEqual([first.memoryItems[0].id]);
 
       const retry = await createPersonaFromRole(input);
       expect(retry.memoryItems).toEqual(first.memoryItems);
+      expect(retry.persona.coreMemoryItemIds).toEqual([first.memoryItems[0].id]);
+      expect(retry.persona.composition?.memoryRefs).toEqual([first.memoryItems[0].id]);
       expect(await listMemoryItems(first.persona.id)).toHaveLength(1);
     });
   });

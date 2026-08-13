@@ -68,6 +68,30 @@ describe('enduring-agent production routes', () => {
     expect(isolated.status).toBe(404);
   });
 
+  it('creates explicit initial memories and pins them in core composition', async () => {
+    const response = await createPersona(request('/v1/personas', workspaceA, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Memory Jim',
+        idempotencyKey: 'route-create-memory-jim',
+        initialMemories: [{ content: 'Jim prefers concise updates.' }],
+      }),
+    }) as never);
+
+    expect(response.status).toBe(201);
+    const bundle = await response.json();
+    expect(bundle.memoryItems).toHaveLength(1);
+    expect(bundle.memoryItems[0]).toMatchObject({
+      personaId: bundle.persona.id,
+      content: 'Jim prefers concise updates.',
+      status: 'active',
+      trust: 'explicit_user',
+    });
+    expect(bundle.persona.coreMemoryItemIds).toEqual([bundle.memoryItems[0].id]);
+    expect(bundle.persona.composition.memoryRefs).toEqual([bundle.memoryItems[0].id]);
+  });
+
   it('lists the built-in Role through the real workspace store', async () => {
     const response = await listRoles(request('/v1/roles', workspaceA) as never);
 
