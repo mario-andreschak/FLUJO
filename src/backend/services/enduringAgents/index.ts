@@ -16,6 +16,7 @@ export * from './personaDispatcher';
 export * from './personaVoiceAdapter';
 export * from './portability';
 export * from './personaAdmin';
+export * from './personaComposition';
 export * from './personaAppGrants';
 export * from './recordMigrations';
 export * from './runtimeEvents';

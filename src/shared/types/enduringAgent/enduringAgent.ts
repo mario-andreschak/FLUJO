@@ -1,6 +1,12 @@
 import type { Flow } from '@/shared/types/flow';
 
 export const ENDURING_AGENT_SCHEMA_VERSION = 1 as const;
+/** Affected product records advance independently from durable runtime records. */
+export const ROLE_DEFINITION_SCHEMA_VERSION = 2 as const;
+export const ROLE_VERSION_SCHEMA_VERSION = 2 as const;
+export const PERSONA_SCHEMA_VERSION = 2 as const;
+export const BEHAVIOR_REVISION_SCHEMA_VERSION = 2 as const;
+export const BEHAVIOR_BINDING_SCHEMA_VERSION = 2 as const;
 export const PERSONA_INSTRUCTION_CONTEXT_SCHEMA_VERSION = 1 as const;
 
 export const PERSONA_LIFECYCLE_STATES = [
@@ -61,10 +67,14 @@ export interface PersonaInstructionContext {
 }
 
 export interface RoleDefinition {
-  schemaVersion: typeof ENDURING_AGENT_SCHEMA_VERSION;
+  schemaVersion: typeof ENDURING_AGENT_SCHEMA_VERSION | typeof ROLE_DEFINITION_SCHEMA_VERSION;
   id: string;
   name: string;
   description?: string;
+  /** Opaque optimistic-concurrency token for the public Role API. */
+  currentVersionId?: string;
+  /** Archived Roles remain readable by pinned Personas but are hidden by default. */
+  archivedAt?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -73,6 +83,85 @@ export interface CreateRoleDefinitionInput {
   id?: string;
   name: string;
   description?: string;
+}
+
+/** Workspace-local reference only; no MCP configuration or credentials are copied. */
+export interface RoleSuggestedAppReference {
+  mcpServerName: string;
+}
+
+export type RoleSuggestedAppStatus =
+  | 'available'
+  | 'disabled'
+  | 'apps_disabled'
+  | 'missing';
+
+export interface PublicRoleSuggestedApp extends RoleSuggestedAppReference {
+  status: RoleSuggestedAppStatus;
+}
+
+export interface CreatePublicRoleInput {
+  id?: string;
+  name: string;
+  prompt: string;
+  suggestedApps?: RoleSuggestedAppReference[];
+}
+
+export interface UpdatePublicRoleInput {
+  expectedCurrentVersionId: string;
+  name?: string;
+  prompt?: string;
+  suggestedApps?: RoleSuggestedAppReference[];
+}
+
+export interface DuplicatePublicRoleInput {
+  name?: string;
+}
+
+export interface RollbackPublicRoleInput {
+  expectedCurrentVersionId: string;
+  sourceVersionId: string;
+}
+
+export interface RestorePublicRoleInput {
+  expectedCurrentVersionId: string;
+}
+
+export interface RoleLifecycleInput {
+  expectedCurrentVersionId: string;
+  action?: 'archive' | 'delete';
+}
+
+export interface PublicRole {
+  id: string;
+  name: string;
+  prompt: string;
+  suggestedApps: PublicRoleSuggestedApp[];
+  archived: boolean;
+  archivedAt?: number;
+  currentVersionId: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface PublicRoleVersion {
+  id: string;
+  roleId: string;
+  version: number;
+  name: string;
+  prompt: string;
+  suggestedApps: PublicRoleSuggestedApp[];
+  createdAt: number;
+  current: boolean;
+}
+
+export interface RoleImpactPreview {
+  roleId: string;
+  personaIds: string[];
+  personaCount: number;
+  pinnedRoleVersionIds: string[];
+  hardDeleteAllowed: boolean;
+  safeAction: 'archive';
 }
 
 export interface RoleBehaviorSlot {
@@ -107,12 +196,14 @@ export interface RoleDefaults {
 
 /** Immutable after creation. A new definition revision receives a new id. */
 export interface RoleVersion {
-  schemaVersion: typeof ENDURING_AGENT_SCHEMA_VERSION;
+  schemaVersion: typeof ENDURING_AGENT_SCHEMA_VERSION | typeof ROLE_VERSION_SCHEMA_VERSION;
   id: string;
   roleDefinitionId: string;
   version: number;
   name: string;
   mission: string;
+  /** Optional workspace-local App suggestions used only by the public Role layer. */
+  suggestedApps?: RoleSuggestedAppReference[];
   behaviorSlots: RoleBehaviorSlot[];
   capabilityRequirements?: RoleCapabilityRequirements;
   defaults?: RoleDefaults;
@@ -126,6 +217,7 @@ export interface CreateRoleVersionInput {
   version: number;
   name: string;
   mission: string;
+  suggestedApps?: RoleSuggestedAppReference[];
   behaviorSlots: RoleBehaviorSlot[];
   capabilityRequirements?: RoleCapabilityRequirements;
   defaults?: RoleDefaults;
@@ -133,7 +225,7 @@ export interface CreateRoleVersionInput {
 }
 
 export interface Persona {
-  schemaVersion: typeof ENDURING_AGENT_SCHEMA_VERSION;
+  schemaVersion: typeof ENDURING_AGENT_SCHEMA_VERSION | typeof PERSONA_SCHEMA_VERSION;
   id: string;
   name: string;
   /** Immutable pin until an explicit upgrade operation changes it. */
@@ -145,6 +237,11 @@ export interface Persona {
   interruptionPolicy: PersonaInterruptionPolicy;
   /** Curated materialized view; items still live in the MemoryItem collection. */
   coreMemoryItemIds?: string[];
+  /**
+   * Product-facing mutable references. Runtime execution never reads these in
+   * place of a pinned RoleVersion, BehaviorRevision, or Activity Flow snapshot.
+   */
+  composition?: PersonaCompositionPreferences;
   /** Hash only—never persist a caller's raw idempotency token. */
   factoryKeyHash?: string;
   /** Crash-retry marker for the multi-record deterministic factory. */
@@ -193,6 +290,80 @@ export interface UpdatePersonaInput {
   expectedUpdatedAt?: number;
 }
 
+/** Friendly Role projection selected by one Persona composition. */
+export interface PersonaRoleComposition {
+  /** Stable RoleDefinition reference. */
+  ref: string;
+  name: string;
+  /** Plain-language Role prompt. */
+  prompt: string;
+  /** Ordered workspace MCP App configuration references. */
+  suggestedAppRefs: string[];
+}
+
+/** Friendly editable Behavior Flow binding; revision mechanics stay internal. */
+export interface PersonaBehaviorComposition {
+  /** Stable existing BehaviorBinding id. */
+  ref: string;
+  name: string;
+  /** Mutable workspace Flow used as the Behavior source. */
+  sourceFlowRef?: string;
+  /** Optional Persona-specific replacement workspace Flow. */
+  overrideFlowRef?: string;
+}
+
+/**
+ * Optional persisted compatibility layer. Missing fields are normalized from
+ * the durable Persona bundle when projecting legacy records.
+ */
+export interface PersonaCompositionPreferences {
+  description?: string;
+  role?: PersonaRoleComposition;
+  coreFlowRef?: string;
+  appRefs?: string[];
+  memoryRefs?: string[];
+  behaviors?: PersonaBehaviorComposition[];
+}
+
+export interface PersonaCompositionMemory {
+  ref: string;
+  kind: MemoryKind;
+  content: string;
+}
+
+/** Default product API view; deliberately omits revisions, hashes, leases, and runtime state. */
+export interface PersonaComposition {
+  personaRef: string;
+  name: string;
+  description: string;
+  role: PersonaRoleComposition;
+  coreFlowRef?: string;
+  appRefs: string[];
+  memories: PersonaCompositionMemory[];
+  behaviors: PersonaBehaviorComposition[];
+  /** Concurrency token required by composition updates. */
+  expectedUpdatedAt: number;
+}
+
+export interface UpdatePersonaBehaviorComposition {
+  ref: string;
+  name: string;
+  sourceFlowRef: string;
+  /** null clears a previously selected Persona override. */
+  overrideFlowRef?: string | null;
+}
+
+export interface UpdatePersonaCompositionInput {
+  expectedUpdatedAt: number;
+  name?: string;
+  description?: string | null;
+  role?: PersonaRoleComposition;
+  coreFlowRef?: string | null;
+  appRefs?: string[];
+  memoryRefs?: string[];
+  behaviors?: UpdatePersonaBehaviorComposition[];
+}
+
 export type BehaviorRevisionSource =
   | {
       kind: 'role_template';
@@ -204,6 +375,9 @@ export type BehaviorRevisionSource =
       kind: 'persona_override';
       parentRevisionId?: string;
       evidenceRefs?: string[];
+      /** Mutable authoring provenance only; flowSnapshot remains executable authority. */
+      sourceFlowRef?: string;
+      overrideFlowRef?: string;
     }
   | {
       kind: 'import';
@@ -212,7 +386,7 @@ export type BehaviorRevisionSource =
 
 /** Immutable, content-addressed, Persona-owned executable Flow snapshot. */
 export interface BehaviorRevision {
-  schemaVersion: typeof ENDURING_AGENT_SCHEMA_VERSION;
+  schemaVersion: typeof ENDURING_AGENT_SCHEMA_VERSION | typeof BEHAVIOR_REVISION_SCHEMA_VERSION;
   id: string;
   behaviorId: string;
   personaId: string;
@@ -236,7 +410,7 @@ export interface CreateBehaviorRevisionInput {
 
 /** Stable Persona-owned Behavior slot pointing at one immutable revision. */
 export interface BehaviorBinding {
-  schemaVersion: typeof ENDURING_AGENT_SCHEMA_VERSION;
+  schemaVersion: typeof ENDURING_AGENT_SCHEMA_VERSION | typeof BEHAVIOR_BINDING_SCHEMA_VERSION;
   id: string;
   personaId: string;
   slotKey: string;

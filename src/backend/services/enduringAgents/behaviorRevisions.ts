@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
 
+import type { BehaviorRevision } from '@/shared/types/enduringAgent';
 import type { Flow, FlowNode } from '@/shared/types/flow';
 
 /**
@@ -151,6 +152,29 @@ export function hashBehaviorFlow(flow: Flow): string {
   return createHash('sha256')
     .update(canonicalJson(executionSignificantFlow(snapshot)))
     .digest('hex');
+}
+
+/**
+ * Project only explicit mutable Flow provenance for the authoring contract.
+ * Legacy snapshots without a workspace reference remain deliberately unset.
+ */
+export function behaviorCompositionFlowRefs(
+  revision: BehaviorRevision,
+): { sourceFlowRef?: string; overrideFlowRef?: string } {
+  if (revision.source.kind === 'role_template') {
+    return { sourceFlowRef: revision.source.templateFlowId };
+  }
+  if (revision.source.kind === 'persona_override') {
+    return {
+      ...(revision.source.sourceFlowRef
+        ? { sourceFlowRef: revision.source.sourceFlowRef }
+        : {}),
+      ...(revision.source.overrideFlowRef
+        ? { overrideFlowRef: revision.source.overrideFlowRef }
+        : {}),
+    };
+  }
+  return {};
 }
 
 /**

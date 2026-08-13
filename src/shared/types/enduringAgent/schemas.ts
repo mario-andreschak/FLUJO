@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 import type { Flow } from '@/shared/types/flow';
 import {
+  BEHAVIOR_BINDING_SCHEMA_VERSION,
+  BEHAVIOR_REVISION_SCHEMA_VERSION,
   ENDURING_AGENT_SCHEMA_VERSION,
   MEMORY_KINDS,
   MEMORY_SCOPES,
@@ -9,6 +11,7 @@ import {
   MEMORY_STATUSES,
   MEMORY_TRUST_LEVELS,
   PERSONA_ACTIVITY_KINDS,
+  PERSONA_SCHEMA_VERSION,
   PERSONA_ACTIVITY_SOURCE_KINDS,
   PERSONA_ACTIVITY_STATUSES,
   PERSONA_AUTONOMY_LEVELS,
@@ -24,6 +27,8 @@ import {
   PERSONA_MAILBOX_STATUSES,
   PERSONA_PRIORITIES,
   PERSONA_WORK_ITEM_STATUSES,
+  ROLE_DEFINITION_SCHEMA_VERSION,
+  ROLE_VERSION_SCHEMA_VERSION,
 } from './enduringAgent';
 
 export const ENDURING_AGENT_SAFE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -37,6 +42,28 @@ const TimestampSchema = z.number().int().nonnegative();
 const NonEmptyText = (max: number) => z.string().trim().min(1).max(max);
 const UniqueIdsSchema = z.array(EnduringAgentIdSchema).max(256)
   .refine((ids) => new Set(ids).size === ids.length, 'IDs must be unique.');
+const UniqueImpactIdsSchema = z.array(EnduringAgentIdSchema).max(10_000)
+  .refine((ids) => new Set(ids).size === ids.length, 'IDs must be unique.');
+const RoleDefinitionRecordVersionSchema = z.union([
+  z.literal(ENDURING_AGENT_SCHEMA_VERSION),
+  z.literal(ROLE_DEFINITION_SCHEMA_VERSION),
+]);
+const RoleVersionRecordVersionSchema = z.union([
+  z.literal(ENDURING_AGENT_SCHEMA_VERSION),
+  z.literal(ROLE_VERSION_SCHEMA_VERSION),
+]);
+const PersonaRecordVersionSchema = z.union([
+  z.literal(ENDURING_AGENT_SCHEMA_VERSION),
+  z.literal(PERSONA_SCHEMA_VERSION),
+]);
+const BehaviorRevisionRecordVersionSchema = z.union([
+  z.literal(ENDURING_AGENT_SCHEMA_VERSION),
+  z.literal(BEHAVIOR_REVISION_SCHEMA_VERSION),
+]);
+const BehaviorBindingRecordVersionSchema = z.union([
+  z.literal(ENDURING_AGENT_SCHEMA_VERSION),
+  z.literal(BEHAVIOR_BINDING_SCHEMA_VERSION),
+]);
 
 const FlowNodeSchema = z.object({
   id: z.string().min(1).max(256),
@@ -110,11 +137,49 @@ export const PersonaPresentationSchema = z.object({
   language: z.string().trim().max(64).optional(),
 }).strict();
 
+export const WorkspaceFlowRefSchema = z.string().trim().min(1).max(256);
+export const PersonaAppRefSchema = z.string().min(1).max(200).refine(
+  (name) => name !== '.' && name !== '..'
+    && !name.includes('/') && !name.includes('\\') && !/[\x00-\x1f]/.test(name),
+  { message: 'Invalid MCP server configuration name.' },
+);
+
+export const PersonaRoleCompositionSchema = z.object({
+  ref: EnduringAgentIdSchema,
+  name: NonEmptyText(160),
+  prompt: NonEmptyText(20_000),
+  suggestedAppRefs: z.array(PersonaAppRefSchema).max(128)
+    .refine((refs) => new Set(refs).size === refs.length, 'App references must be unique.'),
+}).strict();
+
+export const PersonaBehaviorCompositionSchema = z.object({
+  ref: EnduringAgentIdSchema,
+  name: NonEmptyText(160),
+  sourceFlowRef: WorkspaceFlowRefSchema.optional(),
+  overrideFlowRef: WorkspaceFlowRefSchema.optional(),
+}).strict();
+
+export const PersonaCompositionPreferencesSchema = z.object({
+  description: z.string().trim().max(10_000).optional(),
+  role: PersonaRoleCompositionSchema.optional(),
+  coreFlowRef: WorkspaceFlowRefSchema.optional(),
+  appRefs: z.array(PersonaAppRefSchema).max(128)
+    .refine((refs) => new Set(refs).size === refs.length, 'App references must be unique.')
+    .optional(),
+  memoryRefs: UniqueIdsSchema.optional(),
+  behaviors: z.array(PersonaBehaviorCompositionSchema).max(64)
+    .refine((items) => new Set(items.map((item) => item.ref)).size === items.length,
+      'Behavior references must be unique.')
+    .optional(),
+}).strict();
+
 export const RoleDefinitionSchema = z.object({
-  schemaVersion: z.literal(ENDURING_AGENT_SCHEMA_VERSION),
+  schemaVersion: RoleDefinitionRecordVersionSchema,
   id: EnduringAgentIdSchema,
   name: NonEmptyText(160),
   description: z.string().trim().max(10_000).optional(),
+  currentVersionId: EnduringAgentIdSchema.optional(),
+  archivedAt: TimestampSchema.optional(),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
 }).strict().refine(
@@ -126,6 +191,89 @@ export const CreateRoleDefinitionInputSchema = z.object({
   id: EnduringAgentIdSchema.optional(),
   name: NonEmptyText(160),
   description: z.string().trim().max(10_000).optional(),
+}).strict();
+
+export const RoleSuggestedAppReferenceSchema = z.object({
+  mcpServerName: z.string().min(1).max(200).refine(
+    (name) => name === name.trim() && name !== '.' && name !== '..' && !/[/\\\x00-\x1f]/.test(name),
+    { message: 'Invalid MCP server configuration name.' },
+  ),
+}).strict();
+
+const RoleSuggestedAppsSchema = z.array(RoleSuggestedAppReferenceSchema).max(64).refine(
+  (apps) => new Set(apps.map((app) => app.mcpServerName)).size === apps.length,
+  'Suggested App references must be unique.',
+);
+
+export const CreatePublicRoleInputSchema = z.object({
+  id: EnduringAgentIdSchema.optional(),
+  name: NonEmptyText(160),
+  prompt: NonEmptyText(20_000),
+  suggestedApps: RoleSuggestedAppsSchema.optional(),
+}).strict();
+
+export const UpdatePublicRoleInputSchema = z.object({
+  expectedCurrentVersionId: EnduringAgentIdSchema,
+  name: NonEmptyText(160).optional(),
+  prompt: NonEmptyText(20_000).optional(),
+  suggestedApps: RoleSuggestedAppsSchema.optional(),
+}).strict().refine(
+  (input) => input.name !== undefined || input.prompt !== undefined || input.suggestedApps !== undefined,
+  { message: 'At least one editable Role field is required.' },
+);
+
+export const DuplicatePublicRoleInputSchema = z.object({
+  name: NonEmptyText(160).optional(),
+}).strict();
+
+export const RollbackPublicRoleInputSchema = z.object({
+  expectedCurrentVersionId: EnduringAgentIdSchema,
+  sourceVersionId: EnduringAgentIdSchema,
+}).strict();
+
+export const RestorePublicRoleInputSchema = z.object({
+  expectedCurrentVersionId: EnduringAgentIdSchema,
+}).strict();
+
+export const RoleLifecycleInputSchema = z.object({
+  expectedCurrentVersionId: EnduringAgentIdSchema,
+  action: z.enum(['archive', 'delete']).optional().default('archive'),
+}).strict();
+
+export const PublicRoleSuggestedAppSchema = RoleSuggestedAppReferenceSchema.extend({
+  status: z.enum(['available', 'disabled', 'apps_disabled', 'missing']),
+}).strict();
+
+export const PublicRoleSchema = z.object({
+  id: EnduringAgentIdSchema,
+  name: NonEmptyText(160),
+  prompt: NonEmptyText(20_000),
+  suggestedApps: z.array(PublicRoleSuggestedAppSchema).max(64),
+  archived: z.boolean(),
+  archivedAt: TimestampSchema.optional(),
+  currentVersionId: EnduringAgentIdSchema,
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+}).strict();
+
+export const PublicRoleVersionSchema = z.object({
+  id: EnduringAgentIdSchema,
+  roleId: EnduringAgentIdSchema,
+  version: z.number().int().positive().max(1_000_000),
+  name: NonEmptyText(160),
+  prompt: NonEmptyText(20_000),
+  suggestedApps: z.array(PublicRoleSuggestedAppSchema).max(64),
+  createdAt: TimestampSchema,
+  current: z.boolean(),
+}).strict();
+
+export const RoleImpactPreviewSchema = z.object({
+  roleId: EnduringAgentIdSchema,
+  personaIds: UniqueImpactIdsSchema,
+  personaCount: z.number().int().nonnegative().max(10_000),
+  pinnedRoleVersionIds: UniqueImpactIdsSchema,
+  hardDeleteAllowed: z.boolean(),
+  safeAction: z.literal('archive'),
 }).strict();
 
 export const RoleBehaviorSlotSchema = z.object({
@@ -152,12 +300,13 @@ export const RoleDefaultsSchema = z.object({
 }).strict();
 
 export const RoleVersionSchema = z.object({
-  schemaVersion: z.literal(ENDURING_AGENT_SCHEMA_VERSION),
+  schemaVersion: RoleVersionRecordVersionSchema,
   id: EnduringAgentIdSchema,
   roleDefinitionId: EnduringAgentIdSchema,
   version: z.number().int().positive().max(1_000_000),
   name: NonEmptyText(160),
   mission: NonEmptyText(20_000),
+  suggestedApps: RoleSuggestedAppsSchema.optional(),
   behaviorSlots: z.array(RoleBehaviorSlotSchema).min(1).max(64),
   capabilityRequirements: RoleCapabilityRequirementsSchema.optional(),
   defaults: RoleDefaultsSchema.optional(),
@@ -174,6 +323,7 @@ export const CreateRoleVersionInputSchema = z.object({
   version: z.number().int().positive().max(1_000_000),
   name: NonEmptyText(160),
   mission: NonEmptyText(20_000),
+  suggestedApps: RoleSuggestedAppsSchema.optional(),
   behaviorSlots: z.array(RoleBehaviorSlotSchema).min(1).max(64),
   capabilityRequirements: RoleCapabilityRequirementsSchema.optional(),
   defaults: RoleDefaultsSchema.optional(),
@@ -181,7 +331,7 @@ export const CreateRoleVersionInputSchema = z.object({
 }).strict();
 
 export const PersonaSchema = z.object({
-  schemaVersion: z.literal(ENDURING_AGENT_SCHEMA_VERSION),
+  schemaVersion: PersonaRecordVersionSchema,
   id: EnduringAgentIdSchema,
   name: NonEmptyText(160),
   roleVersionId: EnduringAgentIdSchema,
@@ -191,6 +341,7 @@ export const PersonaSchema = z.object({
   autonomyLevel: z.enum(PERSONA_AUTONOMY_LEVELS),
   interruptionPolicy: z.enum(PERSONA_INTERRUPTION_POLICIES),
   coreMemoryItemIds: UniqueIdsSchema.optional(),
+  composition: PersonaCompositionPreferencesSchema.optional(),
   factoryKeyHash: z.string().regex(SHA256_PATTERN).optional(),
   provisioningState: z.enum(['pending', 'ready']).optional(),
   createdAt: TimestampSchema,
@@ -246,6 +397,47 @@ export const UpdatePersonaInputSchema = z.object({
   expectedUpdatedAt: TimestampSchema.optional(),
 }).strict();
 
+export const PersonaCompositionMemorySchema = z.object({
+  ref: EnduringAgentIdSchema,
+  kind: z.enum(MEMORY_KINDS),
+  content: NonEmptyText(100_000),
+}).strict();
+
+export const PersonaCompositionSchema = z.object({
+  personaRef: EnduringAgentIdSchema,
+  name: NonEmptyText(160),
+  description: z.string().trim().max(10_000),
+  role: PersonaRoleCompositionSchema,
+  coreFlowRef: WorkspaceFlowRefSchema.optional(),
+  appRefs: z.array(PersonaAppRefSchema).max(128),
+  memories: z.array(PersonaCompositionMemorySchema).max(256),
+  behaviors: z.array(PersonaBehaviorCompositionSchema).max(64),
+  expectedUpdatedAt: TimestampSchema,
+}).strict();
+
+export const UpdatePersonaBehaviorCompositionSchema = z.object({
+  ref: EnduringAgentIdSchema,
+  name: NonEmptyText(160),
+  sourceFlowRef: WorkspaceFlowRefSchema,
+  overrideFlowRef: WorkspaceFlowRefSchema.nullable().optional(),
+}).strict();
+
+export const UpdatePersonaCompositionInputSchema = z.object({
+  expectedUpdatedAt: TimestampSchema,
+  name: NonEmptyText(160).optional(),
+  description: z.string().trim().max(10_000).nullable().optional(),
+  role: PersonaRoleCompositionSchema.optional(),
+  coreFlowRef: WorkspaceFlowRefSchema.nullable().optional(),
+  appRefs: z.array(PersonaAppRefSchema).max(128)
+    .refine((refs) => new Set(refs).size === refs.length, 'App references must be unique.')
+    .optional(),
+  memoryRefs: UniqueIdsSchema.optional(),
+  behaviors: z.array(UpdatePersonaBehaviorCompositionSchema).max(64)
+    .refine((items) => new Set(items.map((item) => item.ref)).size === items.length,
+      'Behavior references must be unique.')
+    .optional(),
+}).strict();
+
 export const BehaviorRevisionSourceSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('role_template'),
@@ -257,6 +449,8 @@ export const BehaviorRevisionSourceSchema = z.discriminatedUnion('kind', [
     kind: z.literal('persona_override'),
     parentRevisionId: EnduringAgentIdSchema.optional(),
     evidenceRefs: z.array(NonEmptyText(2048)).max(100).optional(),
+    sourceFlowRef: WorkspaceFlowRefSchema.optional(),
+    overrideFlowRef: WorkspaceFlowRefSchema.optional(),
   }).strict(),
   z.object({
     kind: z.literal('import'),
@@ -265,7 +459,7 @@ export const BehaviorRevisionSourceSchema = z.discriminatedUnion('kind', [
 ]);
 
 export const BehaviorRevisionSchema = z.object({
-  schemaVersion: z.literal(ENDURING_AGENT_SCHEMA_VERSION),
+  schemaVersion: BehaviorRevisionRecordVersionSchema,
   id: EnduringAgentIdSchema,
   behaviorId: EnduringAgentIdSchema,
   personaId: EnduringAgentIdSchema,
@@ -286,7 +480,7 @@ export const CreateBehaviorRevisionInputSchema = BehaviorRevisionSchema.omit({
 }).strict();
 
 export const BehaviorBindingSchema = z.object({
-  schemaVersion: z.literal(ENDURING_AGENT_SCHEMA_VERSION),
+  schemaVersion: BehaviorBindingRecordVersionSchema,
   id: EnduringAgentIdSchema,
   personaId: EnduringAgentIdSchema,
   slotKey: BehaviorSlotKeySchema,

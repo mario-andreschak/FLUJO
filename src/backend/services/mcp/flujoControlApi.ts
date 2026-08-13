@@ -20,6 +20,8 @@ export const FLUJO_AUTHORING_TOOLS = [
   'find_best_mcp_server',
   'install_mcp_server',
   'install_best_mcp_server',
+  'read_persona_composition',
+  'update_persona_composition',
 ] as const;
 
 export const FLUJO_FLOW_TOOLS = [

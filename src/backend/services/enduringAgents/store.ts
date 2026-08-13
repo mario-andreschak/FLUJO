@@ -3,7 +3,6 @@ import type { ZodType } from 'zod';
 import {
   BehaviorBindingSchema,
   BehaviorRevisionSchema,
-  ENDURING_AGENT_SCHEMA_VERSION,
   MemoryItemSchema,
   PersonaAppGrantSchema,
   PersonaActivitySchema,
@@ -49,6 +48,8 @@ import { ENDURING_AGENT_COLLECTIONS } from './collections';
 import { personaAppGrantId, personaDeletionTombstoneId } from './ids';
 import {
   UnsupportedEnduringAgentSchemaError,
+  enduringAgentRecordMigrations,
+  enduringAgentRecordSchemaVersion,
   migrateAndParseRecord,
 } from './recordMigrations';
 import {
@@ -65,8 +66,9 @@ function parseRecord<T>(recordKind: string, schema: ZodType<T>, value: unknown):
   return migrateAndParseRecord({
     recordKind,
     value,
-    currentVersion: ENDURING_AGENT_SCHEMA_VERSION,
+    currentVersion: enduringAgentRecordSchemaVersion(recordKind),
     schema,
+    migrations: enduringAgentRecordMigrations(recordKind),
   });
 }
 

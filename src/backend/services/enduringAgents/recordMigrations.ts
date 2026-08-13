@@ -1,9 +1,71 @@
 import type { ZodType } from 'zod';
 
+import {
+  BEHAVIOR_BINDING_SCHEMA_VERSION,
+  BEHAVIOR_REVISION_SCHEMA_VERSION,
+  ENDURING_AGENT_SCHEMA_VERSION,
+  PERSONA_SCHEMA_VERSION,
+  ROLE_DEFINITION_SCHEMA_VERSION,
+  ROLE_VERSION_SCHEMA_VERSION,
+} from '@/shared/types/enduringAgent';
+
 export interface RecordMigration {
   from: number;
   to: number;
   migrate: (record: Record<string, unknown>) => Record<string, unknown>;
+}
+
+function migrationTo(to: number): readonly RecordMigration[] {
+  return [{
+    from: 1,
+    to,
+    migrate: (record) => ({ ...record, schemaVersion: to }),
+  }];
+}
+
+/** Explicit per-record migrations keep compatibility changes reviewable. */
+export const ROLE_DEFINITION_RECORD_MIGRATIONS =
+  migrationTo(ROLE_DEFINITION_SCHEMA_VERSION);
+export const ROLE_VERSION_RECORD_MIGRATIONS =
+  migrationTo(ROLE_VERSION_SCHEMA_VERSION);
+export const PERSONA_RECORD_MIGRATIONS = migrationTo(PERSONA_SCHEMA_VERSION);
+export const BEHAVIOR_REVISION_RECORD_MIGRATIONS =
+  migrationTo(BEHAVIOR_REVISION_SCHEMA_VERSION);
+export const BEHAVIOR_BINDING_RECORD_MIGRATIONS =
+  migrationTo(BEHAVIOR_BINDING_SCHEMA_VERSION);
+
+export function enduringAgentRecordSchemaVersion(recordKind: string): number {
+  switch (recordKind) {
+    case 'RoleDefinition':
+      return ROLE_DEFINITION_SCHEMA_VERSION;
+    case 'RoleVersion':
+      return ROLE_VERSION_SCHEMA_VERSION;
+    case 'Persona':
+      return PERSONA_SCHEMA_VERSION;
+    case 'BehaviorRevision':
+      return BEHAVIOR_REVISION_SCHEMA_VERSION;
+    case 'BehaviorBinding':
+      return BEHAVIOR_BINDING_SCHEMA_VERSION;
+    default:
+      return ENDURING_AGENT_SCHEMA_VERSION;
+  }
+}
+
+export function enduringAgentRecordMigrations(recordKind: string): readonly RecordMigration[] {
+  switch (recordKind) {
+    case 'RoleDefinition':
+      return ROLE_DEFINITION_RECORD_MIGRATIONS;
+    case 'RoleVersion':
+      return ROLE_VERSION_RECORD_MIGRATIONS;
+    case 'Persona':
+      return PERSONA_RECORD_MIGRATIONS;
+    case 'BehaviorRevision':
+      return BEHAVIOR_REVISION_RECORD_MIGRATIONS;
+    case 'BehaviorBinding':
+      return BEHAVIOR_BINDING_RECORD_MIGRATIONS;
+    default:
+      return [];
+  }
 }
 
 export class UnsupportedEnduringAgentSchemaError extends Error {
@@ -22,9 +84,9 @@ export class UnsupportedEnduringAgentSchemaError extends Error {
 
 /**
  * Single additive migration choke point for every enduring-agent record.
- * Version 1 has no predecessors, but future versions must register each
- * explicit N -> N+1 transform here rather than teaching ordinary reads to
- * guess at old shapes or silently overwrite newer records.
+ * Every schema transition registers an explicit N -> N+1 transform here
+ * rather than teaching ordinary reads to guess at old shapes or silently
+ * overwrite newer records.
  */
 export function migrateAndParseRecord<T>(options: {
   recordKind: string;

@@ -1,11 +1,14 @@
 import { createHash } from 'crypto';
 
 import {
+  BEHAVIOR_BINDING_SCHEMA_VERSION,
+  BEHAVIOR_REVISION_SCHEMA_VERSION,
   BehaviorBindingSchema,
   BehaviorRevisionSchema,
   CreatePersonaInputSchema,
   ENDURING_AGENT_SCHEMA_VERSION,
   MemoryItemSchema,
+  PERSONA_SCHEMA_VERSION,
   PersonaSchema,
   type BehaviorBinding,
   type BehaviorRevision,
@@ -134,7 +137,7 @@ async function materializeBehavior(
   });
   const contentHash = hashBehaviorFlow(flow);
   const revision: BehaviorRevision = BehaviorRevisionSchema.parse({
-    schemaVersion: ENDURING_AGENT_SCHEMA_VERSION,
+    schemaVersion: BEHAVIOR_REVISION_SCHEMA_VERSION,
     id: behaviorRevisionId({
       personaId: persona.id,
       behaviorId,
@@ -158,7 +161,7 @@ async function materializeBehavior(
   await createBehaviorRevision(revision);
 
   const binding: BehaviorBinding = BehaviorBindingSchema.parse({
-    schemaVersion: ENDURING_AGENT_SCHEMA_VERSION,
+    schemaVersion: BEHAVIOR_BINDING_SCHEMA_VERSION,
     id: behaviorId,
     personaId: persona.id,
     slotKey: slot.key,
@@ -174,7 +177,8 @@ async function materializeBehavior(
 async function materializeInitialMemories(
   persona: Persona,
   input: CreatePersonaInput,
-): Promise<void> {
+): Promise<string[]> {
+  const memoryIds: string[] = [];
   for (const [index, candidate] of (input.initialMemories ?? []).entries()) {
     const id = stableEnduringAgentId('memory', {
       personaId: persona.id,
@@ -183,6 +187,7 @@ async function materializeInitialMemories(
       kind: candidate.kind ?? 'semantic',
       scope: candidate.scope ?? 'persona',
     });
+    memoryIds.push(id);
     // Do not resurrect a memory that a user corrected/forgot after factory
     // completion. Presence proves this deterministic input was materialized.
     if (await getMemoryItem(id)) continue;
@@ -207,6 +212,7 @@ async function materializeInitialMemories(
     });
     await createMemoryItem(memory);
   }
+  return memoryIds;
 }
 
 /**
@@ -240,7 +246,7 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
     } else {
       const now = Date.now();
       persona = PersonaSchema.parse({
-        schemaVersion: ENDURING_AGENT_SCHEMA_VERSION,
+        schemaVersion: PERSONA_SCHEMA_VERSION,
         id: personaId,
         name: input.name,
         roleVersionId: roleVersion.id,
@@ -265,13 +271,26 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
     await Promise.all(
       roleVersion.behaviorSlots.map((slot) => materializeBehavior(persona!, roleVersion, slot)),
     );
-    await materializeInitialMemories(persona, input);
+    const initialMemoryIds = await materializeInitialMemories(persona, input);
 
     if (persona.provisioningState !== 'ready') {
       persona = await updatePersonaWithinRuntimeLock(PersonaSchema.parse({
         ...persona,
         lifecycleState: 'idle',
         provisioningState: 'ready',
+        coreMemoryItemIds: initialMemoryIds,
+        composition: {
+          description: '',
+          appRefs: [],
+          memoryRefs: initialMemoryIds,
+          behaviors: roleVersion.behaviorSlots.map((slot) => ({
+            ref: stableEnduringAgentId('behavior', {
+              personaId: persona!.id,
+              slotKey: slot.key,
+            }),
+            name: slot.name,
+          })),
+        },
         updatedAt: Date.now(),
       }), lock);
     }

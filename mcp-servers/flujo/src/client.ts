@@ -26,6 +26,8 @@ const AUTHORING_TOOLS = new Set([
   'find_best_mcp_server',
   'install_mcp_server',
   'install_best_mcp_server',
+  'read_persona_composition',
+  'update_persona_composition',
 ]);
 const FLOW_TOOLS = new Set([
   'propose_ui_action',

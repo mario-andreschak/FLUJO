@@ -48,6 +48,17 @@ jest.mock('@/backend/services/mcp/flowAuthoringTools', () => ({
   ],
   authoringCallTool: jest.fn(async () => ({ content: [{ type: 'text', text: 'authored' }] })),
 }));
+jest.mock('@/backend/services/mcp/personaCompositionTools', () => ({
+  isPersonaCompositionTool: (name: string) => name === 'read_persona_composition',
+  personaCompositionToolDefinitions: () => [{
+    name: 'read_persona_composition',
+    description: 'persona composition',
+    inputSchema: { type: 'object', properties: {} },
+  }],
+  callPersonaCompositionTool: jest.fn(async () => ({
+    content: [{ type: 'text', text: 'persona composition' }],
+  })),
+}));
 // update_flow goes through compileSpec, which pulls gatherGenerationContext -> mcpService.
 jest.mock('@/backend/services/flow/compileFlow', () => ({
   compileSpec: jest.fn(),
@@ -100,6 +111,7 @@ import { flowService } from '@/backend/services/flow';
 import { modelService } from '@/backend/services/model';
 import { runFlow } from '@/backend/execution/flow/runFlow';
 import { authoringCallTool } from '@/backend/services/mcp/flowAuthoringTools';
+import { callPersonaCompositionTool } from '@/backend/services/mcp/personaCompositionTools';
 import { compileSpec } from '@/backend/services/flow/compileFlow';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import { flushConversationLog, readConversationLog, projectMessages } from '@/backend/execution/flow/conversationLog';
@@ -152,6 +164,7 @@ describe('internalToolDefinitions', () => {
     expect(names).toEqual(
       expect.arrayContaining([
         'create_flow', // from the (stubbed) authoring set
+        'read_persona_composition',
         'propose_ui_action',
         'list_flows',
         'discover_capabilities',
@@ -379,6 +392,16 @@ describe('authoring tool routing', () => {
     const r = await internalCallTool(makeService(), 'create_flow', { spec: {} });
     expect(authoringCallTool).toHaveBeenCalledWith('create_flow', { spec: {} });
     expect(text(r)).toBe('authored');
+  });
+
+  it('routes Persona composition tools through the closed registry', async () => {
+    const args = { persona_id: 'persona_1' };
+    const r = await internalCallTool(makeService(), 'read_persona_composition', args);
+    expect(callPersonaCompositionTool).toHaveBeenCalledWith(
+      'read_persona_composition',
+      args,
+    );
+    expect(text(r)).toBe('persona composition');
   });
 });
 

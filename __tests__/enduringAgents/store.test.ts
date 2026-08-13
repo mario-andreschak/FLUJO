@@ -30,6 +30,7 @@ import {
   ENDURING_AGENT_SCHEMA_VERSION,
   FlowSnapshotSchema,
   MemoryItemSchema,
+  PERSONA_SCHEMA_VERSION,
   RoleVersionSchema,
   type BehaviorRevision,
   type BehaviorRevisionSource,
@@ -389,7 +390,7 @@ describe('enduring-agent referential integrity', () => {
 
 describe('enduring-agent schema boundary', () => {
   it.each([
-    ['a future schema version', 2],
+    ['a future schema version', PERSONA_SCHEMA_VERSION + 1],
     ['a missing schema version', undefined],
   ])('rejects %s instead of guessing or rewriting it', async (_label, schemaVersion) => {
     await inFreshWorkspace(async () => {
