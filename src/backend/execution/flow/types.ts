@@ -599,6 +599,9 @@ export interface SubflowLanePlan {
     laneId?: string;
     /** Stable child conversation id reused by every recovery attempt. */
     conversationId?: string;
+    /** Resolved per-key session handle for this job. Reusing the same key in a
+     *  later visit resumes this lane's child conversation as a new turn. */
+    sessionKey?: string;
 }
 
 /** The outcome of one queued child job, kept in request order. */
@@ -615,6 +618,8 @@ export interface SubflowLaneResult {
     laneTitle?: string;
     laneId?: string;
     conversationId?: string;
+    /** Stable caller-visible handle for a resumable keyed child conversation. */
+    sessionKey?: string;
 }
 
 export type SubflowInvocationLaneStatus =
@@ -667,6 +672,10 @@ export interface SubflowInvocation {
     concurrencyLimit: number;
     joinSeparator: string;
     errorStrategy: 'fail-fast' | 'collect-all';
+    /** Session configuration frozen with this durable visit so crash recovery
+     *  cannot silently fall back to per-visit behavior. */
+    sessionScope?: 'per-visit' | 'per-run' | 'per-key';
+    sessionInputMode?: 'resume' | 'summary';
     /** Shared node input stored once for fan-out lanes. Per-lane briefs/items
      *  remain on the lane itself, avoiding N copies of a full chat transcript. */
     sharedInput?: { prompt: string } | { messages: FlujoChatMessage[] };
@@ -725,20 +734,41 @@ export interface StaticNodeParams extends BaseNodeParams<StaticNodeProperties> {
     type: 'static';
 }
 
+export interface StaticAttachment {
+    id?: string;
+    type: 'document' | 'audio' | 'image' | 'video';
+    content: string;
+    originalName?: string;
+    mimeType?: string;
+    transcript?: string;
+}
+
 /**
- * Static node (issue #358): a deterministic, non-LLM, pass-through node that
- * INJECTS pre-authored entries into the conversation when traversed. Each entry
- * is either a plain message (system/user/assistant) or a synthetic assistant
- * tool-call plus its matching tool result (two messages).
+ * Static node entries. A missing executionMode on a tool call is the legacy
+ * mock behavior, preserving existing flows byte-for-byte at runtime.
  */
 export type StaticEntry =
-    | { kind: 'message'; role: 'system' | 'user' | 'assistant'; content: string }
-    | { kind: 'toolCall'; toolName: string; argumentsJson: string; result: string };
+    | {
+        kind: 'message';
+        role: 'system' | 'user' | 'assistant';
+        content: string;
+        attachments?: StaticAttachment[];
+      }
+    | {
+        kind: 'toolCall';
+        toolName: string;
+        argumentsJson: string;
+        result: string;
+        executionMode?: 'mock' | 'real';
+        serverName?: string;
+      };
 
 export interface StaticNodeProperties {
     name?: string;
     /** Entries injected, in order, onto sharedState.messages. Defaults to []. */
     entries?: StaticEntry[];
+    /** MCP attachments derived from static↔MCP graph edges at conversion time. */
+    mcpNodes?: MCPNodeReference[];
     /**
      * Re-entry semantics. Default (`false`/omitted): append entries on every traversal,
      * so a looping node re-injects each iteration with freshly resolved `${var:…}` values.
@@ -948,12 +978,16 @@ export interface SharedState {
     messages: FlujoChatMessage[];
     /** Codex SDK threads persisted with the conversation, keyed by Process node id. */
     codexSessions?: Record<string, CodexSessionMetadata>;
-    /** Server-owned anchors for undoing a confirmed per-message revert. */
+    /** Server-owned anchors for undoing a confirmed per-message restore. */
     revertOperations?: Record<string, {
         messageId: string;
-        root: string;
-        snapshotId: string;
-        paths: string[];
+        mode?: 'chat-and-files' | 'files-only' | 'chat-only';
+        root?: string;
+        snapshotId?: string;
+        paths?: string[];
+        /** Projection ids before/after a suffix restore; content stays in the log. */
+        chatHeadMessageIds?: string[];
+        chatTailMessageIds?: string[];
         createdAt: number;
         undoneAt?: number;
     }>;
@@ -1090,6 +1124,9 @@ export interface SharedState {
          *  the node's `subflowId`; concurrencyLimit controls only active workers.
          *  Single-shot and node-id-scoped like `prompt`. */
         tasks?: string[];
+        /** Per-task session handles aligned by index with `tasks`. `null` means
+         *  that call did not provide a handle. Used only by keyed Subflows. */
+        sessionKeys?: Array<string | null>;
         /** Legacy Phase 4 (issue #130): caller-chosen fan-out target flow ids.
          *  No handoff tool exposes this parameter anymore (superseded by the
          *  spawn-with-brief `task` calls above — issue #156), but the capture

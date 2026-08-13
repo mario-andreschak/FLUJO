@@ -1049,6 +1049,61 @@ describe('validateFlow — static node re-entry & placeholders (#381)', () => {
     expect(r.isRunnable).toBe(false);
   });
 
+  it('requires a server for real tool calls', () => {
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        staticNode('st', {
+          entries: [{ kind: 'toolCall', executionMode: 'real', toolName: 'count', argumentsJson: '{}', result: '' }],
+        }),
+        finishNode(),
+      ],
+      edges: [edge('start', 'st'), edge('st', 'finish')],
+    };
+    const r = validateFlow(flow);
+    expect(codes(r)).toContain('static-real-toolcall-missing-server');
+    expect(r.isRunnable).toBe(false);
+  });
+
+  it('requires a matching connected MCP server with the real tool enabled', () => {
+    const server = mcpNode('mcp', 'math');
+    server.data!.properties!.enabledTools = ['sum'];
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        staticNode('st', {
+          entries: [{ kind: 'toolCall', executionMode: 'real', serverName: 'math', toolName: 'count', argumentsJson: '{}', result: '' }],
+        }),
+        server,
+        finishNode(),
+      ],
+      edges: [edge('start', 'st'), edge('st', 'finish'), edge('st', 'mcp', true)],
+    };
+    const r = validateFlow(flow);
+    expect(codes(r)).toContain('static-real-toolcall-not-wired');
+    expect(r.isRunnable).toBe(false);
+  });
+
+  it('accepts a real tool call wired to the matching enabled MCP tool', () => {
+    const server = mcpNode('mcp', 'math');
+    server.data!.properties!.enabledTools = ['count', 'sum'];
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        staticNode('st', {
+          entries: [{ kind: 'toolCall', executionMode: 'real', serverName: 'math', toolName: 'count', argumentsJson: '{}', result: '' }],
+        }),
+        server,
+        finishNode(),
+      ],
+      edges: [edge('start', 'st'), edge('st', 'finish'), edge('st', 'mcp', true)],
+    };
+    const r = validateFlow(flow);
+    expect(codes(r)).not.toContain('static-real-toolcall-missing-server');
+    expect(codes(r)).not.toContain('static-real-toolcall-not-wired');
+    expect(r.isRunnable).toBe(true);
+  });
+
   it('flags injectOnce on a node that can never be re-entered', () => {
     const flow: VFlow = {
       nodes: [startNode(), staticNode('st', { entries: [messageEntry], injectOnce: true }), finishNode()],

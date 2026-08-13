@@ -1,0 +1,58 @@
+import {
+  normalizeSessionKey,
+  resolveSessionConversationId,
+  resolveSessionIdentity,
+  updateSessionRegistry,
+} from '@/backend/execution/flow/sessionManagement';
+import type { SharedState } from '@/backend/execution/flow/types';
+
+function parentState(): SharedState {
+  return {
+    trackingInfo: { executionId: 'exec', startTime: 1, nodeExecutionTracker: [] },
+    messages: [],
+    flowId: 'parent-flow',
+    conversationId: 'parent-conversation',
+    logicalRunId: 'logical-run-1',
+    title: 'Parent',
+    createdAt: 1,
+    updatedAt: 1,
+  } as SharedState;
+}
+
+describe('resumable Subflow session registry', () => {
+  it('builds run- and key-scoped identities without allowing a missing parent run', () => {
+    expect(resolveSessionIdentity('run-1', 'sub', 'per-run', undefined)).toBe('run-1::sub::');
+    expect(resolveSessionIdentity('run-1', 'sub', 'per-key', 'writer-1')).toBe('run-1::sub::writer-1');
+    expect(resolveSessionIdentity(undefined, 'sub', 'per-run', undefined)).toBeUndefined();
+    expect(resolveSessionIdentity('run-1', 'sub', 'per-key', undefined)).toBeUndefined();
+  });
+
+  it('accepts bounded opaque keys and rejects unsafe/malformed values', () => {
+    expect(normalizeSessionKey('  scene_2:review.v1  ')).toBe('scene_2:review.v1');
+    expect(normalizeSessionKey('contains spaces')).toBeUndefined();
+    expect(normalizeSessionKey('../path')).toBeUndefined();
+    expect(normalizeSessionKey('x'.repeat(129))).toBeUndefined();
+  });
+
+  it('reuses one conversation for the same key and keeps different keys independent', () => {
+    const state = parentState();
+    const firstIdentity = resolveSessionIdentity('logical-run-1', 'sub', 'per-key', 'writer-a')!;
+    const otherIdentity = resolveSessionIdentity('logical-run-1', 'sub', 'per-key', 'writer-b')!;
+
+    const first = resolveSessionConversationId(state, firstIdentity, 'sub', 'writer-a');
+    expect(first.resumedVisit).toBe(false);
+    updateSessionRegistry(state, firstIdentity, 'completed');
+
+    const resumed = resolveSessionConversationId(state, firstIdentity, 'sub', 'writer-a');
+    const other = resolveSessionConversationId(state, otherIdentity, 'sub', 'writer-b');
+
+    expect(resumed).toEqual({ conversationId: first.conversationId, resumedVisit: true });
+    expect(other.resumedVisit).toBe(false);
+    expect(other.conversationId).not.toBe(first.conversationId);
+    expect(state.subflowSessions?.[firstIdentity]).toMatchObject({
+      sessionKey: 'writer-a',
+      visits: 1,
+      status: 'running',
+    });
+  });
+});

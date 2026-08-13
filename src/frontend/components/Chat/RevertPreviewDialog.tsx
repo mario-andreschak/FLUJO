@@ -9,13 +9,21 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  FormControl,
+  FormControlLabel,
   LinearProgress,
   List,
   ListItem,
   ListItemText,
+  Radio,
+  RadioGroup,
   Typography,
 } from '@mui/material';
-import { chatService, type RevertPreview } from '@/frontend/services/chat';
+import {
+  chatService,
+  type RestoreMode,
+  type RevertPreview,
+} from '@/frontend/services/chat';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 
 interface Props {
@@ -33,6 +41,7 @@ export default function RevertPreviewDialog({ open, conversationId, messageId, o
   const [loading, setLoading] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [operationId, setOperationId] = useState<string | null>(null);
+  const [mode, setMode] = useState<RestoreMode>('chat-and-files');
 
   useEffect(() => {
     if (!open || !messageId) return;
@@ -42,7 +51,11 @@ export default function RevertPreviewDialog({ open, conversationId, messageId, o
     setOperationId(null);
     setLoading(true);
     chatService.previewRevert(conversationId, messageId)
-      .then(value => { if (!cancelled) setPreview(value); })
+      .then(value => {
+        if (cancelled) return;
+        setPreview(value);
+        setMode(value.fileRestoreAvailable ? 'chat-and-files' : 'chat-only');
+      })
       .catch(err => { if (!cancelled) setError(err instanceof Error ? err.message : t('chat.revert.previewFailed')); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -53,7 +66,12 @@ export default function RevertPreviewDialog({ open, conversationId, messageId, o
     setConfirming(true);
     setError(null);
     try {
-      const result = await chatService.revertToMessage(conversationId, messageId, preview.previewId);
+      const result = await chatService.revertToMessage(
+        conversationId,
+        messageId,
+        preview.previewId,
+        mode,
+      );
       setOperationId(result.operationId);
       onReverted?.(messageId);
     } catch (err) {
@@ -70,6 +88,7 @@ export default function RevertPreviewDialog({ open, conversationId, messageId, o
     try {
       await chatService.undoRevert(conversationId, operationId);
       setOperationId(null);
+      if (messageId) onReverted?.(messageId);
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : t('chat.revert.undoFailed'));
@@ -88,18 +107,73 @@ export default function RevertPreviewDialog({ open, conversationId, messageId, o
           <Alert severity="success">{t('chat.revert.success')}</Alert>
         ) : preview && (
           <>
-            <Typography variant="body2">{t('chat.revert.review')}</Typography>
-            <List dense>
-              {preview.files.map(file => (
-                <ListItem key={`${file.status}:${file.path}`} disableGutters>
-                  <ListItemText primary={file.path} secondary={file.status} />
-                </ListItem>
-              ))}
-            </List>
-            <Box component="pre" sx={{ maxHeight: 360, overflow: 'auto', p: 1.5, bgcolor: 'action.hover', borderRadius: 1, fontFamily: 'monospace', fontSize: 12, whiteSpace: 'pre-wrap' }}>
-              {preview.diff || t('chat.revert.noDiff')}
+            <FormControl component="fieldset" fullWidth sx={{ mb: 2 }}>
+              <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+                {t('chat.revert.chooseMode')}
+              </Typography>
+              <RadioGroup
+                value={mode}
+                onChange={event => setMode(event.target.value as RestoreMode)}
+              >
+                <FormControlLabel
+                  value="chat-and-files"
+                  control={<Radio />}
+                  disabled={!preview.fileRestoreAvailable}
+                  label={t('chat.revert.mode.chatAndFiles')}
+                />
+                <FormControlLabel
+                  value="files-only"
+                  control={<Radio />}
+                  disabled={!preview.fileRestoreAvailable}
+                  label={t('chat.revert.mode.filesOnly')}
+                />
+                <FormControlLabel
+                  value="chat-only"
+                  control={<Radio />}
+                  label={t('chat.revert.mode.chatOnly')}
+                />
+              </RadioGroup>
+            </FormControl>
+
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              {t('chat.revert.nonFileWarning')}
+            </Alert>
+
+            <Typography variant="subtitle2">{t('chat.revert.restrictionsTitle')}</Typography>
+            <Box component="ul" sx={{ mt: 0.5, mb: 2, pl: 3 }}>
+              <Typography component="li" variant="body2">
+                {t('chat.revert.chatBoundary', { count: preview.chatMessageCount })}
+              </Typography>
+              <Typography component="li" variant="body2">
+                {t('chat.revert.fileBoundary')}
+              </Typography>
+              <Typography component="li" variant="body2">
+                {t('chat.revert.runningRestriction')}
+              </Typography>
             </Box>
-            {preview.truncated && <Typography variant="caption">{t('chat.revert.truncated')}</Typography>}
+
+            {!preview.fileRestoreAvailable && (
+              <Alert severity="info" sx={{ mb: 2 }}>
+                {t(`chat.revert.fileUnavailable.${preview.fileRestoreUnavailableReason ?? 'no-snapshotted-file-changes'}`)}
+              </Alert>
+            )}
+
+            {preview.fileRestoreAvailable && (
+              <>
+                <Typography variant="body2">{t('chat.revert.review')}</Typography>
+                <List dense>
+                  {preview.files.map(file => (
+                    <ListItem key={`${file.status}:${file.path}`} disableGutters>
+                      <ListItemText primary={file.path} secondary={file.status} />
+                    </ListItem>
+                  ))}
+                </List>
+                <Box component="pre" sx={{ maxHeight: 360, overflow: 'auto', p: 1.5, bgcolor: 'action.hover', borderRadius: 1, fontFamily: 'monospace', fontSize: 12, whiteSpace: 'pre-wrap' }}>
+                  {preview.diff || t('chat.revert.noDiff')}
+                </Box>
+                {preview.truncated && <Typography variant="caption">{t('chat.revert.truncated')}</Typography>}
+              </>
+            )}
           </>
         )}
       </DialogContent>

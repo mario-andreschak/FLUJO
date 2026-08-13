@@ -184,8 +184,9 @@ describe('canConvertToBidirectional', () => {
 
 describe('validTargetTypesFor', () => {
   it('agrees with validateConnection for every source/handle combination', () => {
-    expect(validTargetTypesFor('mcp', 'mcp-bottom')).toEqual(['process']);
+    expect(validTargetTypesFor('mcp', 'mcp-bottom')).toEqual(['process', 'static']);
     expect(validTargetTypesFor('process', 'process-left-mcp')).toEqual(['mcp']);
+    expect(validTargetTypesFor('static', 'static-right-mcp')).toEqual(['mcp']);
     // `signal` is a real intermediate flow-control target reachable from any
     // plain control-flow source; it is appended last by the `all` filter order
     // (process, finish, mcp, subflow, resource, signal).

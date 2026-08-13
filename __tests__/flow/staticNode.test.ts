@@ -1,5 +1,5 @@
 /**
- * Static node (issue #358): deterministic conversation injection.
+ * Static node (issue #358): authored conversation injection with mock or real tools.
  *
  * Pins the node contract:
  *  - authored `message` entries are appended to sharedState.messages in order;
@@ -12,9 +12,14 @@
  */
 import { StaticNode } from '@/backend/execution/flow/nodes/StaticNode';
 import type { SharedState, StaticNodeParams } from '@/backend/execution/flow/types';
+import { mcpService } from '@/backend/services/mcp';
 
 jest.mock('@/backend/execution/flow/resolveRunResourceRefs', () => ({
   resolveRunResourceRefs: jest.fn(async (value: string) => value),
+}));
+
+jest.mock('@/backend/services/mcp', () => ({
+  mcpService: { callTool: jest.fn() },
 }));
 
 function makeState(overrides: Partial<SharedState> = {}): SharedState {
@@ -86,6 +91,98 @@ describe('StaticNode', () => {
     expect(tool.role).toBe('tool');
     expect(tool.tool_call_id).toBe(assistant.tool_calls[0].id);
     expect(tool.content).toBe('contents');
+  });
+
+  it('executes real tool calls through the connected MCP node', async () => {
+    (mcpService.callTool as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      data: { content: [{ type: 'text', text: 'live result' }] },
+    });
+    const node = nodeWithSuccessor();
+    const p = params({
+      entries: [{
+        kind: 'toolCall',
+        executionMode: 'real',
+        serverName: 'files',
+        toolName: 'read_file',
+        argumentsJson: '{"path":"a.txt"}',
+        result: 'stale mock',
+      }],
+      mcpNodes: [{
+        id: 'mcp-files',
+        properties: { boundServer: 'files', enabledTools: ['read_file'], toolTimeout: 42 },
+      }],
+    });
+    const state = makeState();
+
+    await run(node, state, p);
+
+    expect(mcpService.callTool).toHaveBeenCalledWith(
+      'files',
+      'read_file',
+      { path: 'a.txt' },
+      42,
+      undefined,
+      'stat',
+    );
+    expect(state.messages).toHaveLength(2);
+    expect((state.messages[0] as any).mcpToolCalls).toEqual({
+      [(state.messages[0] as any).tool_calls[0].id]: { serverName: 'files', toolName: 'read_file' },
+    });
+    expect(state.messages[1].content).toBe(JSON.stringify({ content: [{ type: 'text', text: 'live result' }] }));
+  });
+
+  it('keeps legacy and explicit mock calls deterministic without executing MCP', async () => {
+    (mcpService.callTool as jest.Mock).mockClear();
+    const node = nodeWithSuccessor();
+    const p = params({
+      entries: [
+        { kind: 'toolCall', serverName: 'files', toolName: 'legacy', argumentsJson: '{}', result: 'legacy result' },
+        { kind: 'toolCall', executionMode: 'mock', serverName: 'files', toolName: 'mocked', argumentsJson: '{}', result: 'mock result' },
+      ],
+    });
+    const state = makeState();
+
+    await run(node, state, p);
+
+    expect(mcpService.callTool).not.toHaveBeenCalled();
+    expect(state.messages[1].content).toBe('legacy result');
+    expect(state.messages[3].content).toBe('mock result');
+  });
+
+  it('rejects a real call that is not backed by the connected MCP tool', async () => {
+    const node = nodeWithSuccessor();
+    const p = params({
+      entries: [{
+        kind: 'toolCall', executionMode: 'real', serverName: 'files', toolName: 'write_file', argumentsJson: '{}', result: '',
+      }],
+      mcpNodes: [{ id: 'mcp-files', properties: { boundServer: 'files', enabledTools: ['read_file'] } }],
+    });
+
+    await expect(run(node, makeState(), p)).rejects.toThrow('is not enabled on its connected MCP server');
+  });
+
+  it('projects static message attachments onto text and media', async () => {
+    const node = nodeWithSuccessor();
+    const p = params({
+      entries: [{
+        kind: 'message',
+        role: 'user',
+        content: 'Review these',
+        attachments: [
+          { id: 'doc', type: 'document', originalName: 'notes.txt', content: 'hello' },
+          { id: 'image', type: 'image', originalName: 'diagram.png', mimeType: 'image/png', content: 'data:image/png;base64,YQ==' },
+        ],
+      }],
+    });
+    const state = makeState();
+
+    await run(node, state, p);
+
+    expect(state.messages[0].content).toContain('[DOCUMENT: notes.txt]\nhello');
+    expect(state.messages[0].media).toEqual([{
+      type: 'image', mimeType: 'image/png', data: 'YQ==', name: 'diagram.png', transcript: undefined,
+    }]);
   });
 
   it('rejects invalid JSON arguments', async () => {

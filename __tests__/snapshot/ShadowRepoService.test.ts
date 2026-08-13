@@ -57,7 +57,9 @@ describe('ShadowRepoService', () => {
     prevShadow = _setShadowRepoDirForTests(shadowDir);
     delete process.env.FLUJO_SNAPSHOTS;
     loadItemMock.mockReset();
-    loadItemMock.mockResolvedValue(undefined);
+    loadItemMock.mockResolvedValue({
+      experimental: { enabled: false, snapshotsEnabled: true },
+    });
   });
 
   afterEach(async () => {
@@ -150,11 +152,11 @@ describe('ShadowRepoService', () => {
     }
   });
 
-  it('keeps snapshots enabled when the persisted setting is absent', async () => {
+  it('keeps snapshots disabled when the persisted setting is absent', async () => {
     const repo = await makeRealRepo();
     try {
       loadItemMock.mockResolvedValue({ experimental: { enabled: false } });
-      expect(await shadowRepoService.isEnabledFor(repo)).toBe(true);
+      expect(await shadowRepoService.isEnabledFor(repo)).toBe(false);
     } finally {
       await fsp.rm(repo, { recursive: true, force: true }).catch(() => {});
     }

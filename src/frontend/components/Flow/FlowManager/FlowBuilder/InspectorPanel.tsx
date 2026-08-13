@@ -280,6 +280,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
   return (
     <InspectorSurface
+      data-tour="flow-inspector"
       elevation={0}
       aria-label={beginnerMode && selectedNode ? t('flows.inspector.stepSettings') : beginnerMode ? t('flows.inspector.agentSettings') : t('flows.inspector.flowInspector')}
     >
@@ -358,6 +359,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 node context pills so it is reachable before the editable fields and
                 the variable-length connection sections further down. */}
             <Button
+              data-tour="flow-full-settings"
               variant={beginnerMode ? 'outlined' : 'contained'}
               startIcon={<TuneRoundedIcon />}
               endIcon={<OpenInNewRoundedIcon />}
@@ -384,6 +386,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             {(selectedNode.data.type === 'process' || selectedNode.data.type === 'start') && (
               <Stack spacing={0.75}>
                 <TextField
+                  data-tour="flow-task-prompt"
                   label={
                     beginnerMode
                       ? selectedNode.data.type === 'start' ? t('flows.inspector.helpfulBackground') : t('flows.inspector.aiTask')
@@ -454,6 +457,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               && onSelectMcpNodeServer
               && (
                 <InspectorMcpServers
+                  dataTour="flow-connected-apps"
                   processNodeId={selectedNode.id}
                   connections={typeof selectedNode.data.properties?.boundServer === 'string'
                     && selectedNode.data.properties.boundServer

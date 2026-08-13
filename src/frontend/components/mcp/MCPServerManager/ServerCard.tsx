@@ -688,6 +688,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
 
   return (
     <Card
+      data-tutorial-server-name={name}
       role={pickerMode ? "button" : undefined}
       aria-pressed={pickerMode ? selected : undefined}
       sx={{
@@ -1340,6 +1341,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
         >
           <Box sx={{ display: "flex", alignItems: "center" }}>
             <Switch
+              data-tutorial-server-toggle={name}
               checked={enabled}
               onClick={(e) => e.stopPropagation()}
               onChange={(e) => {

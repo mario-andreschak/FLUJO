@@ -71,6 +71,7 @@ import {
   reconcileInterruptedRecovery,
 } from '@/backend/execution/flow/recoveryCheckpoint';
 import { queueSubflowRunOutcome } from '@/backend/execution/flow/subflowRecovery';
+import { normalizeSessionKey } from '@/backend/execution/flow/sessionManagement';
 import { hydrateLazyToolPayloads } from '@/backend/execution/flow/lazyToolPayloads';
 import { combineAbortSignals } from '@/backend/execution/flow/combineAbortSignals';
 import {
@@ -373,6 +374,11 @@ export interface FlowRunInput {
   mcpAppContexts?: import('@/shared/types/chat').McpAppModelContextMap;
   /** Convenience: a single user message. Used when `messages` is absent. */
   prompt?: string;
+  /** Internal resumable-subflow continuation. For an EXISTING conversation,
+   *  append the supplied input as a new turn instead of replacing its saved
+   *  transcript, then re-enter the child flow from its Start node. Ignored for
+   *  a fresh conversation. */
+  resumeAsNewTurn?: boolean;
   /** Edit support: reset execution to this node (mirrors the legacy processNodeId). */
   processNodeId?: string;
   /** Named inputs seeded onto SharedState.variables (Tier 2c) at run start.
@@ -1073,6 +1079,9 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   sharedState.onApprovalRequired = input.onApprovalRequired ?? sharedState.onApprovalRequired ?? 'auto';
 
   if (!resumingPausedLogicalRun) {
+    // Subflow sessions are scoped to one logical parent run. Old handles stay in
+    // their saved child conversations but must not leak into a later user turn.
+    sharedState.subflowSessions = undefined;
     sharedState.logicalRunId = input.runId ?? crypto.randomUUID();
     sharedState.statisticsRunStartedAt = Date.now();
     sharedState.statisticsRunStarted = false;
@@ -1289,7 +1298,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     if (data.messages && data.messages.length > 0) {
       // As above: drop display-only subflow step messages (depth>0) so they
       // can never round-trip from the projection into the parent transcript.
-      sharedState.messages = data.messages
+      const normalizedInputMessages = data.messages
         .filter(msg => !((msg as any).depth > 0))
         .map(msg => {
           const flujoMsg: FlujoChatMessage = {
@@ -1300,7 +1309,15 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
           };
           return flujoMsg;
         });
-      log.info(`Updated conversation ${sharedState.conversationId} with ${sharedState.messages.length} messages from request`);
+      if (input.resumeAsNewTurn) {
+        sharedState.messages.push(...normalizedInputMessages);
+        const lastUser = [...normalizedInputMessages].reverse().find(m => m.role === 'user');
+        if (lastUser) sharedState.lastUserMessageAt = lastUser.timestamp ?? Date.now();
+        log.info(`Appended ${normalizedInputMessages.length} follow-up message(s) to resumed conversation ${sharedState.conversationId}`);
+      } else {
+        sharedState.messages = normalizedInputMessages;
+        log.info(`Updated conversation ${sharedState.conversationId} with ${sharedState.messages.length} messages from request`);
+      }
       // Stamp lastUserMessageAt whenever a user turn is received
       if (userTurn) {
         const _existLastUser = [...sharedState.messages].reverse().find(m => m.role === 'user');
@@ -1339,6 +1356,26 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         sharedState.executionTrace = [];
       }
     }
+  }
+
+  if (input.resumeAsNewTurn && stateSource !== 'new') {
+    // A finished child is a conversation, not a suspended call stack. A keyed
+    // follow-up starts a new logical turn at the child flow's Start node while
+    // retaining the complete prior transcript that was just appended to.
+    sharedState.currentNodeId = undefined;
+    sharedState.status = 'running';
+    sharedState.lastResponse = undefined;
+    sharedState.lastError = undefined;
+    sharedState.errorEventEmitted = false;
+    sharedState.pendingToolCalls = undefined;
+    sharedState.handoffRequested = undefined;
+    sharedState.handoffInput = undefined;
+    sharedState.pendingSubflowReturn = undefined;
+    sharedState.debugPendingToolCalls = undefined;
+    sharedState.debugPendingAction = undefined;
+    sharedState.debugBoundary = undefined;
+    sharedState.debugPauseRequested = false;
+    sharedState.isCancelled = false;
   }
 
   if (
@@ -2648,6 +2685,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
               // the target node's prep consumes and clears it. A malformed args
               // string must NEVER break routing — parse defensively per call.
               const briefs: string[] = [];
+              const sessionKeys: Array<string | null> = [];
               let callerPrompt = '';
               let signalBody = '';
               let callerFlows: string[] | undefined;
@@ -2668,7 +2706,17 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
                     // Every Subflow handoff call is one queued job, even when it
                     // omits `task` and therefore uses the node's configured input.
                     // Other target types retain the old non-empty-only behavior.
-                    if (isSubflowHandoff || brief) briefs.push(brief);
+                    if (isSubflowHandoff || brief) {
+                      briefs.push(brief);
+                      const sessionKey = normalizeSessionKey(parsedArgs?.sessionKey);
+                      sessionKeys.push(sessionKey ?? null);
+                      if (parsedArgs?.sessionKey !== undefined && !sessionKey) {
+                        log.warn('Ignoring invalid Subflow sessionKey; this job will use fresh/per-node behavior', {
+                          targetNodeId: nextNodeId,
+                          lane: laneIdx + 1,
+                        });
+                      }
+                    }
                     if (!callerPrompt && prompt) callerPrompt = prompt;
                     if (!callerFlows && Array.isArray(parsedArgs?.parallelFlows)) {
                       const flows = parsedArgs.parallelFlows.filter(
@@ -2719,13 +2767,15 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
               // subflow that never opted into spawning.
               if (!callerPrompt && briefs.length === 1) callerPrompt = briefs[0];
               const isSignalHandoff = sharedState.handoffTargetTypes?.[nextNodeId] === 'signal';
-              if (isSignalHandoff || signalBody || callerPrompt || briefs.length > 0 || (callerFlows && callerFlows.length > 0)) {
+              const hasCallerSessionKey = sessionKeys.some((key) => key !== null);
+              if (isSignalHandoff || signalBody || callerPrompt || briefs.length > 0 || hasCallerSessionKey || (callerFlows && callerFlows.length > 0)) {
                 sharedState.handoffInput = {
                   targetNodeId: nextNodeId,
                   prompt: callerPrompt,
                   ...(isSignalHandoff ? { fromHandoffTool: true } : {}),
                   ...(signalBody ? { signalBody } : {}),
                   ...(briefs.length > 0 ? { tasks: briefs } : {}),
+                  ...(hasCallerSessionKey ? { sessionKeys } : {}),
                   ...(callerFlows && callerFlows.length > 0 ? { parallelFlows: callerFlows } : {}),
                   ...(callerConcurrency !== undefined ? { concurrencyLimit: callerConcurrency } : {}),
                 };
@@ -2733,6 +2783,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
                   promptChars: callerPrompt.length,
                   signalBodyChars: signalBody.length,
                   spawnBriefs: briefs.length,
+                  sessionKeys: sessionKeys.filter((key) => key !== null).length,
                   fanoutCount: callerFlows?.length ?? 0,
                 });
               } else {

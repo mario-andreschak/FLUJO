@@ -196,6 +196,8 @@ export const SubflowNodePropertiesModal = ({
   const promptTemplate = nodeData.properties?.promptTemplate || '';
   const inputMode: 'full-history' | 'latest-message' | 'isolated' =
     nodeData.properties?.inputMode || (promptTemplate.trim() ? 'isolated' : 'full-history');
+  const sessionScope: 'per-visit' | 'per-run' | 'per-key' =
+    nodeData.properties?.sessionScope || 'per-visit';
 
   return (
     <Dialog
@@ -471,6 +473,66 @@ export const SubflowNodePropertiesModal = ({
         <Typography variant="body2" color="text.secondary" sx={{ ml: 4, mt: -0.5 }}>
           {t('flows.subflow.saveConversationHelp')}
         </Typography>
+
+        <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
+          {t('flows.subflow.sessionTitle')}
+        </Typography>
+        <Box
+          role="radiogroup"
+          aria-label={t('flows.subflow.sessionAria')}
+          sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}
+        >
+          <OptionCard
+            selected={sessionScope === 'per-visit'}
+            onClick={() => {
+              removeProperty('sessionScope');
+              removeProperty('sessionKey');
+            }}
+            icon={<ChatBubbleOutlineIcon />}
+            title={t('flows.subflow.sessionPerVisit')}
+            description={t('flows.subflow.sessionPerVisitHelp')}
+          />
+          <OptionCard
+            selected={sessionScope === 'per-run'}
+            onClick={() => {
+              handlePropertyChange('sessionScope', 'per-run');
+              removeProperty('sessionKey');
+            }}
+            icon={<HistoryIcon />}
+            title={t('flows.subflow.sessionPerRun')}
+            description={t('flows.subflow.sessionPerRunHelp')}
+          />
+          <OptionCard
+            selected={sessionScope === 'per-key'}
+            onClick={() => handlePropertyChange('sessionScope', 'per-key')}
+            icon={<AccountTreeOutlinedIcon />}
+            title={t('flows.subflow.sessionPerKey')}
+            description={t('flows.subflow.sessionPerKeyHelp')}
+          />
+        </Box>
+        {sessionScope === 'per-key' && (
+          <TextField
+            fullWidth
+            label={t('flows.subflow.sessionKey')}
+            value={nodeData.properties?.sessionKey || ''}
+            onChange={(e) => {
+              if (e.target.value === '') removeProperty('sessionKey');
+              else handlePropertyChange('sessionKey', e.target.value);
+            }}
+            margin="normal"
+            helperText={t('flows.subflow.sessionKeyHelp')}
+          />
+        )}
+        {sessionScope !== 'per-visit' && nodeData.properties?.saveConversation === false && (
+          <Alert severity="warning" sx={{ mt: 1 }}>
+            {t('flows.subflow.sessionRequiresSaved')}
+          </Alert>
+        )}
+        {sessionScope !== 'per-visit' && (
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            {t('flows.subflow.sessionExperimentalHelp')}
+          </Typography>
+        )}
 
         {/* Callable-subflow TOOL invocation (issue #385, deferred Part B of
             #359): a small opt-in toggle. Backend-gated behind the experimental

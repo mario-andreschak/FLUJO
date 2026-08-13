@@ -41,6 +41,7 @@ interface GuidedFlowComposerProps {
   flowNameError: string | null;
   onFlowNameChange: (value: string) => void;
   onSelectNode: (nodeId: string) => void;
+  onOpenNode?: (node: FlowNode) => void;
   onAddTask: (prompt: string) => void;
   onTry?: () => void;
   isSaving?: boolean;
@@ -130,6 +131,7 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
   flowNameError,
   onFlowNameChange,
   onSelectNode,
+  onOpenNode,
   onAddTask,
   onTry,
   isSaving = false,
@@ -306,6 +308,7 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
 
                 <Stack spacing={1} sx={{ mt: 2 }}>
                   <Box
+                    data-tour="flow-start-node"
                     sx={{
                       px: 1.5,
                       py: 1,
@@ -329,6 +332,7 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
                         sx={{ alignSelf: 'center', color: 'text.disabled', fontSize: 20 }}
                       />
                       <Paper
+                        data-tour={node.data.type === 'process' ? 'flow-process-node' : undefined}
                         elevation={0}
                         sx={{
                           width: '100%',
@@ -346,6 +350,7 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
                       >
                         <ButtonBase
                           onClick={() => onSelectNode(node.id)}
+                          onDoubleClick={() => onOpenNode?.(node)}
                           sx={{ display: 'block', width: '100%', p: 1.5, textAlign: 'left' }}
                         >
                           <Stack direction="row" spacing={1.25} alignItems="flex-start">
@@ -452,6 +457,7 @@ export const GuidedFlowComposer: React.FC<GuidedFlowComposerProps> = ({
                     sx={{ alignSelf: 'center', color: 'text.disabled', fontSize: 20 }}
                   />
                   <Box
+                    data-tour="flow-finish-node"
                     sx={{
                       px: 1.5,
                       py: 1,

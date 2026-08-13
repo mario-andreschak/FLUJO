@@ -4,6 +4,7 @@ import { lookup } from 'node:dns/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 import { chromium, type Browser, type BrowserContext, type Page } from 'patchright';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -130,6 +131,16 @@ function allowPrivateHosts(): boolean {
   return booleanEnv('FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS') ?? true;
 }
 
+/**
+ * Browser navigation is deliberately open by default: this is an operator-run
+ * browser, and its primary job is to inspect the operator's local and remote
+ * applications. Deployments that need the former SSRF/origin policy can opt
+ * back into it explicitly.
+ */
+function navigationRestricted(): boolean {
+  return enabledEnv('FLUJO_BROWSER_RESTRICT_NAVIGATION');
+}
+
 function browserWindowVisibility(): BrowserWindowVisibility {
   const configured = process.env.FLUJO_BROWSER_WINDOW_VISIBILITY?.trim().toLowerCase();
   if (configured === 'offscreen' || configured === 'minimized') return configured;
@@ -152,10 +163,9 @@ export function defaultViewport(): { width: number; height: number } {
 
 export function timeoutMs(value: unknown): number {
   if (value === undefined) return DEFAULT_TIMEOUT_MS;
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    throw new BrowserMcpError('INVALID_ARGUMENT', 'timeoutMs must be a finite number.');
-  }
-  return Math.min(MAX_TIMEOUT_MS, Math.max(1_000, Math.trunc(value)));
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_TIMEOUT_MS;
+  return Math.min(MAX_TIMEOUT_MS, Math.max(1_000, Math.trunc(parsed)));
 }
 
 function allowedOrigins(): Set<string> {
@@ -212,19 +222,54 @@ async function resolveHostAddresses(hostname: string): Promise<string[]> {
   return addresses;
 }
 
+async function normalizeNavigationTarget(input: string): Promise<URL> {
+  const raw = input.trim();
+  if (!raw) throw new BrowserMcpError('INVALID_ARGUMENT', 'Provide a URL or local file path to navigate to.');
+
+  const windowsPath = /^[A-Za-z]:[\\/]/.test(raw);
+  const explicitPath = windowsPath || path.isAbsolute(raw) || raw.startsWith('./') || raw.startsWith('../');
+  if (explicitPath) return pathToFileURL(path.resolve(raw));
+  try {
+    await fs.access(path.resolve(raw));
+    return pathToFileURL(path.resolve(raw));
+  } catch {
+    // It is a URL or hostname, not an existing local path.
+  }
+
+  // A hostname followed by a numeric port (localhost:4200, app.test:3000)
+  // is not a URL scheme. Treat only :// or a non-numeric scheme payload as an
+  // explicit protocol.
+  if (!/^[A-Za-z][A-Za-z\d+.-]*:(?:\/\/|[^\d])/.test(raw)) {
+    const local = /^(?:localhost|127(?:\.\d{1,3}){3}|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|\[?::1\]?|[^/\s]+\.local)(?::\d+)?(?:\/|$)/i.test(raw)
+      || /^[^/\s]+:\d+(?:\/|$)/.test(raw);
+    return new URL(`${local ? 'http' : 'https'}://${raw}`);
+  }
+  try {
+    return new URL(raw);
+  } catch {
+    throw new BrowserMcpError('INVALID_ARGUMENT', `Could not understand the browser target ${JSON.stringify(raw)}.`);
+  }
+}
+
 export async function assertNavigationAllowed(input: string): Promise<URL> {
   let url: URL;
   try {
-    url = new URL(input);
-  } catch {
-    throw new BrowserMcpError('NAVIGATION_BLOCKED', 'The URL is malformed.');
+    url = await normalizeNavigationTarget(input);
+  } catch (error) {
+    if (error instanceof BrowserMcpError) throw error;
+    throw new BrowserMcpError('INVALID_ARGUMENT', `Could not understand the browser target ${JSON.stringify(input)}.`);
   }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new BrowserMcpError('NAVIGATION_BLOCKED', 'Only HTTP and HTTPS URLs are allowed.');
+  if (!['http:', 'https:', 'file:'].includes(url.protocol) && !(url.protocol === 'about:' && url.href === 'about:blank')) {
+    throw new BrowserMcpError(
+      'INVALID_ARGUMENT',
+      `The browser cannot navigate to ${url.protocol} targets. Use HTTP(S), a local file path, file://, or about:blank.`,
+    );
   }
   if (url.username || url.password) {
-    throw new BrowserMcpError('NAVIGATION_BLOCKED', 'URLs containing credentials are not allowed.');
+    throw new BrowserMcpError('INVALID_ARGUMENT', 'Remove embedded credentials from the URL and authenticate in the page instead.');
   }
+
+  if (!navigationRestricted() || url.protocol === 'file:' || url.protocol === 'about:') return url;
 
   const configuredOrigins = allowedOrigins();
   if (configuredOrigins.size > 0 && !configuredOrigins.has(url.origin)) {
@@ -612,6 +657,7 @@ function sessionForPage(page: Page | undefined): BrowserSession | undefined {
 
 /** Enforce the same SSRF/navigation policy on sessions, recordings, and capture contexts. */
 export async function installRequestPolicy(context: BrowserContext): Promise<void> {
+  if (!navigationRestricted()) return;
   await context.route('**/*', async (route) => {
     const request = route.request();
     let session: BrowserSession | undefined;

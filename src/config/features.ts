@@ -32,9 +32,6 @@ export const FEATURES = {
    */
   ENABLE_EXECUTION_TRACKER: false, // Enabled by default
 
-  /** Enables the preview/confirm per-message worktree revert UI and API. */
-  ENABLE_REVERT_TO_HERE: false,
-
   /**
    * MCP Tasks extension (issue #404), CLIENT side.
    *

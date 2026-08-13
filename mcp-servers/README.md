@@ -50,15 +50,15 @@ Extensions belong only to the dedicated trusted profile. A user can install ordi
 
 `sessionId` is optional on every browser tool. When omitted, the server targets the most recently used live session. `browser_open` creates a new random session only when no live session exists; supplying an explicit id remains the way to select, reuse, or create a particular session.
 
-Navigation permits HTTP(S), including localhost and private-network destinations by default. Set `FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS=0` to block local/private destinations (including DNS resolutions, memoised for one minute so a media-heavy page does not pay a lookup per subresource). URL credentials remain blocked, and `FLUJO_BROWSER_ALLOWED_ORIGINS` provides a comma-separated exact-origin allowlist for a narrower policy. Only top-level documents count against the redirect cap, so embed-heavy pages are not blocked by their tenth iframe.
+Navigation is open by default for HTTP(S), localhost/private networks, bare hostnames, and local file paths. This is an operator-run inspection browser, so ordinary pages and subresources do not encounter an SSRF allowlist. URL credentials and executable schemes remain rejected. Security-sensitive hosted deployments can set `FLUJO_BROWSER_RESTRICT_NAVIGATION=1` to re-enable the exact-origin/private-host policy controlled by `FLUJO_BROWSER_ALLOWED_ORIGINS` and `FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS`.
 
 `browser_diagnostics` reports the configured and actual mode/channel, headless and profile state, locale/timezone, service-worker policy, and the active page's browser fingerprint. Tool errors include a `category` (`policy`, `runtime`, `input`, or `cancelled`), and successful navigations expose destination-site/WAF challenge detection separately from FLUJO's request-policy counters.
 
 ### Deterministic capture and recording (#366)
 
-`browser_capture_page`, `browser_capture_region`, and `browser_capture_element_metrics` capture a page, an inline HTML fragment, or a local file deterministically: viewport is fixed, animations/caret are disabled, `document.fonts.ready` is awaited, and an optional `waitFor` (CSS selector or JS predicate, its result is boolean-coerced and never returned) gates the capture. Still captures assert a single stable PNG color type rather than silently emitting mixed formats. `file://`/localhost/private-host sources are refused unless **all** of the following hold: `allowLocal: true` on the call, `FLUJO_BROWSER_ALLOW_LOCAL_CAPTURE=1`, and the resolved realpath is inside the FLUJO data directory or `FLUJO_BROWSER_LOCAL_CAPTURE_ROOTS` — ordinary `browser_open`/`browser_navigate` policy is untouched.
+`browser_capture_page`, `browser_capture_region`, and `browser_capture_element_metrics` use one compact `source` parameter that accepts a remote URL, localhost address, bare hostname, local path, file URL, or inline HTML. Omit `source` to capture the active session. Presets such as `720p`, `1080p`, and `4k` and `WIDTHxHEIGHT` strings are normalized rather than rejected; capture retries safe lower resolutions after rendering failures and reports `requestedResolution`, `effectiveResolution`, `warnings`, and failed `attempts`. Legacy `url`/`html`/`filePath`/`width`/`height` calls remain accepted.
 
-`browser_record_start`/`browser_record_stop`/`browser_record_status` record a dedicated session (drivable with the ordinary browser tools while recording) to WebM via Patchright's `recordVideo`, with an optional WAV audio sidecar from the existing Web Audio tap. If an `ffmpeg` binary is discoverable (`FLUJO_FFMPEG_PATH` or `PATH`) the two are muxed into one file; otherwise both artifacts are returned separately with `muxed: false` — ffmpeg is never downloaded or installed. `FLUJO_BROWSER_RECORD_DIR` and `FLUJO_BROWSER_RECORD_MAX_MS` control where artifacts land and the hard duration cap.
+`browser_record_start` returns a drivable session immediately, including when `durationMs` requests auto-stop. It may load `source` before returning; completed auto-stop artifacts remain retrievable through either `browser_record_stop` or `browser_record_status`. Recording sizes are normalized to safe even dimensions (1920×1080 by default) and context creation retries 1080p/720p/480p/360p fallbacks before reporting a failure. The stop path tries both Patchright's normal save and Chromium's raw file, preserves detailed warnings, and returns small videos as embedded MCP media so FLUJO can auto-capture them. If `ffmpeg` (`FLUJO_FFMPEG_PATH` or `PATH`) is available, audio/video are muxed and requested MP4/MOV/WebM output conversions are honored; otherwise the original artifacts remain usable.
 
 This is deliberately separate from `system_screenshot` (below): browser capture renders *a page*, while `system_screenshot` captures *the host desktop*, including unrelated windows. Use browser capture to verify rendered HTML.
 
@@ -80,7 +80,8 @@ Browser controls:
 
 - `FLUJO_BROWSER_ENABLED=1`: seed the ordinary browser MCP record enabled on first migration; default is disabled.
 - `FLUJO_BROWSER_ALLOWED_ORIGINS=https://example.com,https://docs.example.com`: optional exact-origin allowlist.
-- `FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS=0`: block loopback/private/local destinations (allowed by default).
+- `FLUJO_BROWSER_RESTRICT_NAVIGATION=1`: opt into origin/private-host request restrictions (off by default).
+- `FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS=0`: in restricted mode, block loopback/private/local destinations.
 - `FLUJO_BROWSER_MODE=sandbox|trusted`: isolated managed Chromium (default) or headed installed Chrome with a dedicated persistent profile.
 - `FLUJO_BROWSER_EXECUTABLE_PATH`: use an operator-managed Chromium executable instead of Patchright's managed binary.
 - `FLUJO_BROWSER_PROFILE_DIR`: trusted-mode profile directory; defaults to `<FLUJO_DATA_DIR>/browser-profile/trusted`.
@@ -103,6 +104,10 @@ Browser controls:
 - `FLUJO_BROWSER_HEADED=1|0`: headed state (sandbox defaults off; trusted defaults on).
 - `FLUJO_BROWSER_AUDIO=1`: also let the managed browser play audio on the host's speakers.
 - `FLUJO_BROWSER_ALLOW_SERVICE_WORKERS=1|0`: service-worker policy (sandbox defaults blocked; trusted defaults allowed).
+- `FLUJO_BROWSER_RECORD_MAX_WIDTH` / `FLUJO_BROWSER_RECORD_MAX_HEIGHT`: safe recording ceiling (defaults 1920×1080).
+- `FLUJO_BROWSER_RECORD_MAX_MS`: hard auto-stop duration ceiling (default 120 seconds).
+- `FLUJO_BROWSER_INLINE_RECORDING_MAX_BYTES`: largest completed video embedded into the MCP result for automatic FLUJO capture (default 16 MiB); larger files remain at `outputPath`.
+- `FLUJO_FFMPEG_PATH`: optional ffmpeg executable for audio muxing and MP4/MOV/WebM conversion; PATH is probed when unset.
 
 The exposed contract is deliberately narrow: open, navigate/history/reload, snapshot, selector or coordinate click, focused or selector typing, key press, scroll, persisted PNG screenshot, and close. Apart from its own bounded screenshot artifact directory, it exposes no process execution, arbitrary host filesystem access, cookies, storage dumps, raw profiles, or unrestricted downloads.
 

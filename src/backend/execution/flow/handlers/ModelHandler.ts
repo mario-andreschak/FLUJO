@@ -63,7 +63,11 @@ import { isMeetingToolName, executeMeetingTool } from './meetingTools';
 import { isMCPResourceToolName, executeMCPResourceTool, LIST_MCP_RESOURCES_TOOL_NAME } from './mcpResourceTools';
 import { isSubflowToolName, executeSubflowToolCall } from './subflowToolInvocation';
 import { executeDetachedSubflowStart, executeTaskCancel, executeTaskGet, SUBFLOW_DETACHED_TOOL_PREFIX } from './subflowDetachedInvocation';
-import type { RunResourceSettings } from '@/shared/types/runResources';
+import {
+  DEFAULT_TOOL_RESULT_MAX_BYTES,
+  DEFAULT_TOOL_RESULT_MAX_LINES,
+  type RunResourceSettings,
+} from '@/shared/types/runResources';
 import type { ModelStreamDelta, ModelToolProgress, ToolResourceMarker } from '@/backend/services/model/adapters/types';
 import type { RecoveryFailureDetails } from '@/shared/types/execution/events';
 import type { ModelMediaPart } from '@/shared/types/model/media';
@@ -3364,8 +3368,8 @@ export class ModelHandler {
             && resultContent.length >= runResourceSettings.textThresholdChars
           ) {
             const resultBytes = Buffer.byteLength(resultContent, 'utf8');
-            const maxBytes = runResourceSettings.toolResultMaxBytes ?? 50 * 1024;
-            const maxLines = runResourceSettings.toolResultMaxLines ?? 2000;
+            const maxBytes = runResourceSettings.toolResultMaxBytes ?? DEFAULT_TOOL_RESULT_MAX_BYTES;
+            const maxLines = runResourceSettings.toolResultMaxLines ?? DEFAULT_TOOL_RESULT_MAX_LINES;
             const overBytes = maxBytes > 0 && resultBytes > maxBytes;
             let overLines = false;
             if (maxLines > 0) {

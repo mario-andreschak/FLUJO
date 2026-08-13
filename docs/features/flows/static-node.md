@@ -1,26 +1,30 @@
 # Static node
 
-A Static node is a deterministic, non-LLM pass-through node. When a run reaches it, the node appends its authored entries to the conversation in order, then continues through its first outgoing edge. Use it for system-prompt scaffolding, few-shot context, deterministic context seeding, and synthetic tool exchanges.
+A Static node is a non-LLM pass-through node. When a run reaches it, the node appends its authored entries to the conversation in order, then continues through its first outgoing edge. Messages and mocked tools are deterministic; a real tool-call entry executes its connected MCP tool at that point in the sequence. Use it for system-prompt scaffolding, few-shot context, deterministic context seeding, synthetic tool exchanges, and fixed MCP operations that do not need a model to decide when to call them.
 
 Static nodes are an **Advanced** FlowSpec feature. They are unavailable in Guided/simple authoring. For the inclusion and round-trip policy, see the [FlowSpec node-type inclusion policy](../../architecture/flowspec-node-inclusion-policy.md).
 
 ## When to use a Static node
 
-Use a Static node when content must be present in the conversation without calling a model or executing a tool. Common cases include:
+Use a Static node when an authored conversation sequence must run without asking a model to decide what happens next. Common cases include:
 
 - Adding stable system or user instructions before a Process node.
 - Showing a model a prior tool-call and tool-result pair as a few-shot example.
 - Inserting values from run variables or run resources into authored context.
 - Replaying a known tool result in a demo or test flow.
+- Running a fixed MCP operation at a precise point in the sequence.
 
 ## Add a Static node
 
 1. In FlowBuilder, drag a **Static** node from the palette onto the canvas.
 2. Open the node's properties.
-3. Add a message or tool-call entry, then fill in its fields.
-4. Reorder entries so they appear in the intended conversation order.
-5. Optionally enable **Inject once** when the node can be revisited in a loop.
-6. Save the node and connect it to the next step.
+3. Add a message or tool-call entry. Messages use the chat-style composer with references and attachments. For a tool call, choose **Real call at runtime** or **Mocked result**, then pick its MCP server/tool and fill the schema-driven parameter form.
+4. For a mock, either author the result or select **Run & use as mock** to execute the selected tool now and capture both its parameters and result.
+5. Reorder entries so they appear in the intended conversation order.
+6. Optionally enable **Inject once** when the node can be revisited in a loop.
+7. Save the node and connect it to the next step.
+
+Saving reconciles MCP graph wiring automatically. The Static node gets one connected MCP node per server used by its real calls. Several real calls on the same server share that MCP node, and their tool names are merged into its enabled-tool list.
 
 The modal validates tool-call JSON before it can be saved. Arguments that contain
 `${var:…}` / `${res:…}` placeholders are exempt from that check, because they only become
@@ -30,8 +34,20 @@ JSON once the placeholders resolve at run time.
 
 ```ts
 type StaticEntry =
-  | { kind: 'message'; role: 'system' | 'user' | 'assistant'; content: string }
-  | { kind: 'toolCall'; toolName: string; argumentsJson: string; result: string };
+  | {
+      kind: 'message';
+      role: 'system' | 'user' | 'assistant';
+      content: string;
+      attachments?: StaticAttachment[];
+    }
+  | {
+      kind: 'toolCall';
+      toolName: string;
+      argumentsJson: string;
+      result: string;
+      executionMode?: 'mock' | 'real';
+      serverName?: string;
+    };
 
 interface StaticNodeProperties {
   name?: string;
@@ -47,11 +63,16 @@ interface StaticNodeProperties {
 | `injectOnce` | boolean | No | Inject only on the first traversal in a run; defaults to `false`. | No |
 | `role` | `system\|user\|assistant` | Yes for a message | Role of a message entry. | No |
 | `content` | string | Yes for a message | Message text. | Yes |
-| `toolName` | string | Yes for a tool call | Function name in the synthetic assistant call. | No |
+| `attachments` | `StaticAttachment[]` | No | Chat-style message attachments. Text documents are appended to content; supported binary media is attached to the message. | Text documents only |
+| `toolName` | string | Yes for a tool call | Function name in the assistant tool call. | No |
 | `argumentsJson` | string | Yes for a tool call | JSON-encoded function arguments; empty means no arguments. | Yes |
-| `result` | string | Yes for a tool call | Content of the matching synthetic tool result. | Yes |
+| `result` | string | Yes for a mock | Authored mock result. Ignored/replaced with the actual result for real calls. | Mocks only |
+| `executionMode` | `mock\|real` | No | Whether to inject the authored result or execute MCP at runtime. Missing defaults to `mock`. | No |
+| `serverName` | string | Yes for a real call | MCP server used for selection, graph wiring, and execution. Optional metadata for a mock. | No |
 
-A `message` entry creates one conversation message. A `toolCall` entry creates two: an assistant message with a tool call, followed immediately by its matching tool-result message.
+A `message` entry creates one conversation message. Text documents are appended to its text and binary/image/audio/video attachments become message media. A `toolCall` entry creates two messages: an assistant message with a tool call, followed immediately by its matching tool-result message.
+
+`executionMode: 'mock'` injects the authored `result`. It is also the default when `executionMode` is absent, preserving old Static nodes. `executionMode: 'real'` requires `serverName`, a connected MCP node for that server, and the selected tool in that node's `enabledTools`; the runtime executes the tool and injects its actual result. A tool error is injected as `Error: …`, while missing/incorrect graph wiring fails the node explicitly.
 
 ## Common patterns
 
@@ -71,20 +92,37 @@ Place a Static node before a Process node to add stable instructions without inv
 
 Entries retain their authored order, so place each message exactly where it belongs.
 
-### Few-shot synthetic tool exchange
+### Mocked tool exchange
 
 A `toolCall` entry models a prior assistant tool call and its result:
 
 ```json
 {
   "kind": "toolCall",
+  "executionMode": "mock",
+  "serverName": "filesystem",
   "toolName": "read_file",
   "argumentsJson": "{\"path\":\"README.md\"}",
   "result": "# Project README\n..."
 }
 ```
 
-The node creates a valid assistant/tool pair with one shared `tool_call_id`. It does not execute this call.
+The node creates a valid assistant/tool pair with one shared `tool_call_id`. It does not execute this call during the flow. In the editor, **Run & use as mock** may execute it once during authoring and capture the returned payload.
+
+### Real MCP tool call
+
+```json
+{
+  "kind": "toolCall",
+  "executionMode": "real",
+  "serverName": "filesystem",
+  "toolName": "read_file",
+  "argumentsJson": "{\"path\":\"README.md\"}",
+  "result": ""
+}
+```
+
+The Static node executes `filesystem/read_file` every time this entry is reached (subject to `injectOnce`). Its MCP attachment is configuration wiring, not a control-flow successor.
 
 ### Variables and run resources
 
@@ -206,10 +244,12 @@ runs three times:
 | `injectOnce: true` on a node that is not on a loop | Authoring validation reports `static-injectonce-without-loop` (warning); the flow still runs, the setting simply has no effect. | Remove the setting, or connect the node so it can actually be re-entered. |
 | `injectOnce` is not a boolean | FlowSpec compilation warns `static-invalid-injectonce` and ignores the value; the runtime treats anything other than `true` as "append". | Use `true` or `false`. |
 | Malformed imported FlowSpec entry | The compiler drops it and warns `static-invalid-entry`. | Use only the schema shown above. |
-| More than 50 entries | The compiler caps the list and warns `static-too-many-entries`. | Keep the list focused. |
+| More than 200 entries | The compiler caps the list and warns `static-too-many-entries`. | Keep the list focused. |
 | Unknown entry kind | Runtime throws `Static node <nodeId>: unknown entry kind.` | Use `message` or `toolCall`. |
+| Real call has no server | The modal disables Save; FlowSpec compilation warns and safely downgrades it to a mock. | Select an MCP server. |
+| Real call lacks connected/enabled MCP wiring | Runtime fails explicitly instead of silently using the wrong tool. | Re-save the Static node to reconcile its MCP attachments, or repair the graph/tool allowlist. |
 
-A tool-call entry validates only that its name is non-empty and its arguments parse as JSON. The Static node does not execute the call, check that the tool is registered, add a server prefix, or validate arguments against a tool schema. A misspelled name still becomes synthetic context that a model may imitate.
+The visual editor selects registered tools and builds parameters from the live tool schema. Imported flows are still validated defensively at runtime: mocks can carry any realistic tool name, while real calls must match a connected server and enabled tool.
 
 Static nodes do not call a model or consume tokens by themselves, but their injected messages increase context for later model calls. Imported or untrusted FlowSpecs are sanitized, so malformed entries can be silently discarded in addition to compiler warnings.
 
@@ -237,7 +277,7 @@ Verify its name and that it is available for the run. Unknown `${var:...}` and `
 
 ### The model ignores my injected tool result
 
-A Static node adds an example; it does not execute or register a tool. Use a realistic tool name, arguments, and result, and explain in the surrounding prompt how the example should guide the model.
+A mocked Static entry is an example, not a registered capability. Use a realistic tool name, arguments, and result, and explain in the surrounding prompt how the example should guide the model. If you need the operation to happen during the run, switch the entry to **Real call at runtime**.
 
 ## Related
 

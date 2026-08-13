@@ -36,6 +36,7 @@ import {
   syncLaneFromPersistedChild,
 } from '../subflowRecovery';
 import {
+  normalizeSessionKey,
   resolveSessionIdentity,
   resolveSessionConversationId,
   updateSessionRegistry,
@@ -48,11 +49,45 @@ export type RunFlowModule = typeof import('../runFlow');
 /** The single/lane input handed to runFlow (prep sets exactly one form). */
 export type SubflowRunInput = { messages: FlujoChatMessage[] } | { prompt: string };
 
+/** Reduce a parent-side lane input to one genuine follow-up turn. The resumed
+ * child's own transcript is already persisted, so replaying the parent's full
+ * history would replace/duplicate the memory we are trying to preserve. */
+export function buildSessionFollowupInput(input: SubflowRunInput): SubflowRunInput {
+  if ('prompt' in input) return { prompt: input.prompt };
+  const latest = [...input.messages].reverse().find((message) =>
+    (message.role === 'user' || message.role === 'assistant')
+    && (hasContent(message.content) || (message.media?.length ?? 0) > 0),
+  );
+  if (!latest) return { prompt: '' };
+  return {
+    messages: [{
+      role: 'user',
+      content: followupText(latest.content),
+      id: crypto.randomUUID(),
+      timestamp: Date.now(),
+      ...(latest.media?.length ? { media: structuredClone(latest.media) } : {}),
+    }],
+  };
+}
+
 /** True when a message carries real (non-empty) content. */
 function hasContent(content: unknown): boolean {
   if (typeof content === 'string') return content.trim().length > 0;
   if (Array.isArray(content)) return content.length > 0;
   return false;
+}
+
+/** Convert either user or assistant content into a legal user-turn payload. */
+function followupText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content.map((part) => {
+    if (!part || typeof part !== 'object') return '';
+    const value = part as { text?: unknown; refusal?: unknown };
+    if (typeof value.text === 'string') return value.text;
+    if (typeof value.refusal === 'string') return value.refusal;
+    return '';
+  }).join('');
 }
 
 /**
@@ -283,6 +318,8 @@ function prepFromInvocation(
     persistConversation: true,
     emit: sharedState.emit,
     invocationId: invocation.id,
+    sessionScope: invocation.sessionScope,
+    sessionInputMode: invocation.sessionInputMode,
     ...(sharedInput && 'messages' in sharedInput ? { messages: structuredClone(sharedInput.messages) } : {}),
     ...(sharedInput && 'prompt' in sharedInput ? { inputText: sharedInput.prompt } : {}),
     lanes: invocation.lanes.map((lane) => ({
@@ -294,6 +331,7 @@ function prepFromInvocation(
       laneTitle: lane.laneTitle,
       laneId: lane.id,
       conversationId: lane.conversationId,
+      sessionKey: lane.sessionKey,
     })),
     concurrencyLimit: invocation.concurrencyLimit,
     joinSeparator: invocation.joinSeparator,
@@ -340,6 +378,8 @@ async function attachDurableInvocation(
     concurrencyLimit: Math.max(1, prepResult.concurrencyLimit ?? 4),
     joinSeparator: prepResult.joinSeparator ?? '\n\n',
     errorStrategy: prepResult.errorStrategy ?? 'collect-all',
+    sessionScope: prepResult.sessionScope,
+    sessionInputMode: prepResult.sessionInputMode,
     sharedInput: cloneInput(sharedInput),
     lanes: prepResult.lanes.map((lane, index, lanes) => ({
       ...lane,
@@ -369,6 +409,7 @@ async function attachDurableInvocation(
     laneTitle: lane.laneTitle,
     laneId: lane.id,
     conversationId: lane.conversationId,
+    sessionKey: lane.sessionKey,
   }));
 
   // Persist before the first worker starts. This closes the old recovery gap
@@ -609,6 +650,7 @@ export class SubflowNode extends BaseNode {
       handoffForThisNode?.tasks && handoffForThisNode.tasks.length > 0
         ? handoffForThisNode.tasks
         : undefined;
+    const callerSessionKeys = handoffForThisNode?.sessionKeys;
     const authorBriefs = (node_params?.properties?.spawnBriefs ?? [])
       .map((b) => (typeof b === 'string' ? b.trim() : ''))
       .filter((b) => b !== '');
@@ -664,6 +706,9 @@ export class SubflowNode extends BaseNode {
       // Result presentation mode for parallel subflows (issue #359):
       // 'separate' or 'joined' (default 'joined' when absent for back-compat).
       resultPresentation: node_params?.properties?.resultPresentation ?? 'joined',
+      sessionScope: node_params?.properties?.sessionScope,
+      sessionKeyTemplate: node_params?.properties?.sessionKey,
+      sessionInputMode: node_params?.properties?.sessionInputMode ?? 'resume',
     };
     if (inputMode === 'isolated') {
       // Isolated mode sends a single authored prompt. When this node opted into
@@ -751,6 +796,7 @@ export class SubflowNode extends BaseNode {
       );
       prepResult.lanes = resolvedBriefs.map((brief, i) => {
         const hasBrief = brief.trim().length > 0;
+        const callerSessionKey = normalizeSessionKey(callerSessionKeys?.[i]);
         return {
           subflowId,
           subflowName,
@@ -772,6 +818,7 @@ export class SubflowNode extends BaseNode {
           itemIndex: i,
           itemCount: resolvedBriefs.length,
           laneTitle: hasBrief ? buildConversationTitle(brief) : subflowName,
+          ...(callerSessionKey ? { sessionKey: callerSessionKey } : {}),
         };
       });
       prepResult.concurrencyLimit = Math.max(1, callerConcurrency ?? node_params?.properties?.concurrencyLimit ?? 4);
@@ -880,6 +927,30 @@ export class SubflowNode extends BaseNode {
       prepResult.concurrencyLimit = Math.max(1, node_params?.properties?.concurrencyLimit ?? 4);
       prepResult.joinSeparator = '\n\n';
       prepResult.errorStrategy = 'collect-all';
+    }
+
+    // Resolve an authored per-key handle after the lane plan exists. A caller
+    // supplied key wins; otherwise the template may use the same run-variable /
+    // resource / kv references as a Subflow prompt. Invalid/empty keys safely
+    // fall back to a fresh per-visit child for that lane.
+    if (
+      prepResult.sessionScope === 'per-key'
+      && prepResult.sessionKeyTemplate?.trim()
+      && prepResult.lanes?.length
+    ) {
+      const authoredKey = normalizeSessionKey(
+        await resolveSubflowTemplate(prepResult.sessionKeyTemplate, sharedState, node_params?.id),
+      );
+      if (authoredKey) {
+        prepResult.lanes = prepResult.lanes.map((lane) => ({
+          ...lane,
+          sessionKey: lane.sessionKey ?? authoredKey,
+        }));
+      } else {
+        log.warn('Subflow sessionKey template resolved to an invalid key; using fresh child conversations', {
+          nodeId: node_params?.id,
+        });
+      }
     }
 
     await attachDurableInvocation(sharedState, prepResult);
@@ -1103,6 +1174,7 @@ export class SubflowNode extends BaseNode {
             laneCount,
             status: lane.success ? 'completed' : 'error',
             conversationId: lane.conversationId,
+            sessionKey: lane.sessionKey,
           },
         };
         sharedState.messages.push(laneMessage);
@@ -1346,12 +1418,12 @@ export async function runSubflowLanes(
       // identity resolves to undefined regardless of the node's configured
       // sessionScope, which reproduces pre-#363 per-visit behaviour exactly:
       // every branch below already keys off `sessionIdentity` being truthy.
-      const sessionIdentity = subflowSessionsEnabled
+      const sessionIdentity = subflowSessionsEnabled && prepResult.persistConversation
         ? resolveSessionIdentity(
-            prepResult.parentRunId,
+            parentState?.logicalRunId ?? prepResult.parentRunId,
             prepResult.nodeId,
             prepResult.sessionScope,
-            prepResult.sessionKeyTemplate,
+            lane.sessionKey,
           )
         : undefined;
 
@@ -1362,7 +1434,7 @@ export async function runSubflowLanes(
           parentState,
           sessionIdentity,
           prepResult.nodeId,
-          undefined,
+          lane.sessionKey,
         );
         laneConversationId = result.conversationId;
         resumedVisit = result.resumedVisit;
@@ -1376,7 +1448,9 @@ export async function runSubflowLanes(
       // record (and, transitively, the live view) can show whether this visit
       // resumed a prior child conversation.
       if (durableLane && sessionIdentity) {
+        durableLane.conversationId = laneConversationId!;
         durableLane.sessionIdentity = sessionIdentity;
+        durableLane.sessionKey = lane.sessionKey;
         durableLane.resumedVisit = resumedVisit;
       }
       // Jobs without a brief fall back to the child-flow name so live-view row
@@ -1400,7 +1474,13 @@ export async function runSubflowLanes(
       );
 
       if (durableLane) {
-        const healed = durableLane.status !== 'completed'
+        // A newly-created visit may intentionally point at a child conversation
+        // that completed on an earlier visit. Only heal from that persisted child
+        // once this durable lane has actually attempted its own execution;
+        // otherwise the old completion would swallow the new follow-up turn.
+        const shouldHealPersistedAttempt = durableLane.status !== 'completed'
+          && (!resumedVisit || durableLane.attempt > 0);
+        const healed = shouldHealPersistedAttempt
           ? await syncLaneFromPersistedChild(durableLane)
           : false;
         if (healed && parentState) {
@@ -1419,6 +1499,7 @@ export async function runSubflowLanes(
             outputMedia: durableLane.outputMedia,
             laneId: durableLane.id,
             conversationId: durableLane.conversationId,
+            sessionKey: durableLane.sessionKey,
           };
           return;
         }
@@ -1437,12 +1518,16 @@ export async function runSubflowLanes(
         // persists as its own sidebar conversation via the sanctioned runFlow
         // mode, titled by its brief/item and linked through parentRunId — lanes
         // no longer stay force-ephemeral.
+        const effectiveInput = resumedVisit
+          ? buildSessionFollowupInput(lane.input ?? runInput)
+          : (lane.input ?? runInput);
         const r = await runFlow({
           flowId: lane.subflowId,
-          ...(lane.input ?? runInput),
+          ...effectiveInput,
           source: 'subflow',
           mode: prepResult.persistConversation ? 'conversation' : 'ephemeral',
           ...(laneConversationId ? { conversationId: laneConversationId } : {}),
+          ...(resumedVisit ? { resumeAsNewTurn: true } : {}),
           ...(prepResult.persistConversation && laneTitle ? { title: laneTitle } : {}),
           flujo: true,
           requireApproval: false,
@@ -1477,6 +1562,7 @@ export async function runSubflowLanes(
                 laneTitle: lane.laneTitle,
                 laneId: lane.laneId,
                 conversationId: laneConversationId,
+                sessionKey: lane.sessionKey,
               }
             : {
                 subflowId: lane.subflowId,
@@ -1487,6 +1573,7 @@ export async function runSubflowLanes(
                 laneTitle: lane.laneTitle,
                 laneId: lane.laneId,
                 conversationId: laneConversationId,
+                sessionKey: lane.sessionKey,
               };
         if (durableLane) {
           durableLane.status = r.status === 'error' ? (cancelled ? 'cancelled' : 'error') : 'completed';
@@ -1515,6 +1602,7 @@ export async function runSubflowLanes(
           laneTitle: lane.laneTitle,
           laneId: lane.laneId,
           conversationId: laneConversationId,
+          sessionKey: lane.sessionKey,
         };
         if (durableLane) {
           durableLane.status = 'error';

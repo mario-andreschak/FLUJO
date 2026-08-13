@@ -75,30 +75,30 @@ export class FlowConverter {
         if (edge.data?.edgeType === 'mcp') {
           log.info(`Handling MCP connection: ${edge.id} (${edge.source} -> ${edge.target})`);
 
-          // Find the Process and MCP nodes
-          let processNode: BaseNode | undefined;
+          // Find the executable tool consumer (Process or Static) and MCP node.
+          let consumerNode: BaseNode | undefined;
           let mcpNode: BaseNode | undefined;
 
-          if (sourceNode instanceof ProcessNode) {
-            processNode = sourceNode;
+          if (sourceNode instanceof ProcessNode || sourceNode instanceof StaticNode) {
+            consumerNode = sourceNode;
             mcpNode = targetNode;
-          } else if (targetNode instanceof ProcessNode) {
-            processNode = targetNode;
+          } else if (targetNode instanceof ProcessNode || targetNode instanceof StaticNode) {
+            consumerNode = targetNode;
             mcpNode = sourceNode;
           }
 
-          if (processNode && mcpNode) {
+          if (consumerNode && mcpNode instanceof MCPNode) {
             // Initialize the MCP nodes array if it doesn't exist
-            if (!processNode.node_params.properties) {
-              processNode.node_params.properties = {};
+            if (!consumerNode.node_params.properties) {
+              consumerNode.node_params.properties = {};
             }
-            if (!processNode.node_params.properties.mcpNodes) {
-              processNode.node_params.properties.mcpNodes = [];
+            if (!consumerNode.node_params.properties.mcpNodes) {
+              consumerNode.node_params.properties.mcpNodes = [];
             }
             
             // Store the full MCP node properties once. Duplicate attachment edges
             // must not produce duplicate runtime references.
-            const mcpNodes = processNode.node_params.properties.mcpNodes as MCPNodeReference[];
+            const mcpNodes = consumerNode.node_params.properties.mcpNodes as MCPNodeReference[];
             if (!mcpNodes.some(({ id }) => id === mcpNode.node_params.id)) {
               mcpNodes.push({
                 id: mcpNode.node_params.id,
@@ -106,8 +106,8 @@ export class FlowConverter {
               });
             }
             
-            log.info(`Stored MCP node in Process node properties`, {
-              processNodeId: processNode.node_params.id,
+            log.info(`Stored MCP node in tool consumer properties`, {
+              consumerNodeId: consumerNode.node_params.id,
               mcpNodeId: mcpNode.node_params.id
             });
           } else {
@@ -366,7 +366,12 @@ export class FlowConverter {
           id: node.id,
           label: node.data.label,
           type: 'static',
-          properties: node.data.properties as StaticNodeProperties || { name: node.data.label }
+          properties: {
+            ...((node.data.properties as StaticNodeProperties | undefined) ?? { name: node.data.label }),
+            // Attachment references are derived from graph edges below. Never
+            // mutate/persist a stale runtime copy on the authored Static node.
+            mcpNodes: [],
+          }
         };
         break;
       default:

@@ -46,11 +46,17 @@ import { Flow, FlowNode, HistoryEntry, NodeType } from '@/shared/types/flow';
 import { flowService } from '@/frontend/services/flow';
 import { mcpService } from '@/frontend/services/mcp';
 import { modelService } from '@/frontend/services/model';
+import {
+  BIG_TUTORIAL_EVENT,
+  emitBigTutorialEvent,
+  isBigTutorialEvent,
+} from '@/frontend/components/Tour/bigTutorialEvents';
 import { createEdgeFromConnection, validateConnection } from './Canvas/utils/edgeUtils';
 import { defaultTargetHandleFor } from './Canvas/utils/connectionRules';
 import { computeAutoLayout } from './Canvas/utils/autoLayout';
 import { computeTidyLayout } from './Canvas/utils/tidyLayout';
 import { migrateHandoffPills } from './utils/handoffPillMigration';
+import { reconcileStaticToolConnections } from './utils/staticToolConnections';
 import { Canvas } from './Canvas/index';
 import { NodePalette } from './NodePalette';
 import { getNodeTypes } from './nodeTypeCatalog';
@@ -281,6 +287,23 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   const isMobileBuilder = useMediaQuery(theme.breakpoints.down('md'), { noSsr: true });
 
   const [nodes, setNodes] = useState<FlowNode[]>(initialFlow?.nodes || []);
+
+  useEffect(() => {
+    const listener = (event: Event) => {
+      if (!isBigTutorialEvent(event) || event.detail.type !== 'prepare-app-picker') return;
+      const { processNodeId, query } = event.detail;
+      setNodes(current => current.map(node => ({
+        ...node,
+        selected: node.id === processNodeId,
+      })));
+      window.setTimeout(() => emitBigTutorialEvent({
+        type: 'filter-app-picker',
+        query,
+      }), 150);
+    };
+    window.addEventListener(BIG_TUTORIAL_EVENT, listener);
+    return () => window.removeEventListener(BIG_TUTORIAL_EVENT, listener);
+  }, []);
   // Initialize with the *filtered* edges (same rule the init effect applies)
   // so the very first render already matches what history is seeded with —
   // otherwise an unfiltered→filtered diff could itself mark the flow dirty.
@@ -1680,6 +1703,28 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     setNodeToEdit(null);
     log.debug(`handleNodeUpdate: Closed property modals`);
   }, [updateNodeData]);
+
+  const handleStaticNodeUpdate = useCallback((nodeId: string, data: FlowNode['data']) => {
+    const renamedNodes = nodes.map((candidate) => candidate.id === nodeId
+      ? { ...candidate, data }
+      : candidate);
+    const updatedNodes = migrateHandoffPills(nodes, renamedNodes, edges);
+    const reconciled = reconcileStaticToolConnections({
+      staticNodeId: nodeId,
+      entries: Array.isArray(data.properties?.entries) ? data.properties.entries : [],
+      nodes: updatedNodes,
+      edges,
+      createMcpNode: (serverName, position) => {
+        const created = flowService.createNode('mcp', position);
+        created.data.label = serverName;
+        return created;
+      },
+    });
+    setNodes(reconciled.nodes);
+    setEdges(reconciled.edges);
+    setStaticModalOpen(false);
+    setNodeToEdit(null);
+  }, [edges, nodes]);
   
   // Connect-a-server shortcut from the Process node properties modal: create
   // an MCP node bound to the server, place it next to the process node, and
@@ -1961,7 +2006,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   }, []);
 
   return (
-    <FlowBuilderContainer>
+    <FlowBuilderContainer data-tour="flow-builder" data-tutorial-save-status={saveStatus}>
       {authoringMode === 'advanced' && !isMobileBuilder && (
         <Box sx={{ flex: '0 0 auto', height: '100%', minHeight: 0 }}>
           <NodePalette authoringMode={authoringMode} onAddNode={handleQuickAddNode} />
@@ -2101,6 +2146,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
             )}
 
             <Button
+              data-tour="flow-save"
               variant={authoringMode === 'guided' ? 'outlined' : 'contained'}
               color="primary"
               onClick={() => void handleSave()}
@@ -2269,6 +2315,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
                 markDirty();
               }}
               onSelectNode={handleSelectGuidedNode}
+              onOpenNode={(node) => openNodeProperties(node)}
               onAddTask={handleAddGuidedTask}
               onTry={onTry ? () => { void handleTry(); } : undefined}
               isSaving={saveStatus === 'saving'}
@@ -2506,7 +2553,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         open={staticModalOpen}
         node={nodeToEdit}
         onClose={() => setStaticModalOpen(false)}
-        onSave={handleNodeUpdate}
+        onSave={handleStaticNodeUpdate}
       />
 
       <TriggerNodePropertiesModal

@@ -61,7 +61,7 @@ import { magicLinkUrl } from '@/frontend/utils/magicLink';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import { copyText } from '@/frontend/components/shared/CopyLinkButton';
 import RevertPreviewDialog from './RevertPreviewDialog';
-import { FEATURES } from '@/config/features';
+import { useStorage } from '@/frontend/contexts/StorageContext';
 import type { QueuedMessage } from './chatQueue'; // #221: inline pending bubbles
 import OpenAI from 'openai'; // Import OpenAI types for tool calls
 import { displayToolName } from '@/utils/shared/common'; // Friendly tool-name decode
@@ -1672,6 +1672,8 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   queueHoldReason = null,
   anchorMessageId,
 }) => {
+  const { settings, settingsHydrated } = useStorage();
+  const restoreEnabled = settingsHydrated && settings?.experimental?.snapshotsEnabled === true;
   const { t, tp } = useI18n();
   // --- Render window (long-conversation performance) ---
   const [visibleCount, setVisibleCount] = useState<number>(MESSAGES_WINDOW_INITIAL);
@@ -2025,7 +2027,9 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
             <ListItemText>{t('chat.actions.splitFromHere')}</ListItemText>
           </MenuItem>
         )}
-        {FEATURES.ENABLE_REVERT_TO_HERE && activeMsgForMenu?.changedFiles?.length ? (
+        {restoreEnabled
+          && activeMsgForMenu
+          && (activeMsgForMenu.role === 'user' || activeMsgForMenu.role === 'assistant') ? (
           <MenuItem onClick={handleRevertToHere}>
             <ListItemIcon><RestoreIcon fontSize="small" /></ListItemIcon>
             <ListItemText>{t('chat.actions.revert')}</ListItemText>
@@ -2037,7 +2041,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
         </MenuItem>
       </Menu>
 
-      {FEATURES.ENABLE_REVERT_TO_HERE && conversationId && (
+      {restoreEnabled && conversationId && (
         <RevertPreviewDialog
           open={!!revertMessageId}
           conversationId={conversationId}

@@ -209,6 +209,44 @@ describe('runFlow keystone', () => {
     expect(result.sharedState.flowId).toBe(FLOW_ID);
   });
 
+  it('appends a resumable-subflow follow-up and restarts the saved child from Start', async () => {
+    const conversationId = 'saved-child';
+    conversationStates.set(conversationId, {
+      trackingInfo: { executionId: 'old-run', startTime: 1, nodeExecutionTracker: [] },
+      messages: [
+        { role: 'user', content: 'Draft section one', id: 'old-user', timestamp: 1 },
+        { role: 'assistant', content: 'First draft', id: 'old-answer', timestamp: 2, processNodeId: PROCESS },
+      ],
+      flowId: FLOW_ID,
+      conversationId,
+      currentNodeId: PROCESS,
+      status: 'completed',
+      title: 'Writer',
+      createdAt: 1,
+      updatedAt: 2,
+    } as unknown as SharedState);
+
+    const result = await runFlowWithContext({
+      flowId: FLOW_ID,
+      conversationId,
+      prompt: 'Now apply the review notes',
+      resumeAsNewTurn: true,
+      mode: 'conversation',
+      source: 'subflow',
+      parentRunId: 'parent-conversation',
+    });
+
+    expect(result.messages.map((message) => message.content)).toEqual(expect.arrayContaining([
+      'Draft section one',
+      'First draft',
+      'Now apply the review notes',
+    ]));
+    // Re-entering at the old terminal Process would execute once; Start ->
+    // Process proves the continuation reset the child graph entry point.
+    expect(FlowExecutor.executeStep as jest.Mock).toHaveBeenCalledTimes(2);
+    expect(result.sharedState.status).toBe('completed');
+  });
+
   it('returns the most recent assistant media when a later final message is text-only', async () => {
     const media = [{
       type: 'video' as const,

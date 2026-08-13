@@ -55,6 +55,10 @@ import type { FlowModelReplacementMap } from '@/utils/shared/flowModelReplacemen
 import { createLogger } from '@/utils/logger';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import Trans from '@/frontend/components/shared/Trans';
+import {
+  BIG_TUTORIAL_EVENT,
+  isBigTutorialEvent,
+} from '@/frontend/components/Tour/bigTutorialEvents';
 
 const log = createLogger('components/Flow/FlowDashboard/FlowDashboard');
 
@@ -99,6 +103,14 @@ const FlowDashboard = ({
 }: FlowDashboardProps) => {
   const { t, tp, formatNumber } = useI18n();
   const [searchTerm, setSearchTerm] = useState('');
+  useEffect(() => {
+    const listener = (event: Event) => {
+      if (!isBigTutorialEvent(event) || event.detail.type !== 'filter-agent-search') return;
+      setSearchTerm(event.detail.query);
+    };
+    window.addEventListener(BIG_TUTORIAL_EVENT, listener);
+    return () => window.removeEventListener(BIG_TUTORIAL_EVENT, listener);
+  }, []);
   // #372: place the caret in the search field automatically. The toolbar Paper
   // already sits outside the inner scroll container below, so it stays visible
   // without a sticky wrapper — only auto-focus is needed here.
@@ -359,6 +371,7 @@ const FlowDashboard = ({
         }}>
           {/* Search field */}
           <TextField
+            data-tour="agents-search"
             placeholder={t('flows.dashboard.search')}
             variant="outlined"
             size="small"

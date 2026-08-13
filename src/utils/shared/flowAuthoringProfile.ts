@@ -36,6 +36,8 @@ const ADVANCED_SUBFLOW_PROPERTIES = new Set([
   'resultPresentation',
   'allowCallerPrompt',
   'saveConversation',
+  'sessionScope',
+  'sessionKey',
   'captureVariable',
   'captureResource',
   'captureKv',

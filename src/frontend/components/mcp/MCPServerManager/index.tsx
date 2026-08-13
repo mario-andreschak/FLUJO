@@ -6,6 +6,7 @@ import { magicLinkPath } from '@/frontend/utils/magicLink';
 import { getSelectedWorkspace } from '@/frontend/utils/workspaceSelection';
 import ServerList from './ServerList';
 import ServerModal from './Modals/ServerModal/index';
+import { BIG_TUTORIAL_EVENT, isBigTutorialEvent } from '@/frontend/components/Tour/bigTutorialEvents';
 import { SaveAndAuthenticateResult, type ServerSetupTab } from './Modals/ServerModal/types';
 import McpConnectionWizard from './McpConnectionWizard';
 import ServerDetailsModal from './ServerDetailsModal';
@@ -331,6 +332,19 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     setShowAddModal(true);
     onServerModalToggle?.(true);
   };
+
+  useEffect(() => {
+    const listener = (event: Event) => {
+      if (!isBigTutorialEvent(event) || event.detail.type !== 'open-app-marketplace') return;
+      setShowConnectionWizard(false);
+      setEditingServer(null);
+      setInitialSetupTab('marketplace');
+      setShowAddModal(true);
+      onServerModalToggle?.(true);
+    };
+    window.addEventListener(BIG_TUTORIAL_EVENT, listener);
+    return () => window.removeEventListener(BIG_TUTORIAL_EVENT, listener);
+  }, [onServerModalToggle]);
 
   const handleConnectApp = () => {
     setEditingServer(null);

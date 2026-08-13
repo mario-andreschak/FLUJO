@@ -16,6 +16,7 @@ import FlowCard, { FlowCardSkeleton } from '@/frontend/components/Flow/FlowDashb
 import { useCardPicker } from '@/frontend/hooks/useCardPicker';
 import { CardGroup } from '@/utils/shared/cardGrouping';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { BIG_TUTORIAL_EVENT, isBigTutorialEvent } from '@/frontend/components/Tour/bigTutorialEvents';
 
 interface FlowSelectorProps {
   selectedFlowId: string | null;
@@ -96,6 +97,16 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
   // Flows page's saved search/sort/folder settings; favorites-first (#120) is
   // preserved by the hook's flows adapter.
   const flowPicker = useCardPicker<Flow>('flows', flows);
+
+  useEffect(() => {
+    const listener = (event: Event) => {
+      if (!isBigTutorialEvent(event) || event.detail.type !== 'open-chat-flow-picker') return;
+      setPickerOpen(true);
+      flowPicker.setSearchTerm(event.detail.query);
+    };
+    window.addEventListener(BIG_TUTORIAL_EVENT, listener);
+    return () => window.removeEventListener(BIG_TUTORIAL_EVENT, listener);
+  }, [flowPicker]);
   const renderFlowCard = (flow: Flow) => (
     <FlowCard
       flow={flow}
@@ -114,7 +125,7 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
   const selectedFlowName = getSelectedFlowName();
 
   return (
-    <Box sx={{ minWidth: 0 }}>
+    <Box sx={{ minWidth: 0 }} data-tour="chat-flow-picker">
       {!hideLabel && !compact && (
         <Typography variant="subtitle1" gutterBottom>
           {t('chat.selector.title')}
@@ -141,6 +152,7 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
           {/* The picker itself reuses the Flow dashboard card layout (#92) so
               choosing a flow here looks exactly like the Flows page. */}
           <Button
+            data-tour="chat-flow-picker-button"
             variant="outlined"
             size={compact ? 'small' : 'medium'}
             startIcon={<AccountTreeOutlinedIcon />}

@@ -138,8 +138,8 @@ export interface RunResourceSettings {
    * first turn, and both ends of a long log survive. Set a limit to 0 to
    * disable that dimension of the bound.
    */
-  toolResultMaxLines?: number; // default 2000
-  toolResultMaxBytes?: number; // default 50 * 1024 (50 KB)
+  toolResultMaxLines?: number; // default 10,000
+  toolResultMaxBytes?: number; // default 256 * 1024 (256 KiB)
   /**
    * Retention sweep (issue #251): spilled run resources older than this many
    * days are deleted on an hourly background sweep. 0 disables the sweep.
@@ -147,13 +147,16 @@ export interface RunResourceSettings {
   retentionAgeDays?: number; // default 7 (0 = disable)
 }
 
+export const DEFAULT_TOOL_RESULT_MAX_LINES = 10_000;
+export const DEFAULT_TOOL_RESULT_MAX_BYTES = 256 * 1024;
+
 export const DEFAULT_RUN_RESOURCE_SETTINGS: RunResourceSettings = {
   autoCaptureEnabled: true,
   textThresholdChars: 8192,
   maxResourceBytes: 50 * 1024 * 1024,
   maxConversationBytes: 256 * 1024 * 1024,
   replaceLargeTextWithStub: false,
-  toolResultMaxLines: 2000,
-  toolResultMaxBytes: 50 * 1024,
+  toolResultMaxLines: DEFAULT_TOOL_RESULT_MAX_LINES,
+  toolResultMaxBytes: DEFAULT_TOOL_RESULT_MAX_BYTES,
   retentionAgeDays: 7,
 };

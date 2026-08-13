@@ -274,6 +274,7 @@ const MarketplaceTab: React.FC<TabProps> = ({
         </Typography>
 
         <Box
+          data-tour="mcp-marketplace-search"
           component="form"
           role="search"
           onSubmit={event => {
