@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import {
+  AssignPersonaWorkItemInputSchema,
   CreatePersonaWorkItemInputSchema,
   ENDURING_AGENT_SCHEMA_VERSION,
   EnduringAgentIdSchema,
@@ -9,6 +10,8 @@ import {
   PERSONA_WORK_ITEM_STATUSES,
   PersonaWorkItemSchema,
   UpdatePersonaWorkItemInputSchema,
+  type AssignPersonaWorkItemInput,
+  type AssignPersonaWorkItemResult,
   type CreatePersonaWorkItemInput,
   type PersonaPriority,
   type PersonaWorkItem,
@@ -17,6 +20,7 @@ import {
 } from '@/shared/types/enduringAgent';
 import { getCurrentWorkspace } from '@/utils/workspace';
 
+import { submitPersonaFlowDispatch } from './personaDispatcher';
 import {
   PersonaDomainConflictError,
   PersonaDomainNotFoundError,
@@ -195,6 +199,125 @@ export async function updatePersonaWorkItem(
     assertDependencyGraph(personaId, candidate, await listStoredPersonaWorkItems(personaId));
     return savePersonaWorkItem(candidate);
   });
+}
+
+function assignmentRelationKey(workItemId: string): string {
+  return `persona-task:${workItemId}`;
+}
+
+function assertAssignableWorkItem(
+  item: PersonaWorkItem,
+  records: readonly PersonaWorkItem[],
+  expectedUpdatedAt: number,
+): void {
+  if (item.updatedAt !== expectedUpdatedAt) {
+    throw new PersonaDomainConflictError(
+      'Task changed since it was inspected.',
+      'PERSONA_WORK_ITEM_STALE',
+      { reason: 'stale' },
+    );
+  }
+  if (item.status === 'completed' || item.status === 'cancelled') {
+    throw new PersonaDomainConflictError(
+      'Completed or cancelled Tasks cannot be assigned.',
+      'PERSONA_WORK_ITEM_NOT_ACTIONABLE',
+      { reason: 'terminal' },
+    );
+  }
+  if (item.status === 'blocked') {
+    throw new PersonaDomainConflictError(
+      'Blocked Tasks cannot be assigned.',
+      'PERSONA_WORK_ITEM_BLOCKED',
+      { reason: 'blocked' },
+    );
+  }
+  const byId = new Map(records.map((record) => [record.id, record]));
+  const incompleteDependencies = item.dependencyIds.filter(
+    (id) => byId.get(id)?.status !== 'completed',
+  );
+  if (incompleteDependencies.length > 0) {
+    throw new PersonaDomainConflictError(
+      'Task dependencies must be completed before assignment.',
+      'PERSONA_WORK_ITEM_BLOCKED',
+      { reason: 'dependencies' },
+    );
+  }
+}
+
+function assignmentPrompt(item: PersonaWorkItem): string {
+  const lines = [
+    'Complete this saved Persona Task and keep its durable status current.',
+    `Task ID: ${item.id}`,
+    `Title: ${item.title}`,
+    `Priority: ${item.priority}`,
+  ];
+  if (item.description) lines.push(`Description: ${item.description}`);
+  if (item.nextAction) lines.push(`Next step: ${item.nextAction}`);
+  if (item.deadline !== undefined) {
+    const deadline = new Date(item.deadline);
+    lines.push(`Deadline: ${Number.isNaN(deadline.getTime()) ? item.deadline : deadline.toISOString()}`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Admit one durable Task through the normal Persona Core dispatch path.
+ * Validation runs under the Persona lock before the dispatch is persisted and
+ * again immediately before mailbox admission. The WorkItem itself is never
+ * marked in progress merely because assignment was requested.
+ */
+export async function assignPersonaWorkItem(
+  personaId: string,
+  workItemId: string,
+  input: AssignPersonaWorkItemInput,
+): Promise<AssignPersonaWorkItemResult> {
+  EnduringAgentIdSchema.parse(personaId);
+  EnduringAgentIdSchema.parse(workItemId);
+  const parsed = AssignPersonaWorkItemInputSchema.parse(input) as AssignPersonaWorkItemInput;
+  const inspected = requireOwnedWorkItem(await getPersonaWorkItem(workItemId), personaId);
+  let workItem: PersonaWorkItem | undefined;
+  const validateAdmission = async (): Promise<void> => {
+    const current = requireOwnedWorkItem(await getPersonaWorkItem(workItemId), personaId);
+    const records = await listStoredPersonaWorkItems(personaId);
+    assertAssignableWorkItem(current, records, parsed.expectedUpdatedAt);
+    workItem = current;
+  };
+
+  const submission = await submitPersonaFlowDispatch({
+    personaId,
+    idempotencyKey: stableEnduringAgentId('taskassign', {
+      purpose: 'persona-work-item-assignment-v1',
+      workspaceId: getCurrentWorkspace(),
+      personaId,
+      workItemId,
+    }),
+    kind: 'assignment',
+    priority: inspected.priority,
+    source: {
+      kind: 'assignment',
+      sourceId: workItemId,
+    },
+    relationKey: assignmentRelationKey(workItemId),
+    summary: inspected.title,
+    flowInput: {
+      messages: [{ role: 'user', content: assignmentPrompt(inspected) }],
+      mode: 'conversation',
+      title: inspected.title,
+      source: 'internal',
+      userTurn: true,
+    },
+  }, {
+    waitForCompletion: false,
+    validateAdmission,
+  });
+
+  if (!workItem) {
+    throw new PersonaDomainConflictError('Task assignment validation did not complete.');
+  }
+  return {
+    workItem,
+    admission: submission.duplicate ? 'already_queued' : 'queued',
+  };
 }
 
 export async function deletePersonaWorkItem(

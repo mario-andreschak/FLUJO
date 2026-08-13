@@ -74,6 +74,7 @@ import {
   type PersonaActivityClaim,
   type CompletedPersonaActivity,
   type PersonaLeaseFence,
+  type PersonaMailboxAdmissionOptions,
   type PersonaMailboxRouteDecision,
   type RoutePersonaMailboxResult,
 } from './activityRuntime';
@@ -268,6 +269,8 @@ export interface SubmitPersonaFlowDispatchOptions {
   startPump?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
+  /** Trusted domain precondition checked under the Persona lock before persistence and admission. */
+  validateAdmission?: () => Promise<void>;
 }
 
 export interface WaitForPersonaFlowDispatchOptions {
@@ -278,6 +281,8 @@ export interface WaitForPersonaFlowDispatchOptions {
 export interface PersonaFlowDispatchSubmission {
   dispatch: PersonaFlowDispatchRecord;
   decision: PersonaMailboxRouteDecision;
+  /** True when this submission reused an existing durable mailbox admission. */
+  duplicate?: boolean;
 }
 
 export interface PersonaFlowDispatchIdentity extends PersonaAttribution {
@@ -755,7 +760,10 @@ async function listDispatchRecords(workspaceId: string): Promise<PersonaFlowDisp
 }
 
 export interface PersonaFlowDispatcherDependencies {
-  routePersonaMailboxItem: (value: unknown) => Promise<RoutePersonaMailboxResult>;
+  routePersonaMailboxItem: (
+    value: unknown,
+    options?: PersonaMailboxAdmissionOptions,
+  ) => Promise<RoutePersonaMailboxResult>;
   claimNextPersonaActivity: (value: unknown) => Promise<PersonaActivityClaim | null>;
   assertPersonaActivityLease: (value: unknown) => Promise<PersonaLease>;
   commitWithPersonaActivityLease: <T>(value: unknown, task: () => Promise<T>) => Promise<T>;
@@ -1205,13 +1213,17 @@ export class PersonaFlowDispatcher {
     }));
   }
 
-  private async routeStored(record: PersonaFlowDispatchRecord): Promise<{
+  private async routeStored(
+    record: PersonaFlowDispatchRecord,
+    options: Pick<SubmitPersonaFlowDispatchOptions, 'validateAdmission'> = {},
+  ): Promise<{
     dispatch: PersonaFlowDispatchRecord;
     decision: PersonaMailboxRouteDecision;
   }> {
     try {
       const routed = await this.inWorkspace(() => this.dependencies.routePersonaMailboxItem(
         this.routeInput(record),
+        { validateAdmission: options.validateAdmission },
       ));
       return {
         dispatch: await this.applyRouteResult(record, routed),
@@ -1274,6 +1286,7 @@ export class PersonaFlowDispatcher {
     const record = await this.inWorkspace(() => withPersonaRuntimeLock(
       input.personaId,
       async () => {
+        await options.validateAdmission?.();
         const persona = await this.dependencies.getPersona(input.personaId);
         if (!persona || persona.id !== input.personaId) {
           throw new Error(`Persona ${JSON.stringify(input.personaId)} not found in this workspace.`);
@@ -1305,11 +1318,16 @@ export class PersonaFlowDispatcher {
 
     let routed: PersonaFlowDispatchSubmission;
     if (record.mailboxItemId && record.routingDecision) {
-      routed = { dispatch: record, decision: record.routingDecision };
+      routed = { dispatch: record, decision: record.routingDecision, duplicate: true };
     } else {
-      routed = await this.routeStored(record);
+      routed = await this.routeStored(record, {
+        validateAdmission: options.validateAdmission,
+      });
     }
 
+    if (routed.decision === 'duplicate' && !routed.duplicate) {
+      routed = { ...routed, duplicate: true };
+    }
     if (routed.dispatch.state === 'queued' && options.startPump !== false) {
       void this.pump(input.personaId).catch((error) => {
         log.error(`Persona Flow pump failed for ${input.personaId}:`, error);

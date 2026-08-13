@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  AddRounded,
   AppsRounded,
   AssignmentRounded,
   AutoStoriesRounded,
@@ -74,8 +75,9 @@ import {
   PERSONA_WORK_ITEM_STATUSES,
   type BehaviorBinding,
   type BehaviorRevision,
-  type PersonaActivity,
+  type PersonaHistoryEntry,
   type PersonaPriority,
+  type PersonaTaskSummary,
   type PersonaWorkItem,
   type PersonaWorkItemStatus,
 } from '@/shared/types/enduringAgent';
@@ -84,21 +86,11 @@ function humanize(value: string): string {
   return value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function activityTime(activity: PersonaActivity): number {
-  return activity.completedAt ?? activity.startedAt ?? activity.updatedAt ?? activity.createdAt;
-}
-
-function activeActivity(detail?: PersonaDetail): PersonaActivity | undefined {
-  const activeId = detail?.runtime?.projection?.active?.activityId;
-  return detail?.activities.find((activity) => activity.id === activeId)
-    ?? detail?.activities.find((activity) => activity.status === 'running' || activity.status === 'waiting');
-}
-
 function statusColor(status: string): 'default' | 'success' | 'warning' | 'error' | 'info' | 'primary' {
-  if (status === 'completed' || status === 'active') return 'success';
-  if (status === 'error' || status === 'forgotten' || status === 'cancelled') return 'error';
-  if (status === 'candidate' || status === 'waiting' || status === 'blocked') return 'warning';
-  if (status === 'running' || status === 'in_progress') return 'info';
+  if (status === 'completed' || status === 'active' || status === 'ready') return 'success';
+  if (status === 'error' || status === 'forgotten' || status === 'cancelled' || status === 'overdue' || status === 'needs_attention') return 'error';
+  if (status === 'candidate' || status === 'waiting' || status === 'blocked' || status === 'queued') return 'warning';
+  if (status === 'running' || status === 'in_progress' || status === 'working') return 'info';
   if (status === 'superseded') return 'default';
   return 'primary';
 }
@@ -153,6 +145,7 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
       if (success) setNotice(success);
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : t('personas.action.failed'));
+      await refreshSelected().catch(() => undefined);
     } finally {
       setBusy(false);
     }
@@ -281,41 +274,45 @@ function AreaShell({ title, icon, action, children }: { title: string; icon: Rea
 
 function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolean; mutate: (action: () => Promise<unknown>, success?: string) => Promise<void> }) {
   const { t, formatDate } = useI18n();
-  const active = activeActivity(detail);
-  const queue = detail.mailboxItems.filter((item) => item.status === 'queued').sort((a, b) => a.sequence - b.sequence);
+  const current = detail.presentation.current;
+  const queuedTasks = detail.presentation.tasks.filter((task) => task.state === 'waiting');
   return (
     <Stack spacing={2}>
       {detail.runtime.projection.stuck && (
         <Alert severity="warning" action={<Button disabled={busy} onClick={() => void mutate(() => personasService.recoverRuntime(detail.persona.id))}>{t('personas.now.recover')}</Button>}>
-          {t('personas.now.stuck')} {detail.runtime.projection.stuckIndicators.map(humanize).join(', ')}
+          {t('personas.now.stuck')}
         </Alert>
       )}
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'minmax(0, 1.25fr) minmax(320px, .75fr)' }, gap: 2 }}>
         <AreaShell title={t('personas.now.title')} icon={<BoltRounded />}>
-          {active ? (
+          {current ? (
             <Stack spacing={1.25}>
               <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                <Chip color={statusColor(active.status)} label={humanize(active.status)} />
-                <Chip label={humanize(active.kind)} />
-                <Chip variant="outlined" label={humanize(active.source.kind)} />
+                <Chip color={statusColor(current.outcome)} label={t(`personas.outcome.${current.outcome}`)} />
+                <Chip label={t(`personas.history.type.${current.kind}`)} />
+                <Chip variant="outlined" label={t(`personas.origin.${current.origin}`)} />
               </Stack>
-              <Typography variant="h6" fontWeight={720}>{active.source.sourceId ?? active.id}</Typography>
-              <Typography color="text.secondary">Updated {formatDate(active.updatedAt, { dateStyle: 'medium', timeStyle: 'short' })}</Typography>
+              <Typography color="text.secondary">{t('personas.history.when', { date: formatDate(current.occurredAt, { dateStyle: 'medium', timeStyle: 'short' }) })}</Typography>
               <Divider />
               <Typography variant="subtitle2">{t('personas.now.scratch')}</Typography>
-              {active.resourceRefs?.length ? active.resourceRefs.map((ref) => <Chip key={ref} size="small" label={ref} sx={{ alignSelf: 'flex-start' }} />) : <Typography color="text.secondary">Working state remains Activity-scoped and is not promoted into durable work automatically.</Typography>}
+              <Typography color="text.secondary">{t('personas.tasks.temporaryHelp')}</Typography>
             </Stack>
           ) : <Typography color="text.secondary">{t('personas.now.empty')}</Typography>}
         </AreaShell>
-        <AreaShell title={t('personas.now.queue')} icon={<AssignmentRounded />}>
-          {queue.length === 0 ? <Typography color="text.secondary">{t('personas.now.empty')}</Typography> : (
-            <Stack divider={<Divider flexItem />}>
-              {queue.map((item) => (
-                <Box key={item.id} sx={{ py: 1.25 }}>
-                  <Stack direction="row" justifyContent="space-between" gap={1}><Typography fontWeight={700}>{item.summary}</Typography><Chip size="small" label={humanize(item.priority)} /></Stack>
-                  <Typography variant="caption" color="text.secondary">#{item.sequence} · {humanize(item.kind)}</Typography>
-                </Box>
+        <AreaShell title={t('personas.now.upNext')} icon={<AssignmentRounded />}>
+          {queuedTasks.length === 0 && detail.presentation.queuedInputCount === 0 ? (
+            <Typography color="text.secondary">{t('personas.now.nothingQueued')}</Typography>
+          ) : (
+            <Stack spacing={1.25}>
+              {queuedTasks.map((task) => (
+                <Stack key={task.id} direction="row" justifyContent="space-between" gap={1}>
+                  <Typography fontWeight={700}>{task.title}</Typography>
+                  <Chip size="small" label={t('personas.taskState.waiting')} />
+                </Stack>
               ))}
+              {detail.presentation.queuedInputCount > 0 && (
+                <Typography color="text.secondary">{t('personas.conversations.queuedInput', { count: detail.presentation.queuedInputCount })}</Typography>
+              )}
             </Stack>
           )}
         </AreaShell>
@@ -326,22 +323,22 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
 
 function TalkArea({ detail, busy, startConversation }: { detail: PersonaDetail; busy: boolean; startConversation: () => Promise<void> }) {
   const { t, formatDate } = useI18n();
-  const conversations = useMemo(() => {
-    const byId = new Map<string, PersonaActivity>();
-    detail.activities.filter((activity) => activity.conversationId).forEach((activity) => {
-      const current = byId.get(activity.conversationId!);
-      if (!current || activityTime(activity) > activityTime(current)) byId.set(activity.conversationId!, activity);
-    });
-    return [...byId.values()].sort((a, b) => activityTime(b) - activityTime(a));
-  }, [detail.activities]);
+  const conversations = detail.presentation.conversations;
   return (
     <AreaShell title={t('personas.talk.title')} icon={<ChatBubbleOutlineRounded />} action={<Button variant="contained" disabled={busy} onClick={() => void startConversation()} startIcon={<AddRounded />}>{t('personas.talk.new')}</Button>}>
       {conversations.length === 0 ? <Typography color="text.secondary">{t('personas.talk.empty')}</Typography> : (
         <Stack divider={<Divider flexItem />}>
-          {conversations.map((activity) => (
-            <Stack key={activity.conversationId} direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={1.5} sx={{ py: 1.5 }}>
-              <Box><Typography fontWeight={720}>{humanize(activity.kind)}</Typography><Typography variant="body2" color="text.secondary">{formatDate(activityTime(activity), { dateStyle: 'medium', timeStyle: 'short' })} · {humanize(activity.status)}</Typography></Box>
-              <Button component={Link} href={withWorkspaceUrl(magicLinkPath({ kind: 'conversation', id: activity.conversationId! }))}>{t('personas.talk.open')}</Button>
+          {conversations.map((conversation) => (
+            <Stack key={conversation.conversationId} direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={1.5} sx={{ py: 1.5 }}>
+              <Box>
+                <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
+                  <Typography fontWeight={720}>{t(`personas.origin.${conversation.origin}`)}</Typography>
+                  {conversation.active && <Chip size="small" color="primary" label={t('personas.conversations.active')} />}
+                  {conversation.queuedInputCount > 0 && <Chip size="small" label={t('personas.conversations.queuedInput', { count: conversation.queuedInputCount })} />}
+                </Stack>
+                <Typography variant="body2" color="text.secondary">{formatDate(conversation.occurredAt, { dateStyle: 'medium', timeStyle: 'short' })} · {t(`personas.outcome.${conversation.outcome}`)}</Typography>
+              </Box>
+              <Button component={Link} href={withWorkspaceUrl(magicLinkPath({ kind: 'conversation', id: conversation.conversationId }))}>{t('personas.talk.open')}</Button>
             </Stack>
           ))}
         </Stack>
@@ -379,7 +376,8 @@ function draftForWorkItem(item?: PersonaWorkItem): WorkDraft {
 function WorkArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolean; mutate: (action: () => Promise<unknown>, success?: string) => Promise<void> }) {
   const { t, formatDate } = useI18n();
   const [draft, setDraft] = useState<WorkDraft | null>(null);
-  const sorted = [...detail.workItems].sort((a, b) => (a.status === 'completed' ? 1 : 0) - (b.status === 'completed' ? 1 : 0) || b.updatedAt - a.updatedAt);
+  const [assignmentNotice, setAssignmentNotice] = useState<string | null>(null);
+  const tasks = detail.presentation.tasks;
   const save = async () => {
     if (!draft?.title.trim()) return;
     const deadline = draft.deadline ? new Date(`${draft.deadline}T23:59:59`).getTime() : null;
@@ -406,31 +404,56 @@ function WorkArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boole
     }
     setDraft(null);
   };
+  const assign = (task: PersonaTaskSummary) => mutate(async () => {
+    const result = await personasService.assignWorkItem(detail.persona.id, task.id, {
+      expectedUpdatedAt: task.expectedUpdatedAt,
+      idempotencyKey: uuidv4(),
+    });
+    setAssignmentNotice(t(
+      result.admission === 'already_queued'
+        ? 'personas.assign.alreadyQueued'
+        : 'personas.assign.queued',
+    ));
+  });
   return (
-    <AreaShell title={t('personas.work.title')} icon={<WorkOutlineRounded />} action={<Button variant="contained" startIcon={<AddRounded />} onClick={() => setDraft(draftForWorkItem())}>{t('personas.work.new')}</Button>}>
-      {sorted.length === 0 ? <Typography color="text.secondary">{t('personas.work.empty')}</Typography> : (
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'repeat(2, minmax(0, 1fr))' }, gap: 1.5 }}>
-          {sorted.map((item) => (
-            <Card key={item.id} variant="outlined" sx={{ borderRadius: 3 }}>
-              <CardContent>
-                <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={1}>
-                  <Typography variant="h6" fontWeight={720}>{item.title}</Typography>
-                  <Stack direction="row" spacing={0.75}><Chip size="small" color={statusColor(item.status)} label={humanize(item.status)} /><Chip size="small" variant="outlined" label={humanize(item.priority)} /></Stack>
-                </Stack>
-                {item.description && <Typography color="text.secondary" sx={{ mt: 1 }}>{item.description}</Typography>}
-                {item.nextAction && <Typography variant="body2" sx={{ mt: 1.5 }}><strong>{t('personas.work.nextAction')}:</strong> {item.nextAction}</Typography>}
-                {item.deadline && <Typography variant="caption" color="text.secondary">Due {formatDate(item.deadline, { dateStyle: 'medium' })}</Typography>}
-                {item.dependencyIds.length > 0 && <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>{item.dependencyIds.map((id) => <Chip key={id} size="small" label={detail.workItems.find((candidate) => candidate.id === id)?.title ?? id} />)}</Stack>}
-              </CardContent>
-              <CardActions>
-                <Button startIcon={<EditRounded />} onClick={() => setDraft(draftForWorkItem(item))}>{t('personas.work.edit')}</Button>
-                {item.status !== 'completed' && <Button disabled={busy} startIcon={<CheckCircleOutlineRounded />} onClick={() => void mutate(() => personasService.updateWorkItem(detail.persona.id, item.id, { status: 'completed', expectedUpdatedAt: item.updatedAt }))}>{t('personas.work.complete')}</Button>}
-                <Button color="error" disabled={busy} onClick={() => { if (window.confirm(`Delete “${item.title}”?`)) void mutate(() => personasService.deleteWorkItem(detail.persona.id, item.id)); }}>{t('personas.work.delete')}</Button>
-              </CardActions>
-            </Card>
-          ))}
-        </Box>
-      )}
+    <AreaShell title={t('personas.tasks.title')} icon={<WorkOutlineRounded />} action={<Button variant="contained" startIcon={<AddRounded />} onClick={() => setDraft(draftForWorkItem())}>{t('personas.tasks.new')}</Button>}>
+      <Stack spacing={2}>
+        <Alert severity="info">{t('personas.tasks.temporaryHelp')}</Alert>
+        {assignmentNotice && <Alert severity="success" onClose={() => setAssignmentNotice(null)}>{assignmentNotice}</Alert>}
+        {tasks.length === 0 ? <Typography color="text.secondary">{t('personas.tasks.empty')}</Typography> : (
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'repeat(2, minmax(0, 1fr))' }, gap: 1.5 }}>
+            {tasks.map((task) => {
+              const item = detail.workItems.find((candidate) => candidate.id === task.id);
+              const assignable = task.state === 'ready' || task.state === 'overdue';
+              return (
+                <Card key={task.id} variant="outlined" sx={{ borderRadius: 3, minWidth: 0 }}>
+                  <CardContent>
+                    <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ sm: 'flex-start' }} gap={1}>
+                      <Typography variant="h6" fontWeight={720}>{task.title}</Typography>
+                      <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                        <Chip size="small" color={statusColor(task.state)} label={t(`personas.taskState.${task.state}`)} />
+                        <Chip size="small" variant="outlined" label={t(`personas.priority.${task.priority}`)} />
+                      </Stack>
+                    </Stack>
+                    {task.description && <Typography color="text.secondary" sx={{ mt: 1 }}>{task.description}</Typography>}
+                    {task.nextAction && <Typography variant="body2" sx={{ mt: 1.5 }}><strong>{t('personas.tasks.nextAction')}:</strong> {task.nextAction}</Typography>}
+                    {task.deadline && <Typography variant="caption" color={task.state === 'overdue' ? 'error.main' : 'text.secondary'}>{t('personas.tasks.deadline', { date: formatDate(task.deadline, { dateStyle: 'medium' }) })}</Typography>}
+                    {task.blockerTitles.length > 0 && <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>{task.blockerTitles.map((title) => <Chip key={title} size="small" color="warning" label={title} />)}</Stack>}
+                  </CardContent>
+                  <CardActions sx={{ flexWrap: 'wrap' }}>
+                    <Button disabled={busy || !assignable} startIcon={<AssignmentRounded />} onClick={() => void assign(task)}>
+                      {task.state === 'waiting' ? t('personas.assign.assigned') : t('personas.assign.action')}
+                    </Button>
+                    {item && <Button startIcon={<EditRounded />} onClick={() => setDraft(draftForWorkItem(item))}>{t('personas.tasks.edit')}</Button>}
+                    {item && item.status !== 'completed' && item.status !== 'cancelled' && <Button disabled={busy} startIcon={<CheckCircleOutlineRounded />} onClick={() => void mutate(() => personasService.updateWorkItem(detail.persona.id, item.id, { status: 'completed', expectedUpdatedAt: item.updatedAt }))}>{t('personas.tasks.complete')}</Button>}
+                    {item && <Button color="error" disabled={busy} onClick={() => { if (window.confirm(t('personas.tasks.deleteConfirm', { title: item.title }))) void mutate(() => personasService.deleteWorkItem(detail.persona.id, item.id)); }}>{t('personas.tasks.delete')}</Button>}
+                  </CardActions>
+                </Card>
+              );
+            })}
+          </Box>
+        )}
+      </Stack>
       <WorkItemDialog draft={draft} items={detail.workItems} busy={busy} onChange={setDraft} onClose={() => setDraft(null)} onSave={() => void save()} />
     </AreaShell>
   );
@@ -442,17 +465,17 @@ function WorkItemDialog({ draft, items, busy, onChange, onClose, onSave }: { dra
   const set = <K extends keyof WorkDraft>(key: K, value: WorkDraft[K]) => onChange({ ...draft, [key]: value });
   return (
     <Dialog open fullWidth maxWidth="sm" onClose={onClose}>
-      <DialogTitle>{draft.id ? t('personas.work.edit') : t('personas.work.new')}</DialogTitle>
+      <DialogTitle>{draft.id ? t('personas.tasks.edit') : t('personas.tasks.new')}</DialogTitle>
       <DialogContent dividers><Stack spacing={2} sx={{ pt: 0.5 }}>
-        <TextField label="Title" value={draft.title} onChange={(event) => set('title', event.target.value)} required autoFocus />
-        <TextField label="Description" value={draft.description} onChange={(event) => set('description', event.target.value)} multiline minRows={3} />
+        <TextField label={t('personas.tasks.field.title')} value={draft.title} onChange={(event) => set('title', event.target.value)} required autoFocus />
+        <TextField label={t('personas.tasks.field.description')} value={draft.description} onChange={(event) => set('description', event.target.value)} multiline minRows={3} />
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-          <TextField select fullWidth label="Status" value={draft.status} onChange={(event) => set('status', event.target.value as PersonaWorkItemStatus)}>{PERSONA_WORK_ITEM_STATUSES.map((status) => <MenuItem key={status} value={status}>{humanize(status)}</MenuItem>)}</TextField>
-          <TextField select fullWidth label="Priority" value={draft.priority} onChange={(event) => set('priority', event.target.value as PersonaPriority)}>{PERSONA_PRIORITIES.map((priority) => <MenuItem key={priority} value={priority}>{humanize(priority)}</MenuItem>)}</TextField>
+          <TextField select fullWidth label={t('personas.tasks.field.status')} value={draft.status} onChange={(event) => set('status', event.target.value as PersonaWorkItemStatus)}>{PERSONA_WORK_ITEM_STATUSES.map((status) => <MenuItem key={status} value={status}>{t(`personas.workItemStatus.${status}`)}</MenuItem>)}</TextField>
+          <TextField select fullWidth label={t('personas.tasks.field.priority')} value={draft.priority} onChange={(event) => set('priority', event.target.value as PersonaPriority)}>{PERSONA_PRIORITIES.map((priority) => <MenuItem key={priority} value={priority}>{t(`personas.priority.${priority}`)}</MenuItem>)}</TextField>
         </Stack>
-        <TextField label={t('personas.work.nextAction')} value={draft.nextAction} onChange={(event) => set('nextAction', event.target.value)} />
-        <TextField label="Deadline" type="date" value={draft.deadline} onChange={(event) => set('deadline', event.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
-        <FormControl><InputLabel>{t('personas.work.dependencies')}</InputLabel><Select multiple label={t('personas.work.dependencies')} value={draft.dependencyIds} onChange={(event) => set('dependencyIds', typeof event.target.value === 'string' ? event.target.value.split(',') : event.target.value)}>{items.filter((item) => item.id !== draft.id).map((item) => <MenuItem key={item.id} value={item.id}>{item.title}</MenuItem>)}</Select></FormControl>
+        <TextField label={t('personas.tasks.nextAction')} value={draft.nextAction} onChange={(event) => set('nextAction', event.target.value)} />
+        <TextField label={t('personas.tasks.field.deadline')} type="date" value={draft.deadline} onChange={(event) => set('deadline', event.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+        <FormControl><InputLabel>{t('personas.tasks.dependencies')}</InputLabel><Select multiple label={t('personas.tasks.dependencies')} value={draft.dependencyIds} onChange={(event) => set('dependencyIds', typeof event.target.value === 'string' ? event.target.value.split(',') : event.target.value)}>{items.filter((item) => item.id !== draft.id).map((item) => <MenuItem key={item.id} value={item.id}>{item.title}</MenuItem>)}</Select></FormControl>
       </Stack></DialogContent>
       <DialogActions><Button onClick={onClose}>{t('personas.action.cancel')}</Button><Button variant="contained" disabled={busy || !draft.title.trim()} onClick={onSave}>{t('personas.action.save')}</Button></DialogActions>
     </Dialog>
@@ -708,8 +731,75 @@ function AppsArea({ detail, busy, mutate }: {
 
 function ActivityArea({ detail }: { detail: PersonaDetail }) {
   const { t, formatDate } = useI18n();
-  const activities = [...detail.activities].sort((a, b) => activityTime(b) - activityTime(a));
-  return <AreaShell title={t('personas.activity.title')} icon={<HistoryRounded />}>{activities.length === 0 ? <Typography color="text.secondary">{t('personas.activity.empty')}</Typography> : <Stack divider={<Divider flexItem />}>{activities.map((activity) => <Stack key={activity.id} direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" gap={1.5} sx={{ py: 1.5 }}><Box><Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap><Chip size="small" color={statusColor(activity.status)} label={humanize(activity.status)} /><Chip size="small" variant="outlined" label={humanize(activity.kind)} /><Chip size="small" variant="outlined" label={humanize(activity.source.kind)} /></Stack><Typography fontWeight={700} sx={{ mt: 0.75 }}>{activity.source.sourceId ?? activity.id}</Typography><Typography variant="caption" color="text.secondary">{formatDate(activityTime(activity), { dateStyle: 'medium', timeStyle: 'short' })}{activity.behaviorRevisionId ? ` · revision ${activity.behaviorRevisionId}` : ''}</Typography>{activity.error && <Alert severity="error" sx={{ mt: 1 }}>{activity.error}</Alert>}</Box><Stack direction="row" spacing={1}>{activity.conversationId && <Button component={Link} href={withWorkspaceUrl(magicLinkPath({ kind: 'conversation', id: activity.conversationId }))}>{t('personas.talk.open')}</Button>}{activity.meetingId && <Button component={Link} href={withWorkspaceUrl(`/meetings?meeting=${encodeURIComponent(activity.meetingId)}`)}>Meeting</Button>}</Stack></Stack>)}</Stack>}</AreaShell>;
+  const [typeFilter, setTypeFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [dateFilter, setDateFilter] = useState('');
+  const activityTypes = [...new Set(detail.presentation.history.map((entry) => entry.kind))];
+  const activities: PersonaHistoryEntry[] = useMemo(() => {
+    const since = dateFilter ? new Date(`${dateFilter}T00:00:00`).getTime() : 0;
+    return detail.presentation.history.filter((entry) => (
+      (!typeFilter || entry.kind === typeFilter)
+      && (!statusFilter || entry.outcome === statusFilter)
+      && entry.occurredAt >= since
+    ));
+  }, [dateFilter, detail.presentation.history, statusFilter, typeFilter]);
+  const clearFilters = () => {
+    setTypeFilter('');
+    setStatusFilter('');
+    setDateFilter('');
+  };
+  return (
+    <AreaShell title={t('personas.history.title')} icon={<HistoryRounded />}>
+      <Stack spacing={2}>
+        <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} alignItems={{ md: 'center' }}>
+          <TextField select fullWidth label={t('personas.history.filter.type')} value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
+            <MenuItem value="">{t('personas.history.filter.allTypes')}</MenuItem>
+            {activityTypes.map((kind) => <MenuItem key={kind} value={kind}>{t(`personas.history.type.${kind}`)}</MenuItem>)}
+          </TextField>
+          <TextField select fullWidth label={t('personas.history.filter.status')} value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+            <MenuItem value="">{t('personas.history.filter.allStatuses')}</MenuItem>
+            {['queued', 'working', 'waiting', 'completed', 'cancelled', 'needs_attention'].map((outcome) => <MenuItem key={outcome} value={outcome}>{t(`personas.outcome.${outcome}`)}</MenuItem>)}
+          </TextField>
+          <TextField fullWidth type="date" label={t('personas.history.filter.date')} value={dateFilter} onChange={(event) => setDateFilter(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+          {(typeFilter || statusFilter || dateFilter) && <Button onClick={clearFilters}>{t('personas.history.filter.clear')}</Button>}
+        </Stack>
+        {activities.length === 0 ? <Typography color="text.secondary">{detail.presentation.history.length === 0 ? t('personas.history.empty') : t('personas.history.noMatches')}</Typography> : (
+          <Stack divider={<Divider flexItem />}>
+            {activities.map((activity) => (
+              <Stack key={activity.key} direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" gap={1.5} sx={{ py: 1.5 }}>
+                <Box sx={{ minWidth: 0 }}>
+                  <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                    <Chip size="small" color={statusColor(activity.outcome)} label={t(`personas.outcome.${activity.outcome}`)} />
+                    <Chip size="small" variant="outlined" label={t(`personas.history.type.${activity.kind}`)} />
+                    <Chip size="small" variant="outlined" label={t(`personas.origin.${activity.origin}`)} />
+                  </Stack>
+                  <Typography fontWeight={700} sx={{ mt: 0.75 }}>{t(`personas.history.type.${activity.kind}`)}</Typography>
+                  <Typography variant="caption" color="text.secondary">{t('personas.history.when', { date: formatDate(activity.occurredAt, { dateStyle: 'medium', timeStyle: 'short' }) })}</Typography>
+                  <Box component="details" sx={{ mt: 1 }}>
+                    <Box component="summary" sx={{ cursor: 'pointer', color: 'text.secondary' }}>{t('personas.history.advanced')}</Box>
+                    <Typography variant="caption" color="text.secondary">
+                      {t('personas.history.advancedSummary', {
+                        type: t(`personas.history.type.${activity.advanced.activityKind}`),
+                        origin: t(`personas.origin.${activity.origin}`),
+                        status: t(`personas.outcome.${activity.outcome}`),
+                      })}
+                    </Typography>
+                  </Box>
+                </Box>
+                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                  {activity.recordLinks.map((link) => link.kind === 'conversation' ? (
+                    <Button key={`${link.kind}:${link.id}`} component={Link} href={withWorkspaceUrl(magicLinkPath({ kind: 'conversation', id: link.id }))}>{t('personas.talk.open')}</Button>
+                  ) : (
+                    <Button key={`${link.kind}:${link.id}`} component={Link} href={withWorkspaceUrl(`/meetings?meeting=${encodeURIComponent(link.id)}`)}>{t('personas.history.openMeeting')}</Button>
+                  ))}
+                </Stack>
+              </Stack>
+            ))}
+          </Stack>
+        )}
+      </Stack>
+    </AreaShell>
+  );
 }
 
 function SettingsArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolean; mutate: (action: () => Promise<unknown>, success?: string) => Promise<void> }) {

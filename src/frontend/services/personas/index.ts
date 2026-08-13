@@ -2,6 +2,8 @@
 
 import type {
   ActivateBehaviorRevisionInput,
+  AssignPersonaWorkItemInput,
+  AssignPersonaWorkItemResult,
   BehaviorBinding,
   BehaviorRevision,
   CreatePersonaInput,
@@ -12,6 +14,7 @@ import type {
   PersonaAppGrant,
   PersonaAppLaunchDescriptor,
   PersonaMailboxItem,
+  PersonaPresentationSummary,
   PersonaWorkItem,
   RoleDefinition,
   RoleVersion,
@@ -81,9 +84,10 @@ export interface PersonaDetail {
     reconciliation: { attempted: boolean; changed: boolean; remainingStuck: boolean };
     recentEvents: Array<Record<string, unknown>>;
   };
+  presentation: PersonaPresentationSummary;
 }
 
-export type PersonaBundle = Omit<PersonaDetail, 'runtime'>;
+export type PersonaBundle = Omit<PersonaDetail, 'runtime' | 'presentation'>;
 
 export interface MemorySearchResult {
   item: MemoryItem;
@@ -236,6 +240,17 @@ class PersonasService {
 
   createWorkItem(personaId: string, input: Omit<CreatePersonaWorkItemInput, 'personaId'>): Promise<PersonaWorkItem> {
     return jsonRequest(personaPath(personaId, '/work-items'), 'POST', input);
+  }
+
+  assignWorkItem(
+    personaId: string,
+    workItemId: string,
+    input: AssignPersonaWorkItemInput,
+  ): Promise<AssignPersonaWorkItemResult> {
+    return jsonRequest(personaPath(
+      personaId,
+      `/work-items/${encodeURIComponent(workItemId)}/assign`,
+    ), 'POST', input);
   }
 
   updateWorkItem(

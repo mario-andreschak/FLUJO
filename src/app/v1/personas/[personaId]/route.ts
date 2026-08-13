@@ -7,6 +7,7 @@ import {
   PersonaDeletionConflictError,
   PersonaDeletionNotFoundError,
   deletePersona,
+  projectPersonaPresentation,
   readPersonaRuntimeSnapshot,
   updatePersonaSettings,
 } from '@/backend/services/enduringAgents';
@@ -30,7 +31,13 @@ async function GET_handler(request: NextRequest, { params }: RouteContext) {
   try {
     const snapshot = await readPersonaRuntimeSnapshot(personaId);
     return snapshot
-      ? NextResponse.json({ ...snapshot.bundle, runtime: snapshot.runtime })
+      ? NextResponse.json({
+          ...snapshot.bundle,
+          runtime: snapshot.runtime,
+          presentation: projectPersonaPresentation(snapshot.bundle, {
+            activeActivityId: snapshot.runtime.projection.active?.activityId,
+          }),
+        })
       : NextResponse.json({ error: 'Persona not found.' }, { status: 404 });
   } catch (error) {
     log.error(`Failed to read Persona ${JSON.stringify(personaId)}`, error);

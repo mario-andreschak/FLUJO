@@ -305,15 +305,64 @@ export interface PersonaRoleComposition {
   suggestedAppRefs: string[];
 }
 
+export type PersonaFlowBinding =
+  | {
+      mode: 'shared';
+      sharedFlowRef: string;
+    }
+  | {
+      mode: 'persona_copy';
+      sharedFlowRef?: string;
+      personaFlowRef: string;
+    };
+
 /** Friendly editable Behavior Flow binding; revision mechanics stay internal. */
 export interface PersonaBehaviorComposition {
   /** Stable existing BehaviorBinding id. */
   ref: string;
+  /** Stable callable slot identity. */
+  slotKey?: string;
   name: string;
-  /** Mutable workspace Flow used as the Behavior source. */
+  description?: string;
+  order?: number;
+  binding?: PersonaFlowBinding;
+  /** Compatibility fields retained while runtime readers migrate to binding. */
   sourceFlowRef?: string;
-  /** Optional Persona-specific replacement workspace Flow. */
   overrideFlowRef?: string;
+}
+
+export type PersonaFlowReadinessState = 'ready' | 'invalid' | 'missing';
+
+export interface PersonaFlowReadiness {
+  state: PersonaFlowReadinessState;
+  issues: string[];
+}
+
+export interface PersonaFlowCard {
+  binding: PersonaFlowBinding;
+  effectiveFlowRef: string;
+  flow?: Flow;
+  readiness: PersonaFlowReadiness;
+}
+
+export interface PersonaBehaviorFlowCard extends PersonaFlowCard {
+  ref: string;
+  slotKey: string;
+  name: string;
+  description?: string;
+  order: number;
+}
+
+export interface CopyPersonaFlowInput {
+  expectedUpdatedAt: number;
+  target: 'core' | 'behavior';
+  behaviorRef?: string;
+  sourceFlowRef: string;
+}
+
+export interface CopyPersonaFlowResult {
+  composition: PersonaComposition;
+  flow: Flow;
 }
 
 /**
@@ -324,6 +373,7 @@ export interface PersonaCompositionPreferences {
   description?: string;
   role?: PersonaRoleComposition;
   coreFlowRef?: string;
+  coreBinding?: PersonaFlowBinding;
   appRefs?: string[];
   memoryRefs?: string[];
   behaviors?: PersonaBehaviorComposition[];
@@ -342,17 +392,24 @@ export interface PersonaComposition {
   description: string;
   role: PersonaRoleComposition;
   coreFlowRef?: string;
+  core?: PersonaFlowCard;
   appRefs: string[];
   memories: PersonaCompositionMemory[];
   behaviors: PersonaBehaviorComposition[];
+  behaviorCards: PersonaBehaviorFlowCard[];
   /** Concurrency token required by composition updates. */
   expectedUpdatedAt: number;
 }
 
 export interface UpdatePersonaBehaviorComposition {
   ref: string;
+  slotKey?: string;
   name: string;
-  sourceFlowRef: string;
+  description?: string;
+  order?: number;
+  binding?: PersonaFlowBinding;
+  /** Compatibility inputs accepted from older clients. */
+  sourceFlowRef?: string;
   /** null clears a previously selected Persona override. */
   overrideFlowRef?: string | null;
 }
@@ -614,6 +671,102 @@ export interface UpdatePersonaWorkItemInput {
   deadline?: number | null;
   /** Optional optimistic-concurrency guard for REST and tool callers. */
   expectedUpdatedAt?: number;
+}
+
+/** Explicit user request to admit one saved Task to the Persona runtime. */
+export interface AssignPersonaWorkItemInput {
+  expectedUpdatedAt: number;
+  /** Caller retry token validated at the API boundary; durable identity is Task-scoped. */
+  idempotencyKey: string;
+}
+
+export type PersonaWorkItemAdmission = 'queued' | 'already_queued';
+
+export interface AssignPersonaWorkItemResult {
+  workItem: PersonaWorkItem;
+  admission: PersonaWorkItemAdmission;
+}
+
+export const PERSONA_TASK_DISPLAY_STATES = [
+  'ready',
+  'blocked',
+  'waiting',
+  'overdue',
+  'in_progress',
+  'completed',
+  'cancelled',
+] as const;
+export type PersonaTaskDisplayState = (typeof PERSONA_TASK_DISPLAY_STATES)[number];
+
+export type PersonaPresentationOrigin =
+  | 'user_chat'
+  | 'assignment'
+  | 'automation'
+  | 'trigger'
+  | 'meeting'
+  | 'voice'
+  | 'api'
+  | 'maintenance'
+  | 'unknown';
+
+export type PersonaPresentationOutcome =
+  | 'queued'
+  | 'working'
+  | 'waiting'
+  | 'completed'
+  | 'cancelled'
+  | 'needs_attention';
+
+export interface PersonaPresentationRecordLink {
+  kind: 'conversation' | 'meeting';
+  id: string;
+}
+
+export interface PersonaConversationSummary {
+  conversationId: string;
+  origin: PersonaPresentationOrigin;
+  outcome: PersonaPresentationOutcome;
+  occurredAt: number;
+  active: boolean;
+  queuedInputCount: number;
+}
+
+export interface PersonaTaskSummary {
+  id: string;
+  title: string;
+  description?: string;
+  state: PersonaTaskDisplayState;
+  priority: PersonaPriority;
+  nextAction?: string;
+  deadline?: number;
+  blockerTitles: string[];
+  completedAt?: number;
+  expectedUpdatedAt: number;
+}
+
+export interface PersonaHistoryEntry {
+  /** Opaque presentation key; never a raw Activity/runtime identifier. */
+  key: string;
+  kind: PersonaActivityKind;
+  origin: PersonaPresentationOrigin;
+  outcome: PersonaPresentationOutcome;
+  occurredAt: number;
+  summary: string;
+  recordLinks: PersonaPresentationRecordLink[];
+  /** Safe diagnostics only. Control-plane ids, tokens, payloads, and errors are excluded. */
+  advanced: {
+    activityKind: PersonaActivityKind;
+    sourceKind: PersonaActivitySourceKind;
+    status: PersonaActivityStatus;
+  };
+}
+
+export interface PersonaPresentationSummary {
+  conversations: PersonaConversationSummary[];
+  tasks: PersonaTaskSummary[];
+  history: PersonaHistoryEntry[];
+  current: PersonaHistoryEntry | null;
+  queuedInputCount: number;
 }
 
 export const MEMORY_KINDS = [

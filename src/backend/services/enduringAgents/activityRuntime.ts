@@ -242,6 +242,14 @@ export interface RoutePersonaMailboxResult {
   targetActivityId?: string;
 }
 
+export interface PersonaMailboxAdmissionOptions {
+  /**
+   * Trusted domain precondition evaluated while the Persona runtime lock is held,
+   * immediately before admission. It must not perform nested runtime locking.
+   */
+  validateAdmission?: () => Promise<void>;
+}
+
 export interface AcknowledgePersonaActivityDeliveryInput extends PersonaLeaseFence {
   mailboxItemId: string;
 }
@@ -1610,6 +1618,7 @@ export async function enqueuePersonaMailboxItem(
 /** Atomically admit and route an input against the current Activity topology. */
 export async function routePersonaMailboxItem(
   value: unknown,
+  options: PersonaMailboxAdmissionOptions = {},
 ): Promise<RoutePersonaMailboxResult> {
   const input = CreatePersonaMailboxItemInputSchema.parse(value) as RoutePersonaMailboxItemInput;
   assertSafeCollectionId(input.personaId);
@@ -1617,7 +1626,10 @@ export async function routePersonaMailboxItem(
   if (behaviorSlotKey === 'primary') await resolvePersonaCoreRevision(input.personaId);
   const result = await withPersonaRuntimeLock(
     input.personaId,
-    (lock) => admitPersonaMailboxItem(lock, input, true),
+    async (lock) => {
+      await options.validateAdmission?.();
+      return admitPersonaMailboxItem(lock, input, true);
+    },
   );
   await observeRuntime(input.personaId, {
     eventId: `mailbox:${result.item.id}:admitted`,

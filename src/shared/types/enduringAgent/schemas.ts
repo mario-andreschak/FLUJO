@@ -862,6 +862,11 @@ export const UpdatePersonaWorkItemInputSchema = z.object({
   expectedUpdatedAt: TimestampSchema.optional(),
 }).strict();
 
+export const AssignPersonaWorkItemInputSchema = z.object({
+  expectedUpdatedAt: TimestampSchema,
+  idempotencyKey: NonEmptyText(512),
+}).strict();
+
 export const MemoryItemSchema = z.object({
   schemaVersion: z.literal(ENDURING_AGENT_SCHEMA_VERSION),
   id: EnduringAgentIdSchema,
