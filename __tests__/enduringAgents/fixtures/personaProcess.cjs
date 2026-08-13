@@ -55,7 +55,13 @@ async function execute(command) {
           await flowService.saveFlow({
             id: command.coreFlowRef,
             name: `Persona process core ${command.coreFlowRef}`,
-            nodes: [],
+            nodes: [
+              {
+                id: 'start',
+                type: 'start',
+                data: { type: 'start', properties: {} },
+              },
+            ],
             edges: [],
           });
         }
