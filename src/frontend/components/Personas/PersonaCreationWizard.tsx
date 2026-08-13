@@ -163,7 +163,13 @@ export default function PersonaCreationWizard({
       selectedRole?.capabilityRequirements?.preferredMcpServers ?? [],
     );
     const eligible = new Set(appServers.map((server) => server.name));
-    setAppRefs([...preferred].filter((ref) => eligible.has(ref)));
+    const next = [...preferred].filter((ref) => eligible.has(ref));
+    setAppRefs((current) => (
+      current.length === next.length
+      && current.every((ref, index) => ref === next[index])
+        ? current
+        : next
+    ));
   }, [appServers, appsEdited, open, selectedRole]);
 
   const refsToCheck = useMemo(
