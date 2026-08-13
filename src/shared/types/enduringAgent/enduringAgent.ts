@@ -5,6 +5,7 @@ export const ENDURING_AGENT_SCHEMA_VERSION = 1 as const;
 export const ROLE_DEFINITION_SCHEMA_VERSION = 2 as const;
 export const ROLE_VERSION_SCHEMA_VERSION = 2 as const;
 export const PERSONA_SCHEMA_VERSION = 2 as const;
+export const PERSONA_CREATION_DRAFT_SCHEMA_VERSION = 1 as const;
 export const BEHAVIOR_REVISION_SCHEMA_VERSION = 2 as const;
 export const BEHAVIOR_BINDING_SCHEMA_VERSION = 2 as const;
 export const PERSONA_INSTRUCTION_CONTEXT_SCHEMA_VERSION = 1 as const;
@@ -276,6 +277,48 @@ export interface CreatePersonaInput {
   idempotencyKey?: string;
   /** Explicit user-provided facts only; no biography is generated implicitly. */
   initialMemories?: InitialPersonaMemoryInput[];
+}
+
+/** Editable wizard values only; none of these references are materialized while drafting. */
+export interface PersonaCreationDraftPayload {
+  step: number;
+  name: string;
+  mission: string;
+  avatarUrl: string;
+  roleVersionId: string;
+  coreFlowRef: string;
+  behaviorFlowRefs: string[];
+  appRefs: string[];
+  appsEdited: boolean;
+  memories: string[];
+  /** Preserves deterministic final-create retries across save and resume. */
+  idempotencyKey: string;
+}
+
+export interface PersonaCreationDraft {
+  schemaVersion: typeof PERSONA_CREATION_DRAFT_SCHEMA_VERSION;
+  id: string;
+  workspaceId: string;
+  status: 'draft';
+  payload: PersonaCreationDraftPayload;
+  revision: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface CreatePersonaCreationDraftInput {
+  /** Supplying a stable id makes a retried create idempotent. */
+  id?: string;
+  payload: PersonaCreationDraftPayload;
+}
+
+export interface UpdatePersonaCreationDraftInput {
+  expectedRevision: number;
+  payload: PersonaCreationDraftPayload;
+}
+
+export interface DeletePersonaCreationDraftInput {
+  expectedRevision: number;
 }
 
 /** User-editable Persona settings. Runtime-owned identity and timestamps stay immutable. */

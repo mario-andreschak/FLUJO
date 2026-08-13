@@ -7,6 +7,7 @@ export const ENDURING_AGENT_COLLECTIONS = Object.freeze({
   roleDefinitions: 'role-definitions',
   roleVersions: 'role-versions',
   personas: 'personas',
+  personaCreationDrafts: 'persona-creation-drafts',
   behaviorBindings: 'persona-behaviors',
   behaviorRevisions: 'behavior-revisions',
   behaviorProposals: 'persona-behavior-proposals',

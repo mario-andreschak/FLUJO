@@ -8,8 +8,10 @@ import type {
   BehaviorRevision,
   CopyPersonaFlowInput,
   CopyPersonaFlowResult,
+  CreatePersonaCreationDraftInput,
   CreatePersonaInput,
   CreatePersonaWorkItemInput,
+  DeletePersonaCreationDraftInput,
   MemoryItem,
   Persona,
   PersonaActivity,
@@ -19,16 +21,19 @@ import type {
   PersonaFlowReadiness,
   PersonaMailboxItem,
   PersonaPresentationSummary,
+  PersonaCreationDraft,
   PersonaWorkItem,
   RoleDefinition,
   RoleVersion,
   UpdatePersonaCompositionInput,
+  UpdatePersonaCreationDraftInput,
   UpdatePersonaInput,
   UpdatePersonaWorkItemInput,
 } from '@/shared/types/enduringAgent';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 
 const BASE = '/v1/personas';
+const DRAFT_BASE = '/v1/persona-drafts';
 
 export class PersonasApiError extends Error {
   constructor(
@@ -140,6 +145,10 @@ function personaPath(personaId: string, suffix = ''): string {
   return `${BASE}/${encodeURIComponent(personaId)}${suffix}`;
 }
 
+function draftPath(draftId: string): string {
+  return `${DRAFT_BASE}/${encodeURIComponent(draftId)}`;
+}
+
 async function jsonRequest<T>(path: string, method: string, body?: unknown): Promise<T> {
   return parse<T>(await fetch(withWorkspaceUrl(path), {
     method,
@@ -159,6 +168,29 @@ class PersonasService {
 
   create(input: CreatePersonaInput): Promise<PersonaBundle> {
     return jsonRequest(BASE, 'POST', input);
+  }
+
+  listDrafts(): Promise<PersonaCreationDraft[]> {
+    return parse(fetch(withWorkspaceUrl(DRAFT_BASE)));
+  }
+
+  getDraft(draftId: string): Promise<PersonaCreationDraft> {
+    return parse(fetch(withWorkspaceUrl(draftPath(draftId))));
+  }
+
+  createDraft(input: CreatePersonaCreationDraftInput): Promise<PersonaCreationDraft> {
+    return jsonRequest(DRAFT_BASE, 'POST', input);
+  }
+
+  updateDraft(
+    draftId: string,
+    input: UpdatePersonaCreationDraftInput,
+  ): Promise<PersonaCreationDraft> {
+    return jsonRequest(draftPath(draftId), 'PATCH', input);
+  }
+
+  deleteDraft(draftId: string, input: DeletePersonaCreationDraftInput): Promise<void> {
+    return jsonRequest(draftPath(draftId), 'DELETE', input);
   }
 
   update(personaId: string, input: UpdatePersonaInput): Promise<Persona> {
@@ -183,8 +215,8 @@ class PersonasService {
     return jsonRequest(personaPath(personaId, '/composition/copy'), 'POST', input);
   }
 
-  roles(): Promise<RolesResponse> {
-    return parse(fetch(withWorkspaceUrl('/v1/roles')));
+  roles(signal?: AbortSignal): Promise<RolesResponse> {
+    return parse(fetch(withWorkspaceUrl('/v1/roles'), { signal }));
   }
 
   flowReadiness(flowRef: string): Promise<PersonaFlowReadiness> {

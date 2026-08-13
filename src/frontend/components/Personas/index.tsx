@@ -7,6 +7,7 @@ import {
   BoltRounded,
   ChatBubbleOutlineRounded,
   CheckCircleOutlineRounded,
+  DeleteOutlineRounded,
   EditRounded,
   HistoryRounded,
   HubRounded,
@@ -67,6 +68,7 @@ import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import {
   PERSONA_PRIORITIES,
   PERSONA_WORK_ITEM_STATUSES,
+  type PersonaCreationDraft,
   type PersonaHistoryEntry,
   type PersonaPresentationOutcome,
   type PersonaPriority,
@@ -102,12 +104,16 @@ interface PersonasDeskProps {
 }
 
 export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
-  const { t } = useI18n();
+  const { t, formatDate } = useI18n();
   const router = useRouter();
   const [selected, setSelected] = useState<PersonaDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [drafts, setDrafts] = useState<PersonaCreationDraft[]>([]);
+  const [draftsLoading, setDraftsLoading] = useState(false);
+  const [draftsError, setDraftsError] = useState<string | null>(null);
+  const [resumeDraft, setResumeDraft] = useState<PersonaCreationDraft | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -130,6 +136,35 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
   }, [initialPersonaId, t]);
 
   useEffect(() => { void load(); }, [load]);
+
+  const loadDrafts = useCallback(async () => {
+    if (initialPersonaId) return;
+    setDraftsLoading(true);
+    setDraftsError(null);
+    try {
+      setDrafts(await personasService.listDrafts());
+    } catch (cause) {
+      setDraftsError(cause instanceof Error ? cause.message : t('personas.create.draftsLoadFailed'));
+    } finally {
+      setDraftsLoading(false);
+    }
+  }, [initialPersonaId, t]);
+
+  useEffect(() => { void loadDrafts(); }, [loadDrafts]);
+
+  const discardDraft = useCallback(async (draft: PersonaCreationDraft) => {
+    setBusy(true);
+    setActionError(null);
+    try {
+      await personasService.deleteDraft(draft.id, { expectedRevision: draft.revision });
+      setDrafts((current) => current.filter((candidate) => candidate.id !== draft.id));
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : t('personas.create.draftDiscardFailed'));
+      await loadDrafts();
+    } finally {
+      setBusy(false);
+    }
+  }, [loadDrafts, t]);
 
   const refreshSelected = useCallback(async () => {
     if (!initialPersonaId) return;
@@ -240,17 +275,95 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
           )}
         />
       ) : (
-        <PersonasGallery
-          busy={busy}
-          onCreate={() => setCreateOpen(true)}
-          onTalk={startConversation}
-        />
+        <Stack spacing={3}>
+          {(draftsLoading || draftsError || drafts.length > 0) && (
+            <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.5 }, borderRadius: 4 }}>
+              <Stack spacing={2}>
+                <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={1}>
+                  <Box>
+                    <Typography variant="h6" fontWeight={760}>{t('personas.create.savedDrafts')}</Typography>
+                    <Typography color="text.secondary">{t('personas.create.savedDraftsHelp')}</Typography>
+                  </Box>
+                  <Button disabled={draftsLoading} startIcon={<RefreshRounded />} onClick={() => void loadDrafts()}>
+                    {t('personas.refresh')}
+                  </Button>
+                </Stack>
+                {draftsLoading && <LinearProgress />}
+                {draftsError && <Alert severity="warning">{draftsError}</Alert>}
+                {drafts.map((item) => (
+                  <Paper key={item.id} variant="outlined" sx={{ p: 2, borderRadius: 3 }}>
+                    <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={2}>
+                      <Box>
+                        <Typography fontWeight={720}>
+                          {item.payload.name.trim() || t('personas.create.untitledDraft')}
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          {t('personas.create.draftUpdated', {
+                            date: formatDate(item.updatedAt, {
+                              dateStyle: 'medium',
+                              timeStyle: 'short',
+                            }),
+                          })}
+                        </Typography>
+                      </Box>
+                      <Stack direction="row" spacing={1}>
+                        <Button
+                          startIcon={<EditRounded />}
+                          onClick={() => {
+                            setResumeDraft(item);
+                            setCreateOpen(true);
+                          }}
+                        >
+                          {t('personas.create.resumeDraft')}
+                        </Button>
+                        <Button
+                          color="error"
+                          startIcon={<DeleteOutlineRounded />}
+                          disabled={busy}
+                          onClick={() => void discardDraft(item)}
+                        >
+                          {t('personas.create.discardDraft')}
+                        </Button>
+                      </Stack>
+                    </Stack>
+                  </Paper>
+                ))}
+              </Stack>
+            </Paper>
+          )}
+          <PersonasGallery
+            busy={busy}
+            onCreate={() => {
+              setResumeDraft(null);
+              setCreateOpen(true);
+            }}
+            onTalk={startConversation}
+          />
+        </Stack>
       )}
       <PersonaCreationWizard
         open={createOpen}
-        onClose={() => setCreateOpen(false)}
+        draft={resumeDraft}
+        onClose={() => {
+          setCreateOpen(false);
+          setResumeDraft(null);
+        }}
+        onDraftSaved={(saved) => {
+          setNotice(t('personas.create.draftSaved'));
+          setDrafts((current) => [
+            saved,
+            ...current.filter((candidate) => candidate.id !== saved.id),
+          ]);
+          setCreateOpen(false);
+          setResumeDraft(null);
+        }}
+        onDraftDiscarded={(draftId) => {
+          setDrafts((current) => current.filter((candidate) => candidate.id !== draftId));
+          setResumeDraft(null);
+        }}
         onCreated={(detail) => {
           setCreateOpen(false);
+          setResumeDraft(null);
           invalidatePersonaSummaryCache();
           router.push(withWorkspaceUrl(
             `/personas/${encodeURIComponent(detail.persona.id)}?area=overview`,

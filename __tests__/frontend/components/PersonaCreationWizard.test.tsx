@@ -3,6 +3,9 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const createMock = jest.fn();
+const createDraftMock = jest.fn();
+const updateDraftMock = jest.fn();
+const deleteDraftMock = jest.fn();
 const rolesMock = jest.fn();
 const readinessMock = jest.fn();
 const loadFlowsMock = jest.fn();
@@ -10,6 +13,9 @@ const loadFlowsMock = jest.fn();
 jest.mock('@/frontend/services/personas', () => ({
   personasService: {
     create: (...args: unknown[]) => createMock(...args),
+    createDraft: (...args: unknown[]) => createDraftMock(...args),
+    updateDraft: (...args: unknown[]) => updateDraftMock(...args),
+    deleteDraft: (...args: unknown[]) => deleteDraftMock(...args),
     roles: (...args: unknown[]) => rolesMock(...args),
     flowReadiness: (...args: unknown[]) => readinessMock(...args),
   },
@@ -74,11 +80,40 @@ describe('PersonaCreationWizard', () => {
     loadFlowsMock.mockResolvedValue([flow]);
     readinessMock.mockResolvedValue({ state: 'ready', issues: [] });
     createMock.mockResolvedValue({ persona: { id: 'persona_1' } });
+    createDraftMock.mockImplementation(async (input) => ({
+      schemaVersion: 1,
+      id: input.id,
+      workspaceId: 'test',
+      status: 'draft',
+      payload: input.payload,
+      revision: 1,
+      createdAt: 1,
+      updatedAt: 1,
+    }));
+    updateDraftMock.mockImplementation(async (_id, input) => ({
+      schemaVersion: 1,
+      id: 'draft_existing',
+      workspaceId: 'test',
+      status: 'draft',
+      payload: input.payload,
+      revision: input.expectedRevision + 1,
+      createdAt: 1,
+      updatedAt: 2,
+    }));
+    deleteDraftMock.mockResolvedValue(undefined);
   });
 
   it('preserves its draft across Back and submits one stable creation bundle', async () => {
     const onCreated = jest.fn();
-    render(<PersonaCreationWizard open onClose={jest.fn()} onCreated={onCreated} />);
+    render(
+      <PersonaCreationWizard
+        open
+        onClose={jest.fn()}
+        onCreated={onCreated}
+        onDraftSaved={jest.fn()}
+        onDraftDiscarded={jest.fn()}
+      />,
+    );
 
     fireEvent.change(await screen.findByRole('textbox', { name: 'Name' }), {
       target: { value: 'Mina' },
@@ -108,5 +143,48 @@ describe('PersonaCreationWizard', () => {
     });
     expect(createMock.mock.calls[0][0].idempotencyKey).toEqual(expect.any(String));
     expect(onCreated).toHaveBeenCalled();
+  });
+
+  it('saves an incomplete wizard without publishing a Persona', async () => {
+    const onDraftSaved = jest.fn();
+    render(
+      <PersonaCreationWizard
+        open
+        onClose={jest.fn()}
+        onCreated={jest.fn()}
+        onDraftSaved={onDraftSaved}
+        onDraftDiscarded={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'personas.create.saveDraft' }));
+    await waitFor(() => expect(createDraftMock).toHaveBeenCalledTimes(1));
+    expect(createDraftMock.mock.calls[0][0]).toMatchObject({
+      id: expect.stringMatching(/^draft_/),
+      payload: expect.objectContaining({ name: '', step: 0 }),
+    });
+    expect(createMock).not.toHaveBeenCalled();
+    expect(onDraftSaved).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes Roles once when focus and visibility return together', async () => {
+    let now = 1_000;
+    const nowSpy = jest.spyOn(Date, 'now').mockImplementation(() => now);
+    render(
+      <PersonaCreationWizard
+        open
+        onClose={jest.fn()}
+        onCreated={jest.fn()}
+        onDraftSaved={jest.fn()}
+        onDraftDiscarded={jest.fn()}
+      />,
+    );
+    await waitFor(() => expect(rolesMock).toHaveBeenCalledTimes(1));
+
+    now = 2_000;
+    fireEvent.focus(window);
+    fireEvent(document, new Event('visibilitychange'));
+    await waitFor(() => expect(rolesMock).toHaveBeenCalledTimes(2));
+    nowSpy.mockRestore();
   });
 });

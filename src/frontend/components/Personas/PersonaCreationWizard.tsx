@@ -4,6 +4,7 @@ import {
   AddRounded,
   DeleteOutlineRounded,
   OpenInNewRounded,
+  RefreshRounded,
 } from '@mui/icons-material';
 import {
   Alert,
@@ -27,7 +28,7 @@ import {
 } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 
 import FlowCard from '@/frontend/components/Flow/FlowDashboard/FlowCard';
@@ -37,20 +38,28 @@ import CardPickerGrid from '@/frontend/components/shared/CardPickerGrid';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { flowService } from '@/frontend/services/flow';
 import {
+  PersonasApiError,
   personasService,
   type PersonaBundle,
   type RolesResponse,
 } from '@/frontend/services/personas';
 import type { Flow } from '@/frontend/types/flow/flow';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
-import type { PersonaFlowReadiness } from '@/shared/types/enduringAgent';
+import type {
+  PersonaCreationDraft,
+  PersonaCreationDraftPayload,
+  PersonaFlowReadiness,
+} from '@/shared/types/enduringAgent';
 
 import RoleVersionCard from './RoleVersionCard';
 
 interface PersonaCreationWizardProps {
   open: boolean;
+  draft?: PersonaCreationDraft | null;
   onClose: () => void;
   onCreated: (detail: PersonaBundle) => void;
+  onDraftSaved: (draft: PersonaCreationDraft) => void;
+  onDraftDiscarded: (draftId: string) => void;
 }
 
 const EMPTY_READINESS: PersonaFlowReadiness = { state: 'missing', issues: [] };
@@ -67,8 +76,11 @@ function validOptionalUrl(value: string): boolean {
 
 export default function PersonaCreationWizard({
   open,
+  draft,
   onClose,
   onCreated,
+  onDraftSaved,
+  onDraftDiscarded,
 }: PersonaCreationWizardProps) {
   const { t } = useI18n();
   const theme = useTheme();
@@ -89,9 +101,18 @@ export default function PersonaCreationWizard({
   const [readiness, setReadiness] = useState<Record<string, PersonaFlowReadiness>>({});
   const [loadingReadiness, setLoadingReadiness] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
+  const [savingDraft, setSavingDraft] = useState(false);
   const [loading, setLoading] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+  const [draftRecord, setDraftRecord] = useState<PersonaCreationDraft | null>(null);
+  const [roleRefreshError, setRoleRefreshError] = useState<string | null>(null);
+  const roleRequestRef = useRef<{ sequence: number; controller: AbortController | null }>({
+    sequence: 0,
+    controller: null,
+  });
+  const lastRoleRefreshAtRef = useRef(0);
 
   const {
     servers: appServers,
@@ -110,6 +131,7 @@ export default function PersonaCreationWizard({
   ], [t]);
 
   const selectedRole = roles?.roleVersions.find((role) => role.id === roleVersionId);
+  const selectedRoleUnavailable = Boolean(roleVersionId && roles && !selectedRole);
   const selectedCore = flows.find((flow) => flow.id === coreFlowRef);
   const selectedBehaviors = flows.filter((flow) => behaviorFlowRefs.includes(flow.id));
   const selectedApps = appServers.filter((server) => appRefs.includes(server.name));
@@ -121,6 +143,7 @@ export default function PersonaCreationWizard({
   );
 
   const reset = () => {
+    roleRequestRef.current.controller?.abort();
     setStep(0);
     setRoles(null);
     setFlows([]);
@@ -136,26 +159,111 @@ export default function PersonaCreationWizard({
     setReadiness({});
     setLoadingReadiness(new Set());
     setError(null);
+    setStatus(null);
+    setRoleRefreshError(null);
+    setDraftRecord(null);
     setIdempotencyKey(uuidv4());
   };
 
   useEffect(() => {
-    if (!open || roles || loading) return;
+    if (!open || !draft) return;
+    setDraftRecord(draft);
+    setStep(draft.payload.step);
+    setName(draft.payload.name);
+    setMission(draft.payload.mission);
+    setAvatarUrl(draft.payload.avatarUrl);
+    setRoleVersionId(draft.payload.roleVersionId);
+    setCoreFlowRef(draft.payload.coreFlowRef);
+    setBehaviorFlowRefs(draft.payload.behaviorFlowRefs);
+    setAppRefs(draft.payload.appRefs);
+    setAppsEdited(draft.payload.appsEdited);
+    setMemories(draft.payload.memories.length ? draft.payload.memories : ['']);
+    setIdempotencyKey(draft.payload.idempotencyKey);
+    setStatus(t('personas.create.draftResumed'));
+  }, [draft, open, t]);
+
+  const refreshRoles = useCallback(async (
+    initialize = false,
+    force = false,
+  ): Promise<void> => {
+    const now = Date.now();
+    if (!force && !initialize && now - lastRoleRefreshAtRef.current < 250) return;
+    lastRoleRefreshAtRef.current = now;
+
+    roleRequestRef.current.controller?.abort();
+    const controller = new AbortController();
+    const sequence = roleRequestRef.current.sequence + 1;
+    roleRequestRef.current = { sequence, controller };
+    setRoleRefreshError(null);
+
+    try {
+      const nextRoles = await personasService.roles(controller.signal);
+      if (
+        controller.signal.aborted
+        || sequence !== roleRequestRef.current.sequence
+      ) return;
+      setRoles(nextRoles);
+      if (initialize) {
+        setRoleVersionId((current) => current || nextRoles.roleVersions[0]?.id || '');
+      }
+    } catch (cause) {
+      if (controller.signal.aborted) return;
+      const message = cause instanceof Error
+        ? cause.message
+        : t('personas.create.refreshRolesFailed');
+      setRoleRefreshError(message);
+      throw cause;
+    }
+  }, [t]);
+
+  useEffect(() => {
+    if (!open) {
+      roleRequestRef.current.controller?.abort();
+      return;
+    }
+
+    let cancelled = false;
     setLoading(true);
     setError(null);
-    void Promise.all([personasService.roles(), flowService.loadFlows()])
-      .then(([nextRoles, nextFlows]) => {
+    void Promise.all([
+      refreshRoles(true),
+      flowService.loadFlows(),
+    ])
+      .then(([, nextFlows]) => {
+        if (cancelled) return;
         const sharedFlows = nextFlows.filter((flow) => !flow.personaOwnership);
-        setRoles(nextRoles);
         setFlows(sharedFlows);
-        setRoleVersionId((current) => current || nextRoles.roleVersions[0]?.id || '');
         setCoreFlowRef((current) => current || sharedFlows[0]?.id || '');
       })
       .catch((cause) => {
+        if (cancelled || roleRequestRef.current.controller?.signal.aborted) return;
         setError(cause instanceof Error ? cause.message : t('personas.action.failed'));
       })
-      .finally(() => setLoading(false));
-  }, [loading, open, roles, t]);
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+      roleRequestRef.current.controller?.abort();
+    };
+  }, [open, refreshRoles, t]);
+
+  useEffect(() => {
+    if (!open) return;
+    const refresh = () => {
+      void refreshRoles(false).catch(() => undefined);
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
+  }, [open, refreshRoles]);
 
   useEffect(() => {
     if (!open || appsEdited) return;
@@ -227,18 +335,89 @@ export default function PersonaCreationWizard({
   const flowReady = (ref: string) => readiness[ref]?.state === 'ready';
   const stepValid = [
     Boolean(name.trim()) && avatarValid,
-    Boolean(roleVersionId),
+    Boolean(selectedRole),
     Boolean(coreFlowRef) && flowReady(coreFlowRef),
     behaviorFlowRefs.every(flowReady),
     true,
     true,
-    Boolean(name.trim() && roleVersionId && coreFlowRef)
+    Boolean(name.trim() && selectedRole && coreFlowRef)
       && flowReady(coreFlowRef)
       && behaviorFlowRefs.every(flowReady),
   ][step];
 
+  const draftPayload = (): PersonaCreationDraftPayload => ({
+    step,
+    name,
+    mission,
+    avatarUrl,
+    roleVersionId,
+    coreFlowRef,
+    behaviorFlowRefs,
+    appRefs,
+    appsEdited,
+    memories,
+    idempotencyKey,
+  });
+
+  const saveDraft = async () => {
+    setSavingDraft(true);
+    setError(null);
+    setStatus(t('personas.create.savingDraft'));
+    try {
+      const payload = draftPayload();
+      const saved = draftRecord
+        ? await personasService.updateDraft(draftRecord.id, {
+            expectedRevision: draftRecord.revision,
+            payload,
+          })
+        : await personasService.createDraft({
+            id: `draft_${uuidv4().replaceAll('-', '')}`,
+            payload,
+          });
+      setDraftRecord(saved);
+      setStatus(t('personas.create.draftSaved'));
+      reset();
+      onDraftSaved(saved);
+    } catch (cause) {
+      const message = cause instanceof PersonasApiError && cause.status === 409
+        ? t('personas.create.draftConflict')
+        : cause instanceof Error
+          ? cause.message
+          : t('personas.create.draftSaveFailed');
+      setError(message);
+      setStatus(null);
+    } finally {
+      setSavingDraft(false);
+    }
+  };
+
+  const discardAndClose = async () => {
+    setSavingDraft(true);
+    setError(null);
+    try {
+      if (draftRecord) {
+        await personasService.deleteDraft(draftRecord.id, {
+          expectedRevision: draftRecord.revision,
+        });
+        onDraftDiscarded(draftRecord.id);
+      }
+      setConfirmCancel(false);
+      reset();
+      onClose();
+    } catch (cause) {
+      setConfirmCancel(false);
+      setError(cause instanceof PersonasApiError && cause.status === 409
+        ? t('personas.create.draftConflict')
+        : cause instanceof Error
+          ? cause.message
+          : t('personas.create.draftDiscardFailed'));
+    } finally {
+      setSavingDraft(false);
+    }
+  };
+
   const requestClose = () => {
-    if (saving) return;
+    if (saving || savingDraft) return;
     if (dirty) setConfirmCancel(true);
     else {
       reset();
@@ -264,6 +443,16 @@ export default function PersonaCreationWizard({
           ? { initialMemories: initialMemories.map((content) => ({ content })) }
           : {}),
       });
+      if (draftRecord) {
+        try {
+          await personasService.deleteDraft(draftRecord.id, {
+            expectedRevision: draftRecord.revision,
+          });
+          onDraftDiscarded(draftRecord.id);
+        } catch {
+          // Persona creation succeeded; draft cleanup must never trigger a duplicate publish retry.
+        }
+      }
       reset();
       onCreated(detail);
     } catch (cause) {
@@ -296,7 +485,25 @@ export default function PersonaCreationWizard({
             <Stepper activeStep={step} alternativeLabel={!fullScreen} orientation={fullScreen ? 'vertical' : 'horizontal'}>
               {steps.map((label) => <Step key={label}><StepLabel>{label}</StepLabel></Step>)}
             </Stepper>
-            {error && <Alert severity="error">{error}</Alert>}
+            {error && <Alert severity="error" role="alert">{error}</Alert>}
+            {status && <Alert severity="info" role="status" aria-live="polite">{status}</Alert>}
+            {roleRefreshError && (
+              <Alert
+                severity="warning"
+                action={(
+                  <Button onClick={() => void refreshRoles(false, true).catch(() => undefined)}>
+                    {t('personas.create.refreshRoles')}
+                  </Button>
+                )}
+              >
+                {roleRefreshError}
+              </Alert>
+            )}
+            {selectedRoleUnavailable && (
+              <Alert severity="warning" role="alert">
+                {t('personas.create.roleUnavailable')}
+              </Alert>
+            )}
 
             {step === 0 && (
               <Stack spacing={2}>
@@ -335,7 +542,10 @@ export default function PersonaCreationWizard({
                     content: <RoleVersionCard role={role} selected={roleVersionId === role.id} plainLanguage onSelect={() => {}} />,
                   }))}
                 />
-                <Button component={Link} href={withWorkspaceUrl('/roles/new')} target="_blank" startIcon={<AddRounded />}>{t('personas.create.newRole')}</Button>
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+                  <Button component={Link} href={withWorkspaceUrl('/roles/new')} target="_blank" startIcon={<AddRounded />}>{t('personas.create.newRole')}</Button>
+                  <Button startIcon={<RefreshRounded />} onClick={() => void refreshRoles(false, true).catch(() => undefined)}>{t('personas.create.refreshRoles')}</Button>
+                </Stack>
               </Stack>
             )}
 
@@ -456,11 +666,16 @@ export default function PersonaCreationWizard({
           </Stack>
         </DialogContent>
         <DialogActions sx={{ justifyContent: 'space-between', px: 3 }}>
-          <Button disabled={saving} onClick={requestClose}>{t('personas.action.cancel')}</Button>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+            <Button disabled={saving || savingDraft} onClick={requestClose}>{t('personas.action.cancel')}</Button>
+            <Button variant="outlined" disabled={saving || savingDraft} onClick={() => void saveDraft()}>
+              {savingDraft ? t('personas.create.savingDraft') : t('personas.create.saveDraft')}
+            </Button>
+          </Stack>
           <Stack direction="row" spacing={1}>
-            {step > 0 && <Button disabled={saving} onClick={() => setStep((current) => current - 1)}>{t('personas.create.back')}</Button>}
+            {step > 0 && <Button disabled={saving || savingDraft} onClick={() => setStep((current) => current - 1)}>{t('personas.create.back')}</Button>}
             {step < steps.length - 1 ? (
-              <Button variant="contained" disabled={!stepValid || saving} onClick={() => setStep((current) => current + 1)}>
+              <Button variant="contained" disabled={!stepValid || saving || savingDraft} onClick={() => setStep((current) => current + 1)}>
                 {(step === 3 || step === 4 || step === 5) && (
                   (step === 3 && behaviorFlowRefs.length === 0)
                   || (step === 4 && appRefs.length === 0)
@@ -468,7 +683,7 @@ export default function PersonaCreationWizard({
                 ) ? t('personas.create.skip') : t('personas.create.next')}
               </Button>
             ) : (
-              <Button variant="contained" disabled={!stepValid || saving} onClick={() => void submit()}>
+              <Button variant="contained" disabled={!stepValid || saving || savingDraft} onClick={() => void submit()}>
                 {saving ? t('personas.create.creating') : t('personas.create.finish')}
               </Button>
             )}
@@ -481,7 +696,7 @@ export default function PersonaCreationWizard({
         <DialogContent><Typography>{t('personas.create.cancelHelp')}</Typography></DialogContent>
         <DialogActions>
           <Button onClick={() => setConfirmCancel(false)}>{t('personas.create.keepEditing')}</Button>
-          <Button color="error" onClick={() => { setConfirmCancel(false); reset(); onClose(); }}>{t('personas.create.discard')}</Button>
+          <Button color="error" disabled={savingDraft} onClick={() => void discardAndClose()}>{draftRecord ? t('personas.create.discardDraft') : t('personas.create.discard')}</Button>
         </DialogActions>
       </Dialog>
     </>
