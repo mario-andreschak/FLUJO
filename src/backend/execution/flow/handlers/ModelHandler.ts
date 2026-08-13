@@ -62,6 +62,7 @@ import { isPersonaToolName, executePersonaTool } from './personaTools';
 import { isMeetingToolName, executeMeetingTool } from './meetingTools';
 import { isMCPResourceToolName, executeMCPResourceTool, LIST_MCP_RESOURCES_TOOL_NAME } from './mcpResourceTools';
 import { isSubflowToolName, executeSubflowToolCall } from './subflowToolInvocation';
+import { isBehaviorToolName, executeBehaviorToolCall } from './behaviorToolInvocation';
 import { executeDetachedSubflowStart, executeTaskCancel, executeTaskGet, SUBFLOW_DETACHED_TOOL_PREFIX } from './subflowDetachedInvocation';
 import {
   DEFAULT_TOOL_RESULT_MAX_BYTES,
@@ -1299,8 +1300,14 @@ export class ModelHandler {
           .map((t) => t.function.name)
       : [];
     const hasSubflowTool = subflowToolCallNames.length > 0;
+    const behaviorToolCallNames = conversationId
+      ? (tools ?? [])
+          .filter((t) => t.type === 'function' && isBehaviorToolName(t.function.name))
+          .map((t) => t.function.name)
+      : [];
+    const hasBehaviorTool = behaviorToolCallNames.length > 0;
     const localToolExecutors: Record<string, (args: Record<string, unknown>) => Promise<unknown>> | undefined =
-      (hasRunResourceTool || hasMCPResourceTool || hasQuestionTool || hasTodoTool || hasPersonaTool || hasMeetingTool || hasSubflowTool)
+      (hasRunResourceTool || hasMCPResourceTool || hasQuestionTool || hasTodoTool || hasPersonaTool || hasMeetingTool || hasSubflowTool || hasBehaviorTool)
         ? {
             [WRITE_RESOURCE_TOOL_NAME]: async (args: Record<string, unknown>): Promise<unknown> => {
               const outcome = await executeRunResourceTool(WRITE_RESOURCE_TOOL_NAME, args, {
@@ -1374,6 +1381,16 @@ export class ModelHandler {
         localToolExecutors[toolName] = async (args: Record<string, unknown>): Promise<unknown> => {
           const outcome = await executeSubflowToolCall(toolName, args, { conversationId, emit });
           if (!outcome.success) throw new Error(outcome.error ?? 'call_subflow failed');
+          return outcome.data;
+        };
+      }
+    }
+
+    if (localToolExecutors && hasBehaviorTool) {
+      for (const toolName of behaviorToolCallNames) {
+        localToolExecutors[toolName] = async (args: Record<string, unknown>): Promise<unknown> => {
+          const outcome = await executeBehaviorToolCall(toolName, args, { conversationId, emit });
+          if (!outcome.success) throw new Error(outcome.error ?? 'call_behavior failed');
           return outcome.data;
         };
       }
@@ -2742,6 +2759,7 @@ export class ModelHandler {
         if (isPersonaToolName(toolName)) return LOCAL_GROUP;
         if (isMeetingToolName(toolName)) return LOCAL_GROUP;
         if (isSubflowToolName(toolName)) return LOCAL_GROUP;
+        if (isBehaviorToolName(toolName)) return LOCAL_GROUP;
         const decoded = decodeToolName(toolName, toolNameMap);
         return decoded ? `srv:${decoded.server}` : LOCAL_GROUP;
       };
@@ -3026,6 +3044,34 @@ export class ModelHandler {
           if (isMeetingToolName(name)) {
             emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
             const outcome = await executeMeetingTool(name, args, { conversationId });
+            const resultContent = outcome.success
+              ? JSON.stringify(outcome.data)
+              : `Error: ${outcome.error}`;
+            emit?.({
+              type: 'tool:result',
+              toolCallId: id,
+              name,
+              result: resultContent.length > 500 ? `${resultContent.slice(0, 500)}…` : resultContent,
+              isError: !outcome.success,
+            });
+            toolCallMessages.push({
+              id: uuidv4(),
+              role: 'tool',
+              tool_call_id: id,
+              content: resultContent,
+              timestamp: Date.now(),
+            });
+            processedToolCalls.push({ name, args, id, result: resultContent });
+            return;
+          }
+
+          if (isBehaviorToolName(name)) {
+            emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
+            const outcome = await executeBehaviorToolCall(name, args, {
+              conversationId,
+              toolCallId: id,
+              emit,
+            });
             const resultContent = outcome.success
               ? JSON.stringify(outcome.data)
               : `Error: ${outcome.error}`;
@@ -3578,7 +3624,7 @@ export class ModelHandler {
               ? 'handoff' as const
               : isRunResourceToolName(name) || isMCPResourceToolName(name)
                 ? 'resource' as const
-                : isQuestionToolName(name) || isTodoToolName(name) || isPersonaToolName(name) || isMeetingToolName(name) || isSubflowToolName(name)
+                : isQuestionToolName(name) || isTodoToolName(name) || isPersonaToolName(name) || isMeetingToolName(name) || isSubflowToolName(name) || isBehaviorToolName(name)
                   ? 'synthetic' as const
                   : decodedForUi
                     ? 'mcp' as const

@@ -20,6 +20,7 @@ import { resolveFrozenSystemPrompt } from '../systemPromptDrift';
 import { buildHandoffDescription } from '../buildHandoffDescription';
 import { buildHandoffToolNameMap, buildSubflowToolNameMap, SUBFLOW_TOOL_PREFIX } from '@/shared/utils/handoffNaming';
 import { buildSubflowTool } from '../handlers/subflowToolInvocation';
+import { buildBehaviorToolDefinitions } from '../handlers/behaviorToolInvocation';
 import { buildDetachedSubflowTool, SUBFLOW_DETACHED_TOOL_PREFIX } from '../handlers/subflowDetachedInvocation';
 import { flowService } from '@/backend/services/flow/index';
 import { modelService } from '@/backend/services/model';
@@ -384,7 +385,10 @@ export class ProcessNode extends BaseNode {
       toolsCount: handoffTools.length
     });
 
-    return handoffTools;
+    return [
+      ...handoffTools,
+      ...buildBehaviorToolDefinitions(sharedState.behaviorToolRegistry),
+    ];
   }
 
   async prep(sharedState: SharedState, node_params?: ProcessNodeParams): Promise<ProcessNodePrepResult> {

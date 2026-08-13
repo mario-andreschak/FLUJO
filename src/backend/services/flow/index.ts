@@ -25,6 +25,12 @@ import {
   FlowVersionRecord,
   FlowVersionSummary,
 } from './flowVersions';
+import {
+  createFlowExecutionSnapshot,
+  type FlowExecutionSnapshot,
+} from './executionSnapshot';
+
+export type { FlowExecutionSnapshot } from './executionSnapshot';
 
 const log = createLogger('backend/services/flow/index');
 
@@ -219,6 +225,24 @@ export class FlowService { // Add export keyword here
       return flow;
     } catch (error) {
       log.error(`Failed to get flow ${flowId}`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Capture the current workspace Flow as one immutable, content-addressed
+   * execution source. This deliberately bypasses the mutable cache and returns
+   * the exact persisted definition and hash from a single authoritative read.
+   */
+  async readFlowExecutionSnapshot(flowId: string): Promise<FlowExecutionSnapshot | null> {
+    try {
+      assertSafeCollectionId(flowId);
+      await ensureFlowsMigrated();
+      const flow = await loadCollectionItem<Flow | null>(FLOWS_COLLECTION, flowId, null);
+      if (!flow || flow.id !== flowId) return null;
+      return createFlowExecutionSnapshot(getCurrentWorkspace(), flow);
+    } catch (error) {
+      log.debug(`readFlowExecutionSnapshot: could not capture flow ${flowId}`, error);
       return null;
     }
   }

@@ -1263,6 +1263,8 @@ export interface SharedState {
      * only ever matches `handoff_to_*` and transitions the graph).
      */
     subflowToolNameMap?: Record<string, string>;
+    /** Persona-authorized call_behavior_* registry, separate from graph Subflows. */
+    behaviorToolRegistry?: import('./handlers/behaviorToolInvocation').BehaviorToolRegistry;
     /** Model-facing start_subflow_* tool name -> detached target node id. */
     subflowDetachedToolNameMap?: Record<string, string>;
     /** Durable task handles launched while this conversation was active. */

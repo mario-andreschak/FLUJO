@@ -451,6 +451,9 @@ export const BehaviorRevisionSourceSchema = z.discriminatedUnion('kind', [
     evidenceRefs: z.array(NonEmptyText(2048)).max(100).optional(),
     sourceFlowRef: WorkspaceFlowRefSchema.optional(),
     overrideFlowRef: WorkspaceFlowRefSchema.optional(),
+    workspaceId: NonEmptyText(256).optional(),
+    selectedFlowRef: WorkspaceFlowRefSchema.optional(),
+    flowVersionId: NonEmptyText(128).optional(),
   }).strict(),
   z.object({
     kind: z.literal('import'),

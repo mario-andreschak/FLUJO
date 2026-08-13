@@ -13,7 +13,6 @@ import {
   PersonaActivitySchema,
   PersonaLeaseSchema,
   PersonaMailboxItemSchema,
-  type BehaviorBinding,
   type BehaviorRevision,
   type CreatePersonaMailboxItemInput,
   type Persona,
@@ -34,6 +33,7 @@ import { getCurrentWorkspace } from '@/utils/workspace';
 import { createLogger } from '@/utils/logger';
 
 import { canonicalJson } from './behaviorRevisions';
+import { resolveEffectiveBehaviorRevision } from './behaviorFlowResolver';
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
 import { randomEnduringAgentId, stableEnduringAgentId } from './ids';
 import {
@@ -48,7 +48,6 @@ import {
   getPersonaLease,
   getPersonaLeaseRecord,
   getPersonaMailboxItem,
-  listBehaviorBindings,
   listPersonaActivities,
   listPersonaBundle,
   listPersonaLeaseRecords,
@@ -727,43 +726,8 @@ async function requireReadyPersona(personaId: string): Promise<Persona> {
 async function resolveBehavior(
   personaId: string,
   slotKey: string,
-): Promise<{ binding: BehaviorBinding; revision: BehaviorRevision }> {
-  const matchingBindings = (await listBehaviorBindings(personaId)).filter(
-    (candidate) => candidate.slotKey === slotKey,
-  );
-  if (matchingBindings.length > 1) {
-    throw new PersonaRuntimeCorruptionError(
-      personaId,
-      `Persona has multiple Behaviors bound to slot ${JSON.stringify(slotKey)}.`,
-    );
-  }
-  const binding = matchingBindings[0];
-  if (!binding) {
-    throw new PersonaRuntimeUnavailableError(
-      personaId,
-      `Persona ${JSON.stringify(personaId)} has no Behavior bound to slot `
-      + `${JSON.stringify(slotKey)}.`,
-    );
-  }
-  const revision = await getBehaviorRevision(binding.activeRevisionId);
-  if (!revision) {
-    throw new PersonaRuntimeCorruptionError(
-      personaId,
-      `BehaviorBinding ${JSON.stringify(binding.id)} references missing revision `
-      + `${JSON.stringify(binding.activeRevisionId)}.`,
-    );
-  }
-  if (
-    revision.personaId !== personaId
-    || revision.behaviorId !== binding.id
-    || revision.slotKey !== binding.slotKey
-  ) {
-    throw new PersonaRuntimeCorruptionError(
-      personaId,
-      `BehaviorBinding ${JSON.stringify(binding.id)} does not own its active revision.`,
-    );
-  }
-  return { binding, revision };
+) {
+  return resolveEffectiveBehaviorRevision(personaId, slotKey);
 }
 
 function sortEligibleMailboxItems(

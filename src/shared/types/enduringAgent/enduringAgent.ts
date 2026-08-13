@@ -378,6 +378,10 @@ export type BehaviorRevisionSource =
       /** Mutable authoring provenance only; flowSnapshot remains executable authority. */
       sourceFlowRef?: string;
       overrideFlowRef?: string;
+      /** Authoritative identity captured with a reference-backed execution pin. */
+      workspaceId?: string;
+      selectedFlowRef?: string;
+      flowVersionId?: string;
     }
   | {
       kind: 'import';

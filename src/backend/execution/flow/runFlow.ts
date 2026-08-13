@@ -463,6 +463,13 @@ export interface FlowRunInput {
    */
   personaInstructionContext?: PersonaInstructionContext;
 
+  /**
+   * Dispatcher-authorized Behavior callables for this immutable Activity.
+   * Stored separately from graph Subflow mappings and never forwarded to child
+   * Behavior runs.
+   */
+  behaviorToolRegistry?: import('./handlers/behaviorToolInvocation').BehaviorToolRegistry;
+
   /** MeetingEngine-only participant identity. Never forwarded to subflows. */
   meetingParticipant?: SharedState['meetingParticipant'];
   /** MeetingEngine-only fresh action buffer for this participant turn. */
@@ -984,6 +991,12 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   }
   if (personaInstructionContext) {
     sharedState.personaInstructionContext = structuredClone(personaInstructionContext);
+  }
+  if (
+    input.behaviorToolRegistry
+    && (!sharedState.behaviorToolRegistry || resetPersonaPromptPrefix)
+  ) {
+    sharedState.behaviorToolRegistry = structuredClone(input.behaviorToolRegistry);
   }
   // A meeting round is still executed by the regular flow runtime, but its
   // coordination state belongs to the sibling MeetingEngine. Install only the

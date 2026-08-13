@@ -8,6 +8,7 @@ import {
   type FlowRunResult,
 } from '@/backend/execution/flow/runFlow';
 import { readConversationLog } from '@/backend/execution/flow/conversationLog';
+import { buildBehaviorToolRegistry } from '@/backend/execution/flow/handlers/behaviorToolInvocation';
 import {
   enqueueSteeringMessage,
   peekSteeringMessages,
@@ -2352,6 +2353,15 @@ export class PersonaFlowDispatcher {
     let result: FlowRunResult;
     try {
       await authority.assertCurrent();
+      const behaviorPersona = await this.inWorkspace(
+        () => this.dependencies.getPersona(record.personaId),
+      );
+      if (!behaviorPersona) throw new Error('Owning Persona no longer exists.');
+      const behaviorToolRegistry = buildBehaviorToolRegistry({
+        personaId: behaviorPersona.id,
+        behaviors: behaviorPersona.composition?.behaviors ?? [],
+        excludeBehaviorId: revision.behaviorId,
+      });
       result = await this.inWorkspace(() => this.dependencies.runFlow({
         ...flowInput,
         // Clone the immutable persisted snapshot before handing it to an engine
@@ -2359,6 +2369,7 @@ export class PersonaFlowDispatcher {
         flowDefinition: structuredClone(revision.flowSnapshot),
         abortSignal: abortController.signal,
         executionAuthority: authority,
+        behaviorToolRegistry,
         personaAttribution: {
           personaId: record.personaId,
           activityId: record.activityId,
