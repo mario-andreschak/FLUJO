@@ -7,7 +7,6 @@ import {
   appendPersonaRuntimeEvent,
   claimNextPersonaActivity,
   completePersonaActivity,
-  createPersonaFromRole,
   deletePersonaRuntimeEvents,
   enqueuePersonaMailboxItem,
   getPersona,
@@ -20,6 +19,7 @@ import {
   readPersonaRuntimeEvents,
   recoverPersonaRuntime,
 } from '@/backend/services/enduringAgents';
+import { createPersonaFromRole } from './fixtures/personaFactory';
 import { ENDURING_AGENT_COLLECTIONS } from '@/backend/services/enduringAgents/collections';
 import { deleteCollectionItem, saveCollectionItem } from '@/utils/storage/backend';
 import { runWithWorkspace } from '@/utils/workspace';

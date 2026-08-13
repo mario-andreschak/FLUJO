@@ -10,7 +10,6 @@ import {
   commitWithPersonaActivityLease,
   completePersonaActivity,
   correctMemory,
-  createPersonaFromRole,
   createPersonaWorkItem,
   deletePersonaWorkItem,
   forgetMemory,
@@ -29,6 +28,7 @@ import {
   type PersonaActivityClaim,
   type PersonaLeaseFence,
 } from '@/backend/services/enduringAgents';
+import { createPersonaFromRole } from './fixtures/personaFactory';
 import { getMemoryItem, getPersona, listMemoryItems } from '@/backend/services/enduringAgents/store';
 import { runWithWorkspace } from '@/utils/workspace';
 

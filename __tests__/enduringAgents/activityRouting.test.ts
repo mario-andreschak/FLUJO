@@ -6,7 +6,6 @@ import {
   acknowledgePersonaActivityDelivery,
   claimNextPersonaActivity,
   completePersonaActivity,
-  createPersonaFromRole,
   enqueuePersonaMailboxItem,
   listPendingPersonaActivityDeliveries,
   rejectPersonaActivityDelivery,
@@ -17,6 +16,7 @@ import {
   type PersonaActivityClaim,
   type PersonaLeaseFence,
 } from '@/backend/services/enduringAgents';
+import { createPersonaFromRole } from './fixtures/personaFactory';
 import {
   getPersonaActivity,
   getPersonaLease,

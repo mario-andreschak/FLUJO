@@ -6,12 +6,12 @@ import {
   appendPersonaRuntimeEvent,
   assertPersonaActivityLease,
   claimNextPersonaActivity,
-  createPersonaFromRole,
   deletePersona,
   enqueuePersonaMailboxItem,
   previewPersonaDeletion,
   readPersonaRuntimeEvents,
 } from '@/backend/services/enduringAgents';
+import { createPersonaFromRole } from './fixtures/personaFactory';
 import {
   getPersona,
   getPersonaDeletionTombstone,

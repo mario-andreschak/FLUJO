@@ -4,7 +4,6 @@ import {
   activateBehaviorProposal,
   approveBehaviorProposal,
   createBehaviorProposal,
-  createPersonaFromRole,
   createProceduralHint,
   deletePersona,
   getBehaviorProposal,
@@ -15,6 +14,7 @@ import {
   type BehaviorProposalCompileResult,
   type CreateBehaviorProposalInput,
 } from '@/backend/services/enduringAgents';
+import { createPersonaFromRole } from './fixtures/personaFactory';
 import {
   getBehaviorBinding,
   getBehaviorRevision,

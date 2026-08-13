@@ -34,11 +34,11 @@ import {
   MeetingEngine,
 } from '@/backend/execution/meeting/MeetingEngine';
 import {
-  createPersonaFromRole,
   getPersonaActivity,
   getPersonaLease,
   listPersonaMailboxItems,
 } from '@/backend/services/enduringAgents';
+import { createPersonaFromRole } from '../enduringAgents/fixtures/personaFactory';
 import { meetingEventBus } from '@/backend/services/meetings/MeetingEventBus';
 import { deleteMeeting, getMeeting } from '@/backend/services/meetings/store';
 import { runWithWorkspace } from '@/utils/workspace';

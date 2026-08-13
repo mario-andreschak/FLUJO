@@ -11,7 +11,6 @@ import {
   assertPersonaActivityLease,
   claimNextPersonaActivity,
   completePersonaActivity,
-  createPersonaFromRole,
   enqueuePersonaMailboxItem,
   listPersonaRuntimeBundle,
   releasePersonaActivityLease,
@@ -19,6 +18,7 @@ import {
   type PersonaActivityClaim,
   type PersonaLeaseFence,
 } from '@/backend/services/enduringAgents';
+import { createPersonaFromRole } from './fixtures/personaFactory';
 import { ENDURING_AGENT_COLLECTIONS } from '@/backend/services/enduringAgents/collections';
 import {
   withIssuedPersonaRuntimeLockOperation,

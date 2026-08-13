@@ -4,11 +4,11 @@ import {
   activatePersonaBehaviorRevision,
   behaviorRevisionId,
   claimNextPersonaActivity,
-  createPersonaFromRole,
   hashBehaviorFlow,
   routePersonaMailboxItem,
   updatePersonaSettings,
 } from '@/backend/services/enduringAgents';
+import { createPersonaFromRole } from './fixtures/personaFactory';
 import {
   createBehaviorRevision,
   listPersonaBundle,
