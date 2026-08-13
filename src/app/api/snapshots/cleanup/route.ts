@@ -1,10 +1,14 @@
 import { NextResponse } from 'next/server';
 import { SnapshotStoreBusyError, snapshotStore } from '@/backend/services/snapshot/SnapshotStore';
 import { assertLocalRequest } from '@/utils/http/localRequest';
+import { assertUnlocked } from '@/utils/encryption/lockGate';
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 
 export const runtime = 'nodejs';
 
-export async function POST(request: Request) {
+async function POST_handler(request: Request) {
+  const locked = await assertUnlocked();
+  if (locked) return locked;
   const notLocal = assertLocalRequest(request);
   if (notLocal) return notLocal;
   let body: { action?: unknown; confirmation?: unknown };
@@ -37,3 +41,5 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Unable to clean snapshot history' }, { status: 500 });
   }
 }
+
+export const POST = withWorkspaceRoute(POST_handler);

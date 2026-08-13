@@ -2,16 +2,22 @@ import { NextResponse } from 'next/server';
 import { snapshotStore } from '@/backend/services/snapshot/SnapshotStore';
 import { isSnapshotRetentionPolicy, type SnapshotRetentionPolicy } from '@/shared/types/snapshot';
 import { assertLocalRequest } from '@/utils/http/localRequest';
+import { assertUnlocked } from '@/utils/encryption/lockGate';
+import { withWorkspaceRoute } from '@/app/api/_workspace';
 
 export const runtime = 'nodejs';
 
-export async function GET(request: Request) {
+async function GET_handler(request: Request) {
+  const locked = await assertUnlocked();
+  if (locked) return locked;
   const notLocal = assertLocalRequest(request);
   if (notLocal) return notLocal;
   return NextResponse.json(await snapshotStore.status());
 }
 
-export async function PATCH(request: Request) {
+async function PATCH_handler(request: Request) {
+  const locked = await assertUnlocked();
+  if (locked) return locked;
   const notLocal = assertLocalRequest(request);
   if (notLocal) return notLocal;
   let body: unknown;
@@ -43,3 +49,6 @@ export async function PATCH(request: Request) {
   // Changing policy is intentionally non-destructive. Cleanup is always explicit.
   return NextResponse.json({ policy: await snapshotStore.updatePolicy(policy) });
 }
+
+export const GET = withWorkspaceRoute(GET_handler);
+export const PATCH = withWorkspaceRoute(PATCH_handler);

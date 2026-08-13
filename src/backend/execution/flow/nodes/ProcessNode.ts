@@ -647,6 +647,7 @@ export class ProcessNode extends BaseNode {
     // Issue #258: carry the resolved unattended flag so execCore can pass it to
     // the model call (the synthetic `question` tool degrades in unattended runs).
     unattended: sharedState.unattended,
+    permissionRules: structuredClone(sharedState.permissionRules ?? []),
     executionAuthority: sharedState.executionAuthority,
     personaAttribution: sharedState.personaAttribution,
   };

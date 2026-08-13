@@ -19,6 +19,14 @@ import { useStorage } from '@/frontend/contexts/StorageContext';
 
 const GIB = 1024 * 1024 * 1024;
 const DAY = 24 * 60 * 60 * 1000;
+type SnapshotPolicyNumberField = 'maxBytes' | 'maxAgeMs' | 'maxCapturesPerRoot';
+
+function parsePolicyNumber(value: string, multiplier: number): number | null {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  const normalized = Math.round(parsed * multiplier);
+  return Number.isSafeInteger(normalized) ? normalized : null;
+}
 
 function formatBytes(bytes: number) {
   return bytes >= GIB ? `${(bytes / GIB).toFixed(2)} GiB` : `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
@@ -98,7 +106,34 @@ export default function SnapshotStorageSettings() {
     }
   };
 
+  const setPolicyNumber = (
+    field: SnapshotPolicyNumberField,
+    value: string,
+    multiplier = 1,
+  ) => {
+    const parsed = parsePolicyNumber(value, multiplier);
+    if (draft && parsed !== null) setDraft({ ...draft, [field]: parsed });
+  };
+
   const captureEnabled = settings.experimental?.snapshotsEnabled !== false;
+  const repositorySummaries = status?.usage.repositories ?? [];
+  const captureCount = repositorySummaries.reduce(
+    (total, repository) => total + repository.commitCount,
+    0,
+  );
+  const captureDates = repositorySummaries.flatMap(repository => (
+    [repository.oldestCaptureAt, repository.newestCaptureAt].filter(
+      (value): value is string => Boolean(value),
+    )
+  )).sort();
+  const oldestCaptureAt = captureDates[0];
+  const newestCaptureAt = captureDates[captureDates.length - 1];
+  const storageBusy = Boolean(
+    status?.activity.capture
+    || status?.activity.cleanup
+    || status?.activity.revert
+    || status?.activity.migration,
+  );
   const setCaptureEnabled = (enabled: boolean) => {
     void updateSettings({
       ...settings,
@@ -128,9 +163,24 @@ export default function SnapshotStorageSettings() {
       {message && <Alert severity="success" sx={{ mb: 1 }}>{message}</Alert>}
       {status && draft && (
         <Stack spacing={2}>
+          {status.overBudget && (
+            <Alert severity="warning">
+              Snapshot storage is over its configured limit. New captures pause until cleanup reclaims enough space.
+            </Alert>
+          )}
+          {(status.activity.cleanup || status.activity.revert || status.activity.migration) && (
+            <Alert severity="info">Snapshot storage is busy; destructive actions are temporarily locked.</Alert>
+          )}
           <Typography variant="body2">
-            {formatBytes(status.usage.onDiskBytes)} on disk · {formatBytes(status.usage.logicalBytes)} Git objects · {status.usage.repositoryCount} repositories
+            {formatBytes(status.usage.onDiskBytes)} on disk · {formatBytes(status.usage.logicalBytes)} Git objects · {status.usage.repositoryCount} repositories · {captureCount} captures
           </Typography>
+          {(oldestCaptureAt || newestCaptureAt) && (
+            <Typography variant="caption" color="text.secondary">
+              {oldestCaptureAt ? `Oldest ${new Date(oldestCaptureAt).toLocaleString()}` : ''}
+              {oldestCaptureAt && newestCaptureAt ? ' · ' : ''}
+              {newestCaptureAt ? `Newest ${new Date(newestCaptureAt).toLocaleString()}` : ''}
+            </Typography>
+          )}
           <Divider />
           <Typography variant="subtitle2">Retention</Typography>
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
@@ -139,7 +189,7 @@ export default function SnapshotStorageSettings() {
               type="number"
               value={draft.maxBytes / GIB}
               inputProps={{ min: 0, step: 0.1 }}
-              onChange={(event) => setDraft({ ...draft, maxBytes: Math.round(Number(event.target.value) * GIB) })}
+              onChange={(event) => setPolicyNumber('maxBytes', event.target.value, GIB)}
               fullWidth
             />
             <TextField
@@ -147,7 +197,7 @@ export default function SnapshotStorageSettings() {
               type="number"
               value={draft.maxAgeMs / DAY}
               inputProps={{ min: 0, step: 1 }}
-              onChange={(event) => setDraft({ ...draft, maxAgeMs: Math.round(Number(event.target.value) * DAY) })}
+              onChange={(event) => setPolicyNumber('maxAgeMs', event.target.value, DAY)}
               fullWidth
             />
             <TextField
@@ -155,7 +205,7 @@ export default function SnapshotStorageSettings() {
               type="number"
               value={draft.maxCapturesPerRoot}
               inputProps={{ min: 0, step: 1 }}
-              onChange={(event) => setDraft({ ...draft, maxCapturesPerRoot: Math.round(Number(event.target.value)) })}
+              onChange={(event) => setPolicyNumber('maxCapturesPerRoot', event.target.value)}
               fullWidth
             />
           </Stack>
@@ -169,7 +219,7 @@ export default function SnapshotStorageSettings() {
           />
           <Stack direction="row" spacing={1} flexWrap="wrap">
             <Button variant="outlined" onClick={() => { void savePolicy(); }} disabled={busy}>Save retention</Button>
-            <Button color="warning" variant="outlined" onClick={() => { void cleanup('clean-old'); }} disabled={busy || status.activity.cleanup}>
+            <Button color="warning" variant="outlined" onClick={() => { void cleanup('clean-old'); }} disabled={busy || storageBusy}>
               Clean old snapshots
             </Button>
           </Stack>
@@ -195,7 +245,7 @@ export default function SnapshotStorageSettings() {
           </Typography>
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
             <TextField value={confirmation} onChange={(event) => setConfirmation(event.target.value)} label="Confirmation" />
-            <Button color="error" variant="contained" disabled={busy || confirmation !== 'DELETE SNAPSHOTS'} onClick={() => { void cleanup('delete-all'); }}>
+            <Button color="error" variant="contained" disabled={busy || storageBusy || confirmation !== 'DELETE SNAPSHOTS'} onClick={() => { void cleanup('delete-all'); }}>
               Delete all history
             </Button>
           </Stack>

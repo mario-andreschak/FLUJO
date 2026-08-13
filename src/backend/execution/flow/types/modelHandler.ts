@@ -78,6 +78,8 @@ export interface ModelCallInput {
    *  localToolExecutor so a self-orchestrating adapter degrades it to a
    *  tool-error instead of blocking for an answer that will never come. */
   unattended?: boolean;
+  /** Abort signal for provider and adapter work. */
+  signal?: AbortSignal;
   /** Runtime-only fencing authority. It is never copied into provider input. */
   executionAuthority?: FlowExecutionAuthority;
   personaAttribution?: PersonaAttribution;

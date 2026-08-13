@@ -54,6 +54,8 @@ export interface SnapshotActivity {
   revert: boolean;
   migration: boolean;
   operatorDisabled: boolean;
+  /** New captures pause while retention cannot make the store safe. */
+  captureSuspended: boolean;
   localFolderAccess: boolean;
 }
 
@@ -69,6 +71,13 @@ export interface SnapshotStatus {
   policy: SnapshotRetentionPolicy;
   usage: SnapshotUsage;
   activity: SnapshotActivity;
+  overBudget: boolean;
+}
+
+export function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === 'number'
+    && Number.isSafeInteger(value)
+    && value >= 0;
 }
 
 export function isSnapshotRetentionPolicy(value: unknown): value is SnapshotRetentionPolicy {
@@ -76,8 +85,8 @@ export function isSnapshotRetentionPolicy(value: unknown): value is SnapshotRete
   const policy = value as Record<string, unknown>;
   return policy.version === SNAPSHOT_POLICY_VERSION
     && typeof policy.enabled === 'boolean'
-    && Number.isSafeInteger(policy.maxBytes) && policy.maxBytes >= 0
-    && Number.isSafeInteger(policy.maxAgeMs) && policy.maxAgeMs >= 0
-    && Number.isSafeInteger(policy.maxCapturesPerRoot) && policy.maxCapturesPerRoot >= 0
+    && isNonNegativeSafeInteger(policy.maxBytes)
+    && isNonNegativeSafeInteger(policy.maxAgeMs)
+    && isNonNegativeSafeInteger(policy.maxCapturesPerRoot)
     && typeof policy.automaticCleanup === 'boolean';
 }

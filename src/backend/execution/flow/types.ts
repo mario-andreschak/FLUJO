@@ -1479,6 +1479,8 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     /** Durable Codex session for this node and a state-owned replacement hook. */
     codexSession?: CodexSessionMetadata;
     onCodexSessionChange?: (session: CodexSessionMetadata | undefined) => void;
+    /** Immutable permission policy restored with the authoritative Flow snapshot. */
+    permissionRules?: Flow['permissionRules'];
     /** Runtime-only guard checked before provider and tool dispatch. */
     executionAuthority?: FlowExecutionAuthority;
     /** Safe actor attribution paired with executionAuthority for fail-closed writes. */

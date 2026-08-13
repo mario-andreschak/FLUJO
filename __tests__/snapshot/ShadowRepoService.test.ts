@@ -26,6 +26,8 @@ import {
   shadowRepoService,
   _setShadowRepoDirForTests,
 } from '@/backend/services/snapshot/ShadowRepoService';
+import { snapshotStore } from '@/backend/services/snapshot/SnapshotStore';
+import { DEFAULT_SNAPSHOT_RETENTION_POLICY } from '@/shared/types/snapshot';
 
 async function mkTemp(prefix: string): Promise<string> {
   return fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -84,6 +86,52 @@ describe('ShadowRepoService', () => {
 
       const diff = await shadowRepoService.diff(repo, before!, after!);
       expect(diff).toContain('changed');
+    } finally {
+      await fsp.rm(repo, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it('keeps retained SHAs usable after packed-history cleanup', async () => {
+    const repo = await makeRealRepo();
+    try {
+      loadItemMock.mockResolvedValue({
+        ...DEFAULT_SNAPSHOT_RETENTION_POLICY,
+        maxCapturesPerRoot: 1,
+      });
+      const first = await shadowRepoService.capture(repo);
+      await fsp.writeFile(path.join(repo, 'kept.txt'), 'second\n', 'utf-8');
+      const retained = await shadowRepoService.capture(repo);
+      expect(first).toBeTruthy();
+      expect(retained).toBeTruthy();
+
+      await fsp.writeFile(path.join(repo, 'kept.txt'), 'working-tree\n', 'utf-8');
+      const changed = await shadowRepoService.files(repo, retained!);
+      expect(changed).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: 'kept.txt' }),
+      ]));
+      expect((await snapshotStore.usage()).repositories[0]?.commitCount).toBe(1);
+    } finally {
+      await fsp.rm(repo, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it('reports damaged shadow repositories as corrupt', async () => {
+    const repo = await makeRealRepo();
+    try {
+      expect(await shadowRepoService.capture(repo)).toBeTruthy();
+      const [repositoryId] = await fsp.readdir(shadowDir);
+      const gitDir = path.join(shadowDir, repositoryId, 'git');
+      const head = (await fsp.readFile(path.join(gitDir, 'HEAD'), 'utf8')).trim();
+      const headRef = head.startsWith('ref: ')
+        ? path.join(gitDir, ...head.slice('ref: '.length).split('/'))
+        : path.join(gitDir, 'HEAD');
+      await fsp.mkdir(path.dirname(headRef), { recursive: true });
+      await fsp.writeFile(headRef, 'not-a-sha\n', 'utf8');
+
+      const usage = await snapshotStore.usage();
+      expect(usage.repositories).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: repositoryId, health: 'corrupt' }),
+      ]));
     } finally {
       await fsp.rm(repo, { recursive: true, force: true }).catch(() => {});
     }
