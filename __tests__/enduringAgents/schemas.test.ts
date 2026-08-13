@@ -1,4 +1,5 @@
 import {
+  CreatePersonaInputSchema,
   ENDURING_AGENT_SAFE_ID_PATTERN,
   MemoryItemSchema,
   DeletePersonaInputSchema,
@@ -246,6 +247,30 @@ describe('enduring-agent lifecycle schemas', () => {
     expect(PersonaDeletionTombstoneSchema.safeParse({
       ...tombstone,
       archivePolicy: 'retain_tombstone',
+    }).success).toBe(false);
+  });
+});
+
+describe('Persona creation bundle schema', () => {
+  it('accepts ordered optional Behavior Flow choices and rejects duplicates', () => {
+    const input = {
+      name: 'Jim',
+      coreFlowRef: 'core_flow',
+      roleVersionId: 'role_version',
+      behaviorFlowRefs: ['research_flow', 'report_flow'],
+      appRefs: ['github-jim'],
+      presentation: { avatarUrl: 'https://example.test/jim.png' },
+      initialMemories: [{ content: 'Use concise progress updates.' }],
+      idempotencyKey: 'stable-wizard-draft',
+    };
+    expect(CreatePersonaInputSchema.safeParse(input).success).toBe(true);
+    expect(CreatePersonaInputSchema.safeParse({
+      ...input,
+      behaviorFlowRefs: ['research_flow', 'research_flow'],
+    }).success).toBe(false);
+    expect(CreatePersonaInputSchema.safeParse({
+      ...input,
+      behaviorFlowRefs: ['core_flow'],
     }).success).toBe(false);
   });
 });

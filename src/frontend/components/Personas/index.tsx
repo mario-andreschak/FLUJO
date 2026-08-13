@@ -37,20 +37,13 @@ import {
   Stack,
   TextField,
   Typography,
-  useMediaQuery,
 } from '@mui/material';
-import { useTheme } from '@mui/material/styles';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { v4 as uuidv4 } from 'uuid';
 
 import { useI18n } from '@/frontend/contexts/I18nContext';
-import { useMcpAppsDiscovery } from '@/frontend/components/mcp/useMcpAppsDiscovery';
-import ServerCard from '@/frontend/components/mcp/MCPServerManager/ServerCard';
-import CardPickerGrid from '@/frontend/components/shared/CardPickerGrid';
-import FlowCard from '@/frontend/components/Flow/FlowDashboard/FlowCard';
-import RoleVersionCard from './RoleVersionCard';
+import PersonaCreationWizard from './PersonaCreationWizard';
 import PersonaDetailShell from './PersonaDetailShell';
 import PersonaFlowsArea from './PersonaFlowsArea';
 import PersonaMemoryArea from './PersonaMemoryArea';
@@ -60,12 +53,8 @@ import PersonasGallery from './PersonasGallery';
 import { invalidatePersonaSummaryCache } from './personaQueries';
 import {
   personasService,
-  type PersonaBundle,
   type PersonaDetail,
-  type RolesResponse,
 } from '@/frontend/services/personas';
-import { flowService } from '@/frontend/services/flow';
-import type { Flow } from '@/frontend/types/flow/flow';
 import { magicLinkPath } from '@/frontend/utils/magicLink';
 import { emitLaunchGlobalMcpApp } from '@/frontend/utils/quickActions';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
@@ -241,7 +230,7 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
           onTalk={startConversation}
         />
       )}
-      <CreatePersonaDialog
+      <PersonaCreationWizard
         open={createOpen}
         onClose={() => setCreateOpen(false)}
         onCreated={(detail) => {
@@ -804,73 +793,4 @@ function ActivityArea({ detail }: { detail: PersonaDetail }) {
       </Stack>
     </AreaShell>
   );
-}
-
-function CreatePersonaDialog({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (detail: PersonaBundle) => void }) {
-  const { t } = useI18n();
-  const theme = useTheme();
-  const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
-  const [roles, setRoles] = useState<RolesResponse | null>(null);
-  const [flows, setFlows] = useState<Flow[]>([]);
-  const [coreFlowRef, setCoreFlowRef] = useState('');
-  const [roleVersionId, setRoleVersionId] = useState('');
-  const [appRefs, setAppRefs] = useState<string[]>([]);
-  const [appsEdited, setAppsEdited] = useState(false);
-  const {
-    servers: createAppServers,
-    loading: createAppsLoading,
-    error: createAppsError,
-  } = useMcpAppsDiscovery({ active: open });
-  const [name, setName] = useState('');
-  const [mission, setMission] = useState('');
-  const [fact, setFact] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    if (!open) return;
-    setError(null);
-    void Promise.all([
-      personasService.roles(),
-      flowService.loadFlows(),
-    ]).then(([result, loadedFlows]) => {
-      setRoles(result);
-      setFlows(loadedFlows);
-      setRoleVersionId((current) => current || result.roleVersions[0]?.id || '');
-      setCoreFlowRef((current) => current || loadedFlows[0]?.id || '');
-    }).catch((cause) => setError(cause instanceof Error ? cause.message : t('personas.action.failed')));
-  }, [open, t]);
-  useEffect(() => {
-    if (!open || appsEdited) return;
-    const role = roles?.roleVersions.find((candidate) => candidate.id === roleVersionId);
-    const eligible = new Set(createAppServers.map((server) => server.name));
-    setAppRefs((role?.capabilityRequirements?.preferredMcpServers ?? []).filter(
-      (name) => eligible.has(name),
-    ));
-  }, [appsEdited, createAppServers, open, roleVersionId, roles]);
-  const toggleCreateApp = (name: string) => {
-    setAppsEdited(true);
-    setAppRefs((current) => current.includes(name)
-      ? current.filter((candidate) => candidate !== name)
-      : [...current, name]);
-  };
-  const submit = async () => {
-    if (!name.trim()) return;
-    setSaving(true); setError(null);
-    try {
-      const detail = await personasService.create({
-        name: name.trim(),
-        coreFlowRef,
-        ...(roleVersionId ? { roleVersionId } : {}),
-        appRefs,
-        ...(mission.trim() ? { mission: mission.trim() } : {}),
-        idempotencyKey: uuidv4(),
-        ...(fact.trim() ? { initialMemories: [{ content: fact.trim() }] } : {}),
-      });
-      onCreated(detail);
-      setName(''); setMission(''); setFact(''); setCoreFlowRef(''); setAppRefs([]); setAppsEdited(false);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t('personas.action.failed'));
-    } finally { setSaving(false); }
-  };
-  return <Dialog open={open} onClose={saving ? undefined : onClose} fullScreen={fullScreen} fullWidth maxWidth="md"><DialogTitle>{t('personas.create.title')}</DialogTitle><DialogContent dividers><Stack spacing={2} sx={{ pt: 0.5 }}>{error && <Alert severity="error">{error}</Alert>}<TextField label={t('personas.create.name')} value={name} onChange={(event) => setName(event.target.value)} required autoFocus /><Box><Typography variant="subtitle2" sx={{ mb: 1 }}>{t('personas.create.coreFlow')}</Typography><CardPickerGrid searchable selectionMode="single" ariaLabel={t('personas.create.coreFlow')} emptyMessage={t('chat.selector.empty')} columns={{ xs: 12, sm: 6, md: 6 }} items={flows.map((flow) => ({ key: flow.id, label: flow.name, selected: coreFlowRef === flow.id, searchText: `${flow.name} ${flow.description ?? ''}`, onSelect: () => setCoreFlowRef(flow.id), content: <FlowCard flow={flow} selected={coreFlowRef === flow.id} pickerMode selectionManaged onSelect={() => {}} /> }))} /></Box><Box><Typography variant="subtitle2" sx={{ mb: 1 }}>{t('personas.create.role')}</Typography><CardPickerGrid searchable selectionMode="single" ariaLabel={t('personas.create.role')} isLoading={!roles && !error} emptyMessage={t('cardPicker.empty')} columns={{ xs: 12, sm: 6, md: 6 }} items={(roles?.roleVersions ?? []).map((role) => ({ key: role.id, label: `${role.name} v${role.version}`, selected: roleVersionId === role.id, searchText: `${role.name} ${role.mission} v${role.version}`, onSelect: () => setRoleVersionId(role.id), content: <RoleVersionCard role={role} selected={roleVersionId === role.id} onSelect={() => {}} /> }))} /></Box><Box><Typography variant="subtitle2" sx={{ mb: 1 }}>{t('personas.apps.title')}</Typography>{createAppsError && <Alert severity="warning" sx={{ mb: 1 }}>{createAppsError}</Alert>}<CardPickerGrid searchable selectionMode="multiple" ariaLabel={t('personas.apps.config')} isLoading={createAppsLoading} emptyMessage={t('personas.apps.noEligible')} columns={{ xs: 12, sm: 6, md: 6 }} items={createAppServers.map((server) => ({ key: server.name, label: server.name, selected: appRefs.includes(server.name), searchText: `${server.name} ${server.config?.rootPath ?? ''}`, onSelect: () => toggleCreateApp(server.name), content: <ServerCard name={server.name} status={server.error ? 'error' : 'connected'} path={server.config?.rootPath ?? ''} enabled={server.config ? !server.config.disabled : true} transport={server.config?.transport ?? 'stdio'} pickerMode selectionManaged selected={appRefs.includes(server.name)} serverConfig={server.config} onClick={() => {}} /> }))} /></Box><TextField label={t('personas.create.mission')} value={mission} onChange={(event) => setMission(event.target.value)} multiline minRows={3} /><TextField label={t('personas.create.fact')} helperText={t('personas.create.factHelp')} value={fact} onChange={(event) => setFact(event.target.value)} multiline minRows={2} /></Stack></DialogContent><DialogActions><Button disabled={saving} onClick={onClose}>{t('personas.action.cancel')}</Button><Button variant="contained" disabled={saving || !name.trim() || !roleVersionId || !coreFlowRef} onClick={() => void submit()}>{saving ? t('personas.action.saving') : t('personas.create')}</Button></DialogActions></Dialog>;
 }

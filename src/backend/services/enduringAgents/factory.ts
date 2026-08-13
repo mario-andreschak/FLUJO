@@ -1,6 +1,8 @@
 import { createHash } from 'crypto';
 
+import { validateFlowObjectForRun } from '@/backend/execution/flow/validateFlowForRun';
 import { flowService } from '@/backend/services/flow';
+import type { Flow } from '@/shared/types/flow';
 import {
   BEHAVIOR_BINDING_SCHEMA_VERSION,
   BEHAVIOR_REVISION_SCHEMA_VERSION,
@@ -104,6 +106,9 @@ function effectiveFactoryRequest(
     coreFlowRef: input.coreFlowRef,
     roleVersionId: roleVersion.id,
     appRefs: input.appRefs ?? null,
+    ...(input.behaviorFlowRefs?.length
+      ? { behaviorFlowRefs: input.behaviorFlowRefs }
+      : {}),
     mission: input.mission ?? roleVersion.mission,
     presentation: input.presentation ?? roleVersion.defaults?.presentation ?? null,
     autonomyLevel: input.autonomyLevel ?? roleVersion.defaults?.autonomyLevel ?? 'locked',
@@ -184,6 +189,74 @@ async function materializeBehavior(
   await createBehaviorBindingIfAbsent(binding);
 }
 
+async function requireReadySharedFlow(flowRef: string, label: string): Promise<Flow> {
+  const flow = await flowService.getFlow(flowRef);
+  if (!flow || flow.personaOwnership) {
+    throw new PersonaFactoryConflictError(
+      `${label} ${JSON.stringify(flowRef)} is unavailable in this workspace.`,
+    );
+  }
+  const readiness = await validateFlowObjectForRun(flow);
+  if (!readiness.isRunnable) {
+    const issues = readiness.issues
+      .filter((issue) => issue.severity === 'error')
+      .map((issue) => issue.message);
+    throw new PersonaFactoryConflictError(
+      `${label} ${JSON.stringify(flowRef)} needs attention before it can be used.`
+      + (issues.length > 0 ? ` ${issues.join(' ')}` : ''),
+    );
+  }
+  return flow;
+}
+
+async function materializeSelectedBehavior(
+  persona: Persona,
+  flow: Flow,
+): Promise<BehaviorBinding> {
+  const behaviorId = stableEnduringAgentId('behavior', {
+    personaId: persona.id,
+    source: 'selected-flow',
+    flowRef: flow.id,
+  });
+  const slotKey = `picked_${behaviorId.slice(-40)}`;
+  const snapshot = snapshotBehaviorFlow({
+    ...flow,
+    id: stableEnduringAgentId('flow', { behaviorId, revision: 1 }),
+  });
+  const contentHash = hashBehaviorFlow(snapshot);
+  const revision: BehaviorRevision = BehaviorRevisionSchema.parse({
+    schemaVersion: BEHAVIOR_REVISION_SCHEMA_VERSION,
+    id: behaviorRevisionId({
+      personaId: persona.id,
+      behaviorId,
+      revision: 1,
+      contentHash,
+    }),
+    behaviorId,
+    personaId: persona.id,
+    slotKey,
+    revision: 1,
+    contentHash,
+    flowSnapshot: snapshot,
+    source: {
+      kind: 'persona_override',
+      sourceFlowRef: flow.id,
+      selectedFlowRef: flow.id,
+    },
+    createdAt: persona.createdAt,
+  });
+  await createBehaviorRevision(revision);
+  return createBehaviorBindingIfAbsent(BehaviorBindingSchema.parse({
+    schemaVersion: BEHAVIOR_BINDING_SCHEMA_VERSION,
+    id: behaviorId,
+    personaId: persona.id,
+    slotKey,
+    activeRevisionId: revision.id,
+    createdAt: persona.createdAt,
+    updatedAt: persona.createdAt,
+  }));
+}
+
 async function materializeInitialMemories(
   persona: Persona,
   input: CreatePersonaInput,
@@ -233,11 +306,12 @@ async function materializeInitialMemories(
  */
 export async function createPersonaFromRole(value: unknown): Promise<PersonaBundle> {
   const input = CreatePersonaInputSchema.parse(value) as CreatePersonaInput;
-  if (!await flowService.getFlow(input.coreFlowRef)) {
-    throw new PersonaFactoryConflictError(
-      `Core Flow ${JSON.stringify(input.coreFlowRef)} does not exist in this workspace.`,
-    );
-  }
+  await requireReadySharedFlow(input.coreFlowRef, 'Core Flow');
+  const behaviorFlows = await Promise.all(
+    (input.behaviorFlowRefs ?? []).map(
+      (flowRef) => requireReadySharedFlow(flowRef, 'Behavior Flow'),
+    ),
+  );
   const personaId = resolvePersonaId(input);
   assertSafeCollectionId(personaId);
 
@@ -286,6 +360,9 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
     await Promise.all(
       roleVersion.behaviorSlots.map((slot) => materializeBehavior(persona!, roleVersion, slot)),
     );
+    const selectedBehaviorBindings = await Promise.all(
+      behaviorFlows.map((flow) => materializeSelectedBehavior(persona!, flow)),
+    );
     const initialMemoryIds = await materializeInitialMemories(persona, input);
 
     if (persona.provisioningState !== 'ready') {
@@ -312,13 +389,26 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
           coreFlowRef: input.coreFlowRef,
           appRefs: initialAppRefs,
           memoryRefs: initialMemoryIds,
-          behaviors: roleVersion.behaviorSlots.map((slot) => ({
-            ref: stableEnduringAgentId('behavior', {
-              personaId: persona!.id,
+          behaviors: [
+            ...roleVersion.behaviorSlots.map((slot, index) => ({
+              ref: stableEnduringAgentId('behavior', {
+                personaId: persona!.id,
+                slotKey: slot.key,
+              }),
               slotKey: slot.key,
-            }),
-            name: slot.name,
-          })),
+              name: slot.name,
+              ...(slot.description ? { description: slot.description } : {}),
+              order: index,
+            })),
+            ...behaviorFlows.map((flow, index) => ({
+              ref: selectedBehaviorBindings[index].id,
+              slotKey: selectedBehaviorBindings[index].slotKey,
+              name: flow.name,
+              ...(flow.description ? { description: flow.description } : {}),
+              order: roleVersion.behaviorSlots.length + index,
+              binding: { mode: 'shared' as const, sharedFlowRef: flow.id },
+            })),
+          ],
         },
         updatedAt: Date.now(),
       }), lock);

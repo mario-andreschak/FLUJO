@@ -8,6 +8,7 @@ interface RoleVersionCardProps {
   role: RoleVersion;
   selected?: boolean;
   disabled?: boolean;
+  plainLanguage?: boolean;
   onSelect?: (roleVersionId: string) => void;
 }
 
@@ -16,6 +17,7 @@ export default function RoleVersionCard({
   role,
   selected = false,
   disabled = false,
+  plainLanguage = false,
   onSelect,
 }: RoleVersionCardProps) {
   return (
@@ -56,10 +58,12 @@ export default function RoleVersionCard({
             </Box>
             <Box minWidth={0} flex={1}>
               <Typography variant="h6" noWrap title={role.name}>{role.name}</Typography>
-              <Stack direction="row" spacing={0.75} sx={{ mt: 0.5 }}>
-                <Chip size="small" label={`v${role.version}`} />
-                <Chip size="small" icon={<LockRounded />} label="Immutable" variant="outlined" />
-              </Stack>
+              {!plainLanguage && (
+                <Stack direction="row" spacing={0.75} sx={{ mt: 0.5 }}>
+                  <Chip size="small" label={`v${role.version}`} />
+                  <Chip size="small" icon={<LockRounded />} label="Immutable" variant="outlined" />
+                </Stack>
+              )}
             </Box>
           </Stack>
           <Typography
@@ -69,9 +73,11 @@ export default function RoleVersionCard({
           >
             {role.mission}
           </Typography>
-          <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1.25 }}>
-            {role.behaviorSlots.length} behavior {role.behaviorSlots.length === 1 ? 'slot' : 'slots'}
-          </Typography>
+          {!plainLanguage && (
+            <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1.25 }}>
+              {role.behaviorSlots.length} behavior {role.behaviorSlots.length === 1 ? 'slot' : 'slots'}
+            </Typography>
+          )}
         </CardContent>
       </CardActionArea>
     </Card>

@@ -420,13 +420,24 @@ export const CreatePersonaInputSchema = z.object({
   appRefs: z.array(PersonaAppRefSchema).max(128)
     .refine((refs) => new Set(refs).size === refs.length, 'App references must be unique.')
     .optional(),
+  behaviorFlowRefs: z.array(WorkspaceFlowRefSchema).max(64)
+    .refine((refs) => new Set(refs).size === refs.length, 'Behavior Flow references must be unique.')
+    .optional(),
   mission: z.string().trim().max(20_000).optional(),
   presentation: PersonaPresentationSchema.optional(),
   autonomyLevel: z.enum(PERSONA_AUTONOMY_LEVELS).optional(),
   interruptionPolicy: z.enum(PERSONA_INTERRUPTION_POLICIES).optional(),
   idempotencyKey: z.string().min(1).max(512).optional(),
   initialMemories: z.array(InitialPersonaMemoryInputSchema).max(100).optional(),
-}).strict();
+}).strict().superRefine((input, ctx) => {
+  if (input.behaviorFlowRefs?.includes(input.coreFlowRef)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['behaviorFlowRefs'],
+      message: 'The Core Flow cannot also be selected as a Behavior.',
+    });
+  }
+});
 
 export const UpdatePersonaInputSchema = z.object({
   name: NonEmptyText(160).optional(),

@@ -16,6 +16,7 @@ import type {
   PersonaAppGrant,
   PersonaAppLaunchDescriptor,
   PersonaComposition,
+  PersonaFlowReadiness,
   PersonaMailboxItem,
   PersonaPresentationSummary,
   PersonaWorkItem,
@@ -184,6 +185,12 @@ class PersonasService {
 
   roles(): Promise<RolesResponse> {
     return parse(fetch(withWorkspaceUrl('/v1/roles')));
+  }
+
+  flowReadiness(flowRef: string): Promise<PersonaFlowReadiness> {
+    return parse(fetch(withWorkspaceUrl(
+      `/v1/flows/${encodeURIComponent(flowRef)}/readiness`,
+    )));
   }
 
   startConversation(input: StartPersonaConversationInput): Promise<{ id: string }> {

@@ -267,6 +267,8 @@ export interface CreatePersonaInput {
   roleVersionId?: string;
   /** Human-confirmed exact MCP configuration names; omitted uses Role suggestions. */
   appRefs?: string[];
+  /** Existing workspace Flows selected as optional callable Behaviors, in display order. */
+  behaviorFlowRefs?: string[];
   mission?: string;
   presentation?: PersonaPresentation;
   autonomyLevel?: PersonaAutonomyLevel;
