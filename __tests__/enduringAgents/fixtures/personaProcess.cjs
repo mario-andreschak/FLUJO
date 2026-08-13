@@ -61,8 +61,19 @@ async function execute(command) {
                 type: 'start',
                 data: { type: 'start', properties: {} },
               },
+              {
+                id: 'finish',
+                type: 'finish',
+                data: { type: 'finish', properties: {} },
+              },
             ],
-            edges: [],
+            edges: [
+              {
+                id: 'start-to-finish',
+                source: 'start',
+                target: 'finish',
+              },
+            ],
           });
         }
         return enduringAgents.createPersonaFromRole({
