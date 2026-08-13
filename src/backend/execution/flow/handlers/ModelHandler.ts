@@ -11,7 +11,7 @@ import { FlujoChatMessage } from '@/shared/types/chat'; // Correct import path f
 import { Result, ExecutionError } from '../errors';
 import { createModelError, createToolError } from '../errorFactory';
 import { decodeToolName, assertToolIdentityFresh, type DecodedTool } from './toolNamespace';
-import { toApiMessages } from '../buildNodeContext';
+import { stripHandoffPlumbing, toApiMessages } from '../buildNodeContext';
 import { compactForWire, couldCompact, wireHasRunResourceUri } from './compactForWire';
 import OpenAI from 'openai';
 import { modelService } from '@/backend/services/model';
@@ -25,7 +25,14 @@ import { resolveEffectiveMaxTurns } from './maxTurns';
 import { resolveEffectiveMaxTokens } from './maxTokens';
 import { resolveEffectiveCompaction, resolveEffectiveVisualCompaction } from './resolveEffectiveCompaction';
 import { compactMessagesVisually, type EffectiveVisualCompaction } from './visualCompaction';
-import { compactHistory, estimateTokens } from './summarizingCompaction';
+import { compactHistory, estimateTokens, type CompactHistoryResult } from './summarizingCompaction';
+import { digestProjectedMessages, digestProjectionIdentity } from '../compaction/digest';
+import {
+  COMPACTION_ARTIFACT_SCHEMA_VERSION,
+  COMPACTION_POLICY_VERSION,
+  COMPACTION_PROJECTION_VERSION,
+  type CompactionProjectionIdentity,
+} from '../compaction/types';
 import { normalizeMaxTokens } from '@/shared/types/model';
 import { isSelfOrchestratingAdapter, normalizeModelTemperature } from '@/shared/types/model/provider';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
@@ -467,70 +474,64 @@ export class ModelHandler {
   }
 
   /**
-   * Summarizing compaction pre-flight (issue #248). When the experimental
-   * `compactionEnabled` setting is on and the persisted history is estimated to
-   * be about to overflow the model's context window, summarize the OLD part of
-   * the conversation into an anchored-summary head and persist it (the summary
-   * becomes the new conversation head; the pre-summary slice is captured as a
-   * recoverable run resource). Returns `{ summaryMessage, removedIds }` so the
-   * caller can also apply the same head-swap to THIS turn's wire, or `null` when
-   * compaction did not run (disabled, no context-window info, under threshold,
-   * nothing old enough, or the summary model call failed — all safe no-ops that
-   * fall through to the existing wire-only path).
-   *
-   * Strictly gated: OFF by default and a pure no-op when disabled, so existing
-   * behaviour is unchanged for every user who hasn't opted in. Best-effort: any
-   * failure is swallowed and treated as "did not compact".
+   * Build summarizing compaction strictly as a provider-facing projection.
+   * Canonical SharedState.messages and the append-only conversation log are
+   * never reconciled or replaced here. Artifact metadata is persisted beside
+   * the complete canonical snapshot and is reusable only under exact digest,
+   * scope, projection, policy, model, and schema identity.
    */
-  private static async maybeCompactPersistedHistory(
-    conversationId: string,
+  private static async maybeCompactWire(
+    source: FlujoChatMessage[],
+    conversationId: string | undefined,
     nodeId: string | undefined,
+    projectionView: CompactionProjectionIdentity['view'],
     model: { id: string; adapter?: string; contextWindow?: number; compactionThreshold?: number },
     effectiveMaxTokens: number | undefined,
     nodeCompaction?: { compactionMode?: 'auto' | 'off'; compactionKeepTokens?: number },
     durableContext: FlowDurableMutationContext = {},
-  ): Promise<{ summaryMessage: FlujoChatMessage; removedIds: string[] } | null> {
+  ): Promise<CompactHistoryResult | null> {
     try {
-      // Self-orchestrating adapters manage their own session/wire; excluded.
-      if (isSelfOrchestratingAdapter(model.adapter)) return null;
+      if (!conversationId || source.length < 4 || isSelfOrchestratingAdapter(model.adapter)) return null;
 
       const global = await ModelHandler.getCompactionGlobalSettings();
       const eff = resolveEffectiveCompaction(nodeCompaction, model, global);
       if (!eff.enabled) return null;
 
-      const { FlowExecutor } = await import('@/backend/execution/flow/FlowExecutor');
-      const state = FlowExecutor.conversationStates.get(conversationId);
-      if (!state || !Array.isArray(state.messages) || state.messages.length < 4) return null;
-
-      // Estimate the current request size. Prefer the last provider-reported
-      // prompt-token figure (authoritative), else the char/4 heuristic.
       let lastPromptTokens: number | undefined;
-      for (let i = state.messages.length - 1; i >= 0; i--) {
-        const u = (state.messages[i] as FlujoChatMessage).usage;
-        if (u && typeof u.promptTokens === 'number' && u.promptTokens > 0) {
-          lastPromptTokens = u.promptTokens;
+      for (let i = source.length - 1; i >= 0; i--) {
+        const usage = source[i].usage;
+        if (usage && typeof usage.promptTokens === 'number' && usage.promptTokens > 0) {
+          lastPromptTokens = usage.promptTokens;
           break;
         }
       }
-      const estimate = lastPromptTokens ?? estimateTokens(state.messages);
-
-      // The trigger threshold: explicit per-model override, else derived from the
-      // context window minus head-room for the reply + a safety buffer. Without
-      // any context-window info we cannot pre-flight safely — no-op.
-      const threshold =
-        eff.threshold ??
-        (model.contextWindow
-          ? model.contextWindow - Math.max(effectiveMaxTokens ?? 0, eff.bufferTokens)
-          : undefined);
+      const estimate = lastPromptTokens ?? estimateTokens(source);
+      const threshold = eff.threshold ?? (model.contextWindow
+        ? model.contextWindow - Math.max(effectiveMaxTokens ?? 0, eff.bufferTokens)
+        : undefined);
       if (threshold === undefined || threshold <= 0 || estimate < threshold) return null;
 
-      log.info('Summarizing-compaction pre-flight triggered', {
+      const projection: CompactionProjectionIdentity = {
         conversationId,
         nodeId,
-        estimate,
-        threshold,
-        messages: state.messages.length,
-      });
+        view: projectionView,
+        handoffPolicy: 'strip-v1',
+        version: COMPACTION_PROJECTION_VERSION,
+      };
+      const sourceDigest = digestProjectedMessages(source);
+      const projectionDigest = digestProjectionIdentity(projection);
+
+      const { FlowExecutor } = await import('@/backend/execution/flow/FlowExecutor');
+      const state = FlowExecutor.conversationStates.get(conversationId);
+      const reusableArtifact = state?.compactionState?.artifacts.find(artifact =>
+        artifact.schemaVersion === COMPACTION_ARTIFACT_SCHEMA_VERSION &&
+        artifact.conversationId === conversationId &&
+        artifact.nodeId === nodeId &&
+        artifact.sourceDigest === sourceDigest &&
+        artifact.projectionDigest === projectionDigest &&
+        artifact.policyVersion === COMPACTION_POLICY_VERSION &&
+        artifact.modelId === model.id
+      );
 
       const summarize = async (
         msgs: FlujoChatMessage[],
@@ -541,67 +542,76 @@ export class ModelHandler {
           ...msgs,
           { id: uuidv4(), role: 'user', content: prompt.user, timestamp: Date.now() } as FlujoChatMessage,
         ];
-        // A bounded, tool-free completion. Reuses the same provider path but must
-        // NOT recurse into compaction (no conversationId keyed state to compact,
-        // and the summary history is a throwaway slice).
-        const res = await ModelHandler.generateCompletion(model.id, '', callMessages, undefined, {
+        const response = await ModelHandler.generateCompletion(model.id, '', callMessages, undefined, {
           maxTokens: Math.min(effectiveMaxTokens ?? 4000, 4000),
           beforeModelDispatch: durableContext.executionAuthority?.assertCurrent,
           durableContext,
         });
         await assertFlowExecutionCurrent(durableContext);
-        return res.success ? (res.value.content ?? '') : '';
+        return response.success ? (response.value.content ?? '') : '';
       };
 
-      const writeAnchor = async (text: string): Promise<string | undefined> => {
-        try {
-          const written = await commitFlowDurableMutation(durableContext, () => writeRunResource({
-              conversationId,
-              name: 'compaction-anchor',
-              mimeType: 'application/json',
-              kind: 'text',
-              data: { text },
-              producedBy: { source: 'tool-result', nodeId },
-            }),
-          );
-          return 'skipped' in written ? undefined : written.uri;
-        } catch (error) {
-          rethrowFlowExecutionAuthorityError(error);
-          return undefined;
-        }
+      const writeAnchor = async (
+        text: string,
+        metadata: { artifactId: string; sourceDigest: string; projectionDigest: string },
+      ): Promise<string | undefined> => {
+        const written = await commitFlowDurableMutation(durableContext, () => writeRunResource({
+          conversationId,
+          name: `compaction-artifact-${metadata.artifactId}`,
+          mimeType: 'application/json',
+          kind: 'text',
+          data: { text },
+          producedBy: {
+            source: 'compaction-artifact',
+            nodeId,
+            artifactId: metadata.artifactId,
+            sourceDigest: metadata.sourceDigest,
+            projectionDigest: metadata.projectionDigest,
+          },
+        }));
+        return 'skipped' in written ? undefined : written.uri;
       };
 
-      const before = [...state.messages];
-      const result = await compactHistory(
-        state.messages,
-        { keepTokens: eff.keepTokens, nodeId },
-        { summarize, writeAnchor },
-      );
+      const result = await compactHistory(source, {
+        keepTokens: eff.keepTokens,
+        nodeId,
+        conversationId,
+        projection,
+        sourceDigest,
+        projectionDigest,
+        policyVersion: COMPACTION_POLICY_VERSION,
+        modelId: model.id,
+        reusableArtifact,
+      }, { summarize, writeAnchor });
       if (!result) return null;
 
-      // A summarizer/provider can return after its generation was replaced.
-      // Reject that output before it mutates either the live projection or the
-      // resource/log/snapshot stores.
       await assertFlowExecutionCurrent(durableContext);
-
-      // Persist: swap the history head in SharedState and reconcile the log so the
-      // summary head + removals are durable and auditable, then snapshot.
-      state.messages = result.newMessages;
-      state.updatedAt = Date.now();
-      try {
-        const { reconcileConversationLog } = await import('@/backend/execution/flow/conversationLog');
-        await reconcileConversationLog(state, before);
-        const { persistConversationState } = await import('@/backend/execution/flow/persistConversationState');
-        await persistConversationState(`conversations/${conversationId}` as StorageKey, state);
-      } catch (persistError) {
-        rethrowFlowExecutionAuthorityError(persistError);
-        log.warn('Compaction persisted-history reconcile/persist failed; continuing', { conversationId, persistError });
+      if (digestProjectedMessages(source) !== sourceDigest) {
+        log.warn('Projected compaction source changed during generation; discarding artifact', { conversationId, nodeId });
+        return null;
       }
 
-      return { summaryMessage: result.summaryMessage, removedIds: result.removedIds };
+      if (state && result.artifact !== reusableArtifact) {
+        const previous = state.compactionState;
+        state.compactionState = {
+          schemaVersion: COMPACTION_ARTIFACT_SCHEMA_VERSION,
+          artifacts: [...(previous?.artifacts ?? []), result.artifact],
+        };
+        try {
+          const { persistConversationState } = await import('@/backend/execution/flow/persistConversationState');
+          await persistConversationState(`conversations/${conversationId}` as StorageKey, state);
+        } catch (persistError) {
+          state.compactionState = previous;
+          rethrowFlowExecutionAuthorityError(persistError);
+          log.warn('Compaction artifact metadata persist failed; using canonical wire', { conversationId, persistError });
+          return null;
+        }
+      }
+
+      return result;
     } catch (error) {
       rethrowFlowExecutionAuthorityError(error);
-      log.warn('Summarizing-compaction pre-flight failed; falling back to existing behaviour', { conversationId, error });
+      log.warn('Summarizing-compaction pre-flight failed; using canonical wire', { conversationId, error });
       return null;
     }
   }
@@ -1434,43 +1444,24 @@ export class ModelHandler {
       ? await ModelHandler.buildRunResourceMarkers(conversationId)
       : undefined;
 
-    // Summarizing-compaction pre-flight (issue #248). Only for FULL-HISTORY
-    // nodes (a scoped `wireMessages` view can't be reconciled against the
-    // persisted history) and only when the experimental `compactionEnabled`
-    // setting is on — a pure no-op otherwise, so existing behaviour is unchanged
-    // for everyone who hasn't opted in. When it runs, it persists an anchored
-    // summary head into SharedState; we apply the SAME head-swap (by id) to this
-    // turn's send view so the request the provider sees matches the compacted
-    // history.
-    let effectiveMessages = messages;
-    if (conversationId && !wireMessages) {
-      const compaction = await ModelHandler.maybeCompactPersistedHistory(
-        conversationId,
-        nodeId,
-        { id: modelId, adapter: modelAdapter, contextWindow: modelContextWindow, compactionThreshold: modelCompactionThreshold },
-        effectiveMaxTokens,
-        { compactionMode, compactionKeepTokens },
-        durableContext,
-      );
-      if (compaction) {
-        const removed = new Set(compaction.removedIds);
-        const firstRemovedIdx = effectiveMessages.findIndex((m) => removed.has(m.id));
-        const kept = effectiveMessages.filter((m) => !removed.has(m.id));
-        const insertAt = firstRemovedIdx < 0 ? 0 : Math.min(firstRemovedIdx, kept.length);
-        effectiveMessages = [
-          ...kept.slice(0, insertAt),
-          compaction.summaryMessage,
-          ...kept.slice(insertAt),
-        ];
-      }
-    }
+    // Summarization is applied after ProcessNode's node/output/input projection
+    // and handoff filtering. The result exists only on the provider wire; the
+    // canonical `messages` array remains the base for returned/persisted output.
+    const projectedMessages = stripHandoffPlumbing(wireMessages ?? messages);
+    const compaction = await ModelHandler.maybeCompactWire(
+      projectedMessages,
+      conversationId,
+      nodeId,
+      wireMessages ? 'node-projected' : 'full-history',
+      { id: modelId, adapter: modelAdapter, contextWindow: modelContextWindow, compactionThreshold: modelCompactionThreshold },
+      effectiveMaxTokens,
+      { compactionMode, compactionKeepTokens },
+      durableContext,
+    );
+    const effectiveMessages = compaction?.wireMessages ?? projectedMessages;
 
-    // Call generateCompletion ONCE. The provider sees `wireMessages` when a node
-    // scoped its input (latest-message / isolated); otherwise it sees the full
-    // (possibly compacted) `effectiveMessages`. `finalMessages` below is always
-    // built from `messages`, so the persisted/returned transcript keeps the
-    // complete history regardless.
-    const response = await this.generateCompletion(modelId, prompt, wireMessages ?? effectiveMessages, tools, {
+    // Call generateCompletion once with the materialized provider projection.
+    const response = await this.generateCompletion(modelId, prompt, effectiveMessages, tools, {
       toolNameMap,
       maxTurns: effectiveMaxTurns,
       maxTokens: effectiveMaxTokens,
@@ -1539,13 +1530,10 @@ export class ModelHandler {
       ? modelResponse.media
       : extractAssistantMedia(modelResponse.fullResponse?.choices?.[0]?.message);
     const responseMedia = await persistModelMedia(rawResponseMedia, conversationId, nodeId, durableContext);
-    // Start from the (possibly compacted) send view, not the raw input: when
-    // summarizing compaction (issue #248) ran pre-flight, `effectiveMessages`
-    // carries the anchored summary head in place of the summarized older turns,
-    // so the transcript written back to SharedState by post() stays consistent
-    // with the compacted history that was persisted+logged. When compaction did
-    // NOT run, `effectiveMessages === messages`, so this is unchanged.
-    const finalMessages: FlujoChatMessage[] = [...effectiveMessages];
+    // Canonical writeback always starts from the complete threaded input. Wire
+    // summaries, resource substitutions, and omissions never enter the persisted
+    // conversation transcript.
+    const finalMessages: FlujoChatMessage[] = [...messages];
 
     // // Check if content already starts with a heading pattern like "## ... says:"
     // const hasHeadingPattern = /^## .+says:\s*\n\n/i.test(content);

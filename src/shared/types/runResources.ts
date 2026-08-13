@@ -30,6 +30,7 @@ export type RunResourceKind = 'text' | 'image' | 'audio' | 'blob' | 'link';
  *    (issue #168), keyed by the producing `toolCallId`.
  *  - 'snapshot': a bounded before/after filesystem change artifact.
  *  - 'model-output': binary media returned directly by a model.
+ *  - 'compaction-artifact': immutable projected-source/summary wire artifact.
  */
 export type RunResourceSource =
   | 'tool-result'
@@ -38,7 +39,8 @@ export type RunResourceSource =
   | 'tool-args'
   | 'snapshot'
   | 'model-output'
-  | 'visual-archive';
+  | 'visual-archive'
+  | 'compaction-artifact';
 
 export interface RunResourceProducer {
   source: RunResourceSource;
@@ -56,6 +58,10 @@ export interface RunResourceProducer {
    * must never be used here.
    */
   toolCallId?: string;
+  /** Immutable summarizing-compaction artifact lineage. */
+  artifactId?: string;
+  sourceDigest?: string;
+  projectionDigest?: string;
 }
 
 export interface RunResourceAccess {
