@@ -6,19 +6,31 @@ import { resolveCodexModelCatalogPath } from '@/backend/services/model/adapters/
 
 jest.mock('os', () => ({ homedir: jest.fn() }));
 jest.mock('fs', () => ({
-  promises: { stat: jest.fn() },
+  promises: { readFile: jest.fn(), stat: jest.fn() },
 }));
 jest.mock('@/utils/storage/backend', () => ({ loadItem: jest.fn() }));
 
 const homedirMock = os.homedir as jest.MockedFunction<typeof os.homedir>;
+const readFileMock = fs.readFile as unknown as jest.MockedFunction<
+  (filePath: string, encoding: string) => Promise<string>
+>;
 const statMock = fs.stat as jest.MockedFunction<typeof fs.stat>;
 const loadItemMock = loadItem as jest.MockedFunction<typeof loadItem>;
+const compatibleCatalog = JSON.stringify({
+  client_version: '0.147.0',
+  models: [{
+    slug: 'gpt-5',
+    model_messages: {},
+  }],
+});
 
 describe('resolveCodexModelCatalogPath', () => {
   const previousCodexHome = process.env.CODEX_HOME;
 
   beforeEach(() => {
     homedirMock.mockReturnValue('C:\\Users\\test');
+    readFileMock.mockReset();
+    readFileMock.mockResolvedValue(compatibleCatalog);
     statMock.mockReset();
     loadItemMock.mockReset();
     delete process.env.CODEX_HOME;
