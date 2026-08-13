@@ -1,6 +1,7 @@
 const listPersonasMock = jest.fn();
 const createPersonaFromRoleMock = jest.fn();
-const listPersonaBundleMock = jest.fn();
+const readPersonaRuntimeSnapshotMock = jest.fn();
+const projectPersonaPresentationMock = jest.fn();
 const inspectPersonaRuntimeMock = jest.fn();
 const recoverPersonaRuntimeMock = jest.fn();
 const previewPersonaDeletionMock = jest.fn();
@@ -43,7 +44,8 @@ jest.mock('@/backend/services/enduringAgents', () => {
     RoleAdminConflictError,
     listPersonas: (...args: unknown[]) => listPersonasMock(...args),
     createPersonaFromRole: (...args: unknown[]) => createPersonaFromRoleMock(...args),
-    listPersonaRuntimeBundle: (...args: unknown[]) => listPersonaBundleMock(...args),
+    readPersonaRuntimeSnapshot: (...args: unknown[]) => readPersonaRuntimeSnapshotMock(...args),
+    projectPersonaPresentation: (...args: unknown[]) => projectPersonaPresentationMock(...args),
     inspectAndReconcilePersonaRuntime: (...args: unknown[]) => inspectPersonaRuntimeMock(...args),
     recoverPersonaRuntime: (...args: unknown[]) => recoverPersonaRuntimeMock(...args),
     previewPersonaDeletion: (...args: unknown[]) => previewPersonaDeletionMock(...args),
@@ -98,6 +100,8 @@ beforeEach(() => {
   listRoleDefinitionsMock.mockResolvedValue([]);
   listRoleVersionsMock.mockResolvedValue([]);
   listPublicRolesMock.mockResolvedValue([]);
+  readPersonaRuntimeSnapshotMock.mockResolvedValue(null);
+  projectPersonaPresentationMock.mockReturnValue(null);
   inspectPersonaRuntimeMock.mockResolvedValue({ projection: { stuck: false }, recentEvents: [] });
   recoverPersonaRuntimeMock.mockResolvedValue({
     personaId: 'jim',
@@ -172,19 +176,28 @@ describe('/v1/personas', () => {
 describe('/v1/personas/[personaId]', () => {
   it('returns a complete inspectable bundle or 404', async () => {
     const bundle = { persona: { id: 'jim' }, memoryItems: [], workItems: [] };
-    listPersonaBundleMock.mockResolvedValueOnce(bundle);
+    const runtime = { projection: { stuck: false, active: null }, recentEvents: [] };
+    const presentation = {
+      conversations: [],
+      tasks: [],
+      history: [],
+      current: null,
+      queuedInputCount: 0,
+    };
+    readPersonaRuntimeSnapshotMock.mockResolvedValueOnce({ bundle, runtime });
+    projectPersonaPresentationMock.mockReturnValueOnce(presentation);
     let response = await getPersona(
       request('/v1/personas/jim') as never,
       { params: Promise.resolve({ personaId: 'jim' }) } as never,
     );
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({
-      ...bundle,
-      runtime: { projection: { stuck: false }, recentEvents: [] },
+    expect(await response.json()).toEqual({ ...bundle, runtime, presentation });
+    expect(readPersonaRuntimeSnapshotMock).toHaveBeenCalledWith('jim');
+    expect(projectPersonaPresentationMock).toHaveBeenCalledWith(bundle, {
+      activeActivityId: undefined,
     });
-    expect(inspectPersonaRuntimeMock).toHaveBeenCalledWith('jim');
 
-    listPersonaBundleMock.mockResolvedValueOnce(null);
+    readPersonaRuntimeSnapshotMock.mockResolvedValueOnce(null);
     response = await getPersona(
       request('/v1/personas/missing') as never,
       { params: Promise.resolve({ personaId: 'missing' }) } as never,
@@ -199,7 +212,7 @@ describe('/v1/personas/[personaId]', () => {
     );
 
     expect(response.status).toBe(404);
-    expect(listPersonaBundleMock).not.toHaveBeenCalled();
+    expect(readPersonaRuntimeSnapshotMock).not.toHaveBeenCalled();
   });
 
   it('requires a preview-bound explicit deletion confirmation', async () => {
@@ -324,8 +337,15 @@ describe('/v1/personas/[personaId]/deletion-preview', () => {
 
 describe('/v1/roles', () => {
   it('seeds Developer v1 before listing workspace Role records', async () => {
-    listRoleDefinitionsMock.mockResolvedValue([{ id: 'role_builtin_developer' }]);
-    listRoleVersionsMock.mockResolvedValue([{ id: 'rolever_builtin_developer_v1' }]);
+    listRoleDefinitionsMock.mockResolvedValue([{
+      id: 'role_builtin_developer',
+      currentVersionId: 'rolever_builtin_developer_v1',
+    }]);
+    listRoleVersionsMock.mockResolvedValue([{
+      id: 'rolever_builtin_developer_v1',
+      roleDefinitionId: 'role_builtin_developer',
+      version: 1,
+    }]);
     listPublicRolesMock.mockResolvedValue([{
       id: 'role_builtin_developer',
       name: 'Developer',
@@ -343,8 +363,15 @@ describe('/v1/roles', () => {
     expect(assertLocalRequestMock).toHaveBeenCalledWith(roleRequest);
     expect(ensureBuiltInDeveloperRoleMock).toHaveBeenCalledTimes(1);
     expect(await response.json()).toEqual({
-      roleDefinitions: [{ id: 'role_builtin_developer' }],
-      roleVersions: [{ id: 'rolever_builtin_developer_v1' }],
+      roleDefinitions: [{
+        id: 'role_builtin_developer',
+        currentVersionId: 'rolever_builtin_developer_v1',
+      }],
+      roleVersions: [{
+        id: 'rolever_builtin_developer_v1',
+        roleDefinitionId: 'role_builtin_developer',
+        version: 1,
+      }],
       roles: [{
         id: 'role_builtin_developer',
         name: 'Developer',
