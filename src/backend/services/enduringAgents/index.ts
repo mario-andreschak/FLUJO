@@ -19,6 +19,7 @@ export * from './personaAdmin';
 export * from './personaComposition';
 export * from './personaAppGrants';
 export * from './recordMigrations';
+export * from './roleAdmin';
 export * from './runtimeEvents';
 export * from './runtimeObservability';
 export * from './store';

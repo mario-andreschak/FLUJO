@@ -6,6 +6,7 @@ import { performance } from 'perf_hooks';
 import { promisify } from 'util';
 
 import { assertSafeCollectionId, runInWriteChain } from '@/utils/storage/backend';
+import { stableEnduringAgentId } from './ids';
 import {
   ensureWorkspaceDirs,
   getCurrentWorkspace,
@@ -904,4 +905,19 @@ export function withWorkspaceRuntimeLock<T>(
       await acquired.release();
     }
   });
+}
+
+/** Serialize Role-version allocation and Role reference creation by definition. */
+export function withRoleDefinitionRuntimeLock<T>(
+  roleDefinitionId: string,
+  task: (lock: PersonaRuntimeLock) => Promise<T>,
+): Promise<T> {
+  assertSafeCollectionId(roleDefinitionId);
+  return withWorkspaceRuntimeLock(
+    stableEnduringAgentId('rolelock', {
+      purpose: 'role-definition-mutation-v1',
+      roleDefinitionId,
+    }),
+    task,
+  );
 }

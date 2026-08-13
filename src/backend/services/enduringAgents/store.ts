@@ -56,6 +56,7 @@ import {
   type PersonaRuntimeLock,
   withIssuedPersonaRuntimeLockOperation,
   withPersonaRuntimeLock,
+  withRoleDefinitionRuntimeLock,
 } from './runtimeLock';
 
 const log = createLogger('backend/services/enduringAgents/store');
@@ -248,6 +249,15 @@ export function listRoleDefinitions(): Promise<RoleDefinition[]> {
   });
 }
 
+export function listRoleDefinitionsStrict(): Promise<RoleDefinition[]> {
+  return listRecords({
+    collection: ENDURING_AGENT_COLLECTIONS.roleDefinitions,
+    recordKind: 'RoleDefinition',
+    schema: RoleDefinitionSchema,
+    strict: true,
+  });
+}
+
 export function saveRoleDefinition(record: RoleDefinition): Promise<RoleDefinition> {
   return saveValidatedRecord({
     collection: ENDURING_AGENT_COLLECTIONS.roleDefinitions,
@@ -272,6 +282,19 @@ export async function listRoleVersions(roleDefinitionId?: string): Promise<RoleV
     collection: ENDURING_AGENT_COLLECTIONS.roleVersions,
     recordKind: 'RoleVersion',
     schema: RoleVersionSchema,
+  });
+  return roleDefinitionId === undefined
+    ? records
+    : records.filter((record) => record.roleDefinitionId === roleDefinitionId);
+}
+
+export async function listRoleVersionsStrict(roleDefinitionId?: string): Promise<RoleVersion[]> {
+  if (roleDefinitionId !== undefined) assertSafeCollectionId(roleDefinitionId);
+  const records = await listRecords({
+    collection: ENDURING_AGENT_COLLECTIONS.roleVersions,
+    recordKind: 'RoleVersion',
+    schema: RoleVersionSchema,
+    strict: true,
   });
   return roleDefinitionId === undefined
     ? records
@@ -318,6 +341,32 @@ export function createRoleVersion(value: RoleVersion): Promise<RoleVersion> {
   });
 }
 
+/** Delete one immutable RoleVersion only when no Persona remains pinned to it. */
+export async function deleteRoleVersionRecord(id: string): Promise<void> {
+  assertSafeCollectionId(id);
+  const version = await getRoleVersion(id);
+  if (!version) return;
+  const referencingPersona = (await listPersonasStrict()).find(
+    (persona) => persona.roleVersionId === version.id,
+  );
+  if (referencingPersona) {
+    throw new Error(
+      `RoleVersion ${JSON.stringify(id)} is pinned by Persona `
+      + `${JSON.stringify(referencingPersona.id)}.`,
+    );
+  }
+  await deleteCollectionItem(ENDURING_AGENT_COLLECTIONS.roleVersions, id);
+}
+
+/** Delete an empty Role family after all of its immutable versions are removed. */
+export async function deleteRoleDefinitionRecord(id: string): Promise<void> {
+  assertSafeCollectionId(id);
+  if ((await listRoleVersionsStrict(id)).length > 0) {
+    throw new Error(`RoleDefinition ${JSON.stringify(id)} still has RoleVersions.`);
+  }
+  await deleteCollectionItem(ENDURING_AGENT_COLLECTIONS.roleDefinitions, id);
+}
+
 export function getPersona(id: string): Promise<Persona | null> {
   return getRecord({
     collection: ENDURING_AGENT_COLLECTIONS.personas,
@@ -335,29 +384,47 @@ export function listPersonas(): Promise<Persona[]> {
   });
 }
 
-export function createPersona(value: Persona): Promise<Persona> {
+export function listPersonasStrict(): Promise<Persona[]> {
+  return listRecords({
+    collection: ENDURING_AGENT_COLLECTIONS.personas,
+    recordKind: 'Persona',
+    schema: PersonaSchema,
+    strict: true,
+  });
+}
+
+export async function createPersona(value: Persona): Promise<Persona> {
   const record = parseRecord('Persona', PersonaSchema, value);
   assertSafeCollectionId(record.id);
+  const selectedRoleVersion = await getRoleVersion(record.roleVersionId);
+  if (!selectedRoleVersion) {
+    throw new Error(
+      `Persona ${JSON.stringify(record.id)} references missing RoleVersion `
+      + `${JSON.stringify(record.roleVersionId)} in this workspace.`,
+    );
+  }
 
-  return recordMutation(ENDURING_AGENT_COLLECTIONS.personas, record.id, async () => {
-    if (await getPersonaDeletionTombstone(record.id)) {
-      throw new Error(
-        `Persona ${JSON.stringify(record.id)} was deleted and cannot be recreated in this workspace.`,
-      );
-    }
-    if (await getPersona(record.id)) {
-      throw new Error(`Persona ${JSON.stringify(record.id)} already exists.`);
-    }
-    if (!await getRoleVersion(record.roleVersionId)) {
-      throw new Error(
-        `Persona ${JSON.stringify(record.id)} references missing RoleVersion `
-        + `${JSON.stringify(record.roleVersionId)} in this workspace.`,
-      );
-    }
-    await assertValidCoreMemoryItems(record);
-    await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.personas, record.id, record);
-    return record;
-  });
+  return withRoleDefinitionRuntimeLock(selectedRoleVersion.roleDefinitionId, () => (
+    recordMutation(ENDURING_AGENT_COLLECTIONS.personas, record.id, async () => {
+      if (await getPersonaDeletionTombstone(record.id)) {
+        throw new Error(
+          `Persona ${JSON.stringify(record.id)} was deleted and cannot be recreated in this workspace.`,
+        );
+      }
+      if (await getPersona(record.id)) {
+        throw new Error(`Persona ${JSON.stringify(record.id)} already exists.`);
+      }
+      if (!await getRoleVersion(record.roleVersionId)) {
+        throw new Error(
+          `Persona ${JSON.stringify(record.id)} references missing RoleVersion `
+          + `${JSON.stringify(record.roleVersionId)} in this workspace.`,
+        );
+      }
+      await assertValidCoreMemoryItems(record);
+      await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.personas, record.id, record);
+      return record;
+    })
+  ));
 }
 
 export function getPersonaDeletionTombstone(

@@ -1,5 +1,7 @@
 import type { Flow } from '@/shared/types/flow';
 import {
+  ROLE_DEFINITION_SCHEMA_VERSION,
+  ROLE_VERSION_SCHEMA_VERSION,
   RoleDefinitionSchema,
   RoleVersionSchema,
   type RoleDefinition,
@@ -144,10 +146,11 @@ function buildMaintainMemoryFlowTemplate(): Flow {
 /** Build the stable workspace-owned Developer Role family record. */
 export function buildBuiltInDeveloperRoleDefinition(): RoleDefinition {
   return RoleDefinitionSchema.parse({
-    schemaVersion: 1,
+    schemaVersion: ROLE_DEFINITION_SCHEMA_VERSION,
     id: BUILT_IN_DEVELOPER_ROLE_ID,
     name: 'Developer',
     description: 'A reusable role for understanding, implementing, and validating software changes.',
+    currentVersionId: BUILT_IN_DEVELOPER_ROLE_VERSION_ID,
     createdAt: BUILT_IN_DEVELOPER_CREATED_AT,
     updatedAt: BUILT_IN_DEVELOPER_CREATED_AT,
   });
@@ -156,7 +159,7 @@ export function buildBuiltInDeveloperRoleDefinition(): RoleDefinition {
 /** Build immutable Developer v1 without reading or writing ambient state. */
 export function buildBuiltInDeveloperRoleVersion(): RoleVersion {
   return RoleVersionSchema.parse({
-    schemaVersion: 1,
+    schemaVersion: ROLE_VERSION_SCHEMA_VERSION,
     id: BUILT_IN_DEVELOPER_ROLE_VERSION_ID,
     roleDefinitionId: BUILT_IN_DEVELOPER_ROLE_ID,
     version: BUILT_IN_DEVELOPER_ROLE_VERSION,

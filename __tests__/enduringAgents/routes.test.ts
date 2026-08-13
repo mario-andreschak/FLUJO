@@ -10,6 +10,8 @@ const activatePersonaBehaviorRevisionMock = jest.fn();
 const ensureBuiltInDeveloperRoleMock = jest.fn();
 const listRoleDefinitionsMock = jest.fn();
 const listRoleVersionsMock = jest.fn();
+const listPublicRolesMock = jest.fn();
+const createPublicRoleMock = jest.fn();
 const assertLocalRequestMock = jest.fn();
 const assertUnlockedMock = jest.fn();
 
@@ -26,6 +28,8 @@ jest.mock('@/backend/services/enduringAgents', () => {
   class PersonaRuntimeNotFoundError extends Error {}
   class PersonaRuntimeRecoveryConflictError extends Error {}
   class PersonaRuntimeUnavailableError extends Error {}
+  class RoleAdminNotFoundError extends Error {}
+  class RoleAdminConflictError extends Error {}
   return {
     PersonaFactoryConflictError,
     RoleVersionNotFoundError,
@@ -35,6 +39,8 @@ jest.mock('@/backend/services/enduringAgents', () => {
     PersonaRuntimeNotFoundError,
     PersonaRuntimeRecoveryConflictError,
     PersonaRuntimeUnavailableError,
+    RoleAdminNotFoundError,
+    RoleAdminConflictError,
     listPersonas: (...args: unknown[]) => listPersonasMock(...args),
     createPersonaFromRole: (...args: unknown[]) => createPersonaFromRoleMock(...args),
     listPersonaRuntimeBundle: (...args: unknown[]) => listPersonaBundleMock(...args),
@@ -47,6 +53,8 @@ jest.mock('@/backend/services/enduringAgents', () => {
     ensureBuiltInDeveloperRole: (...args: unknown[]) => ensureBuiltInDeveloperRoleMock(...args),
     listRoleDefinitions: (...args: unknown[]) => listRoleDefinitionsMock(...args),
     listRoleVersions: (...args: unknown[]) => listRoleVersionsMock(...args),
+    listPublicRoles: (...args: unknown[]) => listPublicRolesMock(...args),
+    createPublicRole: (...args: unknown[]) => createPublicRoleMock(...args),
   };
 });
 
@@ -76,7 +84,7 @@ import { DELETE as deletePersonaRoute, GET as getPersona, PATCH as updatePersona
 import { POST as activatePersonaBehaviorRoute } from '@/app/v1/personas/[personaId]/behaviors/[behaviorId]/activate/route';
 import { GET as previewPersonaDeletionRoute } from '@/app/v1/personas/[personaId]/deletion-preview/route';
 import { POST as recoverPersonaRuntimeRoute } from '@/app/v1/personas/[personaId]/runtime-recovery/route';
-import { GET as listRoles } from '@/app/v1/roles/route';
+import { GET as listRoles, POST as createRole } from '@/app/v1/roles/route';
 
 const request = (path: string, init?: RequestInit) =>
   new Request(`http://localhost${path}`, init);
@@ -89,6 +97,7 @@ beforeEach(() => {
   listPersonasMock.mockResolvedValue([]);
   listRoleDefinitionsMock.mockResolvedValue([]);
   listRoleVersionsMock.mockResolvedValue([]);
+  listPublicRolesMock.mockResolvedValue([]);
   inspectPersonaRuntimeMock.mockResolvedValue({ projection: { stuck: false }, recentEvents: [] });
   recoverPersonaRuntimeMock.mockResolvedValue({
     personaId: 'jim',
@@ -317,6 +326,16 @@ describe('/v1/roles', () => {
   it('seeds Developer v1 before listing workspace Role records', async () => {
     listRoleDefinitionsMock.mockResolvedValue([{ id: 'role_builtin_developer' }]);
     listRoleVersionsMock.mockResolvedValue([{ id: 'rolever_builtin_developer_v1' }]);
+    listPublicRolesMock.mockResolvedValue([{
+      id: 'role_builtin_developer',
+      name: 'Developer',
+      prompt: 'Build software.',
+      suggestedApps: [],
+      archived: false,
+      currentVersionId: 'rolever_builtin_developer_v1',
+      createdAt: 1,
+      updatedAt: 1,
+    }]);
     const roleRequest = request('/v1/roles');
     const response = await listRoles(roleRequest as never);
 
@@ -326,6 +345,34 @@ describe('/v1/roles', () => {
     expect(await response.json()).toEqual({
       roleDefinitions: [{ id: 'role_builtin_developer' }],
       roleVersions: [{ id: 'rolever_builtin_developer_v1' }],
+      roles: [{
+        id: 'role_builtin_developer',
+        name: 'Developer',
+        prompt: 'Build software.',
+        suggestedApps: [],
+        archived: false,
+        currentVersionId: 'rolever_builtin_developer_v1',
+        createdAt: 1,
+        updatedAt: 1,
+      }],
     });
+  });
+
+  it('creates a simple public Role without accepting internal Role fields', async () => {
+    const body = {
+      name: 'Researcher',
+      prompt: 'Investigate the question and cite evidence.',
+      suggestedApps: [{ mcpServerName: 'search' }],
+    };
+    createPublicRoleMock.mockResolvedValue({ id: 'role_researcher', ...body });
+
+    const response = await createRole(request('/v1/roles', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }) as never);
+
+    expect(response.status).toBe(201);
+    expect(createPublicRoleMock).toHaveBeenCalledWith(body);
+    expect(await response.json()).toEqual({ id: 'role_researcher', ...body });
   });
 });
