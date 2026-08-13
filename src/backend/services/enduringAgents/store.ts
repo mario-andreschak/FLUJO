@@ -42,6 +42,7 @@ import {
   behaviorRevisionId,
   canonicalJson,
   hashBehaviorFlow,
+  roleTemplateMatchesBehaviorFlow,
   snapshotBehaviorFlow,
 } from './behaviorRevisions';
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
@@ -803,12 +804,7 @@ async function assertBehaviorRevisionReferences(
         + `${JSON.stringify(source.templateFlowId)}).`,
       );
     }
-    const normalizedCandidate = snapshotBehaviorFlow({
-      ...record.flowSnapshot,
-      id: slot.flowTemplate.id,
-      name: slot.flowTemplate.name,
-    });
-    if (hashBehaviorFlow(normalizedCandidate) !== hashBehaviorFlow(slot.flowTemplate)) {
+    if (!roleTemplateMatchesBehaviorFlow(slot.flowTemplate, record.flowSnapshot)) {
       throw new Error(
         `BehaviorRevision ${JSON.stringify(record.id)} Flow does not match its claimed `
         + `RoleVersion template ${JSON.stringify(source.templateFlowId)}.`,

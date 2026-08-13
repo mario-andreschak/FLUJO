@@ -56,6 +56,28 @@ function jsonClone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+/**
+ * Materialize the factory's only authorized Role-template transformation:
+ * assign one resolved default model to every process node that has no authored
+ * binding. Authored bindings are immutable and always win.
+ */
+export function bindDefaultModelToFlow(flow: Flow, defaultModelId?: string): Flow {
+  const copy = jsonClone(flow);
+  if (!defaultModelId) return copy;
+
+  copy.nodes = copy.nodes.map((node) => {
+    if (node.data.type !== 'process' || node.data.properties?.boundModel) return node;
+    return {
+      ...node,
+      data: {
+        ...node.data,
+        properties: { ...node.data.properties, boundModel: defaultModelId },
+      },
+    };
+  });
+  return copy;
+}
+
 function stripDerivedProcessProperties(node: FlowNode): FlowNode {
   if (node.type !== 'process' || !node.data?.properties) return node;
   const properties = { ...node.data.properties };
@@ -152,6 +174,42 @@ export function hashBehaviorFlow(flow: Flow): string {
   return createHash('sha256')
     .update(canonicalJson(executionSignificantFlow(snapshot)))
     .digest('hex');
+}
+
+/**
+ * Verify that a Persona-owned snapshot derives from an immutable Role template.
+ * Generated id/name fields may differ, and the factory may add one consistent
+ * default model to every otherwise-unbound process node. Every other
+ * execution-significant field must still match the authored template exactly.
+ */
+export function roleTemplateMatchesBehaviorFlow(
+  template: Flow,
+  candidate: Flow,
+): boolean {
+  const normalizedCandidate = snapshotBehaviorFlow({
+    ...candidate,
+    id: template.id,
+    name: template.name,
+  });
+  const injectedModelIds = new Set<string>();
+
+  for (const [index, templateNode] of template.nodes.entries()) {
+    if (
+      templateNode.data.type !== 'process'
+      || templateNode.data.properties?.boundModel
+    ) {
+      continue;
+    }
+    const candidateModel = normalizedCandidate.nodes[index]?.data.properties?.boundModel;
+    if (typeof candidateModel === 'string' && candidateModel.length > 0) {
+      injectedModelIds.add(candidateModel);
+    }
+  }
+
+  if (injectedModelIds.size > 1) return false;
+  const [injectedModelId] = injectedModelIds;
+  const expected = bindDefaultModelToFlow(template, injectedModelId);
+  return hashBehaviorFlow(normalizedCandidate) === hashBehaviorFlow(expected);
 }
 
 /**

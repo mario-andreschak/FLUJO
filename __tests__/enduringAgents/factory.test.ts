@@ -4,6 +4,7 @@ import {
   BUILT_IN_DEVELOPER_ROLE_VERSION_ID,
   createPersonaFromRole,
   ensureBuiltInDeveloperRole,
+  hashBehaviorFlow,
   PersonaFactoryConflictError,
 } from '@/backend/services/enduringAgents';
 import {
@@ -200,10 +201,15 @@ describe('createPersonaFromRole', () => {
       ]);
       expect(bundle.behaviorBindings).toHaveLength(2);
       expect(bundle.behaviorRevisions).toHaveLength(2);
+      const roleVersion = await getRoleVersion(BUILT_IN_DEVELOPER_ROLE_VERSION_ID);
+      expect(roleVersion).not.toBeNull();
       for (const binding of bundle.behaviorBindings) {
         const revision = bundle.behaviorRevisions.find(
           (candidate) => candidate.id === binding.activeRevisionId,
-        );
+        )!;
+        const slot = roleVersion!.behaviorSlots.find(
+          (candidate) => candidate.key === binding.slotKey,
+        )!;
         expect(revision).toMatchObject({
           behaviorId: binding.id,
           personaId: bundle.persona.id,
@@ -215,6 +221,15 @@ describe('createPersonaFromRole', () => {
             slotKey: binding.slotKey,
           },
         });
+        expect(revision.contentHash).toBe(hashBehaviorFlow(revision.flowSnapshot));
+        expect(slot.flowTemplate.nodes
+          .filter((candidate) => candidate.data.type === 'process')
+          .every((candidate) => candidate.data.properties?.boundModel === undefined))
+          .toBe(true);
+        expect(revision.flowSnapshot.nodes
+          .filter((candidate) => candidate.data.type === 'process')
+          .map((candidate) => candidate.data.properties?.boundModel))
+          .toEqual(expect.arrayContaining(['model-test']));
       }
 
       // The deterministic factory must not invent biography or pre-populate

@@ -28,6 +28,7 @@ import { assertSafeCollectionId } from '@/utils/storage/backend';
 
 import {
   behaviorRevisionId,
+  bindDefaultModelToFlow,
   canonicalJson,
   hashBehaviorFlow,
   snapshotBehaviorFlow,
@@ -197,22 +198,6 @@ async function materializeBehavior(
 
 function personaFlowGroupId(personaId: string): string {
   return stableEnduringAgentId('personaflowgroup', { personaId });
-}
-
-function bindDefaultModel(flow: Flow, defaultModelId?: string): Flow {
-  const copy = JSON.parse(JSON.stringify(flow)) as Flow;
-  if (!defaultModelId) return copy;
-  copy.nodes = copy.nodes.map((node) => {
-    if (node.data.type !== 'process' || node.data.properties?.boundModel) return node;
-    return {
-      ...node,
-      data: {
-        ...node.data,
-        properties: { ...node.data.properties, boundModel: defaultModelId },
-      },
-    };
-  });
-  return copy;
 }
 
 function firstBoundModel(flow?: Flow): string | undefined {
@@ -444,12 +429,12 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
 
     const defaultModelId = await resolveDefaultModelId(roleVersion, coreTemplate as Flow);
     const preparedCore = await requireRunnableGeneratedFlow(
-      bindDefaultModel(coreTemplate as Flow, defaultModelId),
+      bindDefaultModelToFlow(coreTemplate as Flow, defaultModelId),
       'Core Flow',
     );
     const preparedRoleFlows = await Promise.all(roleVersion.behaviorSlots.map(
       (slot) => requireRunnableGeneratedFlow(
-        bindDefaultModel(slot.flowTemplate as Flow, defaultModelId),
+        bindDefaultModelToFlow(slot.flowTemplate as Flow, defaultModelId),
         `Required Behavior ${JSON.stringify(slot.key)}`,
       ),
     ));

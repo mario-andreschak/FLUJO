@@ -1,7 +1,9 @@
 import {
   BehaviorSubflowDependencyError,
   behaviorRevisionId,
+  bindDefaultModelToFlow,
   hashBehaviorFlow,
+  roleTemplateMatchesBehaviorFlow,
   snapshotBehaviorFlow,
 } from '@/backend/services/enduringAgents/behaviorRevisions';
 import type { Flow } from '@/shared/types/flow';
@@ -263,6 +265,38 @@ describe('hashBehaviorFlow', () => {
     mutate(changed);
 
     expect(hashBehaviorFlow(changed)).not.toBe(hashBehaviorFlow(flow));
+  });
+});
+
+describe('roleTemplateMatchesBehaviorFlow', () => {
+  it('accepts only the deterministic default-model overlay on an unbound template', () => {
+    const template = behaviorFlow();
+    delete node(template, 'researcher').data.properties!.boundModel;
+    const materialized = bindDefaultModelToFlow(template, 'model-default');
+    materialized.id = 'persona-owned-flow';
+    materialized.name = 'Jim Primary';
+
+    expect(roleTemplateMatchesBehaviorFlow(template, materialized)).toBe(true);
+    expect(node(template, 'researcher').data.properties).not.toHaveProperty('boundModel');
+  });
+
+  it('rejects changes outside generated identity and missing model bindings', () => {
+    const template = behaviorFlow();
+    delete node(template, 'researcher').data.properties!.boundModel;
+    const materialized = bindDefaultModelToFlow(template, 'model-default');
+    materialized.permissionRules = [
+      { action: 'delete', resource: '*', effect: 'allow' },
+    ];
+
+    expect(roleTemplateMatchesBehaviorFlow(template, materialized)).toBe(false);
+  });
+
+  it('preserves authored model bindings as immutable template content', () => {
+    const template = behaviorFlow();
+    const changed = cloneFlow(template);
+    node(changed, 'researcher').data.properties!.boundModel = 'model-other';
+
+    expect(roleTemplateMatchesBehaviorFlow(template, changed)).toBe(false);
   });
 });
 
