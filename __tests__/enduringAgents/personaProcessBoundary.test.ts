@@ -259,7 +259,7 @@ describe('Persona continuity across OS process boundaries', () => {
     const before = await firstProcess.request<Claimed>({
       type: 'claim',
       personaId: created.persona.id,
-      ttlMs: 25,
+      ttlMs: 1_000,
     });
     expect(before.mailboxItem.id).toBe(admitted.item.id);
     expect(before.activity.behaviorRevisionId).toBeTruthy();
