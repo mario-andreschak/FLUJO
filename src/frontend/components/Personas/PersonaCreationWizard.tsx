@@ -82,6 +82,7 @@ export default function PersonaCreationWizard({
   onDraftDiscarded,
 }: PersonaCreationWizardProps) {
   const { t } = useI18n();
+  const tRef = useRef(t);
   const theme = useTheme();
   const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
   const [step, setStep] = useState(0);
@@ -112,6 +113,10 @@ export default function PersonaCreationWizard({
     controller: null,
   });
   const lastRoleRefreshAtRef = useRef(0);
+
+  useEffect(() => {
+    tRef.current = t;
+  }, [t]);
 
   const {
     servers: appServers,
@@ -209,11 +214,11 @@ export default function PersonaCreationWizard({
       if (controller.signal.aborted) return;
       const message = cause instanceof Error
         ? cause.message
-        : t('personas.create.refreshRolesFailed');
+        : tRef.current('personas.create.refreshRolesFailed');
       setRoleRefreshError(message);
       throw cause;
     }
-  }, [t]);
+  }, []);
 
   useEffect(() => {
     if (!open) {
@@ -236,7 +241,9 @@ export default function PersonaCreationWizard({
       })
       .catch((cause) => {
         if (cancelled || roleRequestRef.current.controller?.signal.aborted) return;
-        setError(cause instanceof Error ? cause.message : t('personas.action.failed'));
+        setError(cause instanceof Error
+          ? cause.message
+          : tRef.current('personas.action.failed'));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -246,7 +253,7 @@ export default function PersonaCreationWizard({
       cancelled = true;
       roleRequestRef.current.controller?.abort();
     };
-  }, [open, refreshRoles, t]);
+  }, [open, refreshRoles]);
 
   useEffect(() => {
     if (!open) return;

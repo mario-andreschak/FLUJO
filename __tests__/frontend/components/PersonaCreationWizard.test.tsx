@@ -29,29 +29,33 @@ jest.mock('@/frontend/components/mcp/useMcpAppsDiscovery', () => ({
   useMcpAppsDiscovery: () => ({ servers: [], loading: false, error: null }),
 }));
 
-jest.mock('@/frontend/contexts/I18nContext', () => ({
-  useI18n: () => ({
-    t: (key: string, values?: Record<string, unknown>) => {
-      const copy: Record<string, string> = {
-        'personas.create.title': 'Create a Persona',
-        'personas.create.step.identity': 'About',
-        'personas.create.step.role': 'Role',
-        'personas.create.step.core': 'Main Flow',
-        'personas.create.step.behaviors': 'Behaviors',
-        'personas.create.step.apps': 'Apps',
-        'personas.create.step.memories': 'Memories',
-        'personas.create.step.review': 'Review',
-        'personas.create.identity.title': 'Who are you creating?',
-        'personas.create.name': 'Name',
-        'personas.create.next': 'Next',
-        'personas.create.finish': 'Create Persona',
-      };
-      return copy[key] ?? key.replace('{number}', String(values?.number ?? ''));
-    },
-    tp: (key: string, count: number) => `${key}:${count}`,
-    formatNumber: (value: number) => String(value),
-  }),
-}));
+jest.mock('@/frontend/contexts/I18nContext', () => {
+  const t = (key: string, values?: Record<string, unknown>) => {
+    const copy: Record<string, string> = {
+      'personas.create.title': 'Create a Persona',
+      'personas.create.step.identity': 'About',
+      'personas.create.step.role': 'Role',
+      'personas.create.step.core': 'Main Flow',
+      'personas.create.step.behaviors': 'Behaviors',
+      'personas.create.step.apps': 'Apps',
+      'personas.create.step.memories': 'Memories',
+      'personas.create.step.review': 'Review',
+      'personas.create.identity.title': 'Who are you creating?',
+      'personas.create.name': 'Name',
+      'personas.create.next': 'Next',
+      'personas.create.finish': 'Create Persona',
+    };
+    return copy[key] ?? key.replace('{number}', String(values?.number ?? ''));
+  };
+
+  return {
+    useI18n: () => ({
+      t,
+      tp: (key: string, count: number) => `${key}:${count}`,
+      formatNumber: (value: number) => String(value),
+    }),
+  };
+});
 
 import PersonaCreationWizard from '@/frontend/components/Personas/PersonaCreationWizard';
 
