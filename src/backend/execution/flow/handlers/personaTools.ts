@@ -10,6 +10,7 @@ import {
   promoteRunTodoToWorkItem,
   rememberMemory,
   searchPersonaMemory,
+  unpinMemoryFromCore,
   updatePersonaWorkItem,
 } from '@/backend/services/enduringAgents';
 
@@ -19,6 +20,7 @@ export const PERSONA_TOOL_NAMES = [
   'correct',
   'forget',
   'pin',
+  'unpin',
   'work_item_create',
   'work_item_update',
   'work_item_complete',
@@ -82,6 +84,15 @@ const TOOL_DEFINITIONS: Record<PersonaToolName, ToolDefinition> = {
   pin: {
     name: 'pin',
     description: 'Pin an already-active, high-trust memory into the Persona core-memory materialized view.',
+    inputSchema: {
+      type: 'object',
+      properties: { memory_id: { type: 'string' } },
+      required: ['memory_id'],
+    },
+  },
+  unpin: {
+    name: 'unpin',
+    description: 'Remove a memory from the Persona core-memory materialized view without changing its record.',
     inputSchema: {
       type: 'object',
       properties: { memory_id: { type: 'string' } },
@@ -268,6 +279,14 @@ export async function executePersonaTool(
           options,
         );
         return { success: true, data: { pinned: true, core } };
+      }
+      case 'unpin': {
+        const core = await unpinMemoryFromCore(
+          trusted.personaId,
+          stringArg(args, 'memory_id') ?? '',
+          options,
+        );
+        return { success: true, data: { unpinned: true, core } };
       }
       case 'work_item_create': {
         const item = await createPersonaWorkItem({

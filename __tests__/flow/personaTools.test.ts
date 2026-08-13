@@ -1,5 +1,6 @@
 const rememberMemoryMock = jest.fn();
 const searchPersonaMemoryMock = jest.fn();
+const unpinMemoryFromCoreMock = jest.fn();
 
 jest.mock('@/backend/services/enduringAgents', () => ({
   correctMemory: jest.fn(),
@@ -9,6 +10,7 @@ jest.mock('@/backend/services/enduringAgents', () => ({
   promoteRunTodoToWorkItem: jest.fn(),
   rememberMemory: (...args: unknown[]) => rememberMemoryMock(...args),
   searchPersonaMemory: (...args: unknown[]) => searchPersonaMemoryMock(...args),
+  unpinMemoryFromCore: (...args: unknown[]) => unpinMemoryFromCoreMock(...args),
   updatePersonaWorkItem: jest.fn(),
 }));
 
@@ -37,21 +39,28 @@ describe('authored Persona tools', () => {
         expect.objectContaining({ name: 'remember' }),
         expect.objectContaining({ name: 'work_item_create' }),
       ]);
+    expect(buildPersonaTools(['unpin', 'pin'])).toEqual([
+      expect.objectContaining({ name: 'pin' }),
+      expect.objectContaining({ name: 'unpin' }),
+    ]);
     expect(buildPersonaTools(undefined)).toEqual([]);
   });
 
-  it('fails closed without trusted Persona attribution and mutation authority', async () => {
-    await expect(executePersonaTool('remember', {
-      content: 'Candidate',
-      kind: 'semantic',
-      scope: 'persona',
-      confidence: 0.5,
-      importance: 0.5,
-    }, {})).resolves.toMatchObject({
+  it.each([
+    'remember',
+    'recall',
+    'correct',
+    'forget',
+    'pin',
+    'unpin',
+  ] as const)('fails closed for %s without trusted Persona attribution and mutation authority', async (toolName) => {
+    await expect(executePersonaTool(toolName, {}, {})).resolves.toMatchObject({
       success: false,
       error: expect.stringContaining('trusted, fenced top-level Persona Activity'),
     });
     expect(rememberMemoryMock).not.toHaveBeenCalled();
+    expect(searchPersonaMemoryMock).not.toHaveBeenCalled();
+    expect(unpinMemoryFromCoreMock).not.toHaveBeenCalled();
   });
 
   it('forces remember into a provenance-bearing model candidate under the live fence', async () => {
@@ -84,6 +93,29 @@ describe('authored Persona tools', () => {
         uri: 'flujo://conversation/conversation_persona',
       }],
     }), { executionAuthority });
+  });
+
+  it('unpins through the owning Activity mutation authority without deleting the record', async () => {
+    const executionAuthority = authority();
+    const remainingCore = [{ id: 'memory_remaining' }];
+    unpinMemoryFromCoreMock.mockResolvedValue(remainingCore);
+
+    await expect(executePersonaTool('unpin', { memory_id: 'memory_target' }, {
+      executionAuthority,
+      personaAttribution: {
+        personaId: 'persona_test',
+        activityId: 'activity_test',
+        behaviorRevisionId: 'revision_test',
+      },
+    })).resolves.toEqual({
+      success: true,
+      data: { unpinned: true, core: remainingCore },
+    });
+    expect(unpinMemoryFromCoreMock).toHaveBeenCalledWith(
+      'persona_test',
+      'memory_target',
+      { executionAuthority },
+    );
   });
 
   it('fence-checks recall before and after reading active memory', async () => {

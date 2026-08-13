@@ -22,6 +22,7 @@ import {
   rememberMemory,
   routePersonaMailboxItem,
   searchPersonaMemory,
+  unpinMemoryFromCore,
   updatePersonaActivityReferences,
   updatePersonaWorkItem,
   type MemoryMaintenancePlan,
@@ -157,7 +158,7 @@ describe('issue #415 phase 4 WorkItems', () => {
   });
 });
 describe('issue #415 phase 4 MemoryKernel', () => {
-  it('remembers, searches, corrects, pins, supersedes, and forgets with provenance', async () => {
+  it('remembers, searches, corrects, pins, unpins, supersedes, and forgets with provenance', async () => {
     await inFreshWorkspace(async () => {
       const { persona } = await createPersonaFromRole({ name: 'Jim', idempotencyKey: 'memory-jim' });
       const memory = await rememberMemory({
@@ -181,6 +182,12 @@ describe('issue #415 phase 4 MemoryKernel', () => {
       expect((await getCoreMemory(persona.id)).map((item) => item.id)).toEqual([memory.id]);
       expect((await searchPersonaMemory(persona.id, { query: 'release stable' }))[0].item.id)
         .toBe(memory.id);
+
+      const beforeUnpin = await getMemoryItem(memory.id);
+      await unpinMemoryFromCore(persona.id, memory.id);
+      expect(await getCoreMemory(persona.id)).toEqual([]);
+      expect(await getMemoryItem(memory.id)).toEqual(beforeUnpin);
+      await pinMemoryToCore(persona.id, memory.id);
 
       const correction = await correctMemory(persona.id, memory.id, {
         content: 'The release branch is named release.',
