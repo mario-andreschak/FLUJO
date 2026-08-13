@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { snapshotStore } from '@/backend/services/snapshot/SnapshotStore';
+import { SnapshotStoreBusyError, snapshotStore } from '@/backend/services/snapshot/SnapshotStore';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 
 export const runtime = 'nodejs';
@@ -30,10 +30,10 @@ export async function POST(request: Request) {
       return NextResponse.json({ ...result, status: await snapshotStore.status() });
     }
     return NextResponse.json({ error: 'Unknown cleanup action' }, { status: 400 });
-  } catch (error) {
-    const message = error instanceof Error && /already in progress/.test(error.message)
-      ? 'Snapshot storage is temporarily busy'
-      : 'Unable to clean snapshot history';
-    return NextResponse.json({ error: message }, { status: message.includes('busy') ? 409 : 500 });
+  } catch (error: unknown) {
+    if (error instanceof SnapshotStoreBusyError) {
+      return NextResponse.json({ error: error.message }, { status: 409 });
+    }
+    return NextResponse.json({ error: 'Unable to clean snapshot history' }, { status: 500 });
   }
 }

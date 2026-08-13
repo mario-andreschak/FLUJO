@@ -19,6 +19,33 @@ const log = createLogger('backend/services/snapshot/SnapshotStore');
 let snapshotRootForTests: string | null = null;
 let cleanupInProgress = false;
 
+export class SnapshotStoreBusyError extends Error {
+  readonly code = 'SNAPSHOT_STORE_BUSY';
+
+  constructor() {
+    super('Snapshot storage is temporarily busy');
+    this.name = 'SnapshotStoreBusyError';
+  }
+}
+let snapshotOperationInProgress = false;
+
+/**
+ * Process-local coordinator for mutations of the derived shadow Git store.
+ * It serializes capture and cleanup so cleanup cannot remove a Git directory
+ * while a capture is initializing or committing it.
+ */
+async function withSnapshotStoreLock<T>(operation: () => Promise<T>): Promise<T> {
+  if (snapshotOperationInProgress) {
+    throw new SnapshotStoreBusyError();
+  }
+  snapshotOperationInProgress = true;
+  try {
+    return await operation();
+  } finally {
+    snapshotOperationInProgress = false;
+  }
+}
+
 /** Test seam for an isolated workspace snapshot store. */
 export function _setSnapshotStoreDirForTests(dir: string | null): string | null {
   const previous = snapshotRootForTests;
@@ -81,8 +108,8 @@ export class SnapshotStore {
     try {
       const saved = await loadItem<unknown>(StorageKey.SNAPSHOT_RETENTION_POLICY, undefined);
       return isSnapshotRetentionPolicy(saved) ? saved : { ...DEFAULT_SNAPSHOT_RETENTION_POLICY };
-    } catch (error) {
-      log.warn('Could not load snapshot retention policy', error);
+    } catch (error: unknown) {
+      log.warn('Could not load snapshot retention policy', { error });
       return { ...DEFAULT_SNAPSHOT_RETENTION_POLICY };
     }
   }
@@ -93,6 +120,11 @@ export class SnapshotStore {
     return policy;
   }
 
+  /** Coordinate a capture transaction with cleanup of derived snapshot data. */
+  async withExclusiveAccess<T>(operation: () => Promise<T>): Promise<T> {
+    return withSnapshotStoreLock(operation);
+  }
+
   async usage(): Promise<SnapshotUsage> {
     let ids: string[] = [];
     try {
@@ -100,7 +132,10 @@ export class SnapshotStore {
         .filter((entry) => entry.isDirectory() && /^[a-f0-9]{16}$/i.test(entry.name))
         .map((entry) => entry.name);
     } catch (error: unknown) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') log.warn('Could not enumerate snapshot store', error);
+      const code = typeof error === 'object' && error !== null && 'code' in error
+        ? (error as { code?: unknown }).code
+        : undefined;
+      if (code !== 'ENOENT') log.warn('Could not enumerate snapshot store', { error });
     }
     const repositories = await Promise.all(ids.sort().map(usageFor));
     return {
@@ -119,7 +154,7 @@ export class SnapshotStore {
     ]);
     const activity: SnapshotActivity = {
       capture: false,
-      cleanup: cleanupInProgress,
+      cleanup: cleanupInProgress || snapshotOperationInProgress,
       revert: false,
       migration: false,
       operatorDisabled: ['0', 'false', 'off'].includes((process.env.FLUJO_SNAPSHOTS || '').trim().toLowerCase())
@@ -135,46 +170,51 @@ export class SnapshotStore {
    * reachable, so deleting individual refs would not reliably reclaim disk.
    */
   async cleanup(manual = false): Promise<{ deletedRepositoryIds: string[]; reclaimedBytes: number }> {
-    if (cleanupInProgress) throw new Error('Snapshot cleanup is already in progress');
-    cleanupInProgress = true;
-    try {
-      const policy = await this.policy();
-      if (!manual && !policy.enabled) return { deletedRepositoryIds: [], reclaimedBytes: 0 };
-      const usage = await this.usage();
-      const now = Date.now();
-      let remaining = usage.onDiskBytes;
-      let reclaimedBytes = 0;
-      const deletedRepositoryIds: string[] = [];
-      const candidates = [...usage.repositories].sort((a, b) =>
-        (a.oldestCaptureAt || '').localeCompare(b.oldestCaptureAt || ''));
-      for (const repository of candidates) {
-        const expired = !!repository.newestCaptureAt
-          && now - Date.parse(repository.newestCaptureAt) > policy.maxAgeMs;
-        const overCount = repository.commitCount > policy.maxCapturesPerRoot;
-        const overBudget = remaining > policy.maxBytes;
-        if (!expired && !overCount && !overBudget) continue;
-        await fs.rm(path.join(snapshotRoot(), repository.id), { recursive: true, force: true });
-        deletedRepositoryIds.push(repository.id);
-        reclaimedBytes += repository.onDiskBytes;
-        remaining -= repository.onDiskBytes;
+    return this.withExclusiveAccess(async () => {
+      cleanupInProgress = true;
+      try {
+        const policy = await this.policy();
+        if (!manual && !policy.enabled) return { deletedRepositoryIds: [], reclaimedBytes: 0 };
+        const usage = await this.usage();
+        const now = Date.now();
+        let remaining = usage.onDiskBytes;
+        let reclaimedBytes = 0;
+        const deletedRepositoryIds: string[] = [];
+        const candidates = [...usage.repositories].sort((a, b) =>
+          (a.oldestCaptureAt || '').localeCompare(b.oldestCaptureAt || ''));
+        for (const repository of candidates) {
+          const expired = !!repository.newestCaptureAt
+            && now - Date.parse(repository.newestCaptureAt) > policy.maxAgeMs;
+          const overCount = repository.commitCount > policy.maxCapturesPerRoot;
+          const overBudget = remaining > policy.maxBytes;
+          if (!expired && !overCount && !overBudget) continue;
+          // Usage only enumerates opaque hash ids; keep deletion strictly
+          // contained within the workspace-derived snapshot root.
+          if (!/^[a-f0-9]{16}$/i.test(repository.id)) continue;
+          await fs.rm(path.join(snapshotRoot(), repository.id), { recursive: true, force: true });
+          deletedRepositoryIds.push(repository.id);
+          reclaimedBytes += repository.onDiskBytes;
+          remaining -= repository.onDiskBytes;
+        }
+        return { deletedRepositoryIds, reclaimedBytes };
+      } finally {
+        cleanupInProgress = false;
       }
-      return { deletedRepositoryIds, reclaimedBytes };
-    } finally {
-      cleanupInProgress = false;
-    }
+    });
   }
 
   /** Delete only the derived workspace snapshot store; never a project path or .git. */
   async deleteAll(): Promise<{ deleted: boolean; reclaimedBytes: number }> {
-    if (cleanupInProgress) throw new Error('Snapshot cleanup is already in progress');
-    cleanupInProgress = true;
-    try {
-      const reclaimedBytes = (await this.usage()).onDiskBytes;
-      await fs.rm(snapshotRoot(), { recursive: true, force: true });
-      return { deleted: true, reclaimedBytes };
-    } finally {
-      cleanupInProgress = false;
-    }
+    return this.withExclusiveAccess(async () => {
+      cleanupInProgress = true;
+      try {
+        const reclaimedBytes = (await this.usage()).onDiskBytes;
+        await fs.rm(snapshotRoot(), { recursive: true, force: true });
+        return { deleted: true, reclaimedBytes };
+      } finally {
+        cleanupInProgress = false;
+      }
+    });
   }
 }
 

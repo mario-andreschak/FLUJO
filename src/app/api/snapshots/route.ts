@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { snapshotStore } from '@/backend/services/snapshot/SnapshotStore';
-import { isSnapshotRetentionPolicy } from '@/shared/types/snapshot';
+import { isSnapshotRetentionPolicy, type SnapshotRetentionPolicy } from '@/shared/types/snapshot';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 
 export const runtime = 'nodejs';
@@ -23,8 +23,20 @@ export async function PATCH(request: Request) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     return NextResponse.json({ error: 'Invalid snapshot policy request' }, { status: 400 });
   }
+  const fields = body as Record<string, unknown>;
   const current = await snapshotStore.policy();
-  const policy = { ...current, ...(body as Record<string, unknown>) };
+  const policy: SnapshotRetentionPolicy = {
+    version: fields.version === undefined ? current.version : fields.version as SnapshotRetentionPolicy['version'],
+    enabled: fields.enabled === undefined ? current.enabled : fields.enabled as boolean,
+    maxBytes: fields.maxBytes === undefined ? current.maxBytes : fields.maxBytes as number,
+    maxAgeMs: fields.maxAgeMs === undefined ? current.maxAgeMs : fields.maxAgeMs as number,
+    maxCapturesPerRoot: fields.maxCapturesPerRoot === undefined
+      ? current.maxCapturesPerRoot
+      : fields.maxCapturesPerRoot as number,
+    automaticCleanup: fields.automaticCleanup === undefined
+      ? current.automaticCleanup
+      : fields.automaticCleanup as boolean,
+  };
   if (!isSnapshotRetentionPolicy(policy)) {
     return NextResponse.json({ error: 'Invalid snapshot retention policy' }, { status: 400 });
   }

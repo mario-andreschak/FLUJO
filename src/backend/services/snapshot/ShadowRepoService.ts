@@ -107,9 +107,13 @@ class ShadowRepoService {
       const abs = path.resolve(root);
       const stat = await fs.stat(abs).catch(() => null);
       if (!stat || !stat.isDirectory()) return false;
-      // checkIsRepo on the root's OWN git context (no --git-dir override): this
-      // asks "is the user's target a git repo?" without touching it.
-      return await simpleGit(abs).checkIsRepo();
+      // Git discovery walks ancestor directories, so `checkIsRepo()` alone
+      // would incorrectly accept a plain nested folder in a parent repository.
+      // Only a target that is itself the worktree root is eligible.
+      const git = simpleGit(abs);
+      if (!(await git.checkIsRepo())) return false;
+      const topLevel = (await git.raw(['rev-parse', '--show-toplevel'])).trim();
+      return path.resolve(topLevel) === abs;
     } catch (err) {
       log.debug('isEnabledFor: not a git repo / unavailable', { root, err });
       return false;
@@ -146,23 +150,28 @@ class ShadowRepoService {
   async capture(root: string): Promise<string | null> {
     if (!(await this.isEnabledFor(root))) return null;
     try {
-      await this.ensureShadowRepo(root);
-      const git = clientFor(root);
-      await git.raw([...gitArgs(root), 'add', '-A']);
-      await git.raw([
-        ...gitArgs(root),
-        'commit',
-        '--no-verify',
-        '--allow-empty',
-        '-m',
-        `snapshot ${new Date().toISOString()}`,
-      ]);
-      const sha = (await git.raw([...gitArgs(root), 'rev-parse', 'HEAD'])).trim();
+      // Coordinate the full shadow-repository transaction with destructive
+      // cleanup. The lock covers only workspace-derived Git metadata; it never
+      // locks or mutates the project's real `.git` directory.
+      const sha = await snapshotStore.withExclusiveAccess(async () => {
+        await this.ensureShadowRepo(root);
+        const git = clientFor(root);
+        await git.raw([...gitArgs(root), 'add', '-A']);
+        await git.raw([
+          ...gitArgs(root),
+          'commit',
+          '--no-verify',
+          '--allow-empty',
+          '-m',
+          `snapshot ${new Date().toISOString()}`,
+        ]);
+        return (await git.raw([...gitArgs(root), 'rev-parse', 'HEAD'])).trim();
+      });
       // Retention is independent from capture enablement. Maintenance can only
       // remove the isolated workspace store; failures never affect the run.
       const policy = await snapshotStore.policy();
       if (policy.enabled && policy.automaticCleanup) {
-        await snapshotStore.cleanup().catch((error) => log.warn('snapshot cleanup failed', { error }));
+        await snapshotStore.cleanup().catch((error: unknown) => log.warn('snapshot cleanup failed', { error }));
       }
       return sha || null;
     } catch (err) {
@@ -215,26 +224,28 @@ class ShadowRepoService {
     try {
       // Un-revert anchor: capture the current state before mutating anything.
       const preRevert = await this.capture(root);
-      const git = clientFor(root);
+      await snapshotStore.withExclusiveAccess(async () => {
+        const git = clientFor(root);
 
-      // What differs between the target snapshot and the current HEAD.
-      const changed = await this.files(root, toSnapshot, 'HEAD');
-      const wanted = paths && paths.length ? new Set(paths.map((p) => p.replace(/\\/g, '/'))) : null;
-      const selected = changed.filter((c) => !wanted || wanted.has(c.path));
+        // What differs between the target snapshot and the current HEAD.
+        const changed = await this.files(root, toSnapshot, 'HEAD');
+        const wanted = paths && paths.length ? new Set(paths.map((p) => p.replace(/\\/g, '/'))) : null;
+        const selected = changed.filter((c) => !wanted || wanted.has(c.path));
 
-      for (const c of selected) {
-        if (c.status.startsWith('A')) {
-          // Added after the snapshot → remove it to revert the creation.
-          await git.raw([...gitArgs(root), 'rm', '-f', '--', c.path]).catch((err) => {
-            log.warn('revert: rm failed for added path', { path: c.path, err });
-          });
-        } else {
-          // Modified/deleted → restore the snapshot version into the worktree.
-          await git.raw([...gitArgs(root), 'checkout', toSnapshot, '--', c.path]).catch((err) => {
-            log.warn('revert: checkout failed', { path: c.path, err });
-          });
+        for (const c of selected) {
+          if (c.status.startsWith('A')) {
+            // Added after the snapshot → remove it to revert the creation.
+            await git.raw([...gitArgs(root), 'rm', '-f', '--', c.path]).catch((err) => {
+              log.warn('revert: rm failed for added path', { path: c.path, err });
+            });
+          } else {
+            // Modified/deleted → restore the snapshot version into the worktree.
+            await git.raw([...gitArgs(root), 'checkout', toSnapshot, '--', c.path]).catch((err) => {
+              log.warn('revert: checkout failed', { path: c.path, err });
+            });
+          }
         }
-      }
+      });
       return preRevert;
     } catch (err) {
       log.warn('revert failed', { root, toSnapshot, err });

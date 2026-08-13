@@ -98,11 +98,15 @@ export default function SnapshotStorageSettings() {
     }
   };
 
-  const captureEnabled = settings?.experimental?.snapshotsEnabled !== false;
+  const captureEnabled = settings.experimental?.snapshotsEnabled !== false;
   const setCaptureEnabled = (enabled: boolean) => {
-    updateSettings({
+    void updateSettings({
       ...settings,
-      experimental: { ...settings?.experimental, snapshotsEnabled: enabled },
+      experimental: {
+        enabled: settings.experimental?.enabled ?? false,
+        ...settings.experimental,
+        snapshotsEnabled: enabled,
+      },
     });
   };
 
