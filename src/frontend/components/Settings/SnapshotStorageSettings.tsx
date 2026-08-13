@@ -228,7 +228,7 @@ export default function SnapshotStorageSettings() {
           </Button>
           <Collapse in={showRepositories}>
             <Stack spacing={1}>
-              {status.usage.repositories.map((repository) => (
+              {repositorySummaries.map((repository) => (
                 <Box key={repository.id} sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 1 }}>
                   <Typography variant="body2">{repository.label} · {repository.health}</Typography>
                   <Typography variant="caption" color="text.secondary">
