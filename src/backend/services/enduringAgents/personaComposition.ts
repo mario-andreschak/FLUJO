@@ -1,6 +1,7 @@
 import { validateFlowObjectForRun } from '@/backend/execution/flow/validateFlowForRun';
 import { flowService } from '@/backend/services/flow';
 import type { Flow } from '@/shared/types/flow';
+import { generatedFlowName } from '@/utils/shared/flowNamePolicy';
 import { loadServerConfigs } from '@/backend/services/mcp/config';
 import {
   CopyPersonaFlowInputSchema,
@@ -222,10 +223,21 @@ async function ensureBehaviorAuthoringFlow(
     const migratedFlow: Flow = {
       ...JSON.parse(JSON.stringify(revision.flowSnapshot)),
       id: flowId,
-      name: `${behavior.name} · ${bundle.persona.name}`,
+      name: generatedFlowName(
+        `${bundle.persona.name} ${behavior.name}`,
+        [],
+        flowId,
+      ),
+      folder: `Persona ${bundle.persona.name}`,
       createdAt: undefined,
       updatedAt: undefined,
-      personaOwnership: { personaId: bundle.persona.id },
+      personaOwnership: {
+        personaId: bundle.persona.id,
+        groupId: stableEnduringAgentId('personaflowgroup', {
+          personaId: bundle.persona.id,
+        }),
+        kind: behavior.slotKey?.startsWith('picked_') ? 'supplemental' : 'role_behavior',
+      },
     };
     const saved = await flowService.saveFlow(migratedFlow);
     if (!saved.success) {

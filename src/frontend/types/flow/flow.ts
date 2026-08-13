@@ -30,6 +30,8 @@ export interface Flow {
   personaOwnership?: {
     personaId: string;
     sourceFlowId?: string;
+    groupId?: string;
+    kind?: 'core' | 'role_behavior' | 'supplemental' | 'custom';
   };
   nodes: FlowNode[];
   edges: Edge[];

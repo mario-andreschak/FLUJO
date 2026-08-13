@@ -204,6 +204,8 @@ export interface RoleVersion {
   mission: string;
   /** Optional workspace-local App suggestions used only by the public Role layer. */
   suggestedApps?: RoleSuggestedAppReference[];
+  coreFlowTemplate?: Flow;
+  defaultModelId?: string;
   behaviorSlots: RoleBehaviorSlot[];
   capabilityRequirements?: RoleCapabilityRequirements;
   defaults?: RoleDefaults;
@@ -218,6 +220,8 @@ export interface CreateRoleVersionInput {
   name: string;
   mission: string;
   suggestedApps?: RoleSuggestedAppReference[];
+  coreFlowTemplate?: Flow;
+  defaultModelId?: string;
   behaviorSlots: RoleBehaviorSlot[];
   capabilityRequirements?: RoleCapabilityRequirements;
   defaults?: RoleDefaults;

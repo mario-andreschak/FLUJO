@@ -20,6 +20,7 @@ import {
   useMediaQuery,
 } from '@mui/material';
 import { createLogger } from '@/utils/logger';
+import { validateFlowDisplayName } from '@/utils/shared/flowNamePolicy';
 // Create a logger instance for this file
 const log = createLogger('components/flow/FlowBuilder/index.tsx');
 
@@ -632,7 +633,7 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     }
     
     // Human-facing names may contain spaces; IDs remain the stable machine key.
-    if (!/^[\p{L}\p{N}_ -]+$/u.test(name.trim())) {
+    if (validateFlowDisplayName(name) !== null) {
       return t('flows.page.nameCharacters');
     }
     

@@ -2,8 +2,6 @@
 
 import {
   AddRounded,
-  DeleteOutlineRounded,
-  OpenInNewRounded,
   RefreshRounded,
 } from '@mui/icons-material';
 import {
@@ -44,6 +42,7 @@ import {
   type RolesResponse,
 } from '@/frontend/services/personas';
 import type { Flow } from '@/frontend/types/flow/flow';
+import { personaFlowBuilderUrl } from '@/frontend/utils/personaFlowNavigation';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import type {
   PersonaCreationDraft,
@@ -123,10 +122,8 @@ export default function PersonaCreationWizard({
   const steps = useMemo(() => [
     t('personas.create.step.identity'),
     t('personas.create.step.role'),
-    t('personas.create.step.core'),
-    t('personas.create.step.behaviors'),
     t('personas.create.step.apps'),
-    t('personas.create.step.memories'),
+    t('personas.create.step.behaviors'),
     t('personas.create.step.review'),
   ], [t]);
 
@@ -135,6 +132,7 @@ export default function PersonaCreationWizard({
   const selectedCore = flows.find((flow) => flow.id === coreFlowRef);
   const selectedBehaviors = flows.filter((flow) => behaviorFlowRefs.includes(flow.id));
   const selectedApps = appServers.filter((server) => appRefs.includes(server.name));
+  const requiredBehaviorCount = selectedRole?.behaviorSlots.length ?? 0;
   const initialMemories = memories.map((value) => value.trim()).filter(Boolean);
   const avatarValid = validOptionalUrl(avatarUrl);
   const dirty = Boolean(
@@ -168,7 +166,8 @@ export default function PersonaCreationWizard({
   useEffect(() => {
     if (!open || !draft) return;
     setDraftRecord(draft);
-    setStep(draft.payload.step);
+    // Older seven-step drafts map safely into the five-step default flow.
+    setStep(Math.min(draft.payload.step, 4));
     setName(draft.payload.name);
     setMission(draft.payload.mission);
     setAvatarUrl(draft.payload.avatarUrl);
@@ -336,10 +335,8 @@ export default function PersonaCreationWizard({
   const stepValid = [
     Boolean(name.trim()) && avatarValid,
     Boolean(selectedRole),
-    Boolean(coreFlowRef) && flowReady(coreFlowRef),
+    true,
     behaviorFlowRefs.every(flowReady),
-    true,
-    true,
     Boolean(name.trim() && selectedRole && coreFlowRef)
       && flowReady(coreFlowRef)
       && behaviorFlowRefs.every(flowReady),
@@ -462,10 +459,9 @@ export default function PersonaCreationWizard({
     }
   };
 
-  const builderHref = (flowRef?: string) => withWorkspaceUrl(
-    flowRef
-      ? `/flows?flow=${encodeURIComponent(flowRef)}&mode=edit`
-      : '/flows',
+  const builderHref = (flowRef: string) => personaFlowBuilderUrl(
+    flowRef,
+    '/personas?create=1',
   );
 
   return (
@@ -549,36 +545,6 @@ export default function PersonaCreationWizard({
               </Stack>
             )}
 
-            {step === 2 && (
-              <Stack spacing={2}>
-                <Box>
-                  <Typography variant="h5">{t('personas.create.coreTitle')}</Typography>
-                  <Typography color="text.secondary">{t('personas.create.coreHelp')}</Typography>
-                </Box>
-                {coreFlowRef && <ReadinessNotice readiness={readiness[coreFlowRef] ?? EMPTY_READINESS} loading={loadingReadiness.has(coreFlowRef)} repairHref={builderHref(coreFlowRef)} />}
-                <CardPickerGrid
-                  searchable
-                  selectionMode="single"
-                  ariaLabel={t('personas.create.coreTitle')}
-                  items={flows.map((flow) => ({
-                    key: flow.id,
-                    label: flow.name,
-                    selected: coreFlowRef === flow.id,
-                    searchText: `${flow.name} ${flow.description ?? ''}`,
-                    onSelect: () => {
-                      setCoreFlowRef(flow.id);
-                      setBehaviorFlowRefs((current) => current.filter((ref) => ref !== flow.id));
-                    },
-                    content: <FlowCard flow={flow} selected={coreFlowRef === flow.id} pickerMode selectionManaged onSelect={() => {}} />,
-                  }))}
-                />
-                <Stack direction="row" spacing={1}>
-                  <Button component={Link} href={builderHref()} target="_blank" startIcon={<AddRounded />}>{t('personas.create.newFlow')}</Button>
-                  {coreFlowRef && <Button component={Link} href={builderHref(coreFlowRef)} target="_blank" startIcon={<OpenInNewRounded />}>{t('personas.create.openBuilder')}</Button>}
-                </Stack>
-              </Stack>
-            )}
-
             {step === 3 && (
               <Stack spacing={2}>
                 <Box>
@@ -604,7 +570,7 @@ export default function PersonaCreationWizard({
               </Stack>
             )}
 
-            {step === 4 && (
+            {step === 2 && (
               <Stack spacing={2}>
                 <Box>
                   <Typography variant="h5">{t('personas.create.appsTitle')}</Typography>
@@ -629,23 +595,7 @@ export default function PersonaCreationWizard({
               </Stack>
             )}
 
-            {step === 5 && (
-              <Stack spacing={2}>
-                <Box>
-                  <Typography variant="h5">{t('personas.create.memoriesTitle')}</Typography>
-                  <Typography color="text.secondary">{t('personas.create.memoriesHelp')}</Typography>
-                </Box>
-                {memories.map((memory, index) => (
-                  <Stack key={index} direction="row" spacing={1} alignItems="flex-start">
-                    <TextField fullWidth multiline minRows={2} label={t('personas.create.memory', { number: index + 1 })} value={memory} onChange={(event) => setMemories((current) => current.map((value, itemIndex) => itemIndex === index ? event.target.value : value))} />
-                    <Button aria-label={t('personas.create.removeMemory')} disabled={memories.length === 1 && !memory} onClick={() => setMemories((current) => current.length === 1 ? [''] : current.filter((_, itemIndex) => itemIndex !== index))}><DeleteOutlineRounded /></Button>
-                  </Stack>
-                ))}
-                <Button disabled={memories.length >= 100} startIcon={<AddRounded />} onClick={() => setMemories((current) => [...current, ''])}>{t('personas.create.addMemory')}</Button>
-              </Stack>
-            )}
-
-            {step === 6 && (
+            {step === 4 && (
               <Stack spacing={2}>
                 <Box>
                   <Typography variant="h5">{t('personas.create.reviewTitle')}</Typography>
@@ -653,10 +603,25 @@ export default function PersonaCreationWizard({
                 </Box>
                 <Typography>{t('personas.create.reviewIdentity', { name: name.trim(), purpose: mission.trim() || t('personas.create.noPurpose') })}</Typography>
                 <Typography>{t('personas.create.reviewRole', { role: selectedRole?.name ?? '' })}</Typography>
-                <Typography>{t('personas.create.reviewCore', { flow: selectedCore?.name ?? '' })}</Typography>
-                <Typography>{selectedBehaviors.length ? t('personas.create.reviewBehaviors', { flows: selectedBehaviors.map((flow) => flow.name).join(', ') }) : t('personas.create.reviewNoBehaviors')}</Typography>
+                <Typography>{t('personas.create.reviewCoreOwned', { flow: selectedCore?.name ?? '' })}</Typography>
+                {coreFlowRef && readiness[coreFlowRef]?.state !== 'ready' && (
+                  <ReadinessNotice
+                    readiness={readiness[coreFlowRef] ?? EMPTY_READINESS}
+                    loading={loadingReadiness.has(coreFlowRef)}
+                    repairHref={builderHref(coreFlowRef)}
+                    name={selectedCore?.name}
+                  />
+                )}
+                <Typography>
+                  {t('personas.create.reviewRequiredBehaviors', {
+                    count: requiredBehaviorCount,
+                    flows: selectedRole?.behaviorSlots.map((slot) => slot.name).join(', ') ?? '',
+                  })}
+                </Typography>
+                <Typography>{selectedBehaviors.length ? t('personas.create.reviewSupplementalBehaviors', { count: selectedBehaviors.length, flows: selectedBehaviors.map((flow) => flow.name).join(', ') }) : t('personas.create.reviewNoSupplementalBehaviors')}</Typography>
+                <Typography>{t('personas.create.reviewBehaviorTotal', { count: requiredBehaviorCount + selectedBehaviors.length })}</Typography>
                 <Typography>{selectedApps.length ? t('personas.create.reviewApps', { apps: selectedApps.map((server) => server.name).join(', ') }) : t('personas.create.reviewNoApps')}</Typography>
-                <Typography>{initialMemories.length ? t('personas.create.reviewMemories', { count: initialMemories.length }) : t('personas.create.reviewNoMemories')}</Typography>
+                <Typography color="text.secondary">{t('personas.create.memoryPostCreate')}</Typography>
                 <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
                   {avatarUrl && <Chip avatar={<Avatar src={avatarUrl} />} label={t('personas.create.pictureChosen')} />}
                   <Chip color="success" label={t('personas.create.ready')} />
@@ -676,11 +641,10 @@ export default function PersonaCreationWizard({
             {step > 0 && <Button disabled={saving || savingDraft} onClick={() => setStep((current) => current - 1)}>{t('personas.create.back')}</Button>}
             {step < steps.length - 1 ? (
               <Button variant="contained" disabled={!stepValid || saving || savingDraft} onClick={() => setStep((current) => current + 1)}>
-                {(step === 3 || step === 4 || step === 5) && (
-                  (step === 3 && behaviorFlowRefs.length === 0)
-                  || (step === 4 && appRefs.length === 0)
-                  || (step === 5 && initialMemories.length === 0)
-                ) ? t('personas.create.skip') : t('personas.create.next')}
+                {((step === 2 && appRefs.length === 0)
+                  || (step === 3 && behaviorFlowRefs.length === 0))
+                  ? t('personas.create.skip')
+                  : t('personas.create.next')}
               </Button>
             ) : (
               <Button variant="contained" disabled={!stepValid || saving || savingDraft} onClick={() => void submit()}>

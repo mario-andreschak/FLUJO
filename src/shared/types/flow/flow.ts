@@ -59,6 +59,10 @@ export interface Flow {
   personaOwnership?: {
     personaId: string;
     sourceFlowId?: string;
+    /** Stable virtual collection shared by all generated Flows for one Persona. */
+    groupId?: string;
+    /** Provenance used for grouping and required/supplemental badges. */
+    kind?: 'core' | 'role_behavior' | 'supplemental' | 'custom';
   };
   /** Immutable execution policy carried by authored Persona behavior snapshots. */
   permissionRules?: PermissionRule[];

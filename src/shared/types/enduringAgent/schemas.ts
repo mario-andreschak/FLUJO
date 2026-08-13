@@ -348,6 +348,10 @@ export const RoleVersionSchema = z.object({
   name: NonEmptyText(160),
   mission: NonEmptyText(20_000),
   suggestedApps: RoleSuggestedAppsSchema.optional(),
+  /** Optional immutable template used to create the Persona-owned Core Flow. */
+  coreFlowTemplate: FlowSnapshotSchema.optional(),
+  /** Permitted role-level fallback for unbound generated Process nodes. */
+  defaultModelId: z.string().trim().min(1).max(256).optional(),
   behaviorSlots: z.array(RoleBehaviorSlotSchema).min(1).max(64),
   capabilityRequirements: RoleCapabilityRequirementsSchema.optional(),
   defaults: RoleDefaultsSchema.optional(),
@@ -365,6 +369,8 @@ export const CreateRoleVersionInputSchema = z.object({
   name: NonEmptyText(160),
   mission: NonEmptyText(20_000),
   suggestedApps: RoleSuggestedAppsSchema.optional(),
+  coreFlowTemplate: FlowSnapshotSchema.optional(),
+  defaultModelId: z.string().trim().min(1).max(256).optional(),
   behaviorSlots: z.array(RoleBehaviorSlotSchema).min(1).max(64),
   capabilityRequirements: RoleCapabilityRequirementsSchema.optional(),
   defaults: RoleDefaultsSchema.optional(),
