@@ -146,8 +146,17 @@ describe('Persona-attributed conversation lifecycle routes', () => {
       state.status = 'completed';
       return {
         id: 'dispatch_test',
+        workspaceId: 'default',
         personaId: 'persona_test',
+        activityId: 'activity_test',
+        behaviorRevisionId: 'revision_test',
         state: 'completed',
+        flowInput: {
+          source: 'api',
+          conversationId: CONVERSATION_ID,
+          runId: 'run_test',
+          mode: 'conversation',
+        },
         outcome: { status: 'completed' },
       };
     });

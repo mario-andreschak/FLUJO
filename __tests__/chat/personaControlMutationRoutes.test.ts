@@ -56,6 +56,7 @@ jest.mock('@/backend/services/snapshot/ShadowRepoService', () => ({
     diff: jest.fn(async () => ''),
     revert: (...args: unknown[]) => shadowRevertMock(...(args as [])),
   },
+  snapshotsEnabled: jest.fn(async () => true),
 }));
 
 import { PUT as replaceBreakpoints } from '@/app/v1/chat/conversations/[conversationId]/breakpoints/route';
