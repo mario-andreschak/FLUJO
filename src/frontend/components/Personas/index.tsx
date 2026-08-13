@@ -42,6 +42,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import { useMcpAppsDiscovery } from '@/frontend/components/mcp/useMcpAppsDiscovery';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import PersonaCreationWizard from './PersonaCreationWizard';
 import PersonaDetailShell from './PersonaDetailShell';
