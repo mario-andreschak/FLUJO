@@ -87,7 +87,7 @@ export default function PersonaDetailShell({
   renderArea: (area: PersonaArea, subsection: PersonaAreaSubsection) => ReactNode;
 }) {
   const { t } = useI18n();
-  const router = useRouter();
+  const { replace } = useRouter();
   const theme = useTheme();
   const [area, setArea] = useState<PersonaArea>('overview');
   const [subsection, setSubsection] = useState<PersonaAreaSubsection>(null);
@@ -123,7 +123,7 @@ export default function PersonaDetailShell({
 
       if (normalized.shouldCanonicalize) {
         const sectionQuery = nextSubsection ? `&section=${nextSubsection}` : '';
-        router.replace(withWorkspaceUrl(
+        replace(withWorkspaceUrl(
           `/personas/${encodeURIComponent(detail.persona.id)}`
           + `?area=${normalized.area}${sectionQuery}`,
         ));
@@ -132,7 +132,7 @@ export default function PersonaDetailShell({
     syncFromLocation();
     window.addEventListener('popstate', syncFromLocation);
     return () => window.removeEventListener('popstate', syncFromLocation);
-  }, [detail.persona.id, router]);
+  }, [detail.persona.id, replace]);
 
   const selectArea = (next: PersonaNavigationArea) => {
     const nextArea: PersonaArea = next === 'behaviors' || next === 'apps'
@@ -144,7 +144,7 @@ export default function PersonaDetailShell({
     const sectionQuery = nextSubsection ? `&section=${nextSubsection}` : '';
     setArea(nextArea);
     setSubsection(nextSubsection);
-    router.replace(withWorkspaceUrl(
+    replace(withWorkspaceUrl(
       `/personas/${encodeURIComponent(detail.persona.id)}`
       + `?area=${nextArea}${sectionQuery}`,
     ));

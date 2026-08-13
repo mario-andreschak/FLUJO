@@ -9,6 +9,7 @@ import {
   CheckCircleOutlineRounded,
   EditRounded,
   HistoryRounded,
+  HubRounded,
   OpenInNewRounded,
   RefreshRounded,
   WorkOutlineRounded,
@@ -41,8 +42,11 @@ import {
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { v4 as uuidv4 } from 'uuid';
 
+import ServerCard from '@/frontend/components/mcp/MCPServerManager/ServerCard';
 import { useMcpAppsDiscovery } from '@/frontend/components/mcp/useMcpAppsDiscovery';
+import CardPickerGrid from '@/frontend/components/shared/CardPickerGrid';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import PersonaCreationWizard from './PersonaCreationWizard';
 import PersonaDetailShell from './PersonaDetailShell';
