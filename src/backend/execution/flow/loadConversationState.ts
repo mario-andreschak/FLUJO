@@ -10,8 +10,41 @@ import {
   reconcileInterruptedRecovery,
 } from './recoveryCheckpoint';
 import { coalesceLoad, noteRead, noteWrite } from './conversationStateCache';
+import { validateCompactionState } from './compaction/state';
 
 const log = createLogger('backend/execution/flow/loadConversationState');
+
+/**
+ * Read canonical conversation state without adopting it into the runtime cache,
+ * replaying logs, reconciling recovery, repairing tool calls, or persisting.
+ * Live state is returned as a readonly view; callers must snapshot the fields
+ * they inspect because an active run may continue updating it.
+ */
+export async function loadConversationStateReadOnly(
+  conversationId: string,
+): Promise<Readonly<SharedState> | undefined> {
+  try {
+    assertSafeCollectionId(conversationId);
+  } catch {
+    log.warn('Rejected unsafe conversationId on read-only load', { conversationId });
+    return undefined;
+  }
+
+  const live = FlowExecutor.conversationStates.get(conversationId);
+  if (live) {
+    log.debug('Read state from memory without cache mutation', { conversationId });
+    return live;
+  }
+
+  const storageKey = `conversations/${conversationId}` as StorageKey;
+  try {
+    const state = await loadItemBackend<SharedState>(storageKey, undefined as any);
+    return state || undefined;
+  } catch (error) {
+    log.warn('Error reading conversation state without recovery', { conversationId, error });
+    return undefined;
+  }
+}
 
 /**
  * Load a conversation's SharedState, preferring the in-memory map and falling
@@ -73,6 +106,13 @@ async function loadFromDurableStorage(conversationId: string): Promise<SharedSta
       // Per-step durability lives in the append-only log; the snapshot is only
       // written at run boundaries. Fold in anything the snapshot missed.
       await recoverMessagesFromLog(state);
+      // Wire artifacts are derived metadata. Stale or cross-conversation records
+      // are ignored; they are never used to repair or replace canonical messages.
+      state.compactionState = validateCompactionState(
+        state.compactionState,
+        conversationId,
+        state.messages,
+      );
       // Issue #355: a persisted running record owned by a prior process did not
       // reach a terminal boundary. Reclassify it before any resume/control route
       // can accidentally treat it as live. Legacy states without owner metadata

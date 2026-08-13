@@ -4,10 +4,10 @@ import React, { useMemo, useState } from 'react';
 import {
   Box, Typography, Chip, Paper,
   Accordion, AccordionSummary, AccordionDetails,
-  ToggleButtonGroup, ToggleButton,
+  ToggleButtonGroup, ToggleButton, Alert,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import { ModelInputSnapshot } from '@/backend/execution/flow/types';
+import type { ModelInputSnapshot, WirePreviewWarning } from '@/backend/execution/flow/types';
 import type { ChatMessage } from './index';
 import ChatMessages from './ChatMessages';
 import { AnnotatedHistory, wireSummary } from './DebuggerModelInput';
@@ -36,9 +36,16 @@ interface DebuggerConversationProps {
   modelInput: ModelInputSnapshot;
   /** Owning conversation/step id — used only to key the ChatMessages render window. */
   conversationId?: string;
+  source?: 'historical-request' | 'current-preview';
+  warnings?: WirePreviewWarning[];
 }
 
-const DebuggerConversation: React.FC<DebuggerConversationProps> = ({ modelInput, conversationId }) => {
+const DebuggerConversation: React.FC<DebuggerConversationProps> = ({
+  modelInput,
+  conversationId,
+  source = 'historical-request',
+  warnings = [],
+}) => {
   const { t } = useI18n();
   const [view, setView] = useState<'wire' | 'annotated'>('wire');
   const { systemMessage, wireMessages, provenance, counts, inputMode } = modelInput;
@@ -53,13 +60,32 @@ const DebuggerConversation: React.FC<DebuggerConversationProps> = ({ modelInput,
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', p: 1 }}>
-      {/* Summary + input mode */}
+      {/* Source is explicit: captured debugger history and predictive previews
+          must never be visually confused. */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap', mb: 1 }}>
+        <Chip
+          size="small"
+          color={source === 'current-preview' ? 'warning' : 'default'}
+          label={source === 'current-preview'
+            ? t('chat.preview.current')
+            : t('chat.preview.historicalRequest')}
+        />
         <Typography variant="caption" color="textSecondary">{wireSummary(counts, t)}</Typography>
         {inputMode && inputMode !== 'full-history' && (
           <Chip size="small" variant="outlined" label={`inputMode: ${inputMode}`} />
         )}
       </Box>
+
+      {warnings.map((warning, index) => (
+        <Alert
+          key={`${warning.code}-${index}`}
+          severity={warning.code === 'current_state' ? 'info' : 'warning'}
+          variant="outlined"
+          sx={{ mb: 1 }}
+        >
+          {warning.message}
+        </Alert>
+      ))}
 
       {/* Resolved system message — prominent, collapsible. */}
       <Accordion sx={{ boxShadow: 'none', '&:before': { display: 'none' } }}>

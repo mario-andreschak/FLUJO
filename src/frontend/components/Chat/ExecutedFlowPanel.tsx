@@ -58,6 +58,10 @@ interface ExecutedFlowPanelProps {
   /** Optional live activity from the SSE stream: briefly pulses the currently
    *  running node while a run is in progress. Absent ⇒ post-hoc summary only. */
   liveActivity?: LiveActivity;
+  /** Independently selected node for current-state model-input preview. */
+  selectedNodeId?: string | null;
+  /** Select an executed node without enabling graph editing. */
+  onSelectNode?: (nodeId: string) => void;
   /** Hide the panel. */
   onClose: () => void;
 }
@@ -67,6 +71,8 @@ const ExecutedFlowPanel: React.FC<ExecutedFlowPanelProps> = ({
   flowSnapshot,
   executedNodeIds,
   liveActivity,
+  selectedNodeId,
+  onSelectNode,
   onClose,
 }) => {
   const { t } = useI18n();
@@ -116,7 +122,7 @@ const ExecutedFlowPanel: React.FC<ExecutedFlowPanelProps> = ({
       setNodes(flowDefinition.nodes.map(node => ({
         ...node,
         draggable: false,
-        selectable: false,
+        selectable: true,
         connectable: false,
       })));
       setEdges(flowDefinition.edges.map(edge => ({ ...edge, selectable: false })));
@@ -148,27 +154,38 @@ const ExecutedFlowPanel: React.FC<ExecutedFlowPanelProps> = ({
   const displayNodes = useMemo(() => {
     return nodes.map((node: Node) => {
       const isExecuted = executedSet.has(node.id);
+      const isSelected = node.id === selectedNodeId;
       const liveEntry = liveActivity?.byNode[node.id];
       const isLive = !!liveEntry && now - liveEntry.ts < LIVE_HIGHLIGHT_TTL_MS;
       return {
         ...node,
+        selected: isSelected,
+        selectable: isExecuted,
+        ariaLabel: isExecuted
+          ? t('chat.preview.selectNode', { node: String(node.data?.label ?? node.id) })
+          : undefined,
         style: {
           ...node.style,
           opacity: isExecuted || isLive ? 1 : 0.4,
-          border: isLive
-            ? `2px solid ${theme.palette.primary.main}`
-            : isExecuted
-              ? `2px solid ${theme.palette.success.main}`
-              : `1px solid ${theme.palette.divider}`,
-          boxShadow: isLive
-            ? `0 0 10px ${theme.palette.primary.light}`
-            : isExecuted
-              ? `0 0 8px ${theme.palette.success.light}`
-              : undefined,
+          cursor: isExecuted ? 'pointer' : 'default',
+          border: isSelected
+            ? `3px solid ${theme.palette.secondary.main}`
+            : isLive
+              ? `2px solid ${theme.palette.primary.main}`
+              : isExecuted
+                ? `2px solid ${theme.palette.success.main}`
+                : `1px solid ${theme.palette.divider}`,
+          boxShadow: isSelected
+            ? `0 0 12px ${theme.palette.secondary.light}`
+            : isLive
+              ? `0 0 10px ${theme.palette.primary.light}`
+              : isExecuted
+                ? `0 0 8px ${theme.palette.success.light}`
+                : undefined,
         },
       };
     });
-  }, [nodes, executedSet, liveActivity, now, theme]);
+  }, [nodes, executedSet, selectedNodeId, liveActivity, now, theme, t]);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', borderLeft: 1, borderColor: 'divider', minWidth: 0 }}>
@@ -214,7 +231,10 @@ const ExecutedFlowPanel: React.FC<ExecutedFlowPanelProps> = ({
               attributionPosition="bottom-right"
               nodesDraggable={false}
               nodesConnectable={false}
-              elementsSelectable={false}
+              elementsSelectable
+              onNodeClick={(_event, node) => {
+                if (executedSet.has(node.id)) onSelectNode?.(node.id);
+              }}
               panOnDrag
               zoomOnScroll
               zoomOnPinch

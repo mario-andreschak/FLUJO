@@ -97,7 +97,7 @@ import {
   type McpAppModelContext,
   type McpAppModelContextMap,
 } from '@/shared/types/chat'; // Import the shared types
-import type { ModelInputSnapshot, SharedState } from '@/backend/execution/flow/types'; // Import SharedState type from backend
+import type { ModelInputSnapshot, SharedState, WirePreviewResponse } from '@/backend/execution/flow/types'; // Import SharedState type from backend
 import type { ExecutionEvent, TodoEventItem } from '@/shared/types/execution/events'; // Live execution events (SSE)
 import {
   LiveActivity,
@@ -589,6 +589,15 @@ const Chat: React.FC = () => {
   const [debuggerSelectedStepIndex, setDebuggerSelectedStepIndex] = useState<number>(-1);
   const [debuggerModelCallIndex, setDebuggerModelCallIndex] = useState<number>(0);
   const [transcriptView, setTranscriptView] = useState<'chat' | 'wire'>('chat');
+  // Normal-chat preview selection is deliberately independent from debugger
+  // steps and the next-run node override.
+  const [selectedPreviewNodeId, setSelectedPreviewNodeId] = useState<string | null>(null);
+  const [wirePreview, setWirePreview] = useState<WirePreviewResponse | null>(null);
+  const [wirePreviewLoading, setWirePreviewLoading] = useState(false);
+  const [wirePreviewError, setWirePreviewError] = useState<string | null>(null);
+  const [wirePreviewRetry, setWirePreviewRetry] = useState(0);
+  const wirePreviewAbortRef = useRef<AbortController | null>(null);
+  const wirePreviewRequestRef = useRef(0);
   // Whether a debug session is active (panel should stay open). Decoupled from
   // isDebugPaused so the debugger panel does NOT vanish while a step is executing
   // (between pauses) — it stays open and shows live progress, then re-populates
@@ -626,9 +635,15 @@ const Chat: React.FC = () => {
   }, [debuggerExpanded]);
 
   useEffect(() => {
+    wirePreviewAbortRef.current?.abort();
+    wirePreviewRequestRef.current += 1;
     setTranscriptView('chat');
     setDebuggerSelectedStepIndex(-1);
     setDebuggerModelCallIndex(0);
+    setSelectedPreviewNodeId(null);
+    setWirePreview(null);
+    setWirePreviewLoading(false);
+    setWirePreviewError(null);
   }, [currentConversationId]);
 
   useEffect(() => {
@@ -4565,10 +4580,57 @@ const Chat: React.FC = () => {
     ? Math.min(debuggerModelCallIndex, debuggerModelInputs.length - 1)
     : 0;
   const selectedDebuggerModelInput = debuggerModelInputs[safeDebuggerModelCallIndex];
-  const wireViewAvailable = debugPanelOpen && !!debugState && (
+  const historicalWireViewAvailable = debugPanelOpen && !!debugState && (
     debuggerModelInputs.length > 0 || activeDebuggerStepIndex >= 0
   );
-  const showingWireView = transcriptView === 'wire' && wireViewAvailable;
+  const currentPreviewAvailable = !!selectedPreviewNodeId && !!currentConversationId;
+  const wireViewAvailable = historicalWireViewAvailable || currentPreviewAvailable;
+  const showingHistoricalWireView =
+    transcriptView === 'wire' && historicalWireViewAvailable;
+  const showingCurrentPreview =
+    transcriptView === 'wire' && !historicalWireViewAvailable && currentPreviewAvailable;
+  const showingWireView = showingHistoricalWireView || showingCurrentPreview;
+
+  // Fetch only while the user is looking at the predictive wire view. Cleanup
+  // aborts view-close, node-change, conversation-change, and unmount requests;
+  // the monotonic id also rejects responses that race with cancellation.
+  useEffect(() => {
+    wirePreviewAbortRef.current?.abort();
+    const requestId = ++wirePreviewRequestRef.current;
+    if (!showingCurrentPreview || !currentConversationId || !selectedPreviewNodeId) {
+      setWirePreviewLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    wirePreviewAbortRef.current = controller;
+    setWirePreview(null);
+    setWirePreviewError(null);
+    setWirePreviewLoading(true);
+
+    void chatService.getWirePreview(
+      currentConversationId,
+      selectedPreviewNodeId,
+      { signal: controller.signal },
+    ).then(result => {
+      if (controller.signal.aborted || requestId !== wirePreviewRequestRef.current) return;
+      setWirePreview(result);
+    }).catch(err => {
+      if (controller.signal.aborted || requestId !== wirePreviewRequestRef.current) return;
+      setWirePreviewError(err instanceof Error ? err.message : t('chat.preview.loadFailed'));
+    }).finally(() => {
+      if (controller.signal.aborted || requestId !== wirePreviewRequestRef.current) return;
+      setWirePreviewLoading(false);
+    });
+
+    return () => controller.abort();
+  }, [
+    showingCurrentPreview,
+    currentConversationId,
+    selectedPreviewNodeId,
+    wirePreviewRetry,
+    t,
+  ]);
 
   // The viewed conversation counts as running when THIS client started or
   // re-attached to the run (isLoading/loadingConversationId/runningConvs) OR
@@ -5124,7 +5186,7 @@ const Chat: React.FC = () => {
             <>
               {showingWireView ? (
                 <Box data-testid="model-input-conversation" sx={{ minHeight: '100%' }}>
-                  {debuggerModelInputs.length > 1 && (
+                  {showingHistoricalWireView && debuggerModelInputs.length > 1 && (
                     <Box
                       sx={{
                         position: 'sticky',
@@ -5178,16 +5240,56 @@ const Chat: React.FC = () => {
                       </Tooltip>
                     </Box>
                   )}
-                  {selectedDebuggerModelInput ? (
+                  {showingHistoricalWireView && selectedDebuggerModelInput ? (
                     <DebuggerConversation
                       modelInput={selectedDebuggerModelInput}
+                      source="historical-request"
                       conversationId={`${detailedConversation.id}-${inspectingLiveDebugBoundary
                         ? `boundary-${activeDebugBoundary?.index ?? 'live'}`
                         : `step-${activeDebuggerStepIndex}`}-call-${safeDebuggerModelCallIndex}`}
                     />
+                  ) : showingCurrentPreview && wirePreviewLoading ? (
+                    <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 1, py: 4 }}>
+                      <CircularProgress size={20} />
+                      <Typography variant="body2">{t('chat.preview.loading')}</Typography>
+                    </Box>
+                  ) : showingCurrentPreview && wirePreviewError ? (
+                    <Alert
+                      severity="error"
+                      variant="outlined"
+                      sx={{ mx: 'auto', mt: 2, maxWidth: 720 }}
+                      action={
+                        <Button color="inherit" size="small" onClick={() => setWirePreviewRetry(value => value + 1)}>
+                          {t('chat.preview.retry')}
+                        </Button>
+                      }
+                    >
+                      {wirePreviewError}
+                    </Alert>
+                  ) : showingCurrentPreview && wirePreview?.status === 'available' && wirePreview.snapshot ? (
+                    <DebuggerConversation
+                      modelInput={wirePreview.snapshot}
+                      source="current-preview"
+                      warnings={wirePreview.warnings}
+                      conversationId={`${detailedConversation.id}-preview-${wirePreview.nodeId}`}
+                    />
+                  ) : showingCurrentPreview && wirePreview?.status === 'unavailable' ? (
+                    <Alert severity="info" variant="outlined" sx={{ mx: 'auto', mt: 2, maxWidth: 720 }}>
+                      {wirePreview.unavailableReason === 'non_process_node'
+                        ? t('chat.preview.nonProcess')
+                        : wirePreview.unavailableReason === 'missing_node'
+                          ? t('chat.preview.missingNode')
+                          : wirePreview.unavailableReason === 'missing_history'
+                            ? t('chat.preview.missingHistory')
+                            : wirePreview.unavailableReason === 'scope_mismatch'
+                              ? t('chat.preview.scopeMismatch')
+                              : t('chat.preview.unsupportedTransformation')}
+                    </Alert>
                   ) : (
                     <Alert severity="info" variant="outlined" sx={{ mx: 'auto', mt: 2, maxWidth: 720 }}>
-                      {t('chat.debug.noModelCall')}
+                      {showingCurrentPreview
+                        ? t('chat.preview.selectProcessNode')
+                        : t('chat.debug.noModelCall')}
                     </Alert>
                   )}
                 </Box>
@@ -5678,6 +5780,12 @@ const Chat: React.FC = () => {
                 flowSnapshot={debugState?.flowSnapshot ?? null}
                 executedNodeIds={executedNodeIds}
                 liveActivity={liveActivity}
+                selectedNodeId={selectedPreviewNodeId}
+                onSelectNode={(nodeId) => {
+                  setSelectedPreviewNodeId(nodeId);
+                  setWirePreview(null);
+                  setWirePreviewError(null);
+                }}
                 onClose={() => setWorkflowPanelVisible(false)}
               />
             </Box>
@@ -5785,6 +5893,12 @@ const Chat: React.FC = () => {
               flowSnapshot={debugState?.flowSnapshot ?? null}
               executedNodeIds={executedNodeIds}
               liveActivity={liveActivity}
+              selectedNodeId={selectedPreviewNodeId}
+              onSelectNode={(nodeId) => {
+                setSelectedPreviewNodeId(nodeId);
+                setWirePreview(null);
+                setWirePreviewError(null);
+              }}
               onClose={() => setWorkflowPanelVisible(false)}
             />
           </Box>

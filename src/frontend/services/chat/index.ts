@@ -8,6 +8,7 @@ import type {
 } from '@/frontend/components/Chat';
 import type { Flow } from '@/shared/types/flow';
 import type { ConversationChainsResponse } from '@/shared/types/conversationChain';
+import type { WirePreviewResponse } from '@/backend/execution/flow/types';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 
 // Create a logger instance for this file
@@ -186,6 +187,30 @@ class ChatService {
     log.debug('getConversation: Entering method', { conversationId: id });
     const response = await fetch(`${BASE}/${encodeURIComponent(id)}?compactToolPayloads=1`);
     return parse<Conversation>(response);
+  }
+
+  /** Build a read-only current-state model-input preview for one selected node. */
+  async getWirePreview(
+    conversationId: string,
+    nodeId: string,
+    options: { targetConversationId?: string; signal?: AbortSignal } = {},
+  ): Promise<WirePreviewResponse> {
+    const response = await fetch(
+      withWorkspaceUrl(`${BASE}/${encodeURIComponent(conversationId)}/wire-preview`),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+        signal: options.signal,
+        body: JSON.stringify({
+          nodeId,
+          ...(options.targetConversationId
+            ? { targetConversationId: options.targetConversationId }
+            : {}),
+        }),
+      },
+    );
+    return parse<WirePreviewResponse>(response);
   }
 
   /**

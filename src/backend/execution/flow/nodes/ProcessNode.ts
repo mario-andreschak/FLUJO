@@ -15,7 +15,7 @@ import {
 } from '../handlers/meetingTools';
 import { buildListMCPResourcesTool, LIST_MCP_RESOURCES_TOOL_NAME } from '../handlers/mcpResourceTools';
 import { RUN_RESOURCE_SCHEME } from '@/shared/types/runResources';
-import { buildNodeContext, scopeMessagesForInput, collapseNodeOutputs, deriveModelInputView } from '../buildNodeContext';
+import { prepareModelInputMaterialization, finalizeModelInputMaterialization } from '../materializeModelInput';
 import { resolveFrozenSystemPrompt } from '../systemPromptDrift';
 import { buildHandoffDescription } from '../buildHandoffDescription';
 import { buildHandoffToolNameMap, buildSubflowToolNameMap, SUBFLOW_TOOL_PREFIX } from '@/shared/utils/handoffNaming';
@@ -47,7 +47,7 @@ import { resolvePromptDynamicReferences } from '@/backend/utils/resolveDynamicRe
 import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { resolveKvNodeRefs, captureKvValue, type KvFlowContext } from '../resolveKvNodeRefs';
 import { rethrowFlowExecutionAuthorityError } from '../executionAuthority';
-import { withMcpAppModelContext } from '@/backend/mcpApps/modelContext';
+import { upsertMessageById } from '../conversationMessages';
 import type { DecodedTool } from '../handlers/toolNamespace';
 import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid'; // Import uuid
@@ -742,21 +742,9 @@ export class ProcessNode extends BaseNode {
         systemPromptContent.substring(0, 100) + '...' : systemPromptContent
     });
 
-    // Assemble the node's threaded history (lossless — this is written back to
-    // SharedState.messages). Stripping handoff plumbing for the MODEL happens at
-    // the provider boundary (ModelHandler.generateCompletion → stripHandoffPlumbing),
-    // so persisted history is never destroyed. See ~/.claude/plans/execution-core-v2.md.
-    prepResult.messages = buildNodeContext(sharedState.messages, systemMessage);
-
-    // Shape what the MODEL sees — both wire-only, prepResult.messages stays the
-    // full history so post() writes it back intact and the tool loop can
-    // re-enter without losing the prior conversation:
-    //  1. collapseNodeOutputs: drop the settled tool exchanges of every node
-    //     whose outputMode is 'latest-message' (their final responses survive).
-    //  2. scopeMessagesForInput: narrow to this node's inputMode
-    //     (latest-message / isolated).
-    // When neither applies, wireMessages stays unset and the model sees
-    // prepResult.messages verbatim.
+    // Begin the shared immutable materialization pipeline. Runtime-only reads,
+    // resource events, and tool setup remain outside it; the same pure fold /
+    // scope / finalization stages are also used by the read-only preview route.
     const inputMode = node_params?.properties?.inputMode ?? 'full-history';
     // Caller handoff input (issue #96): the single-shot, node-id-scoped `prompt`
     // an upstream routing model passed via the handoff tool — the same value
@@ -788,21 +776,27 @@ export class ProcessNode extends BaseNode {
       }
     }
 
-    let wireBase = prepResult.messages;
+    let collapsedNodeIds = new Set<string>();
     if (!preserveFullHistoryForClaudeResume) {
       try {
         const flow = sharedState.flowSnapshot ?? await flowService.getFlow(flowId);
-        const collapsedNodeIds = new Set(
+        collapsedNodeIds = new Set(
           (flow?.nodes ?? [])
             .filter((n) => n.type === 'process' && n.data?.properties?.outputMode === 'latest-message')
             .map((n) => n.id)
         );
-        wireBase = collapseNodeOutputs(wireBase, collapsedNodeIds);
       } catch (err) {
         // Collapsing is a context-token optimization — never block the run on it.
         log.warn('Could not resolve outputMode collapse set; sending the full wire view', { err });
       }
     }
+    const materializationBase = prepareModelInputMaterialization({
+      canonicalMessages: sharedState.messages,
+      systemMessage,
+      collapsedNodeIds,
+    });
+    prepResult.messages = materializationBase.threaded;
+    let wireBase = materializationBase.folded;
 
     // Chat references are a wire-only projection: preserve canonical serialized
     // pills in SharedState.messages, but expand only resources authorized for
@@ -843,21 +837,17 @@ export class ProcessNode extends BaseNode {
       }));
     }
 
+    let resolvedIsolatedPrompt: string | undefined;
     if (inputMode !== 'full-history' || wireBase !== prepResult.messages) {
-      // Tier 2c: resolve `${var:NAME}` in the isolated prompt too (wire-only text,
-      // like the system prompt) so an isolated step can pull captured state.
-      // Tier 3: `${res:NAME}` likewise.
-      // Isolated mode: when this node opted into `allowCallerPrompt` (issue #96,
-      // default ON) and the routing model passed a `prompt` via the handoff tool,
-      // that caller-supplied message OVERRIDES the authored `isolatedPrompt`
-      // (which stays the default/fallback) — mirroring the isolated subflow path.
+      // Runtime reference reads stay outside the immutable materializer. Their
+      // resolved value is supplied as plain data to the shared scoping stage.
       const allowCallerPrompt = node_params?.properties?.allowCallerPrompt !== false;
       const callerPrompt = allowCallerPrompt ? handoffForThisNode?.prompt?.trim() : undefined;
       if (callerPrompt) {
         log.info('Using caller-supplied prompt for isolated process node', { nodeId });
       }
       const isolatedPrompt = callerPrompt || node_params?.properties?.isolatedPrompt;
-      let resolvedIsolatedPrompt = isolatedPrompt !== undefined
+      resolvedIsolatedPrompt = isolatedPrompt !== undefined
         ? await resolveRunResourceRefs(
             resolveRunVars(isolatedPrompt, sharedState.variables),
             sharedState.ephemeral ? undefined : sharedState.conversationId,
@@ -874,30 +864,22 @@ export class ProcessNode extends BaseNode {
           appId: currentAppId,
         }) as string;
       }
-      // Tier 4: `${kv:NAME}` in the isolated prompt too (wire-only text).
       if (typeof resolvedIsolatedPrompt === 'string' && resolvedIsolatedPrompt.includes('${kv:')) {
         resolvedIsolatedPrompt = await resolveKvNodeRefs(resolvedIsolatedPrompt, await kvContext());
       }
-      prepResult.wireMessages = scopeMessagesForInput(
-        wireBase,
-        inputMode,
-        resolvedIsolatedPrompt,
-      );
     }
 
-    // MCP Apps: `ui/update-model-context` is future-turn context, not a chat
-    // message. Add the latest per-app snapshots to the wire view only, directly
-    // before the current user input, so they neither appear in nor mutate the
-    // persisted transcript. This also keeps overwrite semantics: exactly one
-    // synthetic message is generated from the current map on every prep.
-    const contextBase = prepResult.wireMessages ?? wireBase;
-    const withAppContext = withMcpAppModelContext(
-      contextBase,
-      sharedState.mcpAppContexts,
-    );
-    if (withAppContext !== contextBase) {
-      prepResult.wireMessages = withAppContext;
-    }
+    let materialized = finalizeModelInputMaterialization({
+      ...materializationBase,
+      folded: wireBase,
+      systemContent: completePrompt,
+      inputMode,
+      isolatedPrompt: resolvedIsolatedPrompt,
+      mcpAppContexts: sharedState.mcpAppContexts,
+    });
+    prepResult.wireMessages = materialized.wireChanged
+      ? materialized.scoped
+      : undefined;
 
     // Issue #168 / #239: expose the synthetic `read_resource` tool so the model
     // can dereference a `flujo://run/...` marker (left by an oversized captured
@@ -979,27 +961,31 @@ export class ProcessNode extends BaseNode {
       sharedState.armedSyntheticTools = Array.from(armed).sort();
     }
 
-    // Todo tool (issue #259): re-inject the current run-scoped task list into the
-    // model's view each turn, so intent survives a compacting history. Appended
-    // as a WIRE-ONLY user message (prepResult.messages / persisted transcript is
-    // untouched, like the isolated/scoped wire views) rather than into the FROZEN
-    // system prompt (#249) — mutating that prefix every time a status flips would
-    // bust the provider prefix cache. Only emitted once the list is non-empty, so
-    // a todo-enabled node with no tasks yet keeps a byte-identical wire view.
+    // Todo state is plain data supplied to the shared immutable finalizer.
+    // The canonical transcript remains untouched.
+    const additionalWireMessages: FlujoChatMessage[] = [];
     if (node_params?.properties?.enableTodoTool === true && (sharedState.todos?.length ?? 0) > 0) {
       const todoBlock = formatTodoBlock(sharedState.todos);
       if (todoBlock) {
-        const base = prepResult.wireMessages ?? wireBase;
-        prepResult.wireMessages = [
-          ...base,
-          {
-            id: uuidv4(),
-            role: 'user',
-            content: todoBlock,
-            timestamp: Date.now(),
-          } as FlujoChatMessage,
-        ];
+        additionalWireMessages.push({
+          id: uuidv4(),
+          role: 'user',
+          content: todoBlock,
+          timestamp: Date.now(),
+        } as FlujoChatMessage);
       }
+    }
+    if (additionalWireMessages.length > 0) {
+      materialized = finalizeModelInputMaterialization({
+        ...materializationBase,
+        folded: wireBase,
+        systemContent: completePrompt,
+        inputMode,
+        isolatedPrompt: resolvedIsolatedPrompt,
+        mcpAppContexts: sharedState.mcpAppContexts,
+        additionalWireMessages,
+      });
+      prepResult.wireMessages = materialized.scoped;
     }
 
     log.info('Assembled node context', {
@@ -1018,13 +1004,7 @@ export class ProcessNode extends BaseNode {
     // conversation content ONLY (never credentials).
     if (sharedState.debugMode || FEATURES.ENABLE_EXECUTION_TRACKER) {
       try {
-        prepResult.modelInput = deriveModelInputView({
-          threaded: prepResult.messages,
-          foldedView: wireBase,
-          scopedView: prepResult.wireMessages ?? wireBase,
-          systemContent: completePrompt,
-          inputMode,
-        });
+        prepResult.modelInput = materialized.snapshot;
         // Issue #167 (Phase 2 of #162): expose the per-model-call wire snapshots
         // this visit produced as an ordered array the debugger can page through,
         // keeping `modelInput` as the first/representative entry for backward
@@ -1632,9 +1612,15 @@ export class ProcessNode extends BaseNode {
     // buildNodeContext drops any stale system messages), so nothing is lost by
     // excluding it here. (execution-core v2 Phase 3, plan §11.2.4)
     if (execResult.messages && execResult.messages.length > 0) {
-      sharedState.messages = execResult.messages.filter(m => m.role !== 'system');
+      // Absence from a model-facing/result projection is never deletion. Upsert
+      // returned canonical messages and preserve every existing canonical id.
+      const canonicalMessages = [...sharedState.messages];
+      for (const message of execResult.messages) {
+        if (message.role !== 'system') upsertMessageById(canonicalMessages, message);
+      }
+      sharedState.messages = canonicalMessages;
 
-      log.info('Updated messages in sharedState (system prompt excluded)', {
+      log.info('Updated canonical messages in sharedState (system prompt excluded)', {
         messagesCount: sharedState.messages.length
       });
     }

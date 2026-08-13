@@ -10,6 +10,7 @@ import type { VisualCompactionDiagnostic } from '@/shared/types/visualArchive';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import type { NormalizedChatError } from '@/shared/types/execution/errors';
 import type { MeetingToolAction } from '@/shared/types/meeting';
+import type { ConversationCompactionState } from './compaction/types';
 import type {
   Persona,
   PersonaActivity,
@@ -98,6 +99,38 @@ export interface ModelInputSnapshot {
   inputMode?: 'full-history' | 'latest-message' | 'isolated';
   /** Final wire-time visual routing metrics, captured by ModelHandler. */
   visualCompaction?: VisualCompactionDiagnostic;
+}
+
+export type WirePreviewUnavailableReason =
+  | 'non_process_node'
+  | 'missing_node'
+  | 'missing_history'
+  | 'scope_mismatch'
+  | 'unsupported_transformation';
+
+export type WirePreviewWarningCode =
+  | 'current_state'
+  | 'provider_finalization_omitted'
+  | 'resource_resolution_omitted'
+  | 'tool_configuration_omitted'
+  | 'history_projection_omitted';
+
+export interface WirePreviewWarning {
+  code: WirePreviewWarningCode;
+  message: string;
+}
+
+export interface WirePreviewResponse {
+  status: 'available' | 'unavailable';
+  mode: 'current-preview';
+  conversationId: string;
+  rootConversationId: string | null;
+  parentConversationId: string | null;
+  nodeId: string;
+  snapshot?: ModelInputSnapshot;
+  providerMessages?: OpenAI.ChatCompletionMessageParam[];
+  warnings: WirePreviewWarning[];
+  unavailableReason?: WirePreviewUnavailableReason;
 }
 
 /**
@@ -984,8 +1017,10 @@ export interface SharedState {
         startTime: number;
         nodeExecutionTracker: NodeExecutionTrackerEntry[];
     };
-    // Messages as the single source of truth, now using our timestamped type
+    // Messages are the immutable-under-compaction canonical source of truth.
     messages: FlujoChatMessage[];
+    /** Versioned provider-wire summary artifacts, persisted separately. */
+    compactionState?: ConversationCompactionState;
     /** Codex SDK threads persisted with the conversation, keyed by Process node id. */
     codexSessions?: Record<string, CodexSessionMetadata>;
     /** Server-owned anchors for undoing a confirmed per-message restore. */
