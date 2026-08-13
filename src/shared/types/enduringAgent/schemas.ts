@@ -375,6 +375,9 @@ export const CreatePersonaInputSchema = z.object({
   id: EnduringAgentIdSchema.optional(),
   name: NonEmptyText(160),
   roleVersionId: EnduringAgentIdSchema.optional(),
+  appRefs: z.array(PersonaAppRefSchema).max(128)
+    .refine((refs) => new Set(refs).size === refs.length, 'App references must be unique.')
+    .optional(),
   mission: z.string().trim().max(20_000).optional(),
   presentation: PersonaPresentationSchema.optional(),
   autonomyLevel: z.enum(PERSONA_AUTONOMY_LEVELS).optional(),

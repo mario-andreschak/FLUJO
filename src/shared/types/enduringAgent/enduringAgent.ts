@@ -263,6 +263,8 @@ export interface CreatePersonaInput {
   id?: string;
   name: string;
   roleVersionId?: string;
+  /** Human-confirmed exact MCP configuration names; omitted uses Role suggestions. */
+  appRefs?: string[];
   mission?: string;
   presentation?: PersonaPresentation;
   autonomyLevel?: PersonaAutonomyLevel;
