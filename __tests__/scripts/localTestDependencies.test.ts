@@ -101,11 +101,11 @@ describe('local test dependency isolation', () => {
   });
 
   it('recovers runInBand when the PowerShell npm shim exposes it as config', () => {
-    expect(jestArgsFromNpm(['a.test.ts'], { npm_config_runinband: 'true' }))
+    expect(jestArgsFromNpm(['a.test.ts'], { NODE_ENV: 'test', npm_config_runinband: 'true' }))
       .toEqual(['--runInBand', 'a.test.ts']);
-    expect(jestArgsFromNpm(['--runInBand', 'a.test.ts'], { npm_config_runinband: 'true' }))
+    expect(jestArgsFromNpm(['--runInBand', 'a.test.ts'], { NODE_ENV: 'test', npm_config_runinband: 'true' }))
       .toEqual(['--runInBand', 'a.test.ts']);
-    expect(jestArgsFromNpm(['a.test.ts'], { npm_config_runinband: 'false' }))
+    expect(jestArgsFromNpm(['a.test.ts'], { NODE_ENV: 'test', npm_config_runinband: 'false' }))
       .toEqual(['a.test.ts']);
   });
 
