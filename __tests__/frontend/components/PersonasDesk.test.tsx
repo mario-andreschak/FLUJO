@@ -295,7 +295,7 @@ it('shows exact account identity and launches only through a grant-scoped descri
   expect(screen.getByText('github-jim')).toBeInTheDocument();
   expect(screen.getByText('GitHub Dashboard')).toBeInTheDocument();
 
-  fireEvent.click(screen.getByRole('button', { name: 'Launch' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Open' }));
   await waitFor(() => expect(authorizeAppLaunchMock).toHaveBeenCalledWith(
     'jim',
     'appgrant_jim',

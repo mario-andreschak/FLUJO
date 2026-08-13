@@ -768,7 +768,7 @@ function ActivityArea({ detail }: { detail: PersonaDetail }) {
           </TextField>
           <TextField select fullWidth label={t('personas.history.filter.status')} value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
             <MenuItem value="">{t('personas.history.filter.allStatuses')}</MenuItem>
-            {['queued', 'working', 'waiting', 'completed', 'cancelled', 'needs_attention'].map((outcome) => <MenuItem key={outcome} value={outcome}>{t(`personas.outcome.${outcome}`)}</MenuItem>)}
+            {(Object.keys(PERSONA_OUTCOME_KEYS) as PersonaPresentationOutcome[]).map((outcome) => <MenuItem key={outcome} value={outcome}>{t(PERSONA_OUTCOME_KEYS[outcome])}</MenuItem>)}
           </TextField>
           <TextField fullWidth type="date" label={t('personas.history.filter.date')} value={dateFilter} onChange={(event) => setDateFilter(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
           {(typeFilter || statusFilter || dateFilter) && <Button onClick={clearFilters}>{t('personas.history.filter.clear')}</Button>}
@@ -779,7 +779,7 @@ function ActivityArea({ detail }: { detail: PersonaDetail }) {
               <Stack key={activity.key} direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" gap={1.5} sx={{ py: 1.5 }}>
                 <Box sx={{ minWidth: 0 }}>
                   <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
-                    <Chip size="small" color={statusColor(activity.outcome)} label={t(`personas.outcome.${activity.outcome}`)} />
+                    <Chip size="small" color={statusColor(activity.outcome)} label={t(PERSONA_OUTCOME_KEYS[activity.outcome])} />
                     <Chip size="small" variant="outlined" label={t(`personas.history.type.${activity.kind}`)} />
                     <Chip size="small" variant="outlined" label={t(`personas.origin.${activity.origin}`)} />
                   </Stack>
@@ -791,7 +791,7 @@ function ActivityArea({ detail }: { detail: PersonaDetail }) {
                       {t('personas.history.advancedSummary', {
                         type: t(`personas.history.type.${activity.advanced.activityKind}`),
                         origin: t(`personas.origin.${activity.origin}`),
-                        status: t(`personas.outcome.${activity.outcome}`),
+                        status: t(PERSONA_OUTCOME_KEYS[activity.outcome]),
                       })}
                     </Typography>
                   </Box>
