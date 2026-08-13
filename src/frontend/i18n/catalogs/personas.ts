@@ -176,7 +176,7 @@ export const personasMessageRows = {
   'personas.memory.forgetTitle': m('Forget this memory?'),
   'personas.memory.forgetBody': m('This memory will no longer be used in future work. Its history may remain available for audit or recovery.'),
   'personas.memory.pin': m('Mark important'),
-  'personas.memory.unpin': m('Unmark important'),
+  'personas.memory.unpin': m('Unpin from core'),
   'personas.memory.provenance': m('Why does this Persona remember this?'),
   'personas.memory.addedByYou': m('Added by you.'),
   'personas.memory.suggestedByPersona': m('Suggested from Persona activity and awaiting your review.'),

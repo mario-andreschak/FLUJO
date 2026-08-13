@@ -156,7 +156,7 @@ export default function PersonaFlowsArea({
     }
   };
 
-  const useFlow = (flow: Flow) => complete(async () => {
+  const applyFlow = (flow: Flow) => complete(async () => {
     if (!composition || !picker) throw new Error(t('personas.flows.loadFailed'));
     if (picker.kind === 'core') {
       return personasService.updateComposition(detail.persona.id, {
@@ -272,9 +272,9 @@ export default function PersonaFlowsArea({
     searchText: `${flow.name} ${flow.description ?? ''}`,
     content: (
       <Stack spacing={1.25} sx={{ height: '100%' }}>
-        <FlowCard flow={flow} pickerMode selectionManaged onSelect={() => {}} />
+        <FlowCard flow={flow} selected={false} pickerMode selectionManaged onSelect={() => {}} />
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
-          <Button fullWidth variant="contained" onClick={() => void useFlow(flow)}>
+          <Button fullWidth variant="contained" onClick={() => void applyFlow(flow)}>
             {t('personas.behaviors.useShared')}
           </Button>
           <Button fullWidth variant="outlined" startIcon={<ContentCopyRounded />} onClick={() => void copyFlow(flow)}>

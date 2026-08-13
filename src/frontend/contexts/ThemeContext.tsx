@@ -43,6 +43,17 @@ export interface ThemeContextProps {
 
 const ThemeContext = createContext<ThemeContextProps | undefined>(undefined);
 
+const DEFAULT_THEME_CONTEXT: ThemeContextProps = {
+  toggleTheme: () => undefined,
+  isDarkMode: false,
+  visualStyle: 'modern',
+  livingWorldEnabled: true,
+  themeHydrated: false,
+  setVisualStyle: () => undefined,
+  setLivingWorldEnabled: () => undefined,
+  setThemePreset: () => undefined,
+};
+
 function applyDocumentTheme(mode: ThemeMode, style: VisualThemeStyle) {
   const root = document.documentElement;
   root.classList.toggle('dark-theme', mode === 'dark');
@@ -148,6 +159,10 @@ export const ThemeProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     </ThemeContext.Provider>
   );
 };
+
+export const useOptionalTheme = (): ThemeContextProps => (
+  useContext(ThemeContext) ?? DEFAULT_THEME_CONTEXT
+);
 
 export const useTheme = () => {
   const context = useContext(ThemeContext);

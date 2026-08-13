@@ -27,6 +27,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { TranslationKey } from '@/frontend/i18n/messages';
 import {
   PersonasApiError,
   personasService,
@@ -54,7 +55,7 @@ function memoryBucket(memory: MemoryItem, core: boolean): MemoryBucket | null {
   return core ? 'important' : 'remembered';
 }
 
-function actorKey(memory: MemoryItem) {
+function actorKey(memory: MemoryItem): TranslationKey {
   if (memory.trust === 'explicit_user'
     || memory.sourceRefs.some((source) => source.kind === 'user_statement')) {
     return 'personas.memory.addedByYou';
@@ -346,7 +347,7 @@ export default function PersonaMemoryArea({
                                       }),
                                     })}
                                   </Typography>
-                                  {memory.supersedes.length > 0 && (
+                                  {(memory.supersedes ?? []).length > 0 && (
                                     <Typography variant="body2" color="text.secondary">
                                       {t('personas.memory.correctionHistory')}
                                     </Typography>

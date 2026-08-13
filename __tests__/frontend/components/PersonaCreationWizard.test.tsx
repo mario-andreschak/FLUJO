@@ -42,6 +42,8 @@ jest.mock('@/frontend/contexts/I18nContext', () => ({
       };
       return copy[key] ?? key.replace('{number}', String(values?.number ?? ''));
     },
+    tp: (key: string, count: number) => `${key}:${count}`,
+    formatNumber: (value: number) => String(value),
   }),
 }));
 

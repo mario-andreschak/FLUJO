@@ -89,7 +89,11 @@ const CardPickerDialog: React.FC<CardPickerDialogProps> = ({
     >
       {title !== undefined && title !== null && (
         <>
-          <DialogHeaderActions title={<span id={titleId}>{title}</span>} onClose={onClose} />
+          <DialogHeaderActions
+            title={<span id={titleId}>{title}</span>}
+            onClose={onClose}
+            showAskFlujo={false}
+          />
           <Divider />
         </>
       )}
