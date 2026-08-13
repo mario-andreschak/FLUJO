@@ -6,17 +6,58 @@
 import { SharedState } from './types';
 
 export const SESSION_KEY_MAX_LENGTH = 128;
-const SESSION_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+const UNRESOLVED_SESSION_KEY = /\{\{[^{}]+\}\}|\$\{[^{}]+\}|@\{[^{}]+\}/;
 
-/** Normalize a model/authored session handle. Invalid values deliberately do
- *  not acquire a session, so malformed input falls back to a fresh child. */
+/** Normalize a model/authored session handle. Keys are opaque: retain Unicode,
+ *  delimiters, and interior whitespace so distinct caller values never collapse.
+ *  Only insignificant outer whitespace is removed. Unresolved templates fall
+ *  back to a fresh child rather than becoming a shared literal-key session. */
 export function normalizeSessionKey(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const key = value.trim();
-  if (!key || key.length > SESSION_KEY_MAX_LENGTH || !SESSION_KEY_PATTERN.test(key)) {
+  if (value === undefined || value === null) return undefined;
+  const key = String(value).trim();
+  if (!key || key.length > SESSION_KEY_MAX_LENGTH || UNRESOLVED_SESSION_KEY.test(key)) {
     return undefined;
   }
   return key;
+}
+
+type SessionCoordinatorEntry = {
+  tail: Promise<void>;
+  claims: number;
+};
+
+const sessionCoordinators = new Map<string, SessionCoordinatorEntry>();
+
+/** Claim one reusable child session in FIFO order. The release callback must be
+ *  invoked from a finally block. Entries disappear after their final claimant. */
+export async function acquireSessionExecution(sessionIdentity: string): Promise<() => void> {
+  let entry = sessionCoordinators.get(sessionIdentity);
+  if (!entry) {
+    entry = { tail: Promise.resolve(), claims: 0 };
+    sessionCoordinators.set(sessionIdentity, entry);
+  }
+
+  const predecessor = entry.tail;
+  let resolveClaim!: () => void;
+  entry.tail = new Promise<void>((resolve) => { resolveClaim = resolve; });
+  entry.claims += 1;
+  await predecessor;
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    entry!.claims -= 1;
+    resolveClaim();
+    if (entry!.claims === 0 && sessionCoordinators.get(sessionIdentity) === entry) {
+      sessionCoordinators.delete(sessionIdentity);
+    }
+  };
+}
+
+/** Diagnostic used by focused coordinator tests. */
+export function activeSessionCoordinatorCount(): number {
+  return sessionCoordinators.size;
 }
 
 /** Resolve session identity for a lane based on session scope. */
@@ -34,7 +75,9 @@ export function resolveSessionIdentity(
 
   const normalizedKey = normalizeSessionKey(sessionKey);
   if (sessionScope === 'per-key' && normalizedKey) {
-    return `${parentRunId}::${nodeId}::${normalizedKey}`;
+    // The key component is encoded so opaque values containing `::` cannot
+    // collide with identity delimiters or with one another.
+    return `${parentRunId}::${nodeId}::${encodeURIComponent(normalizedKey)}`;
   }
 
   return undefined;

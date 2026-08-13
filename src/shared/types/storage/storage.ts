@@ -283,13 +283,14 @@ export interface ExperimentalSettings {
    * run, instead of starting a fresh child run every visit (issue #363 Phase
    * 1, gated by #391). Off by default: resumed children inherit their own
    * prior transcript, which changes what the child model sees each visit, so
-   * this stays opt-in until verified on real flows. Only `sessionScope:
-   * 'per-run'` is functional today; `'per-key'` and `sessionInputMode:
-   * 'summary'` are reserved for future phases (#363 Phases 2–3) and currently
-   * behave like `'per-visit'`/`'resume'`. When off, a Subflow node authored
-   * with `sessionScope: 'per-run'` silently falls back to `'per-visit'` —
-   * flipping this flag never breaks an existing flow. A missing value is
-   * treated as disabled.
+   * this stays opt-in until verified on real flows. Both `sessionScope:
+   * 'per-run'` and `'per-key'` are functional; per-key sessions reuse one child
+   * conversation for equal resolved keys and serialise same-key execution while
+   * allowing different keys to proceed concurrently (#388). `sessionInputMode:
+   * 'summary'` remains reserved for Phase 3 and currently behaves like `resume`.
+   * When off, reusable scopes silently fall back to `'per-visit'`, so flipping
+   * this flag never breaks an existing flow. A missing value is treated as
+   * disabled.
    */
   subflowSessions?: boolean;
   /**

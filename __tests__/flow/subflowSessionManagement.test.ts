@@ -1,4 +1,6 @@
 import {
+  acquireSessionExecution,
+  activeSessionCoordinatorCount,
   normalizeSessionKey,
   resolveSessionConversationId,
   resolveSessionIdentity,
@@ -27,11 +29,21 @@ describe('resumable Subflow session registry', () => {
     expect(resolveSessionIdentity('run-1', 'sub', 'per-key', undefined)).toBeUndefined();
   });
 
-  it('accepts bounded opaque keys and rejects unsafe/malformed values', () => {
+  it('accepts bounded opaque keys while rejecting empty and unresolved values', () => {
     expect(normalizeSessionKey('  scene_2:review.v1  ')).toBe('scene_2:review.v1');
-    expect(normalizeSessionKey('contains spaces')).toBeUndefined();
-    expect(normalizeSessionKey('../path')).toBeUndefined();
+    expect(normalizeSessionKey('contains spaces')).toBe('contains spaces');
+    expect(normalizeSessionKey('../路径/🎬')).toBe('../路径/🎬');
+    expect(normalizeSessionKey('  ')).toBeUndefined();
+    expect(normalizeSessionKey('{{scene_id}}')).toBeUndefined();
     expect(normalizeSessionKey('x'.repeat(129))).toBeUndefined();
+  });
+
+  it('encodes opaque key components so delimiters and Unicode cannot collide', () => {
+    const delimited = resolveSessionIdentity('run-1', 'sub', 'per-key', 'a::b');
+    const unicode = resolveSessionIdentity('run-1', 'sub', 'per-key', '场景/🎬');
+    expect(delimited).toBe('run-1::sub::a%3A%3Ab');
+    expect(unicode).toBe(`run-1::sub::${encodeURIComponent('场景/🎬')}`);
+    expect(delimited).not.toBe(unicode);
   });
 
   it('reuses one conversation for the same key and keeps different keys independent', () => {
@@ -54,5 +66,26 @@ describe('resumable Subflow session registry', () => {
       visits: 1,
       status: 'running',
     });
+  });
+
+  it('serialises cold-start acquisition in FIFO order and removes the idle coordinator', async () => {
+    const state = parentState();
+    const identity = resolveSessionIdentity('logical-run-1', 'sub', 'per-key', 'shared')!;
+    const firstRelease = await acquireSessionExecution(identity);
+    const order: number[] = [1];
+    const second = acquireSessionExecution(identity).then((release) => {
+      order.push(2);
+      const result = resolveSessionConversationId(state, identity, 'sub', 'shared');
+      release();
+      return result;
+    });
+
+    const first = resolveSessionConversationId(state, identity, 'sub', 'shared');
+    firstRelease();
+    const resumed = await second;
+
+    expect(order).toEqual([1, 2]);
+    expect(resumed).toEqual({ conversationId: first.conversationId, resumedVisit: true });
+    expect(activeSessionCoordinatorCount()).toBe(0);
   });
 });

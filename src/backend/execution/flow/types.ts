@@ -599,8 +599,11 @@ export interface SubflowLanePlan {
     laneId?: string;
     /** Stable child conversation id reused by every recovery attempt. */
     conversationId?: string;
-    /** Resolved per-key session handle for this job. Reusing the same key in a
-     *  later visit resumes this lane's child conversation as a new turn. */
+    /** Optional handoff value, kept separate so it can override an authored
+     *  per-key template after lane-specific resolution. */
+    callerSessionKey?: string;
+    /** Canonical resolved per-key session handle for this job. Reusing the same
+     *  key resumes this lane's child conversation as a serialised new turn. */
     sessionKey?: string;
 }
 

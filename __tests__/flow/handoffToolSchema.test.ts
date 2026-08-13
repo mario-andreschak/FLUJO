@@ -97,7 +97,7 @@ describe('ProcessNode.generateHandoffTools — queued Subflow jobs', () => {
       nodes: [{
         id: 'sub-keyed',
         type: 'subflow',
-        data: { properties: { sessionScope: 'per-key', saveConversation: true } },
+        data: { properties: { sessionScope: 'per-key', sessionKey: '{{scene_id}}', saveConversation: true } },
       }],
     });
     const sharedState = {
@@ -121,6 +121,7 @@ describe('ProcessNode.generateHandoffTools — queued Subflow jobs', () => {
       type: 'string',
       maxLength: 128,
     });
+    expect(tools[0].inputSchema.required).not.toContain('sessionKey');
     expect(tools[0].description).toContain('follow-up');
     expect(tools[0].description).toContain('writer-main');
   });

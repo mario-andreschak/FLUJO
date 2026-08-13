@@ -16,7 +16,8 @@ import { FEATURES } from '@/config/features';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
-import { resolveRunVars } from '@/utils/shared/resolveRunVars';
+import { resolveDataTemplate, resolveRunVars } from '@/utils/shared/resolveRunVars';
+import { resolvePromptDynamicReferences } from '@/backend/utils/resolveDynamicReferences';
 import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
 import { resolveKvNodeRefs, captureKvValue } from '../resolveKvNodeRefs';
 import {
@@ -36,6 +37,7 @@ import {
   syncLaneFromPersistedChild,
 } from '../subflowRecovery';
 import {
+  acquireSessionExecution,
   normalizeSessionKey,
   resolveSessionIdentity,
   resolveSessionConversationId,
@@ -331,6 +333,7 @@ function prepFromInvocation(
       laneTitle: lane.laneTitle,
       laneId: lane.id,
       conversationId: lane.conversationId,
+      callerSessionKey: lane.callerSessionKey,
       sessionKey: lane.sessionKey,
     })),
     concurrencyLimit: invocation.concurrencyLimit,
@@ -409,6 +412,7 @@ async function attachDurableInvocation(
     laneTitle: lane.laneTitle,
     laneId: lane.id,
     conversationId: lane.conversationId,
+    callerSessionKey: lane.callerSessionKey,
     sessionKey: lane.sessionKey,
   }));
 
@@ -458,9 +462,16 @@ async function resolveSubflowTemplate(
   text: string,
   sharedState: SharedState,
   nodeId: string | undefined,
+  templateValues?: Record<string, unknown>,
 ): Promise<string> {
+  const mergedValues = { ...(sharedState.variables ?? {}), ...(templateValues ?? {}) };
+  const runVariables = Object.fromEntries(
+    Object.entries(mergedValues)
+      .filter(([, value]) => ['string', 'number', 'boolean'].includes(typeof value))
+      .map(([key, value]) => [key, String(value)]),
+  );
   let resolved = await resolveRunResourceRefs(
-    resolveRunVars(text, sharedState.variables),
+    resolveRunVars(resolveDataTemplate(text, mergedValues), runVariables),
     sharedState.ephemeral ? undefined : sharedState.conversationId,
     sharedState.emit,
     nodeId ? { nodeId, nodeType: 'subflow' } : undefined,
@@ -483,7 +494,37 @@ async function resolveSubflowTemplate(
       personaAttribution: sharedState.personaAttribution,
     });
   }
+  if (templateValues !== undefined) {
+    const dynamic = await resolvePromptDynamicReferences(resolved, {
+      flowId: sharedState.flowId,
+      conversationId: sharedState.conversationId,
+      nodeId,
+    });
+    resolved = String(dynamic ?? '');
+  }
   return resolved;
+}
+
+/** Extract lane-local JSON fields for `{{field}}` resolution. Plain-text lanes
+ * still expose their value as `{{item}}`; structured objects retain nesting. */
+function laneTemplateValues(lane: SubflowLanePlan): Record<string, unknown> {
+  const input = lane.input;
+  let text: string | undefined;
+  if (input && 'prompt' in input) {
+    text = input.prompt;
+  } else if (input && 'messages' in input) {
+    const latest = [...input.messages].reverse().find((message) => hasContent(message.content));
+    text = latest ? messageText(latest.content) : undefined;
+  }
+  if (text) {
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return { ...(parsed as Record<string, unknown>), item: parsed, laneIndex: lane.itemIndex };
+      }
+    } catch { /* a normal text lane */ }
+  }
+  return { item: text ?? '', laneIndex: lane.itemIndex };
 }
 
 /**
@@ -796,7 +837,10 @@ export class SubflowNode extends BaseNode {
       );
       prepResult.lanes = resolvedBriefs.map((brief, i) => {
         const hasBrief = brief.trim().length > 0;
-        const callerSessionKey = normalizeSessionKey(callerSessionKeys?.[i]);
+        const suppliedKey = callerSessionKeys?.[i];
+        const callerSessionKey = typeof suppliedKey === 'string' && suppliedKey.trim()
+          ? suppliedKey
+          : undefined;
         return {
           subflowId,
           subflowName,
@@ -818,7 +862,7 @@ export class SubflowNode extends BaseNode {
           itemIndex: i,
           itemCount: resolvedBriefs.length,
           laneTitle: hasBrief ? buildConversationTitle(brief) : subflowName,
-          ...(callerSessionKey ? { sessionKey: callerSessionKey } : {}),
+          ...(callerSessionKey ? { callerSessionKey } : {}),
         };
       });
       prepResult.concurrencyLimit = Math.max(1, callerConcurrency ?? node_params?.properties?.concurrencyLimit ?? 4);
@@ -929,28 +973,35 @@ export class SubflowNode extends BaseNode {
       prepResult.errorStrategy = 'collect-all';
     }
 
-    // Resolve an authored per-key handle after the lane plan exists. A caller
-    // supplied key wins; otherwise the template may use the same run-variable /
-    // resource / kv references as a Subflow prompt. Invalid/empty keys safely
-    // fall back to a fresh per-visit child for that lane.
-    if (
-      prepResult.sessionScope === 'per-key'
-      && prepResult.sessionKeyTemplate?.trim()
-      && prepResult.lanes?.length
-    ) {
-      const authoredKey = normalizeSessionKey(
-        await resolveSubflowTemplate(prepResult.sessionKeyTemplate, sharedState, node_params?.id),
-      );
-      if (authoredKey) {
-        prepResult.lanes = prepResult.lanes.map((lane) => ({
-          ...lane,
-          sessionKey: lane.sessionKey ?? authoredKey,
-        }));
-      } else {
-        log.warn('Subflow sessionKey template resolved to an invalid key; using fresh child conversations', {
-          nodeId: node_params?.id,
-        });
-      }
+    // Resolve one canonical key per lane. A non-empty handoff key wins over the
+    // authored template; templates see run variables, dynamic references, and
+    // lane-local JSON fields such as `{{scene_id}}`. Missing/unresolved values
+    // deliberately remain per-visit and never collapse into an empty session.
+    if (prepResult.sessionScope === 'per-key' && prepResult.lanes?.length) {
+      prepResult.lanes = await Promise.all(prepResult.lanes.map(async (lane, laneIndex) => {
+        const callerKey = normalizeSessionKey(lane.callerSessionKey);
+        const template = prepResult.sessionKeyTemplate?.trim();
+        const templateKey = !callerKey && template
+          ? normalizeSessionKey(await resolveSubflowTemplate(
+              template,
+              sharedState,
+              node_params?.id,
+              laneTemplateValues(lane),
+            ))
+          : undefined;
+        const resolvedKey = callerKey ?? templateKey;
+        const { sessionKey: _previousKey, ...baseLane } = lane;
+        if (!resolvedKey) {
+          log.debug('Per-key Subflow lane has no concrete session key; using per-visit execution', {
+            nodeId: node_params?.id,
+            laneIndex,
+            callerKeyProvided: Boolean(lane.callerSessionKey),
+            templateConfigured: Boolean(template),
+          });
+          return baseLane;
+        }
+        return { ...baseLane, sessionKey: resolvedKey };
+      }));
     }
 
     await attachDurableInvocation(sharedState, prepResult);
@@ -1404,6 +1455,11 @@ export async function runSubflowLanes(
     let cursor = 0;
     let aborted = false;
 
+    // Cancellation is checked before a queue claim and again after a lane has
+    // waited for keyed ownership, so cancelled work never starts late.
+    const parentChainCancelled = (): boolean =>
+      isCancelledByAncestry(prepResult.parentRunId, FlowExecutor.conversationStates);
+
     const runLane = async (i: number): Promise<void> => {
       const lane = lanes[i];
       // Pre-generate the lane's conversation id so the live view can deep-link
@@ -1426,6 +1482,15 @@ export async function runSubflowLanes(
             lane.sessionKey,
           )
         : undefined;
+
+      const releaseSession = sessionIdentity
+        ? await acquireSessionExecution(sessionIdentity)
+        : undefined;
+      try {
+        if (parentChainCancelled()) {
+          aborted = true;
+          return;
+        }
 
       let laneConversationId: string | undefined;
       let resumedVisit = false;
@@ -1626,14 +1691,30 @@ export async function runSubflowLanes(
       if (!results[i]!.success && errorStrategy === 'fail-fast') {
         aborted = true; // stop the pool from starting any further lanes
       }
+      } finally {
+        releaseSession?.();
+      }
     };
 
-    // Cancellation guard for the pool (issue #109): once the parent run (or any
-    // ancestor) is cancelled, workers stop pulling NEW lanes. In-flight lanes
-    // terminate at their own runFlow cancellation guard (each child walks the
-    // same ancestor chain).
-    const parentChainCancelled = (): boolean =>
-      isCancelledByAncestry(prepResult.parentRunId, FlowExecutor.conversationStates);
+    // Build one FIFO queue per reusable session identity. This prevents a busy
+    // key's waiters from occupying every bounded worker while another key is
+    // runnable. Per-visit lanes get unique queues and keep legacy concurrency.
+    const queueMap = new Map<string, number[]>();
+    lanes.forEach((lane, index) => {
+      const identity = subflowSessionsEnabled && prepResult.persistConversation
+        ? resolveSessionIdentity(
+            parentState?.logicalRunId ?? prepResult.parentRunId,
+            prepResult.nodeId,
+            prepResult.sessionScope,
+            lane.sessionKey,
+          )
+        : undefined;
+      const queueKey = identity ?? `per-visit:${index}`;
+      const queue = queueMap.get(queueKey) ?? [];
+      queue.push(index);
+      queueMap.set(queueKey, queue);
+    });
+    const laneQueues = [...queueMap.values()];
 
     const worker = async (): Promise<void> => {
       for (;;) {
@@ -1642,13 +1723,19 @@ export async function runSubflowLanes(
           aborted = true;
           return;
         }
-        const i = cursor++;
-        if (i >= laneCount) return;
-        await runLane(i);
+        const queue = laneQueues[cursor++];
+        if (!queue) return;
+        for (const i of queue) {
+          if (aborted || parentChainCancelled()) {
+            aborted = true;
+            return;
+          }
+          await runLane(i);
+        }
       }
     };
 
-    const poolSize = Math.min(concurrencyLimit, laneCount);
+    const poolSize = Math.min(concurrencyLimit, laneQueues.length);
     await Promise.all(Array.from({ length: poolSize }, () => worker()));
 
     // Filter preserves array index order => deterministic child-order join.

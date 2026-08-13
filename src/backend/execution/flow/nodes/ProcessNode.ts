@@ -299,8 +299,7 @@ export class ProcessNode extends BaseNode {
         subflowSessionsEnabled &&
         target.type === 'subflow' &&
         targetProps?.sessionScope === 'per-key' &&
-        targetProps?.saveConversation !== false &&
-        !(targetProps.sessionKey?.trim());
+        targetProps?.saveConversation !== false;
 
       const paramProps: Record<string, unknown> = {};
       const requiredParams: string[] = [];
@@ -345,8 +344,7 @@ export class ProcessNode extends BaseNode {
           type: 'string',
           minLength: 1,
           maxLength: 128,
-          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$',
-          description: 'Stable child-conversation handle. Use a new value to start a new child chat; reuse the exact same value to send this task as a follow-up to that finished child chat.'
+          description: 'Stable child-conversation handle. It overrides the authored key template for this job. Equal keys reuse and serialise access to one child chat; different keys may run concurrently.'
         };
         const knownKeys = Object.values(sharedState.subflowSessions ?? {})
           .filter((session) => session.nodeId === target.id && !!session.sessionKey)
@@ -354,7 +352,7 @@ export class ProcessNode extends BaseNode {
           .slice(0, 20)
           .map((session) => session.sessionKey as string);
         descExtras.push(
-          'PERSISTENT CHILD CHAT: pass a stable "sessionKey". A new key creates a child conversation; reusing that key appends "task" as a follow-up to the same finished child conversation, preserving its transcript. Omit the key for a fresh one-off child.',
+          'PERSISTENT CHILD CHAT: optionally pass a stable "sessionKey". It overrides the authored key template for this job. Reusing a key appends "task" as a serialised follow-up to the same finished child conversation; different keys can run concurrently. If neither caller nor template resolves a key, the job uses a fresh one-off child.',
         );
         if (knownKeys.length > 0) {
           descExtras.push(`Existing resumable session keys for this sub-agent: ${knownKeys.map((key) => JSON.stringify(key)).join(', ')}.`);
