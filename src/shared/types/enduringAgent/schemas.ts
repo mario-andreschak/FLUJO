@@ -530,6 +530,11 @@ export const CreatePersonaAppGrantInputSchema = z.object({
 }).strict();
 
 export const PersonaAppLaunchInputSchema = z.object({
+export const ReplacePersonaAppGrantInputSchema = z.object({
+  mcpServerName: McpServerConfigNameSchema,
+  expectedUpdatedAt: TimestampSchema,
+}).strict();
+
   uri: z.string().min(1).max(4096).regex(/^ui:\/\//i),
 }).strict();
 

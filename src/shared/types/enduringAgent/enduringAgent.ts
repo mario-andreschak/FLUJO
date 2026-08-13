@@ -456,6 +456,12 @@ export interface CreatePersonaAppGrantInput {
 }
 
 export interface PersonaAppLaunchInput {
+/** Compare-and-swap input for replacing one exact Persona App configuration. */
+export interface ReplacePersonaAppGrantInput {
+  mcpServerName: string;
+  expectedUpdatedAt: number;
+}
+
   /** MCP Apps resource selected from the granted config's live discovery. */
   uri: string;
 }
