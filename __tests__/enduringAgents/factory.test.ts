@@ -196,9 +196,11 @@ describe('createPersonaFromRole', () => {
         lifecycleState: 'idle',
         provisioningState: 'ready',
       });
-      const coreFlow = await flowService.getFlow(
-        bundle.persona.composition!.coreFlowRef,
-      );
+      const coreFlowRef = bundle.persona.composition?.coreFlowRef;
+      if (!coreFlowRef) {
+        throw new Error('Expected Persona composition to contain a coreFlowRef.');
+      }
+      const coreFlow = await flowService.getFlow(coreFlowRef);
       expect(coreFlow).toMatchObject({
         personaOwnership: {
           personaId: bundle.persona.id,
@@ -206,8 +208,8 @@ describe('createPersonaFromRole', () => {
         },
       });
       expect(coreFlow!.nodes
-        .filter((candidate) => candidate.data.type === 'process')
-        .map((candidate) => candidate.data.properties?.boundModel))
+        .filter((candidate: FlowNode) => candidate.data.type === 'process')
+        .map((candidate: FlowNode) => candidate.data.properties?.boundModel))
         .toEqual(expect.arrayContaining(['model-test']));
       expect(bundle.behaviorBindings.map((binding) => binding.slotKey).sort()).toEqual([
         'maintain_memory',
@@ -217,16 +219,22 @@ describe('createPersonaFromRole', () => {
       expect(bundle.behaviorRevisions).toHaveLength(2);
       const roleVersion = await getRoleVersion(BUILT_IN_DEVELOPER_ROLE_VERSION_ID);
       expect(roleVersion).not.toBeNull();
-      expect(roleVersion!.coreTemplate!.nodes
-        .filter((candidate) => candidate.data.type === 'process')
-        .every((candidate) => candidate.data.properties?.boundModel === undefined))
+      expect(roleVersion!.coreFlowTemplate!.nodes
+        .filter((candidate: FlowNode) => candidate.data.type === 'process')
+        .every((candidate: FlowNode) => (
+          candidate.data.properties?.boundModel === undefined
+        )))
         .toBe(true);
       for (const binding of bundle.behaviorBindings) {
         const revision = bundle.behaviorRevisions.find(
-          (candidate) => candidate.id === binding.activeRevisionId,
+          (candidate: typeof bundle.behaviorRevisions[number]) => (
+            candidate.id === binding.activeRevisionId
+          ),
         )!;
         const slot = roleVersion!.behaviorSlots.find(
-          (candidate) => candidate.key === binding.slotKey,
+          (candidate: RoleVersion['behaviorSlots'][number]) => (
+            candidate.key === binding.slotKey
+          ),
         )!;
         expect(revision).toMatchObject({
           behaviorId: binding.id,
