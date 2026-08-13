@@ -15,7 +15,13 @@ export function personaDomainErrorResponse(error: unknown): NextResponse | null 
     return NextResponse.json({ error: error.message }, { status: 404 });
   }
   if (error instanceof PersonaDomainBusyError || error instanceof PersonaDomainConflictError) {
-    return NextResponse.json({ error: error.message }, { status: 409 });
+    return NextResponse.json({
+      error: error.message,
+      code: error.code,
+      ...(error instanceof PersonaDomainConflictError && error.details
+        ? { details: error.details }
+        : {}),
+    }, { status: 409 });
   }
   return null;
 }

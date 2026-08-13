@@ -23,7 +23,12 @@ import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 const BASE = '/v1/personas';
 
 export class PersonasApiError extends Error {
-  constructor(readonly status: number, message: string) {
+  constructor(
+    readonly status: number,
+    message: string,
+    readonly code?: string,
+    readonly details?: Record<string, unknown>,
+  ) {
     super(message);
     this.name = 'PersonasApiError';
   }
@@ -103,11 +108,20 @@ export interface StartPersonaConversationInput {
 async function parse<T>(response: Response | Promise<Response>): Promise<T> {
   response = await response;
   if (response.status === 204) return undefined as T;
-  const body = await response.json().catch(() => null) as { error?: unknown } | null;
+  const body = await response.json().catch(() => null) as {
+    error?: unknown;
+    code?: unknown;
+    details?: unknown;
+  } | null;
   if (!response.ok) {
+    const details = body?.details;
     throw new PersonasApiError(
       response.status,
       typeof body?.error === 'string' ? body.error : `Persona request failed (HTTP ${response.status}).`,
+      typeof body?.code === 'string' ? body.code : undefined,
+      details !== null && typeof details === 'object' && !Array.isArray(details)
+        ? details as Record<string, unknown>
+        : undefined,
     );
   }
   return body as T;
@@ -157,6 +171,29 @@ class PersonasService {
     });
     if (query?.trim()) params.set('q', query.trim());
     return parse(fetch(withWorkspaceUrl(`${personaPath(personaId, '/memories')}?${params}`)));
+  }
+
+  createMemory(
+    personaId: string,
+    input: { content: string; requestId: string },
+  ): Promise<MemoryItem> {
+    const observedAt = Date.now();
+    return jsonRequest(personaPath(personaId, '/memories'), 'POST', {
+      id: input.requestId,
+      personaId,
+      kind: 'semantic',
+      scope: 'persona',
+      content: input.content,
+      confidence: 1,
+      importance: 0.5,
+      status: 'active',
+      trust: 'explicit_user',
+      sourceRefs: [{
+        kind: 'user_statement',
+        id: `persona-desk-create-${input.requestId}`,
+        observedAt,
+      }],
+    });
   }
 
   activateMemory(personaId: string, memoryId: string): Promise<MemoryItem> {
@@ -239,6 +276,18 @@ class PersonasService {
       personaId,
       `/app-grants/${encodeURIComponent(grantId)}`,
     ), 'DELETE');
+  }
+
+  replaceApp(
+    personaId: string,
+    grantId: string,
+    mcpServerName: string,
+    expectedUpdatedAt: number,
+  ): Promise<PersonaAppGrant> {
+    return jsonRequest(personaPath(
+      personaId,
+      `/app-grants/${encodeURIComponent(grantId)}`,
+    ), 'PATCH', { mcpServerName, expectedUpdatedAt });
   }
 
   authorizeAppLaunch(

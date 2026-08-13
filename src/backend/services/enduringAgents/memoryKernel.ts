@@ -254,7 +254,11 @@ export async function correctMemory(
       throw new PersonaDomainConflictError('Forgotten memory cannot be corrected in place.');
     }
     if (parsed.expectedUpdatedAt !== undefined && parsed.expectedUpdatedAt !== original.updatedAt) {
-      throw new PersonaDomainConflictError('Memory changed since it was inspected.');
+      throw new PersonaDomainConflictError(
+        'Memory changed since it was inspected.',
+        'memory_changed',
+        { currentUpdatedAt: original.updatedAt },
+      );
     }
     const invokedByFlow = Boolean(options.executionAuthority);
     const correction = await createMemoryWithinMutation({
@@ -374,7 +378,14 @@ export async function pinMemoryToCore(
     const role = await getRoleVersion(persona.roleVersionId);
     const maxItems = role?.defaults?.memory?.coreMemoryMaxItems ?? 32;
     if (ids.length > maxItems) {
-      throw new PersonaDomainConflictError(`Core memory is limited to ${maxItems} items.`);
+      throw new PersonaDomainConflictError(
+        `Core memory is limited to ${maxItems} items.`,
+        'core_memory_capacity',
+        {
+          maxCoreItems: maxItems,
+          currentCoreItems: persona.coreMemoryItemIds?.length ?? 0,
+        },
+      );
     }
     if (ids.length !== (persona.coreMemoryItemIds ?? []).length) {
       await updatePersona({

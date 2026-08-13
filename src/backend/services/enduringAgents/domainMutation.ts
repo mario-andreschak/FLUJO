@@ -21,9 +21,11 @@ export class PersonaDomainNotFoundError extends Error {
 }
 
 export class PersonaDomainConflictError extends Error {
-  readonly code = 'PERSONA_DOMAIN_CONFLICT';
-
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly code = 'PERSONA_DOMAIN_CONFLICT',
+    readonly details?: Record<string, unknown>,
+  ) {
     super(message);
     this.name = 'PersonaDomainConflictError';
   }

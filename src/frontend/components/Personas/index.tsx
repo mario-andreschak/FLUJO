@@ -9,9 +9,7 @@ import {
   CheckCircleOutlineRounded,
   EditRounded,
   HistoryRounded,
-  MemoryRounded,
   OpenInNewRounded,
-  PushPinRounded,
   RefreshRounded,
   ReplayRounded,
   SettingsRounded,
@@ -56,6 +54,7 @@ import CardPickerGrid from '@/frontend/components/shared/CardPickerGrid';
 import FlowCard from '@/frontend/components/Flow/FlowDashboard/FlowCard';
 import RoleVersionCard from './RoleVersionCard';
 import PersonaDetailShell from './PersonaDetailShell';
+import PersonaMemoryArea from './PersonaMemoryArea';
 import PersonaSetup from './PersonaSetup';
 import PersonasGallery from './PersonasGallery';
 import { invalidatePersonaSummaryCache } from './personaQueries';
@@ -75,7 +74,6 @@ import {
   PERSONA_WORK_ITEM_STATUSES,
   type BehaviorBinding,
   type BehaviorRevision,
-  type MemoryItem,
   type PersonaActivity,
   type PersonaPriority,
   type PersonaWorkItem,
@@ -217,7 +215,7 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
                 </PersonaSetup>
               )}
               {area === 'memory' && (
-                <MemoryArea detail={selected} busy={busy} mutate={mutate} />
+                <PersonaMemoryArea detail={selected} busy={busy} refresh={refreshSelected} />
               )}
               {area === 'conversations' && (
                 <TalkArea
@@ -458,44 +456,6 @@ function WorkItemDialog({ draft, items, busy, onChange, onClose, onSave }: { dra
       </Stack></DialogContent>
       <DialogActions><Button onClick={onClose}>{t('personas.action.cancel')}</Button><Button variant="contained" disabled={busy || !draft.title.trim()} onClick={onSave}>{t('personas.action.save')}</Button></DialogActions>
     </Dialog>
-  );
-}
-
-function MemoryArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolean; mutate: (action: () => Promise<unknown>, success?: string) => Promise<void> }) {
-  const { t, formatDate } = useI18n();
-  const [query, setQuery] = useState('');
-  const [correction, setCorrection] = useState<MemoryItem | null>(null);
-  const [content, setContent] = useState('');
-  const coreIds = new Set(detail.persona.coreMemoryItemIds ?? []);
-  const memories = detail.memoryItems.filter((memory) => memory.content.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())).sort((a, b) => b.updatedAt - a.updatedAt);
-  const groups = ['candidate', 'active', 'superseded', 'forgotten'] as const;
-  return (
-    <AreaShell title={t('personas.memory.title')} icon={<MemoryRounded />} action={<TextField size="small" label={t('personas.memory.search')} value={query} onChange={(event) => setQuery(event.target.value)} />}>
-      {memories.length === 0 ? <Typography color="text.secondary">{t('personas.memory.empty')}</Typography> : (
-        <Stack spacing={3}>
-          {groups.map((status) => {
-            const items = memories.filter((memory) => memory.status === status);
-            if (items.length === 0) return null;
-            return <Box key={status}><Typography variant="overline" color="text.secondary" fontWeight={800}>{status === 'candidate' ? 'Proposed' : humanize(status)} · {items.length}</Typography><Stack spacing={1.25} sx={{ mt: 0.75 }}>{items.map((memory) => {
-              const core = coreIds.has(memory.id);
-              const canPin = memory.status === 'active' && (memory.trust === 'explicit_user' || memory.trust === 'verified_tool');
-              return <Card key={memory.id} variant="outlined" sx={{ borderRadius: 3 }}><CardContent>
-                <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={1}><Typography sx={{ whiteSpace: 'pre-wrap' }}>{memory.content}</Typography><Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap justifyContent="flex-end"><Chip size="small" color={statusColor(memory.status)} label={humanize(memory.status)} />{core && <Chip size="small" color="primary" icon={<PushPinRounded />} label={t('personas.memory.core')} />}</Stack></Stack>
-                <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ mt: 1.5 }}><Chip size="small" variant="outlined" label={humanize(memory.kind)} /><Chip size="small" variant="outlined" label={humanize(memory.scope)} /><Chip size="small" variant="outlined" label={humanize(memory.trust)} /><Chip size="small" variant="outlined" label={`Confidence ${Math.round(memory.confidence * 100)}%`} /></Stack>
-                <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>{t('personas.memory.sources')}: {memory.sourceRefs.map((source) => `${humanize(source.kind)} · ${source.id}`).join(' | ')}</Typography>
-                <Typography variant="caption" color="text.secondary">Updated {formatDate(memory.updatedAt, { dateStyle: 'medium', timeStyle: 'short' })}</Typography>
-              </CardContent><CardActions>
-                {memory.status === 'candidate' && <Button disabled={busy} onClick={() => void mutate(() => personasService.activateMemory(detail.persona.id, memory.id))}>{t('personas.memory.activate')}</Button>}
-                {memory.status !== 'forgotten' && <Button startIcon={<EditRounded />} onClick={() => { setCorrection(memory); setContent(memory.content); }}>{t('personas.memory.correct')}</Button>}
-                {memory.status !== 'forgotten' && <Button color="error" disabled={busy} onClick={() => { if (window.confirm('Forget this memory?')) void mutate(() => personasService.forgetMemory(detail.persona.id, memory.id)); }}>{t('personas.memory.forget')}</Button>}
-                {canPin && <Button disabled={busy} startIcon={<PushPinRounded />} onClick={() => void mutate(() => personasService.pinMemory(detail.persona.id, memory.id, !core))}>{core ? t('personas.memory.unpin') : t('personas.memory.pin')}</Button>}
-              </CardActions></Card>;
-            })}</Stack></Box>;
-          })}
-        </Stack>
-      )}
-      <Dialog open={Boolean(correction)} onClose={() => setCorrection(null)} fullWidth maxWidth="sm"><DialogTitle>{t('personas.memory.correct')}</DialogTitle><DialogContent dividers><TextField fullWidth multiline minRows={5} value={content} onChange={(event) => setContent(event.target.value)} /></DialogContent><DialogActions><Button onClick={() => setCorrection(null)}>{t('personas.action.cancel')}</Button><Button variant="contained" disabled={busy || !content.trim()} onClick={() => { if (!correction) return; void mutate(() => personasService.correctMemory(detail.persona.id, correction, content)).then(() => setCorrection(null)); }}>{t('personas.action.save')}</Button></DialogActions></Dialog>
-    </AreaShell>
   );
 }
 
