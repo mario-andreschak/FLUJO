@@ -116,7 +116,7 @@ async function POST_handler(
   // snapshot themselves, so the trusted boundary must precede those effects.
   const responseState = await loadConversationState(conversationId);
   if (isPersonaOwnedConversationState(responseState)) {
-    const notLoopback = assertLocalRequest(request);
+    const notLoopback = assertLocalRequest(request, { strictLoopback: true });
     if (notLoopback) return notLoopback;
   }
   if (responseState?.personaArchived) {
@@ -224,7 +224,7 @@ async function POST_handler(
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }
     if (isPersonaOwnedConversationState(sharedState)) {
-      const notLoopback = assertLocalRequest(request);
+      const notLoopback = assertLocalRequest(request, { strictLoopback: true });
       if (notLoopback) return notLoopback;
     }
     if (sharedState.personaArchived) {

@@ -341,6 +341,28 @@ function makeHarness(
     if (activity) Object.assign(activity, updated);
     return updated;
   });
+  const persistPersonaActivitySnapshot = jest.fn(async (value: unknown) => {
+    const input = value as Record<string, unknown>;
+    const activity = routedClaims.find((candidate) => candidate.activity.id === input.activityId)?.activity;
+    if (!activity) throw new Error('Activity snapshot target was not found.');
+    return {
+      ...activity,
+      coreFlowId: input.coreFlowId,
+      coreFlowRevisionId: input.coreFlowRevisionId,
+      coreAppRefs: input.coreAppRefs,
+      instructionContext: input.instructionContext,
+      instructionContextDigest: input.instructionContextDigest,
+      instructionContextSchemaVersion: input.instructionContextSchemaVersion,
+      entryPointPayloadRef: input.entryPointPayloadRef,
+      updatedAt: Date.now(),
+    } as PersonaActivity;
+  });
+  const snapshotPersonaCoreAppRefs = jest.fn(async () => []);
+  const projectPersonaCoreAppsIntoFlow = jest.fn(async (
+    _personaId: string,
+    _coreAppRefs: unknown,
+    flowDefinition: BehaviorRevision['flowSnapshot'],
+  ) => flowDefinition);
   const listPendingPersonaActivityDeliveries = jest.fn(async (value: unknown) => {
     const fence = value as Record<string, unknown>;
     return [...mailboxItems.values()].filter((item) => (
@@ -438,6 +460,7 @@ function makeHarness(
     completePersonaActivityWithinRuntimeLock,
     observeCompletedPersonaActivity,
     updatePersonaActivityReferences,
+    persistPersonaActivitySnapshot,
     listPendingPersonaActivityDeliveries,
     acknowledgePersonaActivityDelivery,
     rejectPersonaActivityDelivery,
@@ -451,6 +474,8 @@ function makeHarness(
     getPersonaActivity,
     getPersonaMailboxItem,
     getCoreMemory: jest.fn(async () => []),
+    snapshotPersonaCoreAppRefs,
+    projectPersonaCoreAppsIntoFlow,
     readConversationLog,
     runFlow,
   };
