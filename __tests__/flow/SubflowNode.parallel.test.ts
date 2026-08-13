@@ -20,6 +20,7 @@ jest.mock('@/backend/services/flow/index', () => ({
 
 import { SubflowNode } from '@/backend/execution/flow/nodes/SubflowNode';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
+import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { ERROR_ACTION } from '@/backend/execution/flow/types';
 import type { SharedState, SubflowNodeParams } from '@/backend/execution/flow/types';
 
@@ -104,10 +105,18 @@ describe('SubflowNode fan-out (issue #102)', () => {
     const releaseFirstA = deferred();
     const bStarted = deferred();
     const started: string[] = [];
+    const events: Array<Record<string, unknown>> = [];
+    const laneInputs: Array<Record<string, unknown>> = [];
     let activeA = 0;
     let maxActiveA = 0;
-    runFlowMock.mockImplementation(async ({ prompt }: { prompt: string }) => {
+    runFlowMock.mockImplementation(async ({ prompt, emit, lane }: {
+      prompt: string;
+      emit?: (event: Record<string, unknown>) => void;
+      lane?: Record<string, unknown>;
+    }) => {
       started.push(prompt);
+      laneInputs.push(lane ?? {});
+      emit?.({ type: 'run:start', flowId: 'child' });
       if (prompt.startsWith('a')) {
         activeA += 1;
         maxActiveA = Math.max(maxActiveA, activeA);
@@ -116,17 +125,20 @@ describe('SubflowNode fan-out (issue #102)', () => {
       } else {
         bStarted.resolve();
       }
+      emit?.({ type: 'run:done', status: 'completed' });
       return { status: 'completed', outputText: prompt };
     });
 
     const node = makeNode();
     const shared = makeShared({
+      emit: (event: Record<string, unknown>) => events.push(event),
       handoffInput: {
         targetNodeId: 'sub-1',
         tasks: ['a1', 'a2', 'b'],
         sessionKeys: ['same', 'same', 'other'],
       },
     });
+    FlowExecutor.conversationStates.set(shared.conversationId!, shared);
     const prep = await node.prep(shared, makeParams({
       subflowId: 'child',
       sessionScope: 'per-key',
@@ -146,6 +158,24 @@ describe('SubflowNode fan-out (issue #102)', () => {
     expect(started).toEqual(['a1', 'b', 'a2']);
     expect(maxActiveA).toBe(1);
     expect(exec.outputText).toBe('a1\n\na2\n\nb');
+    expect(laneInputs.map((lane) => ({
+      key: lane.sessionKey,
+      visit: lane.sessionVisit,
+      hasIdentity: typeof lane.sessionIdentity === 'string',
+    }))).toEqual([
+      { key: 'same', visit: 1, hasIdentity: true },
+      { key: 'other', visit: 1, hasIdentity: true },
+      { key: 'same', visit: 2, hasIdentity: true },
+    ]);
+    expect(events.filter((event) => event.type === 'subflow:start').map((event) => ({
+      key: event.sessionKey,
+      visit: event.sessionVisit,
+    }))).toEqual([
+      { key: 'same', visit: 1 },
+      { key: 'other', visit: 1 },
+      { key: 'same', visit: 2 },
+    ]);
+    FlowExecutor.conversationStates.delete(shared.conversationId!);
   });
 
   it('joins lane outputs in child order regardless of completion order', async () => {

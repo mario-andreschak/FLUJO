@@ -510,6 +510,8 @@ export const chatMessageRows = {
   'chat.live.working': ['Working…', 'Trabajando…', 'Arbeitet…', 'Travail en cours…', 'Elaborazione…', 'Trabalhando…', '正在处理…'],
   'chat.live.stop': ['Stop', 'Detener', 'Stoppen', 'Arrêter', 'Interrompi', 'Parar', '停止'],
   'chat.live.queued': ['queued', 'en cola', 'in Warteschlange', 'en attente', 'in coda', 'na fila', '已排队'],
+  'chat.history.session': ['session: {key}', 'sesión: {key}', 'Sitzung: {key}', 'session : {key}', 'sessione: {key}', 'sessão: {key}', '会话：{key}'],
+  'chat.live.sessionVisit': ['session: {key} (visit {visit})', 'sesión: {key} (visita {visit})', 'Sitzung: {key} (Besuch {visit})', 'session : {key} (visite {visit})', 'sessione: {key} (visita {visit})', 'sessão: {key} (visita {visit})', '会话：{key}（第 {visit} 次访问）'],
   'chat.live.laneRunning.one': ['{count} running', '{count} en ejecución', '{count} läuft', '{count} en cours', '{count} in esecuzione', '{count} em execução', '{count} 个正在运行'],
   'chat.live.laneRunning.other': ['{count} running', '{count} en ejecución', '{count} laufen', '{count} en cours', '{count} in esecuzione', '{count} em execução', '{count} 个正在运行'],
   'chat.live.laneQueued.one': ['{count} queued', '{count} en cola', '{count} in Warteschlange', '{count} en attente', '{count} in coda', '{count} na fila', '{count} 个已排队'],

@@ -13,10 +13,10 @@ import type { NormalizedChatError } from '@/shared/types/execution/errors';
 import { isPersonaOwnedConversationState } from './personaConversationOwnership';
 
 const log = createLogger('backend/execution/flow/conversationSummaryStore');
-// Issue #383: bumped to 3 so every summary is rebuilt and picks up the new
-// compact `lastError` projection (stale v2 summaries lack the field, which is
-// fine since it's optional, but a rebuild lets the sidebar show it sooner).
-const SUMMARY_VERSION = 6;
+// Issue #390: session metadata changes the serialized summary projection.
+// Advance the current lineage from v6 to v7 (the issue's v3 reference predates
+// later migrations); mismatched sidecars are rebuilt from authoritative snapshots.
+const SUMMARY_VERSION = 7;
 const SUMMARY_READ_CONCURRENCY = 32;
 
 export type ConversationStatus = NonNullable<SharedState['status']>;
@@ -32,6 +32,10 @@ export interface ConversationSummary {
   plannedExecutionId?: string | null;
   parentConversationId?: string | null;
   rootConversationId?: string | null;
+  /** User-facing resolved key for a persisted keyed child session. */
+  sessionKey?: string;
+  /** Internal stable correlation identity; returned for clients that need correlation, never displayed. */
+  sessionIdentity?: string;
   recovery?: SharedState['recovery'];
   /** Durable invocation origin used by the chat sidebar's origin filter/chip. */
   source?: SharedState['source'] | null;
@@ -86,6 +90,8 @@ export function summarizeConversation(state: SharedState, fallbackId: string): C
     ...(state.plannedExecutionId !== undefined ? { plannedExecutionId: state.plannedExecutionId } : {}),
     ...(state.parentConversationId !== undefined ? { parentConversationId: state.parentConversationId } : {}),
     ...(state.rootConversationId !== undefined ? { rootConversationId: state.rootConversationId } : {}),
+    ...(state.subflowLane?.sessionKey ? { sessionKey: state.subflowLane.sessionKey } : {}),
+    ...(state.subflowLane?.sessionIdentity ? { sessionIdentity: state.subflowLane.sessionIdentity } : {}),
     ...(state.recovery ? { recovery: state.recovery } : {}),
     ...(state.source !== undefined ? { source: state.source } : {}),
     ...(isPersonaOwnedConversationState(state)

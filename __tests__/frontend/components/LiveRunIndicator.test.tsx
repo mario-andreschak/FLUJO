@@ -134,7 +134,15 @@ describe('working chat messages', () => {
         lanes={{
           ownerNodeId: 'subflow-node',
           byIndex: {
-            0: { laneIndex: 0, laneCount: 2, label: 'Inspect auth', status: 'running', lastEventAt: now },
+            0: {
+              laneIndex: 0,
+              laneCount: 2,
+              label: 'Inspect auth',
+              status: 'running',
+              sessionKey: 'writer-main',
+              sessionVisit: 2,
+              lastEventAt: now,
+            },
             1: { laneIndex: 1, laneCount: 2, label: 'Inspect billing', status: 'pending', lastEventAt: now },
           },
         }}
@@ -142,6 +150,7 @@ describe('working chat messages', () => {
     );
 
     expect(screen.getByText('Inspect auth')).toBeInTheDocument();
+    expect(screen.getByText('session: writer-main (visit 2)')).toBeInTheDocument();
     expect(screen.getByText(/Inspect billing.*queued/i)).toBeInTheDocument();
     // One parent-run spinner plus one spinner for the active child job.
     expect(screen.getAllByRole('progressbar')).toHaveLength(2);

@@ -82,6 +82,8 @@ export interface ConversationPageQuery {
   search?: string;
   dimension?: 'title' | 'content';
   origin?: 'chat' | 'schedule' | 'subflow' | 'meeting';
+  /** Exact resolved session-key match. Session keys must not contain secrets. */
+  sessionKey?: string;
   /** Return only transitive descendants of this conversation. */
   descendantsOf?: string;
   /** Cancels both the current page request and any all-pages traversal. */
@@ -463,6 +465,7 @@ class ChatService {
     if (query.search?.trim()) params.set('search', query.search.trim());
     if (query.dimension) params.set('dimension', query.dimension);
     if (query.origin) params.set('origin', query.origin);
+    if (query.sessionKey) params.set('sessionKey', query.sessionKey);
     if (query.descendantsOf) params.set('descendantsOf', query.descendantsOf);
     const url = `${BASE}?${params.toString()}`;
     const response = query.signal

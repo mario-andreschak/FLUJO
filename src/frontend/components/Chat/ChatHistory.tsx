@@ -928,6 +928,26 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
                     />
                   </Tooltip>
                 )}
+                {conversation.sessionKey && (
+                  <Tooltip title={t('chat.history.session', { key: conversation.sessionKey })}>
+                    <Chip
+                      label={t('chat.history.session', { key: conversation.sessionKey })}
+                      size="small"
+                      variant="outlined"
+                      sx={{
+                        minWidth: 0,
+                        maxWidth: '100%',
+                        height: modern ? 22 : 20,
+                        '& .MuiChip-label': {
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          px: 0.75,
+                          fontSize: '0.68rem',
+                        },
+                      }}
+                    />
+                  </Tooltip>
+                )}
                 {/* Parent chain unresolved in this view (paginated off the page,
                     hidden by a filter, deleted, or an ephemeral parent that was
                     never persisted). Without this the row is indistinguishable

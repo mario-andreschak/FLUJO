@@ -652,6 +652,8 @@ export interface SubflowInvocationLane extends SubflowLanePlan {
     sessionKey?: string;
     /** Issue #363: true if this lane reused a child conversation from a prior visit. */
     resumedVisit?: boolean;
+    /** Issue #390: 1-based ordinal of the visit currently executing. */
+    sessionVisit?: number;
 }
 
 export type SubflowInvocationStatus = 'running' | 'blocked' | 'ready' | 'folded';

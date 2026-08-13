@@ -209,6 +209,54 @@ describe('GET /v1/chat/conversations content search (issue #182)', () => {
     await expect(getJson('?paged=1&descendantsOf=../escape')).resolves.toMatchObject({ status: 400 });
   });
 
+  it('filters exact session keys before pagination in summary and content-search paths', async () => {
+    const keyedLane = (sessionKey: string) => ({
+      laneIndex: 0,
+      sessionKey,
+      sessionIdentity: `parent::node::${encodeURIComponent(sessionKey)}`,
+    });
+    await writeConv('alpha-new', {
+      title: 'Alpha new', updatedAt: 30, messages: [{ role: 'user', content: 'needle' }],
+      parentConversationId: 'root', rootConversationId: 'root',
+      subflowLane: keyedLane('writer/main'),
+    });
+    await writeConv('beta', {
+      title: 'Beta', updatedAt: 20, messages: [{ role: 'user', content: 'needle' }],
+      subflowLane: keyedLane('writer-main'),
+    });
+    await writeConv('alpha-old', {
+      title: 'Alpha old', updatedAt: 10, messages: [{ role: 'user', content: 'needle' }],
+      parentConversationId: 'alpha-new', rootConversationId: 'root',
+      subflowLane: keyedLane('writer/main'),
+    });
+
+    const first = await getJson('?paged=1&limit=1&sessionKey=writer%2Fmain');
+    expect(first.body.items.map((c: any) => c.id)).toEqual(['alpha-new']);
+    expect(first.body).toMatchObject({ total: 2, hasMore: true });
+    expect(first.body.items[0]).toMatchObject({
+      sessionKey: 'writer/main',
+      sessionIdentity: 'parent::node::writer%2Fmain',
+    });
+
+    const second = await getJson(
+      `?paged=1&limit=1&sessionKey=writer%2Fmain&cursor=${encodeURIComponent(first.body.nextCursor)}`,
+    );
+    expect(second.body.items.map((c: any) => c.id)).toEqual(['alpha-old']);
+
+    const content = await getJson(
+      '?paged=1&limit=50&dimension=content&search=needle&sessionKey=writer%2Fmain&descendantsOf=root',
+    );
+    expect(content.body.items.map((c: any) => c.id)).toEqual(['alpha-new', 'alpha-old']);
+
+    const noMatch = await getJson('?paged=1&limit=50&sessionKey=missing');
+    expect(noMatch.body).toMatchObject({ items: [], total: 0, hasMore: false });
+  });
+
+  it('rejects an over-long session key with 400', async () => {
+    const key = 'x'.repeat(129);
+    await expect(getJson(`?paged=1&sessionKey=${key}`)).resolves.toMatchObject({ status: 400 });
+  });
+
   it('rejects an over-long search term with 400', async () => {
     const term = 'x'.repeat(300);
     const { status } = await getJson(`?search=${term}&dimension=content`);

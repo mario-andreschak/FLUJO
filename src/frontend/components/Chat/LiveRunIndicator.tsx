@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from 'react';
-import { Box, Button, CircularProgress, Collapse, IconButton, Tooltip, Typography } from '@mui/material';
+import { Box, Button, Chip, CircularProgress, Collapse, IconButton, Tooltip, Typography } from '@mui/material';
 import PauseCircleOutlineIcon from '@mui/icons-material/PauseCircleOutline';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
@@ -91,6 +91,27 @@ const LaneRow: React.FC<{ lane: LiveLane; onOpenLane?: (conversationId: string) 
           </Typography>
         )}
       </Typography>
+      {lane.sessionKey && lane.sessionVisit !== undefined && (
+        <Tooltip title={t('chat.live.sessionVisit', { key: lane.sessionKey, visit: lane.sessionVisit })}>
+          <Chip
+            label={t('chat.live.sessionVisit', { key: lane.sessionKey, visit: lane.sessionVisit })}
+            size="small"
+            variant="outlined"
+            sx={{
+              flexShrink: 1,
+              minWidth: 0,
+              maxWidth: 220,
+              height: 20,
+              '& .MuiChip-label': {
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                px: 0.75,
+                fontSize: '0.68rem',
+              },
+            }}
+          />
+        </Tooltip>
+      )}
     </Box>
   );
 };

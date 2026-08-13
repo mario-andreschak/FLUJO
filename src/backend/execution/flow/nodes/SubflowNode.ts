@@ -546,7 +546,14 @@ function buildChildEmit(
   nodeRef: NodeRef,
   subflowId: string,
   subflowName: string | undefined,
-  lane?: { index: number; count: number; title?: string; conversationId?: string },
+  lane?: {
+    index: number;
+    count: number;
+    title?: string;
+    conversationId?: string;
+    sessionKey?: string;
+    sessionVisit?: number;
+  },
 ): EmitFn | undefined {
   if (!parentEmit || !showSteps) return undefined;
   const laneFields = lane ? { laneIndex: lane.index, laneCount: lane.count } : {};
@@ -554,7 +561,12 @@ function buildChildEmit(
   // (both, so a late-joining client that missed start still gets label + link)
   // — never on every forwarded event.
   const laneIdentity = lane
-    ? { ...(lane.title ? { laneTitle: lane.title } : {}), ...(lane.conversationId ? { laneConversationId: lane.conversationId } : {}) }
+    ? {
+        ...(lane.title ? { laneTitle: lane.title } : {}),
+        ...(lane.conversationId ? { laneConversationId: lane.conversationId } : {}),
+        ...(lane.sessionKey ? { sessionKey: lane.sessionKey } : {}),
+        ...(lane.sessionVisit !== undefined ? { sessionVisit: lane.sessionVisit } : {}),
+      }
     : {};
   return (raw) => {
     const depth = (raw.depth ?? 0) + 1;
@@ -1494,6 +1506,7 @@ export async function runSubflowLanes(
 
       let laneConversationId: string | undefined;
       let resumedVisit = false;
+      let sessionVisit: number | undefined;
       if (prepResult.persistConversation) {
         const result = resolveSessionConversationId(
           parentState,
@@ -1503,6 +1516,7 @@ export async function runSubflowLanes(
         );
         laneConversationId = result.conversationId;
         resumedVisit = result.resumedVisit;
+        sessionVisit = durableLane?.sessionVisit ?? result.sessionVisit;
         // For non-session lanes, prefer durable lane ID
         if (!sessionIdentity) {
           laneConversationId = lane.conversationId ?? durableLane?.conversationId ?? laneConversationId;
@@ -1517,6 +1531,7 @@ export async function runSubflowLanes(
         durableLane.sessionIdentity = sessionIdentity;
         durableLane.sessionKey = lane.sessionKey;
         durableLane.resumedVisit = resumedVisit;
+        durableLane.sessionVisit = sessionVisit;
       }
       // Jobs without a brief fall back to the child-flow name so live-view row
       // labels and sidebar titles agree (and are non-empty).
@@ -1535,6 +1550,8 @@ export async function runSubflowLanes(
           count: lane.itemCount ?? laneCount,
           title: laneTitle,
           conversationId: laneConversationId,
+          ...(sessionVisit !== undefined && lane.sessionKey ? { sessionKey: lane.sessionKey } : {}),
+          ...(sessionVisit !== undefined ? { sessionVisit } : {}),
         },
       );
 
@@ -1608,6 +1625,9 @@ export async function runSubflowLanes(
             ...(prepResult.invocationId ? { invocationId: prepResult.invocationId } : {}),
             ...(lane.laneId ? { laneId: lane.laneId } : {}),
             ...(prepResult.nodeId ? { parentNodeId: prepResult.nodeId } : {}),
+            ...(sessionVisit !== undefined && sessionIdentity ? { sessionIdentity } : {}),
+            ...(sessionVisit !== undefined && lane.sessionKey ? { sessionKey: lane.sessionKey } : {}),
+            ...(sessionVisit !== undefined ? { sessionVisit } : {}),
           },
           ...(prepResult.plannedExecutionId ? { plannedExecutionId: prepResult.plannedExecutionId } : {}),
           ...(prepResult.personaAttribution ? { personaAttribution: prepResult.personaAttribution } : {}),

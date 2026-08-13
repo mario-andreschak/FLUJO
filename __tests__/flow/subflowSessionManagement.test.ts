@@ -52,14 +52,18 @@ describe('resumable Subflow session registry', () => {
     const otherIdentity = resolveSessionIdentity('logical-run-1', 'sub', 'per-key', 'writer-b')!;
 
     const first = resolveSessionConversationId(state, firstIdentity, 'sub', 'writer-a');
-    expect(first.resumedVisit).toBe(false);
+    expect(first).toMatchObject({ resumedVisit: false, sessionVisit: 1 });
     updateSessionRegistry(state, firstIdentity, 'completed');
 
     const resumed = resolveSessionConversationId(state, firstIdentity, 'sub', 'writer-a');
     const other = resolveSessionConversationId(state, otherIdentity, 'sub', 'writer-b');
 
-    expect(resumed).toEqual({ conversationId: first.conversationId, resumedVisit: true });
-    expect(other.resumedVisit).toBe(false);
+    expect(resumed).toEqual({
+      conversationId: first.conversationId,
+      resumedVisit: true,
+      sessionVisit: 2,
+    });
+    expect(other).toMatchObject({ resumedVisit: false, sessionVisit: 1 });
     expect(other.conversationId).not.toBe(first.conversationId);
     expect(state.subflowSessions?.[firstIdentity]).toMatchObject({
       sessionKey: 'writer-a',
@@ -81,11 +85,16 @@ describe('resumable Subflow session registry', () => {
     });
 
     const first = resolveSessionConversationId(state, identity, 'sub', 'shared');
+    updateSessionRegistry(state, identity, 'completed');
     firstRelease();
     const resumed = await second;
 
     expect(order).toEqual([1, 2]);
-    expect(resumed).toEqual({ conversationId: first.conversationId, resumedVisit: true });
+    expect(resumed).toEqual({
+      conversationId: first.conversationId,
+      resumedVisit: true,
+      sessionVisit: 2,
+    });
     expect(activeSessionCoordinatorCount()).toBe(0);
   });
 });

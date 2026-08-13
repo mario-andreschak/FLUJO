@@ -41,6 +41,7 @@ import {
   ConversationCursorError,
   paginateConversationSummaries,
 } from '@/backend/execution/flow/conversationListPage';
+import { SESSION_KEY_MAX_LENGTH } from '@/backend/execution/flow/sessionManagement';
 // Use frontend type for response structure, maybe rename for clarity?
 import { ConversationListItem as FrontendConversationListItem } from '@/frontend/components/Chat';
 
@@ -209,6 +210,14 @@ async function GET_handler(request: NextRequest) {
   const cursor = url.searchParams.get('cursor') ?? undefined;
   const requestedOrigin = (url.searchParams.get('origin') ?? '').trim();
   const descendantsOf = (url.searchParams.get('descendantsOf') ?? '').trim();
+  const rawSessionKey = url.searchParams.get('sessionKey');
+  if (rawSessionKey !== null && rawSessionKey.length > SESSION_KEY_MAX_LENGTH) {
+    return NextResponse.json(
+      { error: `sessionKey too long (max ${SESSION_KEY_MAX_LENGTH} chars)` },
+      { status: 400 },
+    );
+  }
+  const requestedSessionKey = rawSessionKey?.trim() || undefined;
   const allowedOrigins = new Set(['chat', 'schedule', 'subflow', 'meeting']);
   if (requestedOrigin && !allowedOrigins.has(requestedOrigin)) {
     return NextResponse.json({ error: 'invalid origin filter' }, { status: 400 });
@@ -291,6 +300,8 @@ async function GET_handler(request: NextRequest) {
             plannedExecutionId: live?.plannedExecutionId ?? summary.plannedExecutionId ?? null,
             parentConversationId: live?.parentConversationId ?? summary.parentConversationId ?? null,
             rootConversationId: live?.rootConversationId ?? summary.rootConversationId ?? null,
+            sessionKey: live?.subflowLane?.sessionKey ?? summary.sessionKey,
+            sessionIdentity: live?.subflowLane?.sessionIdentity ?? summary.sessionIdentity,
             recovery: live?.recovery ?? summary.recovery,
             ...(live?.personaArchived || summary.personaArchived
               ? { personaArchived: true as const }
@@ -298,6 +309,9 @@ async function GET_handler(request: NextRequest) {
           };
         })
         .filter((summary) => sidebarMetadataMatches(summary, query, flowNames));
+      if (requestedSessionKey) {
+        visible = visible.filter((summary) => summary.sessionKey === requestedSessionKey);
+      }
       if (requestedOrigin) {
         visible = visible.filter((summary) => conversationOrigin(summary) === requestedOrigin);
       }
@@ -381,6 +395,8 @@ async function GET_handler(request: NextRequest) {
             // Absent on legacy conversations => they render as roots.
             parentConversationId: state.parentConversationId ?? null,
             rootConversationId: state.rootConversationId ?? null,
+            ...(state.subflowLane?.sessionKey ? { sessionKey: state.subflowLane.sessionKey } : {}),
+            ...(state.subflowLane?.sessionIdentity ? { sessionIdentity: state.subflowLane.sessionIdentity } : {}),
             ...(isPersonaOwnedConversationState(state)
               ? { personaOwned: true as const }
               : {}),
@@ -422,6 +438,8 @@ async function GET_handler(request: NextRequest) {
         const updatedAt = live?.updatedAt ?? base.updatedAt;
         const lastUserMessageAt = live?.lastUserMessageAt ?? base.lastUserMessageAt ?? null;
         const source = live?.source ?? base.source ?? null;
+        const sessionKey = live?.subflowLane?.sessionKey ?? base.sessionKey;
+        const sessionIdentity = live?.subflowLane?.sessionIdentity ?? base.sessionIdentity;
         // Prefer the live in-memory wave id for a running scheduler run (#181).
         const plannedExecutionId = live?.plannedExecutionId ?? base.plannedExecutionId ?? null;
 
@@ -447,6 +465,8 @@ async function GET_handler(request: NextRequest) {
           status,
           source,
           plannedExecutionId,
+          sessionKey,
+          sessionIdentity,
           ...(live?.personaArchived || base.personaArchived
             ? { personaArchived: true as const }
             : {}),
@@ -488,7 +508,12 @@ async function GET_handler(request: NextRequest) {
     for (const key of workspaceCacheEntries) {
       if (!present.has(key)) listSummaryCache.delete(key);
     }
-    const validConversations = results.filter((conv): conv is ConversationListItem => conv !== null);
+    let validConversations = results.filter((conv): conv is ConversationListItem => conv !== null);
+    if (requestedSessionKey) {
+      validConversations = validConversations.filter(
+        (conversation) => conversation.sessionKey === requestedSessionKey,
+      );
+    }
     log.debug(`Successfully processed ${validConversations.length} conversation files`, { requestId });
 
     // Sort by lastUserMessageAt descending (falls back to updatedAt for legacy conversations)
@@ -500,9 +525,13 @@ async function GET_handler(request: NextRequest) {
     log.info(`Successfully retrieved conversation list`, { requestId, count: validConversations.length, duration: `${duration}ms` });
 
     if (paged) {
-      const visibleConversations = requestedOrigin
+      let visibleConversations = requestedOrigin
         ? validConversations.filter((conversation) => conversationOrigin(conversation) === requestedOrigin)
         : validConversations;
+      if (descendantsOf) {
+        const ids = descendantIds(visibleConversations, descendantsOf);
+        visibleConversations = visibleConversations.filter((conversation) => ids.has(conversation.id));
+      }
       try {
         return NextResponse.json(paginateConversationSummaries(visibleConversations, pageLimit, cursor));
       } catch (error) {

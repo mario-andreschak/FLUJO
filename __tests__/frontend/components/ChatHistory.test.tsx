@@ -92,6 +92,34 @@ describe('ChatHistory', () => {
     expect(onSelectConversation).not.toHaveBeenCalled();
   });
 
+  it('shows only the resolved session key on keyed conversation rows', () => {
+    render(
+      <ThemeProvider theme={createTheme()}>
+        <ChatHistory
+          conversations={[
+            {
+              id: 'keyed', title: 'Keyed child', flowId: null,
+              createdAt: 1, updatedAt: 2, status: 'completed', source: 'subflow',
+              sessionKey: 'writer-main', sessionIdentity: 'parent::node::writer-main',
+            },
+            {
+              id: 'legacy', title: 'Legacy child', flowId: null,
+              createdAt: 1, updatedAt: 1, status: 'completed', source: 'subflow',
+            },
+          ]}
+          currentConversationId={null}
+          onSelectConversation={jest.fn()}
+          onDeleteConversation={jest.fn()}
+          onBulkDelete={jest.fn(async () => undefined)}
+          onNewConversation={jest.fn()}
+        />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByText('session: writer-main')).toBeInTheDocument();
+    expect(screen.queryByText('parent::node::writer-main')).not.toBeInTheDocument();
+  });
+
   it('offers parent-only or cascading deletion when a conversation has descendants', async () => {
     const onDeleteConversation = jest.fn();
     const onBulkDelete = jest.fn(async () => undefined);

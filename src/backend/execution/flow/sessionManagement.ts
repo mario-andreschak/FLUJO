@@ -83,13 +83,22 @@ export function resolveSessionIdentity(
   return undefined;
 }
 
+/** Return the 1-based ordinal of the visit currently starting. The registry's
+ * `visits` field counts terminal visits only, so the current visit is +1. */
+export function currentSessionVisit(session: { visits: number }): number {
+  const completedVisits = Number.isFinite(session.visits)
+    ? Math.max(0, Math.floor(session.visits))
+    : 0;
+  return completedVisits + 1;
+}
+
 /** Look up or create a session in the registry. Returns the conversationId to use. */
 export function resolveSessionConversationId(
   parentState: SharedState | undefined,
   sessionIdentity: string | undefined,
   nodeId: string,
   sessionKey: string | undefined,
-): { conversationId: string; resumedVisit: boolean } {
+): { conversationId: string; resumedVisit: boolean; sessionVisit?: number } {
   if (!sessionIdentity || !parentState) {
     // No session, generate a new conversation ID
     return {
@@ -107,6 +116,7 @@ export function resolveSessionConversationId(
     return {
       conversationId: session.conversationId,
       resumedVisit: true,
+      sessionVisit: currentSessionVisit(session),
     };
   }
 
@@ -129,6 +139,7 @@ export function resolveSessionConversationId(
   return {
     conversationId: newConversationId,
     resumedVisit: false,
+    sessionVisit: currentSessionVisit(parentState.subflowSessions[sessionIdentity]),
   };
 }
 

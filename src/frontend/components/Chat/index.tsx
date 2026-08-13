@@ -335,6 +335,10 @@ export interface ConversationListItem {
   /** Top-level conversation of this chain (computed at creation) -- issue #182.
    *  Lets the sidebar bucket a whole chain by its root in O(1). */
   rootConversationId?: string | null;
+  /** Resolved display key for a persisted keyed child session. */
+  sessionKey?: string;
+  /** Internal stable correlation identity; never rendered in the chat UI. */
+  sessionIdentity?: string;
   /** Issue #383: COMPACT error projection (message/code/class only, no
    *  redacted provider details/stack) so the sidebar's bulk listing stays
    *  small. Present when status === 'error'. */
@@ -376,6 +380,8 @@ const sameConversationLists = (a: ConversationListItem[], b: ConversationListIte
       x.source === y.source &&
       x.parentConversationId === y.parentConversationId &&
       x.rootConversationId === y.rootConversationId &&
+      x.sessionKey === y.sessionKey &&
+      x.sessionIdentity === y.sessionIdentity &&
       x.createdAt === y.createdAt &&
       x.updatedAt === y.updatedAt &&
       x.lastUserMessageAt === y.lastUserMessageAt

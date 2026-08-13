@@ -42,6 +42,12 @@ export interface RecoveryLaneIdentity {
   laneId?: string;
   /** Parent Subflow node parked at the join. */
   parentNodeId?: string;
+  /** Resolved user-facing key for a persisted keyed child session. */
+  sessionKey?: string;
+  /** Internal stable correlation identity for the reusable child session. */
+  sessionIdentity?: string;
+  /** 1-based ordinal of the visit currently executing in this child. */
+  sessionVisit?: number;
 }
 
 export type RecoveryCheckpointPhase =
@@ -427,6 +433,10 @@ export interface SubflowStartEvent extends ExecutionEventBase {
   /** The lane's persisted sidebar conversation (present only when
    *  saveConversation is on) — lets the live view deep-link into the lane. */
   laneConversationId?: string;
+  /** Resolved display key for a keyed child session. */
+  sessionKey?: string;
+  /** 1-based ordinal of the current session visit. */
+  sessionVisit?: number;
 }
 /** The child run of a SubflowNode reached a terminal state. */
 export interface SubflowDoneEvent extends ExecutionEventBase {
@@ -437,6 +447,10 @@ export interface SubflowDoneEvent extends ExecutionEventBase {
   /** See SubflowStartEvent — duplicated here for late-joining clients. */
   laneTitle?: string;
   laneConversationId?: string;
+  /** Resolved display key for a keyed child session. */
+  sessionKey?: string;
+  /** 1-based ordinal of the visit that reached this terminal state. */
+  sessionVisit?: number;
 }
 /**
  * A resource was read during execution. `source` says through which mechanism:

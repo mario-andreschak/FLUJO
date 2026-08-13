@@ -80,8 +80,28 @@ this additional handoff-tool argument:
 The first use of `writer-main` creates a saved child conversation. A later handoff with
 the same key appends its `task` as a new user turn, restarts the child flow at its Start
 node, and keeps the child's full prior transcript. A different key creates an independent
-child conversation. Keys are 1–128 characters and may contain letters, numbers, `.`,
-`_`, `:`, and `-`.
+child conversation. Keys are 1–128 characters. They are opaque display handles: the runtime keeps the
+resolved `sessionKey` separate from its encoded, composite `sessionIdentity`, which is
+used only for durable correlation.
+
+## Session visibility and filtering
+
+Persisted keyed child conversations project optional `sessionKey` and internal
+`sessionIdentity` fields into the v7 conversation-summary sidecar. Historical and
+non-session conversations omit both fields and continue to render normally. The chat
+conversation tree displays only the resolved `sessionKey`; it never displays the
+composite identity.
+
+`GET /v1/chat/conversations` accepts `sessionKey=<key>` for an exact resolved-key
+match. The filter is applied before cursor pagination and composes with title/content
+search, origin, descendants, limit, and cursor parameters. Keys longer than 128
+characters receive a `400` response. Because query parameters may be retained by a
+browser or proxy, session keys must not contain secrets.
+
+Live child-job rows display `session: <key> (visit N)`. `N` is the current 1-based
+visit: a newly created session starts at visit 1, while a resumed session uses the
+number of completed visits plus one. The registry increments its completed count only
+when that visit reaches a terminal outcome.
 
 ## Worked example
 

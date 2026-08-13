@@ -25,6 +25,10 @@ export interface LiveLane {
   label: string;
   /** The lane's persisted sidebar conversation, when saveConversation is on. */
   laneConversationId?: string;
+  /** Resolved display key for a reusable child session. */
+  sessionKey?: string;
+  /** 1-based ordinal of the current visit to that session. */
+  sessionVisit?: number;
   /** pending = known from laneCount but not yet started (bounded worker pool). */
   status: 'pending' | 'running' | 'completed' | 'error';
   /** Current node/tool inside the lane, shown as secondary text while running. */
@@ -119,6 +123,8 @@ export function applyLaneEvent(prev: LiveLanes, event: ExecutionEvent, now: numb
       laneCount: count,
       label: event.laneTitle || fallbackLabel(event, index, count),
       laneConversationId: event.laneConversationId ?? byIndex[index]?.laneConversationId,
+      sessionKey: event.sessionKey ?? byIndex[index]?.sessionKey,
+      sessionVisit: event.sessionVisit ?? byIndex[index]?.sessionVisit,
       status: 'running',
       lastEventAt: now,
     };
@@ -134,6 +140,8 @@ export function applyLaneEvent(prev: LiveLanes, event: ExecutionEvent, now: numb
       // Backfill label/link for a late-joining client that missed start.
       label: row.label && row.status !== 'pending' ? row.label : event.laneTitle || row.label,
       laneConversationId: row.laneConversationId ?? event.laneConversationId,
+      sessionKey: event.sessionKey ?? row.sessionKey,
+      sessionVisit: event.sessionVisit ?? row.sessionVisit,
       // A capped lane (issue #253) landed successfully with a summary; show it as
       // completed in the lane row (which has no dedicated 'capped' state).
       status: event.status === 'capped' ? 'completed' : event.status,
