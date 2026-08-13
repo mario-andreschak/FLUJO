@@ -553,8 +553,7 @@ export async function updatePersonaComposition(
   personaId: string,
   value: unknown,
 ): Promise<PersonaComposition> {
-  const input = UpdatePersonaCompositionInputSchema.parse(value)
-    as UpdatePersonaCompositionInput;
+  const input = UpdatePersonaCompositionInputSchema.parse(value) as UpdatePersonaCompositionInput;
 
   await withPersonaDomainMutation(personaId, {}, async ({ persona, updatePersona }) => {
     if (input.expectedUpdatedAt !== persona.updatedAt) {

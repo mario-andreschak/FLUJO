@@ -291,7 +291,6 @@ export const PublicRoleSchema = z.object({
   prompt: NonEmptyText(20_000),
   suggestedApps: z.array(PublicRoleSuggestedAppSchema).max(64),
   archived: z.boolean(),
-  archivedAt: TimestampSchema.optional(),
   currentVersionId: EnduringAgentIdSchema,
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,

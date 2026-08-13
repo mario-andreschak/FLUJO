@@ -241,7 +241,6 @@ function projectRole(
     prompt: state.current.mission,
     suggestedApps: resolveSuggestedApps(state.current.suggestedApps, statuses),
     archived: state.definition.archivedAt !== undefined,
-    archivedAt: state.definition.archivedAt,
     currentVersionId: state.current.id,
     createdAt: state.definition.createdAt,
     updatedAt: state.definition.updatedAt,

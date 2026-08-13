@@ -138,7 +138,6 @@ export interface PublicRole {
   prompt: string;
   suggestedApps: PublicRoleSuggestedApp[];
   archived: boolean;
-  archivedAt?: number;
   currentVersionId: string;
   createdAt: number;
   updatedAt: number;
