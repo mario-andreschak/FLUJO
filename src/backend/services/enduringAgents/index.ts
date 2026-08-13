@@ -15,6 +15,7 @@ export * from './ids';
 export * from './namespaces';
 export * from './personaDeletion';
 export * from './personaDispatcher';
+export * from './personaActivitySnapshot';
 export * from './personaPresentation';
 export * from './personaVoiceAdapter';
 export * from './portability';

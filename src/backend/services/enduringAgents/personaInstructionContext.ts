@@ -7,6 +7,10 @@ import {
   type MemoryItem,
   type RoleVersion,
 } from '@/shared/types/enduringAgent';
+import {
+  PersonaDomainConflictError,
+  PersonaDomainNotFoundError,
+} from './domainMutation';
 import { evidenceDigest } from './provenance';
 
 export const PERSONA_CORE_MEMORY_APPROXIMATE_TOKEN_BUDGET = 2_000;
@@ -76,14 +80,25 @@ export function buildPersonaInstructionContext(input: {
     if (!coreIdSet.has(item.id)) continue;
     suppliedById.set(item.id, [...(suppliedById.get(item.id) ?? []), item]);
   }
-  const eligibleCoreMemoryItems = coreIds
-    .map((id) => suppliedById.get(id)?.sort(compareMemoryRecord)[0])
-    .filter((item): item is MemoryItem => Boolean(
-      item
-      && item.personaId === persona.id
-      && item.status === 'active'
-      && (item.trust === 'explicit_user' || item.trust === 'verified_tool'),
-    ));
+  const eligibleCoreMemoryItems = coreIds.map((id) => {
+    const item = suppliedById.get(id)?.sort(compareMemoryRecord)[0];
+    // Pinned core-memory references are part of the trusted Persona contract.
+    // Never silently weaken that contract by rendering a partial projection.
+    if (!item || item.personaId !== persona.id) {
+      throw new PersonaDomainNotFoundError('MemoryItem', id);
+    }
+    if (item.status !== 'active') {
+      throw new PersonaDomainConflictError(
+        `MemoryItem ${JSON.stringify(id)} is not active.`,
+      );
+    }
+    if (item.trust !== 'explicit_user' && item.trust !== 'verified_tool') {
+      throw new PersonaDomainConflictError(
+        `MemoryItem ${JSON.stringify(id)} is not eligible for core memory.`,
+      );
+    }
+    return item;
+  });
   const coreMemoryItemLimit = Math.max(
     0,
     Math.floor(roleVersion.defaults?.memory?.coreMemoryMaxItems ?? DEFAULT_CORE_MEMORY_MAX_ITEMS),
