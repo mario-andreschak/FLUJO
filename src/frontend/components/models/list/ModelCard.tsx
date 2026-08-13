@@ -34,7 +34,8 @@ import FolderAssignMenu from '@/frontend/components/shared/FolderAssignMenu';
 import CopyLinkButton from '@/frontend/components/shared/CopyLinkButton';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useThemeUtils } from '@/frontend/utils/theme';
-import type { SxProps, Theme } from '@mui/material/styles';
+import type { Theme } from '@mui/material/styles';
+import type { SystemStyleObject } from '@mui/system';
 
 const log = createLogger('frontend/components/models/list/ModelCard');
 
@@ -371,7 +372,7 @@ export const ModelCard = ({
     </>
   );
 
-  const modernCardSx = (highlighted = false): SxProps<Theme> => ({
+  const modernCardSx = (highlighted = false): SystemStyleObject<Theme> => ({
     height: '100%',
     display: 'flex',
     flexDirection: 'column',
