@@ -13,7 +13,6 @@ import {
   OpenInNewRounded,
   RefreshRounded,
   ReplayRounded,
-  SettingsRounded,
   WorkOutlineRounded,
 } from '@mui/icons-material';
 import {
@@ -56,6 +55,7 @@ import FlowCard from '@/frontend/components/Flow/FlowDashboard/FlowCard';
 import RoleVersionCard from './RoleVersionCard';
 import PersonaDetailShell from './PersonaDetailShell';
 import PersonaMemoryArea from './PersonaMemoryArea';
+import PersonaSettings from './settings/PersonaSettings';
 import PersonaSetup from './PersonaSetup';
 import PersonasGallery from './PersonasGallery';
 import { invalidatePersonaSummaryCache } from './personaQueries';
@@ -69,8 +69,6 @@ import { magicLinkPath } from '@/frontend/utils/magicLink';
 import { emitLaunchGlobalMcpApp } from '@/frontend/utils/quickActions';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import {
-  PERSONA_AUTONOMY_LEVELS,
-  PERSONA_INTERRUPTION_POLICIES,
   PERSONA_PRIORITIES,
   PERSONA_WORK_ITEM_STATUSES,
   type BehaviorBinding,
@@ -224,10 +222,15 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
                 <ActivityArea detail={selected} />
               )}
               {area === 'settings' && subsection !== 'history' && (
-                <Stack spacing={2}>
-                  <SettingsArea detail={selected} busy={busy} mutate={mutate} />
-                  <ActivityArea detail={selected} />
-                </Stack>
+                <PersonaSettings
+                  detail={selected}
+                  onRefresh={refreshSelected}
+                  onDeleted={() => {
+                    setSelected(null);
+                    invalidatePersonaSummaryCache();
+                    router.push(withWorkspaceUrl('/personas'));
+                  }}
+                />
               )}
             </>
           )}
@@ -836,43 +839,6 @@ function ActivityArea({ detail }: { detail: PersonaDetail }) {
       </Stack>
     </AreaShell>
   );
-}
-
-function SettingsArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolean; mutate: (action: () => Promise<unknown>, success?: string) => Promise<void> }) {
-  const { t } = useI18n();
-  const [form, setForm] = useState(() => ({
-    name: detail.persona.name,
-    mission: detail.persona.mission ?? '',
-    avatarUrl: detail.persona.presentation?.avatarUrl ?? '',
-    voice: detail.persona.presentation?.voice ?? '',
-    language: detail.persona.presentation?.language ?? '',
-    lifecycleState: detail.persona.lifecycleState === 'busy' || detail.persona.lifecycleState === 'waiting' || detail.persona.lifecycleState === 'error' ? 'idle' : detail.persona.lifecycleState,
-    autonomyLevel: detail.persona.autonomyLevel,
-    interruptionPolicy: detail.persona.interruptionPolicy,
-  }));
-  useEffect(() => setForm({
-    name: detail.persona.name,
-    mission: detail.persona.mission ?? '',
-    avatarUrl: detail.persona.presentation?.avatarUrl ?? '',
-    voice: detail.persona.presentation?.voice ?? '',
-    language: detail.persona.presentation?.language ?? '',
-    lifecycleState: detail.persona.lifecycleState === 'busy' || detail.persona.lifecycleState === 'waiting' || detail.persona.lifecycleState === 'error' ? 'idle' : detail.persona.lifecycleState,
-    autonomyLevel: detail.persona.autonomyLevel,
-    interruptionPolicy: detail.persona.interruptionPolicy,
-  }), [detail.persona]);
-  const set = (key: keyof typeof form, value: string) => setForm((current) => ({ ...current, [key]: value }));
-  return <AreaShell title={t('personas.settings.title')} icon={<SettingsRounded />}><Stack spacing={2} maxWidth={820}>
-    <Alert severity="info">{t('personas.busyHint')}</Alert>
-    <TextField label={t('personas.settings.name')} value={form.name} onChange={(event) => set('name', event.target.value)} required />
-    <TextField label={t('personas.settings.mission')} value={form.mission} onChange={(event) => set('mission', event.target.value)} multiline minRows={3} />
-    <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}><TextField fullWidth label={t('personas.settings.avatar')} value={form.avatarUrl} onChange={(event) => set('avatarUrl', event.target.value)} /><TextField fullWidth label={t('personas.settings.voice')} value={form.voice} onChange={(event) => set('voice', event.target.value)} /><TextField fullWidth label={t('personas.settings.language')} value={form.language} onChange={(event) => set('language', event.target.value)} /></Stack>
-    <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
-      <TextField select fullWidth label={t('personas.settings.lifecycle')} value={form.lifecycleState} onChange={(event) => set('lifecycleState', event.target.value)}>{['idle', 'sleeping', 'disabled'].map((value) => <MenuItem key={value} value={value}>{humanize(value)}</MenuItem>)}</TextField>
-      <TextField select fullWidth label={t('personas.settings.autonomy')} value={form.autonomyLevel} onChange={(event) => set('autonomyLevel', event.target.value)}>{PERSONA_AUTONOMY_LEVELS.map((value) => <MenuItem key={value} value={value}>{humanize(value)}</MenuItem>)}</TextField>
-      <TextField select fullWidth label={t('personas.settings.interruption')} value={form.interruptionPolicy} onChange={(event) => set('interruptionPolicy', event.target.value)}>{PERSONA_INTERRUPTION_POLICIES.map((value) => <MenuItem key={value} value={value}>{humanize(value)}</MenuItem>)}</TextField>
-    </Stack>
-    <Box><Button variant="contained" disabled={busy || !form.name.trim()} onClick={() => void mutate(() => personasService.update(detail.persona.id, { name: form.name, mission: form.mission || null, presentation: { avatarUrl: form.avatarUrl || null, voice: form.voice || null, language: form.language || null }, lifecycleState: form.lifecycleState as 'idle' | 'sleeping' | 'disabled', autonomyLevel: form.autonomyLevel, interruptionPolicy: form.interruptionPolicy, expectedUpdatedAt: detail.persona.updatedAt }))}>{t('personas.settings.save')}</Button></Box>
-  </Stack></AreaShell>;
 }
 
 function CreatePersonaDialog({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (detail: PersonaBundle) => void }) {
