@@ -570,7 +570,12 @@ function AppsArea({ detail, busy, mutate }: {
       action={<Button component={Link} href={withWorkspaceUrl('/mcp')} startIcon={<HubRounded />}>{t('personas.apps.manage')}</Button>}
     >
       <Stack spacing={2.5}>
-        <Alert severity="info">{t('personas.apps.description')}</Alert>
+        <Alert severity="info">
+          <Stack spacing={0.5}>
+            <Typography variant="body2">{t('personas.apps.description')}</Typography>
+            <Typography variant="body2">{t('personas.apps.launchSafety')}</Typography>
+          </Stack>
+        </Alert>
         {launchError && <Alert severity="error">{launchError}</Alert>}
         {error && <Alert severity="warning">{error}</Alert>}
 

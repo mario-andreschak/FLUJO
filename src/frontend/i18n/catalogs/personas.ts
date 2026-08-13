@@ -215,6 +215,7 @@ export const personasMessageRows = {
   'personas.behaviors.futureActivity': m('Changes apply to future conversations and Activities. Work already in progress keeps the Flow it started with.'),
   'personas.apps.title': m('Apps'),
   'personas.apps.description': m('These Apps are used by the Core. Behavior Flows keep the tools configured in their own Flow.'),
+  'personas.apps.launchSafety': m('Opening an App only opens its interface. It will never add tools or permissions to this Persona.'),
   'personas.apps.manage': m('Manage MCP configs'),
   'personas.apps.config': m('MCP App configuration'),
   'personas.apps.grant': m('Add App'),
