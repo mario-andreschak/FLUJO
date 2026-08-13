@@ -7,6 +7,7 @@ import {
   hashBehaviorFlow,
   PersonaFactoryConflictError,
 } from '@/backend/services/enduringAgents';
+import { flowService } from '@/backend/services/flow';
 import {
   createRoleVersion,
   getBehaviorRevision,
@@ -59,9 +60,9 @@ function exactToolsRoleVersion(): RoleVersion {
   const builtIn = buildBuiltInDeveloperRoleVersion();
   return RoleVersionSchema.parse({
     ...builtIn,
-    id: 'rolever_developer_exact_tools_v2',
-    version: 2,
-    name: 'Developer exact tools v2',
+    id: 'rolever_developer_exact_tools_v3',
+    version: 3,
+    name: 'Developer exact tools v3',
     mission: 'Develop carefully with only the exact account and tools authored in the Behavior.',
     behaviorSlots: [
       {
@@ -195,6 +196,19 @@ describe('createPersonaFromRole', () => {
         lifecycleState: 'idle',
         provisioningState: 'ready',
       });
+      const coreFlow = await flowService.getFlow(
+        bundle.persona.composition!.coreFlowRef,
+      );
+      expect(coreFlow).toMatchObject({
+        personaOwnership: {
+          personaId: bundle.persona.id,
+          kind: 'core',
+        },
+      });
+      expect(coreFlow!.nodes
+        .filter((candidate) => candidate.data.type === 'process')
+        .map((candidate) => candidate.data.properties?.boundModel))
+        .toEqual(expect.arrayContaining(['model-test']));
       expect(bundle.behaviorBindings.map((binding) => binding.slotKey).sort()).toEqual([
         'maintain_memory',
         'primary',
@@ -203,6 +217,10 @@ describe('createPersonaFromRole', () => {
       expect(bundle.behaviorRevisions).toHaveLength(2);
       const roleVersion = await getRoleVersion(BUILT_IN_DEVELOPER_ROLE_VERSION_ID);
       expect(roleVersion).not.toBeNull();
+      expect(roleVersion!.coreTemplate!.nodes
+        .filter((candidate) => candidate.data.type === 'process')
+        .every((candidate) => candidate.data.properties?.boundModel === undefined))
+        .toBe(true);
       for (const binding of bundle.behaviorBindings) {
         const revision = bundle.behaviorRevisions.find(
           (candidate) => candidate.id === binding.activeRevisionId,
@@ -330,6 +348,8 @@ describe('createPersonaFromRole', () => {
       const revision = bundle.behaviorRevisions[0];
       const snapshotBeforeSourceMutation = clone(revision.flowSnapshot);
 
+      expect(await getRoleVersion(sourceVersion.id)).toEqual(sourceVersion);
+      expect(revision.contentHash).toBe(hashBehaviorFlow(revision.flowSnapshot));
       expect(revision.source).toEqual({
         kind: 'role_template',
         roleVersionId: sourceVersion.id,

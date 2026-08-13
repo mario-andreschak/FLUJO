@@ -23,11 +23,11 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-function roleVersion2(): RoleVersion {
+function roleVersion3(): RoleVersion {
   const version = clone(buildBuiltInDeveloperRoleVersion());
-  version.id = 'rolever_developer_v2_portable';
-  version.version = 2;
-  version.name = 'Developer v2';
+  version.id = 'rolever_developer_v3_portable';
+  version.version = 3;
+  version.name = 'Developer v3';
   version.migrationNotes = 'Review and explicitly repin each Persona.';
   version.behaviorSlots[0].flowTemplate.nodes.push({
     id: 'github-binding',
@@ -56,7 +56,7 @@ function personaTemplate(roleVersionId: string): PackagedPersonaTemplate {
   };
 }
 
-function portableRole(versions = [roleVersion2()]): PackagedRoleTemplate {
+function portableRole(versions = [roleVersion3()]): PackagedRoleTemplate {
   return {
     definition: clone(buildBuiltInDeveloperRoleDefinition()),
     versions: clone(versions),
@@ -260,6 +260,24 @@ describe('Phase 8 configuration-only packaging', () => {
     expect(legacy.behaviorTemplates).toBeUndefined();
   });
 
+  it('rejects duplicate immutable Role version coordinates inside a package', () => {
+    const v2 = buildBuiltInDeveloperRoleVersion();
+    const duplicateV2 = clone(v2);
+    duplicateV2.id = 'rolever_developer_duplicate_v2';
+
+    const result = flujoPackageSchema.safeParse({
+      ...basePackage(),
+      roleTemplates: [portableRole([v2, duplicateV2])],
+      personaTemplates: [personaTemplate(v2.id)],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map((issue) => issue.message).join(' '))
+        .toMatch(/duplicate immutable Role version|version coordinate/i);
+    }
+  });
+
   it('rejects Persona-template private fields and broken Role references', () => {
     const role = portableRole();
     const raw = {
@@ -276,7 +294,7 @@ describe('Phase 8 configuration-only packaging', () => {
 
 describe('Phase 8 capability and import planning', () => {
   it('makes missing and ambiguous bindings explicit without changing Flow tool bindings', () => {
-    const version = roleVersion2();
+    const version = roleVersion3();
     const originalFlow = clone(version.behaviorSlots[0].flowTemplate);
     const unresolved = resolveRoleCapabilities({
       requirements: {
@@ -313,19 +331,19 @@ describe('Phase 8 capability and import planning', () => {
 
   it('reports collisions and upgrades while leaving existing Personas explicitly pinned', () => {
     const definition = buildBuiltInDeveloperRoleDefinition();
-    const v1 = buildBuiltInDeveloperRoleVersion();
-    const v2 = roleVersion2();
-    const pkg = basePackage([portableRole([v1, v2])]);
+    const v2 = buildBuiltInDeveloperRoleVersion();
+    const v3 = roleVersion3();
+    const pkg = basePackage([portableRole([v2, v3])]);
 
     const plan = planRolePackageImport({
       package: pkg,
       existingRoleDefinitions: [definition],
-      existingRoleVersions: [v1],
-      existingPersonas: [{ id: 'persona_jim', roleVersionId: v1.id }],
+      existingRoleVersions: [v2],
+      existingPersonas: [{ id: 'persona_jim', roleVersionId: v2.id }],
       providers: [
         {
           name: 'portable-provider',
-          capabilities: v2.capabilityRequirements?.semantic ?? [],
+          capabilities: v3.capabilityRequirements?.semantic ?? [],
         },
       ],
     });
@@ -335,7 +353,7 @@ describe('Phase 8 capability and import planning', () => {
     );
     expect(plan.flowBindingRequirements).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        templateId: `${v2.id}:${v2.behaviorSlots[0].key}`,
+        templateId: `${v3.id}:${v3.behaviorSlots[0].key}`,
         requiredServerNames: ['github-jim'],
         missingServerNames: ['github-jim'],
       }),
@@ -343,8 +361,8 @@ describe('Phase 8 capability and import planning', () => {
     expect(plan.upgrades).toEqual([{
       personaId: 'persona_jim',
       roleDefinitionId: definition.id,
-      fromRoleVersionId: v1.id,
-      toRoleVersionId: v2.id,
+      fromRoleVersionId: v2.id,
+      toRoleVersionId: v3.id,
       requiresExplicitRepin: true,
     }]);
     expect(plan.personasRemainPinned).toBe(true);
