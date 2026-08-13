@@ -18,10 +18,6 @@ jest.mock('@/backend/execution/flow/conversationLog', () => ({
   appendRawForState: (state: unknown, raws: unknown[]) => appendRawForStateMock(state, raws),
 }));
 
-jest.mock('@/utils/http/localRequest', () => ({
-  assertLocalRequest: jest.fn(() => undefined),
-}));
-
 const loadConversationStateMock = jest.fn();
 jest.mock('@/backend/execution/flow/loadConversationState', () => ({
   loadConversationState: (...args: unknown[]) => loadConversationStateMock(...args),

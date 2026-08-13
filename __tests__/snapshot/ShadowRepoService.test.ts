@@ -28,6 +28,7 @@ import {
 } from '@/backend/services/snapshot/ShadowRepoService';
 import { snapshotStore } from '@/backend/services/snapshot/SnapshotStore';
 import { DEFAULT_SNAPSHOT_RETENTION_POLICY } from '@/shared/types/snapshot';
+import { StorageKey } from '@/shared/types/storage/storage';
 
 async function mkTemp(prefix: string): Promise<string> {
   return fsp.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -96,10 +97,16 @@ describe('ShadowRepoService', () => {
   it('keeps retained SHAs usable after packed-history cleanup', async () => {
     const repo = await makeRealRepo();
     try {
-      loadItemMock.mockResolvedValue({
-        ...DEFAULT_SNAPSHOT_RETENTION_POLICY,
-        maxCapturesPerRoot: 1,
-      });
+      loadItemMock.mockImplementation(async (key: StorageKey) => (
+        key === StorageKey.SNAPSHOT_RETENTION_POLICY
+          ? {
+              ...DEFAULT_SNAPSHOT_RETENTION_POLICY,
+              maxCapturesPerRoot: 1,
+            }
+          : {
+              experimental: { enabled: false, snapshotsEnabled: true },
+            }
+      ));
       const first = await shadowRepoService.capture(repo);
       await fsp.writeFile(path.join(repo, 'kept.txt'), 'second\n', 'utf-8');
       const retained = await shadowRepoService.capture(repo);
