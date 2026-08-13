@@ -49,15 +49,11 @@ export function kvScopeId(scope: KvRefScope, ctx: KvFlowContext): string {
 
   if (scope === 'flow') return flowBoard();
 
-  // folder (default): a package of ordinary flows sharing one folder shares a
-  // board. Persona Behavior content hashes deliberately predate and exclude the
-  // dashboard-only `Flow.folder` field. Treating that unhashed field as a
-  // runtime scope would let snapshot tampering redirect durable reads/writes
-  // without invalidating the pinned revision. Persona-attributed execution
-  // therefore always maps default/folder scope to its hash-covered Flow id.
-  // This also preserves the historical private-Behavior behavior: those ids
-  // had no live Flow record, so folder resolution already fell back to flow.
-  const folder = ctx.personaAttribution ? undefined : ctx.folder?.trim();
+  // folder (default): all executions of flows sharing one folder use the same
+  // board, including Persona-attributed execution. Callers resolve the current
+  // Flow.folder before reads and captures; flows without one retain the
+  // historical per-flow fallback below.
+  const folder = ctx.folder?.trim();
   if (folder) {
     const hash = createHash('sha256').update(folder).digest('hex').slice(0, 32);
     return `folder-${hash}`;
