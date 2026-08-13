@@ -30,7 +30,7 @@ import simpleGit, { SimpleGit } from 'simple-git';
 import { createLogger } from '@/utils/logger';
 import { loadItem } from '@/utils/storage/backend';
 import { StorageKey, type Settings } from '@/shared/types/storage/storage';
-<<import { snapshotStore } from './SnapshotStore';
+import { snapshotStore } from './SnapshotStore';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 
 const log = createLogger('backend/services/snapshot/ShadowRepoService');
