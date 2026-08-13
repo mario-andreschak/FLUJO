@@ -157,8 +157,8 @@ export async function startPersonaProcess(
     } catch {
       return;
     }
-    if ('type' in message && message.type === 'ready') {
-      readyResolve();
+    if ('type' in message) {
+      if (message.type === 'ready') readyResolve();
       return;
     }
     const waiter = pending.get(message.id);

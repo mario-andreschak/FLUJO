@@ -15,6 +15,21 @@ function processEnv(extra: Record<string, string>): Record<string, string> {
   };
 }
 
+type BrowserToolContentItem = {
+  type: string;
+  resource?: { mimeType?: string };
+};
+
+function browserToolContent(value: unknown): BrowserToolContentItem[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is BrowserToolContentItem => (
+    typeof item === 'object'
+    && item !== null
+    && 'type' in item
+    && typeof item.type === 'string'
+  ));
+}
+
 async function connectBrowser(dataDir: string): Promise<Client> {
   const client = new Client({ name: 'browser-capture-recording-test', version: '1.0.0' }, { capabilities: {} });
   await client.connect(new StdioClientTransport({
@@ -62,7 +77,7 @@ describe('browser capture and recording process boundary', () => {
           arguments: { source, resolution: 'not-a-resolution' },
         });
         expect(result.isError).not.toBe(true);
-        expect(result.content.some((item) => item.type === 'image')).toBe(true);
+        expect(browserToolContent(result.content).some((item) => item.type === 'image')).toBe(true);
         expect(result.structuredContent).toMatchObject({
           success: true,
           effectiveResolution: { width: 1920, height: 1080 },
@@ -144,8 +159,8 @@ describe('browser capture and recording process boundary', () => {
         audioPath: expect.any(String),
         outputPath: expect.any(String),
       });
-      expect(stopped.content.some((item) =>
-        item.type === 'resource' && item.resource.mimeType === 'video/webm'
+      expect(browserToolContent(stopped.content).some((item) =>
+        item.type === 'resource' && item.resource?.mimeType === 'video/webm'
       )).toBe(true);
       const outputPath = (stopped.structuredContent as { outputPath: string }).outputPath;
       expect((await fs.stat(outputPath)).size).toBeGreaterThan(0);

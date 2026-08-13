@@ -294,6 +294,7 @@ describe('Persona continuity across OS process boundaries', () => {
       (claim): claim is Claimed => claim !== null,
       { timeoutMs: 10_000, description: 'expired Persona lease recovery' },
     );
+    if (!after) throw new Error('Expected the expired Persona lease to be recovered.');
 
     expectPersonaContinuity(
       continuitySnapshot(before, created.persona.roleVersionId),

@@ -43,7 +43,6 @@ function appConfig(
     args: [],
     disabled: options.disabled ?? false,
     enableMcpApps: options.enableMcpApps ?? true,
-    autoApprove: [],
     rootPath: '',
     env: {},
     _buildCommand: '',
