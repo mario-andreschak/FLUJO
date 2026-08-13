@@ -744,7 +744,7 @@ async function acquireFilesystemLock(personaId: string): Promise<{
         canonicalInstalled = false;
       }
 
-      if (await installCandidateLock(lockRoot, lockPath, owner)) {
+      if (await installCandidateLockWithRetry(lockRoot, lockPath, owner)) {
         canonicalInstalled = true;
         // A recovery intent may have appeared after the scan but before our
         // installation. Do not enter the critical section until every live

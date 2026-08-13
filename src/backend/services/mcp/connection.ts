@@ -58,6 +58,10 @@ import {
   STDIO_OAUTH_EXTENSION_CAPABILITY,
   STDIO_OAUTH_EXTENSION_ID,
 } from "mcp-stdio-oauth/protocol";
+import {
+  issueMcpAppRuntimeBrokerEnvironment,
+  revokeMcpAppRuntimeBrokerLease,
+} from '@/backend/mcpApps/runtimeBroker';
 
 // We stash a capabilities key on the client so shouldRecreateClient can detect a change to
 // a client-declared MCP capability that is negotiated at connect time (the SDK doesn't
@@ -89,6 +93,8 @@ export interface TransportWithConfigKey {
   __flujoStdioKey?: string;
   __flujoHttpKey?: string;
   __flujoKind?: "stdio" | "streamable" | "sse" | "websocket";
+  /** Capability lease for one managed MCP Apps stdio process generation. */
+  __flujoRuntimeBrokerLeaseId?: string;
   /** Inner SDK transport when FLUJO applies a protocol decorator. */
   __flujoInnerTransport?: unknown;
 }
@@ -352,11 +358,17 @@ export function createNewClient(config: MCPServerConfig): Client {
   return client;
 }
 
+export interface TransportCreationOptions {
+  /** Mint sidecar registration credentials only for the managed live process. */
+  enableRuntimeBroker?: boolean;
+}
+
 /**
  * Create a transport for the MCP client
  */
 export function createTransport(
   config: MCPServerConfig,
+  options?: TransportCreationOptions,
 ):
   | StdioClientTransport
   | WebSocketClientTransport
@@ -519,7 +531,7 @@ export function createTransport(
     );
     return new WebSocketClientTransport(new URL(config.websocketUrl));
   } else {
-    return createStdioTransport(config);
+    return createStdioTransport(config, options);
   }
 }
 
@@ -783,6 +795,7 @@ export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
  */
 export function createStdioTransport(
   config: MCPServerConfig,
+  options?: TransportCreationOptions,
 ): StdioClientTransport {
   log.debug("Entering createStdioTransport method");
 
@@ -792,6 +805,9 @@ export function createStdioTransport(
   }
 
   const { command, args, env, cwd } = resolveStdioLaunch(config);
+  const runtimeBroker = options?.enableRuntimeBroker && config.enableMcpApps === true
+    ? issueMcpAppRuntimeBrokerEnvironment(config.name)
+    : undefined;
 
   // Create the transport with stderr capture
   log.info(
@@ -801,12 +817,22 @@ export function createStdioTransport(
   const transportoptions: StdioServerParameters = {
     command: command,
     args: args,
-    env: env,
+    env: runtimeBroker ? { ...env, ...runtimeBroker.env } : env,
     cwd: cwd,
     stderr: "pipe",
   };
 
-  const transport = new StdioClientTransport(transportoptions);
+  let transport: StdioClientTransport;
+  try {
+    transport = new StdioClientTransport(transportoptions);
+  } catch (error) {
+    revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId);
+    throw error;
+  }
+  if (runtimeBroker) {
+    (transport as unknown as TransportWithConfigKey).__flujoRuntimeBrokerLeaseId =
+      runtimeBroker.leaseId;
+  }
 
   // Key the transport with the RAW config so shouldRecreateClient can tell whether a
   // later config is byte-identical, independent of the command/args rewrites above.
@@ -1104,11 +1130,11 @@ export async function safelyCloseClient(
   const killEscalationMs = options?.killEscalationMs ?? 5000;
   let exited = true;
   let forced = false;
+  const rawTransport = getUnderlyingTransport(client.transport);
   try {
     // Check if the transport is stdio. Duck-typed on the private _process field
     // (present on both the v1 and v2-beta StdioClientTransport) instead of a v1
     // instanceof, so beta-built connections get the same graceful shutdown.
-    const rawTransport = getUnderlyingTransport(client.transport);
     const child: ChildProcess | undefined = (
       rawTransport as { _process?: ChildProcess } | undefined
     )?._process;
@@ -1166,6 +1192,10 @@ export async function safelyCloseClient(
   } catch (error) {
     log.warn(`Error closing client for ${serverName}:`, error);
     // We continue even if close fails
+  } finally {
+    revokeMcpAppRuntimeBrokerLease(
+      (rawTransport as TransportWithConfigKey | undefined)?.__flujoRuntimeBrokerLeaseId,
+    );
   }
   return { exited, forced, durationMs: Date.now() - startedAt };
 }

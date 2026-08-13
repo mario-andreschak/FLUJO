@@ -22,6 +22,7 @@ import {
   capabilityKey,
   ClientWithBetaMarker,
   TransportWithConfigKey,
+  type TransportCreationOptions,
 } from "./connection";
 import { createOAuthClientProvider } from "./oauth";
 import { createRootsListHandler } from "./roots";
@@ -37,6 +38,10 @@ import {
 } from "mcp-stdio-oauth/protocol";
 import type { StdioOAuthMrtrController } from "mcp-stdio-oauth/client";
 import { StdioOAuthDeferredMrtrController } from "mcp-stdio-oauth/client/transport";
+import {
+  issueMcpAppRuntimeBrokerEnvironment,
+  revokeMcpAppRuntimeBrokerLease,
+} from '@/backend/mcpApps/runtimeBroker';
 
 // ---------------------------------------------------------------------------
 // Experimental v2-beta MCP protocol support (spec revision 2026-07-28).
@@ -206,6 +211,7 @@ function betaRequestInit(config: {
  */
 export function createBetaTransport(
   config: MCPServerConfig,
+  options?: TransportCreationOptions,
 ):
   | BetaStdioClientTransport
   | BetaStreamableHTTPClientTransport
@@ -282,14 +288,24 @@ export function createBetaTransport(
 
   // Default: stdio, spawned from the SAME resolved parameters as the v1 path.
   const { command, args, env, cwd } = resolveStdioLaunch(config);
-  const transport = new BetaStdioClientTransport({
-    command,
-    args,
-    env,
-    cwd,
-    stderr: "pipe",
-  });
+  const runtimeBroker = options?.enableRuntimeBroker && config.enableMcpApps === true
+    ? issueMcpAppRuntimeBrokerEnvironment(config.name)
+    : undefined;
+  let transport: BetaStdioClientTransport;
+  try {
+    transport = new BetaStdioClientTransport({
+      command,
+      args,
+      env: runtimeBroker ? { ...env, ...runtimeBroker.env } : env,
+      cwd,
+      stderr: "pipe",
+    });
+  } catch (error) {
+    revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId);
+    throw error;
+  }
   const keyed = transport as unknown as TransportWithConfigKey;
+  keyed.__flujoRuntimeBrokerLeaseId = runtimeBroker?.leaseId;
   keyed.__flujoStdioKey = stdioConfigKey(config);
   keyed.__flujoKind = "stdio";
   stdioOAuthControllers.set(transport, new StdioOAuthDeferredMrtrController());

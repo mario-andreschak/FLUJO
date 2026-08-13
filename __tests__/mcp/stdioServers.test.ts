@@ -110,6 +110,15 @@ describe('standalone stdio MCP packages', () => {
         'browser_open', 'browser_click', 'browser_type', 'browser_press', 'browser_scroll',
       ]));
       const opened = await client.callTool({ name: 'browser_open', arguments: {} });
+      if (opened.isError) {
+        const errorCode = (opened.structuredContent as {
+          error?: { code?: string };
+        } | undefined)?.error?.code;
+        if (errorCode === 'BROWSER_UNAVAILABLE') return;
+        throw new Error(
+          `browser_open failed unexpectedly: ${JSON.stringify(opened.structuredContent)}`,
+        );
+      }
       sessionId = (opened.structuredContent as { sessionId: string }).sessionId;
       expect(sessionId).toBeTruthy();
       const reopened = await client.callTool({ name: 'browser_open', arguments: {} });
