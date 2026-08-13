@@ -61,6 +61,7 @@ import {
   completePersonaActivity,
   completePersonaActivityWithinRuntimeLock,
   listPendingPersonaActivityDeliveries,
+  persistPersonaActivitySnapshot,
   observeYieldedPersonaActivity,
   releasePersonaActivityLease,
   rejectPersonaActivityDelivery,
@@ -78,6 +79,16 @@ import {
 } from './activityRuntime';
 import { canonicalJson } from './behaviorRevisions';
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
+import {
+  createPersonaActivitySnapshot,
+  readPersonaActivityInstructionContext,
+} from './personaActivitySnapshot';
+import {
+  authorizePersonaCoreAppAccess,
+  isPersonaCoreAppNodeId,
+  projectPersonaCoreAppsIntoFlow,
+  snapshotPersonaCoreAppRefs,
+} from './personaCoreApps';
 import { stableEnduringAgentId } from './ids';
 import { buildPersonaInstructionContext } from './personaInstructionContext';
 import { getCoreMemory } from './memoryKernel';
@@ -602,6 +613,23 @@ function assertInstructionContextMatchesClaim(
   return context;
 }
 
+function assertActivityInstructionContextMatchesClaim(
+  record: PersonaFlowDispatchRecord,
+  claim: PersonaActivityClaim,
+  revision: BehaviorRevision,
+): PersonaInstructionContext {
+  try {
+    const context = readPersonaActivityInstructionContext(claim.activity, revision);
+    if (!context) throw new Error('Activity has no immutable instruction context.');
+    return context;
+  } catch (error) {
+    throw new PersonaFlowDispatchCorruptionError(
+      record.id,
+      error instanceof Error ? error.message : 'Activity Core snapshot is invalid.',
+    );
+  }
+}
+
 function cloneSerializableFlowInput(value: unknown): SerializablePersonaFlowRunInput {
   const parsed = SerializableFlowRunInputSchema.parse(value);
   // Parsing validates JSON. A JSON round-trip also removes any exotic object
@@ -740,6 +768,7 @@ export interface PersonaFlowDispatcherDependencies {
   ) => Promise<CompletedPersonaActivity>;
   observeCompletedPersonaActivity: (result: CompletedPersonaActivity) => Promise<void>;
   updatePersonaActivityReferences: (value: unknown) => Promise<PersonaActivity>;
+  persistPersonaActivitySnapshot: (value: unknown) => Promise<PersonaActivity>;
   listPendingPersonaActivityDeliveries: (value: unknown) => Promise<PersonaMailboxItem[]>;
   acknowledgePersonaActivityDelivery: (value: unknown) => Promise<PersonaMailboxItem>;
   rejectPersonaActivityDelivery: (value: unknown) => Promise<PersonaMailboxItem>;
@@ -756,6 +785,8 @@ export interface PersonaFlowDispatcherDependencies {
   getPersonaActivity: (id: string) => Promise<PersonaActivity | null>;
   getPersonaMailboxItem: (id: string) => Promise<PersonaMailboxItem | null>;
   getCoreMemory: (personaId: string) => Promise<MemoryItem[]>;
+  snapshotPersonaCoreAppRefs: typeof snapshotPersonaCoreAppRefs;
+  projectPersonaCoreAppsIntoFlow: typeof projectPersonaCoreAppsIntoFlow;
   readConversationLog: typeof readConversationLog;
   runFlow: (input: FlowRunInput) => Promise<FlowRunResult>;
 }
@@ -771,6 +802,7 @@ const DEFAULT_DEPENDENCIES: PersonaFlowDispatcherDependencies = {
   completePersonaActivityWithinRuntimeLock,
   observeCompletedPersonaActivity,
   updatePersonaActivityReferences,
+  persistPersonaActivitySnapshot,
   listPendingPersonaActivityDeliveries,
   acknowledgePersonaActivityDelivery,
   rejectPersonaActivityDelivery,
@@ -784,6 +816,8 @@ const DEFAULT_DEPENDENCIES: PersonaFlowDispatcherDependencies = {
   getPersonaActivity,
   getPersonaMailboxItem,
   getCoreMemory,
+  snapshotPersonaCoreAppRefs,
+  projectPersonaCoreAppsIntoFlow,
   readConversationLog,
   runFlow,
 };
@@ -2033,9 +2067,18 @@ export class PersonaFlowDispatcher {
     }
 
     let instructionContext: PersonaInstructionContext | undefined;
+    let coreAppRefs = claim.activity.coreAppRefs ?? [];
     let memoryCandidateLimit = record.memoryCandidateLimit;
     try {
-      if (record.instructionContext) {
+      if (claim.activity.instructionContext) {
+        // The Activity is the authoritative immutable resume source. Dispatch
+        // envelopes remain a compatibility mirror for records created earlier.
+        instructionContext = assertActivityInstructionContextMatchesClaim(
+          record,
+          claim,
+          revision,
+        );
+      } else if (record.instructionContext) {
         instructionContext = assertInstructionContextMatchesClaim(record, claim, revision);
       } else if (record.startedAt === undefined) {
         // Resolve mutable Persona metadata exactly once, before the first run.
@@ -2043,6 +2086,11 @@ export class PersonaFlowDispatcher {
         // not guess historical identity/mission data during resume or recovery.
         const persona = await this.inWorkspace(() => this.dependencies.getPersona(record.personaId));
         if (!persona) throw new Error('Persona no longer exists.');
+        coreAppRefs = claim.activity.kind === 'maintenance'
+          ? []
+          : await this.inWorkspace(() => (
+              this.dependencies.snapshotPersonaCoreAppRefs(persona.id, persona)
+            ));
         const roleVersion = await this.inWorkspace(() => this.dependencies.getRoleVersion(
           persona.roleVersionId,
         ));
@@ -2077,6 +2125,27 @@ export class PersonaFlowDispatcher {
       && typeof flowInput.meetingParticipant.meetingId === 'string'
       ? flowInput.meetingParticipant.meetingId
       : undefined;
+
+    if (instructionContext) {
+      try {
+        const snapshot = createPersonaActivitySnapshot({
+          activity: claim.activity,
+          revision,
+          context: instructionContext,
+          coreAppRefs,
+          ...(claim.mailboxItem.payloadRef
+            ? { entryPointPayloadRef: claim.mailboxItem.payloadRef }
+            : {}),
+        });
+        await this.inWorkspace(() => this.dependencies.persistPersonaActivitySnapshot({
+          ...fence,
+          ...snapshot,
+        }));
+      } catch (error) {
+        await this.failClaimWithoutPayload(claim, error);
+        return true;
+      }
+    }
 
     try {
       await this.inWorkspace(() => this.dependencies.updatePersonaActivityReferences({
@@ -2121,9 +2190,24 @@ export class PersonaFlowDispatcher {
       }
       return false;
     }
-    if (record.instructionContext) {
-      // Re-read the value saved under the Persona runtime lock. This is the
-      // exact context every continuation must pass to runFlow.
+    if (claim.activity.instructionContext) {
+      instructionContext = assertActivityInstructionContextMatchesClaim(record, claim, revision);
+      if (
+        record.instructionContext
+        && canonicalJson(record.instructionContext) !== canonicalJson(instructionContext)
+      ) {
+        await this.failClaimWithoutPayload(
+          claim,
+          new PersonaFlowDispatchCorruptionError(
+            record.id,
+            'Dispatch context does not match the authoritative Activity Core snapshot.',
+          ),
+        );
+        return true;
+      }
+    } else if (record.instructionContext) {
+      // First execution mirrors the context written to the Activity into the
+      // private dispatch envelope for older recovery tooling.
       instructionContext = assertInstructionContextMatchesClaim(record, claim, revision);
     } else {
       instructionContext = undefined;
@@ -2143,6 +2227,14 @@ export class PersonaFlowDispatcher {
       assertCurrent: async () => {
         if (heartbeat.lost()) throw new Error('Persona execution authority was lost.');
         await this.inWorkspace(() => this.dependencies.assertPersonaActivityLease(fence));
+      },
+      authorizePersonaCoreMcp: async (serverName, nodeId) => {
+        if (!isPersonaCoreAppNodeId(nodeId)) return;
+        if (heartbeat.lost()) throw new Error('Persona execution authority was lost.');
+        await this.inWorkspace(async () => {
+          await this.dependencies.assertPersonaActivityLease(fence);
+          await authorizePersonaCoreAppAccess(record.personaId, coreAppRefs, serverName);
+        });
       },
       commitWhileCurrent: <T>(task: () => Promise<T>) => this.inWorkspace(() => (
         this.dependencies.commitWithPersonaActivityLease(fence, task)
@@ -2362,11 +2454,18 @@ export class PersonaFlowDispatcher {
         behaviors: behaviorPersona.composition?.behaviors ?? [],
         excludeBehaviorId: revision.behaviorId,
       });
+      const coreFlowDefinition = claim.activity.kind === 'maintenance'
+        ? structuredClone(revision.flowSnapshot)
+        : await this.inWorkspace(() => this.dependencies.projectPersonaCoreAppsIntoFlow(
+            record.personaId,
+            coreAppRefs,
+            structuredClone(revision.flowSnapshot),
+          ));
       result = await this.inWorkspace(() => this.dependencies.runFlow({
         ...flowInput,
-        // Clone the immutable persisted snapshot before handing it to an engine
-        // that may annotate node objects in memory.
-        flowDefinition: structuredClone(revision.flowSnapshot),
+        // Persona Apps are projected only into this Activity-local Core clone.
+        // The persisted Core revision and generic Behavior Flow remain unchanged.
+        flowDefinition: coreFlowDefinition,
         abortSignal: abortController.signal,
         executionAuthority: authority,
         behaviorToolRegistry,

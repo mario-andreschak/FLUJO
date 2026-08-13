@@ -5,10 +5,14 @@ import {
   EnduringAgentIdSchema,
   PersonaAppGrantSchema,
   PersonaAppLaunchInputSchema,
+  PersonaSchema,
+  ReplacePersonaAppGrantInputSchema,
   type CreatePersonaAppGrantInput,
+  type Persona,
   type PersonaAppGrant,
   type PersonaAppLaunchDescriptor,
   type PersonaAppLaunchInput,
+  type ReplacePersonaAppGrantInput,
 } from '@/shared/types/enduringAgent';
 import type { MCPServerConfig } from '@/shared/types/mcp';
 
@@ -17,7 +21,11 @@ import {
   PersonaDomainNotFoundError,
 } from './domainMutation';
 import { personaAppGrantId } from './ids';
-import { withPersonaRuntimeLock } from './runtimeLock';
+import { authorizePersonaCoreAppAccess } from './personaCoreApps';
+import {
+  withPersonaRuntimeLock,
+  type PersonaRuntimeLock,
+} from './runtimeLock';
 import {
   createPersonaAppGrant,
   deletePersonaAppGrantRecord,
@@ -25,12 +33,38 @@ import {
   getPersonaAppGrant,
   getPersonaDeletionTombstone,
   listPersonaAppGrants,
+  updatePersonaWithinRuntimeLock,
 } from './store';
 
-async function requireWritablePersona(personaId: string): Promise<void> {
-  if (!await getPersona(personaId) || await getPersonaDeletionTombstone(personaId)) {
+async function requireWritablePersona(personaId: string): Promise<Persona> {
+  const persona = await getPersona(personaId);
+  if (!persona || await getPersonaDeletionTombstone(personaId)) {
     throw new PersonaDomainNotFoundError('Persona', personaId);
   }
+  return persona;
+}
+
+async function syncPersonaSelection(
+  persona: Persona,
+  mcpServerName: string,
+  selected: boolean,
+  lock: PersonaRuntimeLock,
+): Promise<void> {
+  const fallbackRefs = persona.composition?.appRefs ?? (
+    await listPersonaAppGrants(persona.id)
+  ).map((grant) => grant.mcpServerName);
+  const current = Array.from(new Set(fallbackRefs));
+  const appRefs = selected
+    ? current.includes(mcpServerName) ? current : [...current, mcpServerName]
+    : current.filter((reference) => reference !== mcpServerName);
+  if (appRefs.length === current.length && appRefs.every((reference, index) => reference === current[index])) {
+    return;
+  }
+  await updatePersonaWithinRuntimeLock(PersonaSchema.parse({
+    ...persona,
+    composition: { ...persona.composition, appRefs },
+    updatedAt: Math.max(Date.now(), persona.updatedAt + 1),
+  }), lock);
 }
 
 async function requireDirectAppConfig(mcpServerName: string): Promise<MCPServerConfig> {
@@ -67,19 +101,22 @@ export async function grantPersonaAppAccess(
   const input = CreatePersonaAppGrantInputSchema.parse(value) as CreatePersonaAppGrantInput;
   await requireDirectAppConfig(input.mcpServerName);
 
-  return withPersonaRuntimeLock(personaId, async () => {
-    await requireWritablePersona(personaId);
+  return withPersonaRuntimeLock(personaId, async (lock) => {
+    const persona = await requireWritablePersona(personaId);
     const id = personaAppGrantId(personaId, input.mcpServerName);
     const existing = await getPersonaAppGrant(id);
     if (existing) {
       if (
         existing.personaId === personaId
         && existing.mcpServerName === input.mcpServerName
-      ) return existing;
+      ) {
+        await syncPersonaSelection(persona, input.mcpServerName, true, lock);
+        return existing;
+      }
       throw new PersonaDomainConflictError('Persona app grant identity collision.');
     }
     const now = Date.now();
-    return createPersonaAppGrant(PersonaAppGrantSchema.parse({
+    const grant = await createPersonaAppGrant(PersonaAppGrantSchema.parse({
       schemaVersion: ENDURING_AGENT_SCHEMA_VERSION,
       id,
       personaId,
@@ -87,6 +124,99 @@ export async function grantPersonaAppAccess(
       createdAt: now,
       updatedAt: now,
     }));
+    await syncPersonaSelection(persona, input.mcpServerName, true, lock);
+    return grant;
+  });
+}
+
+/**
+ * Replace one exact configuration under the Persona runtime lock. The target is
+ * validated before persistence and a stale client cannot overwrite a newer
+ * selection. Retrying the already-applied target is idempotent only while the
+ * caller's expected timestamp still matches.
+ */
+export async function replacePersonaAppAccess(
+  personaId: string,
+  grantId: string,
+  value: unknown,
+): Promise<PersonaAppGrant> {
+  EnduringAgentIdSchema.parse(personaId);
+  EnduringAgentIdSchema.parse(grantId);
+  const input = ReplacePersonaAppGrantInputSchema.parse(value) as ReplacePersonaAppGrantInput;
+
+  return withPersonaRuntimeLock(personaId, async (lock) => {
+    const persona = await requireWritablePersona(personaId);
+    const grant = await getPersonaAppGrant(grantId);
+    if (!grant || grant.personaId !== personaId) {
+      throw new PersonaDomainNotFoundError('PersonaAppGrant', grantId);
+    }
+    if (grant.updatedAt !== input.expectedUpdatedAt) {
+      throw new PersonaDomainConflictError(
+        'The Persona App selection changed in another request.',
+        'PERSONA_APP_STALE_WRITE',
+        { currentUpdatedAt: grant.updatedAt },
+      );
+    }
+
+    // Revalidate inside the lock so a failed target never removes the working App.
+    await requireDirectAppConfig(input.mcpServerName);
+    if (grant.mcpServerName === input.mcpServerName) return grant;
+
+    const replacementId = personaAppGrantId(personaId, input.mcpServerName);
+    if (await getPersonaAppGrant(replacementId)) {
+      throw new PersonaDomainConflictError(
+        'That MCP configuration is already selected for this Persona.',
+        'PERSONA_APP_ALREADY_SELECTED',
+      );
+    }
+
+    const now = Math.max(Date.now(), grant.updatedAt + 1);
+    const replacement = PersonaAppGrantSchema.parse({
+      schemaVersion: ENDURING_AGENT_SCHEMA_VERSION,
+      id: replacementId,
+      personaId,
+      mcpServerName: input.mcpServerName,
+      createdAt: grant.createdAt,
+      updatedAt: now,
+    });
+    let createdReplacement = false;
+    let updatedSelection = false;
+    try {
+      await createPersonaAppGrant(replacement);
+      createdReplacement = true;
+      const currentRefs = Array.from(new Set(
+        persona.composition?.appRefs ?? (
+          await listPersonaAppGrants(personaId)
+        ).map((candidate) => candidate.mcpServerName),
+      ));
+      const nextRefs = currentRefs.map((reference) => (
+        reference === grant.mcpServerName ? input.mcpServerName : reference
+      ));
+      if (!nextRefs.includes(input.mcpServerName)) nextRefs.push(input.mcpServerName);
+      const appRefs = Array.from(new Set(nextRefs.filter(
+        (reference) => reference !== grant.mcpServerName,
+      )));
+      await updatePersonaWithinRuntimeLock(PersonaSchema.parse({
+        ...persona,
+        composition: { ...persona.composition, appRefs },
+        updatedAt: Math.max(Date.now(), persona.updatedAt + 1),
+      }), lock);
+      updatedSelection = true;
+      await deletePersonaAppGrantRecord(grant.id);
+      return replacement;
+    } catch (error) {
+      // Best-effort rollback keeps the previously working exact configuration.
+      if (updatedSelection) {
+        await updatePersonaWithinRuntimeLock(PersonaSchema.parse({
+          ...persona,
+          updatedAt: Math.max(Date.now(), persona.updatedAt + 1),
+        }), lock).catch(() => undefined);
+      }
+      if (createdReplacement) {
+        await deletePersonaAppGrantRecord(replacement.id).catch(() => undefined);
+      }
+      throw error;
+    }
   });
 }
 
@@ -97,8 +227,8 @@ export async function revokePersonaAppAccess(
 ): Promise<void> {
   EnduringAgentIdSchema.parse(personaId);
   EnduringAgentIdSchema.parse(grantId);
-  await withPersonaRuntimeLock(personaId, async () => {
-    await requireWritablePersona(personaId);
+  await withPersonaRuntimeLock(personaId, async (lock) => {
+    const persona = await requireWritablePersona(personaId);
     const grant = await getPersonaAppGrant(grantId);
     // Return the same 404 for missing and foreign records: never reveal another
     // Persona's device inventory through a confused-deputy request.
@@ -106,6 +236,7 @@ export async function revokePersonaAppAccess(
       throw new PersonaDomainNotFoundError('PersonaAppGrant', grantId);
     }
     await deletePersonaAppGrantRecord(grant.id);
+    await syncPersonaSelection(persona, grant.mcpServerName, false, lock);
   });
 }
 
@@ -136,7 +267,11 @@ export async function authorizePersonaAppLaunch(
     if (!grant || grant.personaId !== personaId) {
       throw new PersonaDomainNotFoundError('PersonaAppGrant', grantId);
     }
-    await requireDirectAppConfig(grant.mcpServerName);
+    await authorizePersonaCoreAppAccess(
+      personaId,
+      [grant.mcpServerName],
+      grant.mcpServerName,
+    );
     return {
       personaId,
       grantId: grant.id,

@@ -276,6 +276,7 @@ async function executeListMCPResources(
     if (serverFilter && boundServer !== serverFilter) continue;
 
     try {
+      await ctx.executionAuthority?.authorizePersonaCoreMcp?.(boundServer, mcpNode.id);
       const [resourcesResult, templatesResult] = await Promise.all([
         mcpService.listServerResources(boundServer),
         mcpService.listServerResourceTemplates(boundServer),
@@ -350,6 +351,7 @@ export async function executeNativeReadResource(
   // 1. Find which bound server advertises this URI (or a matching template).
   //    Re-list on demand to ensure freshness.
   let owningServer: string | undefined;
+  let owningNodeId: string | undefined;
   let ownerEnabledResources: string[] | 'all' | undefined;
 
   for (const mcpNode of ctx.mcpNodes) {
@@ -365,10 +367,12 @@ export async function executeNativeReadResource(
 
     // Re-list the server's resources to confirm the URI is advertised
     try {
+      await ctx.executionAuthority?.authorizePersonaCoreMcp?.(boundServer, mcpNode.id);
       const resourcesResult = await mcpService.listServerResources(boundServer);
       const found = (resourcesResult.resources ?? []).some((r) => r.uri === uri);
       if (found) {
         owningServer = boundServer;
+        owningNodeId = mcpNode.id;
         ownerEnabledResources = enabledResources;
         break;
       }
@@ -394,6 +398,7 @@ export async function executeNativeReadResource(
   let readResult: { success: boolean; data?: MCPReadResourceResult; error?: string; statusCode?: number };
   try {
     await assertFlowExecutionCurrent(ctx);
+    await ctx.executionAuthority?.authorizePersonaCoreMcp?.(owningServer, owningNodeId);
     readResult = await mcpService.readResource(owningServer, uri) as typeof readResult;
     // Resource reads can block on a remote server.  Reject a late response
     // before it is captured, emitted, or returned into a stale transcript.

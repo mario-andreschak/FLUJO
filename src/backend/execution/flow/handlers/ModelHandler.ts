@@ -1490,6 +1490,7 @@ export class ModelHandler {
       sessionResume,
       onFinalWire,
       beforeToolDispatch: input.beforeToolDispatch,
+      authorizePersonaCoreMcp: input.executionAuthority?.authorizePersonaCoreMcp,
       beforeModelDispatch: input.beforeModelDispatch ?? input.executionAuthority?.assertCurrent,
       durableContext,
       flushTranscriptProjection: flushLiveProjection,
@@ -1770,6 +1771,8 @@ export class ModelHandler {
       }) => void;
       /** Runtime-only Persona/activity fence assertion before tool side effects. */
       beforeToolDispatch?: () => Promise<void>;
+      /** Call-time authorization for Persona Core-injected MCP handles. */
+      authorizePersonaCoreMcp?: (serverName: string, nodeId?: string) => Promise<void>;
       /** Runtime-only fence assertion immediately before every provider attempt. */
       beforeModelDispatch?: () => Promise<void>;
       /** Authority context for resource/lineage writes performed in this call. */
@@ -2314,6 +2317,7 @@ export class ModelHandler {
               onToolProgress,
               signal: abortController.signal,
               beforeToolDispatch: opts?.beforeToolDispatch,
+              authorizePersonaCoreMcp: opts?.authorizePersonaCoreMcp,
               afterToolDispatch: () => assertFlowExecutionCurrent(opts?.durableContext ?? {}),
               commitDurableMutation: <T>(task: () => Promise<T>) =>
                 commitFlowDurableMutation(opts?.durableContext ?? {}, task),
@@ -3279,6 +3283,10 @@ export class ModelHandler {
             // boundary, immediately before MCP dispatch.
             try {
               await input.beforeToolDispatch?.();
+              await input.executionAuthority?.authorizePersonaCoreMcp?.(
+                serverName,
+                decoded.nodeId,
+              );
             } catch (error) {
               executionAuthorityFailure = error;
               throw error;

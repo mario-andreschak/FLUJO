@@ -374,6 +374,7 @@ export const InitialPersonaMemoryInputSchema = z.object({
 export const CreatePersonaInputSchema = z.object({
   id: EnduringAgentIdSchema.optional(),
   name: NonEmptyText(160),
+  coreFlowRef: WorkspaceFlowRefSchema,
   roleVersionId: EnduringAgentIdSchema.optional(),
   appRefs: z.array(PersonaAppRefSchema).max(128)
     .refine((refs) => new Set(refs).size === refs.length, 'App references must be unique.')
@@ -532,12 +533,12 @@ export const CreatePersonaAppGrantInputSchema = z.object({
   mcpServerName: McpServerConfigNameSchema,
 }).strict();
 
-export const PersonaAppLaunchInputSchema = z.object({
 export const ReplacePersonaAppGrantInputSchema = z.object({
   mcpServerName: McpServerConfigNameSchema,
   expectedUpdatedAt: TimestampSchema,
 }).strict();
 
+export const PersonaAppLaunchInputSchema = z.object({
   uri: z.string().min(1).max(4096).regex(/^ui:\/\//i),
 }).strict();
 
@@ -556,6 +557,13 @@ export const PersonaActivitySchema = z.object({
   source: PersonaActivitySourceSchema,
   behaviorId: EnduringAgentIdSchema.optional(),
   behaviorRevisionId: EnduringAgentIdSchema.optional(),
+  coreFlowId: z.string().min(1).max(256).optional(),
+  coreFlowRevisionId: EnduringAgentIdSchema.optional(),
+  coreAppRefs: z.array(McpServerConfigNameSchema).max(64).optional(),
+  instructionContext: PersonaInstructionContextSchema.optional(),
+  instructionContextDigest: z.string().regex(SHA256_PATTERN).optional(),
+  instructionContextSchemaVersion: z.literal(PERSONA_INSTRUCTION_CONTEXT_SCHEMA_VERSION).optional(),
+  entryPointPayloadRef: z.string().min(1).max(4096).optional(),
   leaseId: EnduringAgentIdSchema.optional(),
   conversationId: EnduringAgentIdSchema.optional(),
   runId: EnduringAgentIdSchema.optional(),
@@ -573,6 +581,65 @@ export const PersonaActivitySchema = z.object({
   const terminal = record.status === 'completed'
     || record.status === 'cancelled'
     || record.status === 'error';
+  const snapshotFields = [
+    record.coreFlowId,
+    record.coreFlowRevisionId,
+    record.instructionContext,
+    record.instructionContextDigest,
+    record.instructionContextSchemaVersion,
+  ];
+  const hasSnapshot = snapshotFields.some((value) => value !== undefined);
+  if (hasSnapshot && snapshotFields.some((value) => value === undefined)) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'An Activity Core snapshot must be persisted as one complete immutable bundle.',
+      path: ['instructionContext'],
+    });
+  }
+  if (record.instructionContext) {
+    if (record.instructionContext.personaId !== record.personaId) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Activity context must identify the owning Persona.',
+        path: ['instructionContext', 'personaId'],
+      });
+    }
+    if (record.instructionContext.activityId !== record.id) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Activity context must identify the owning Activity.',
+        path: ['instructionContext', 'activityId'],
+      });
+    }
+    if (record.instructionContext.behaviorRevisionId !== record.behaviorRevisionId) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Activity context must match the pinned Behavior revision.',
+        path: ['instructionContext', 'behaviorRevisionId'],
+      });
+    }
+    if (record.instructionContext.rootFlowId !== record.coreFlowId) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Activity Core Flow must match the frozen context root Flow.',
+        path: ['coreFlowId'],
+      });
+    }
+    if (record.coreFlowRevisionId !== record.behaviorRevisionId) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Activity Core revision must match the immutable Behavior revision pin.',
+        path: ['coreFlowRevisionId'],
+      });
+    }
+    if (record.instructionContextSchemaVersion !== record.instructionContext.schemaVersion) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Activity context schema version must match the frozen context.',
+        path: ['instructionContextSchemaVersion'],
+      });
+    }
+  }
 
   if (record.updatedAt < record.createdAt) {
     ctx.addIssue({

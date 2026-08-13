@@ -172,6 +172,8 @@ export interface CompletionInput {
   signal?: AbortSignal;
   /** Runtime-only lease/fence assertion immediately before a tool side effect. */
   beforeToolDispatch?: () => Promise<void>;
+  /** Call-time authorization for Persona Core-injected MCP handles. */
+  authorizePersonaCoreMcp?: (serverName: string, nodeId?: string) => Promise<void>;
   /** Runtime-only lease/generation assertion immediately after a long tool call. */
   afterToolDispatch?: () => Promise<void>;
   /** Hold the current execution fence across one durable resource mutation. */

@@ -869,6 +869,11 @@ export interface CodexSessionMetadata {
 export interface FlowExecutionAuthority {
     assertCurrent: () => Promise<void>;
     signal: AbortSignal;
+    /**
+     * Persona Core-only authorization for runtime-injected MCP nodes. Generic
+     * Flow nodes never call this hook, and the capability is never persisted.
+     */
+    authorizePersonaCoreMcp?: (serverName: string, nodeId?: string) => Promise<void>;
     /** Hold the higher-level lease lock across one authoritative durable write. */
     commitWhileCurrent?: <T>(task: () => Promise<T>) => Promise<T>;
     /**

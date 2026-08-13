@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
 
+import { flowService } from '@/backend/services/flow';
 import {
   BEHAVIOR_BINDING_SCHEMA_VERSION,
   BEHAVIOR_REVISION_SCHEMA_VERSION,
@@ -9,6 +10,7 @@ import {
   ENDURING_AGENT_SCHEMA_VERSION,
   MemoryItemSchema,
   PERSONA_SCHEMA_VERSION,
+  PersonaAppGrantSchema,
   PersonaSchema,
   type BehaviorBinding,
   type BehaviorRevision,
@@ -27,14 +29,20 @@ import {
 } from './behaviorRevisions';
 import { BUILT_IN_DEVELOPER_ROLE_VERSION_ID } from './builtInDeveloperRole';
 import { ensureBuiltInDeveloperRole } from './builtInRoleStore';
-import { randomEnduringAgentId, stableEnduringAgentId } from './ids';
+import {
+  personaAppGrantId,
+  randomEnduringAgentId,
+  stableEnduringAgentId,
+} from './ids';
 import { ensurePersonaNamespaces } from './namespaces';
+import { resolveAvailablePersonaAppRefs } from './personaCoreApps';
 import { withPersonaRuntimeLock } from './runtimeLock';
 import {
   createBehaviorRevision,
   createBehaviorBindingIfAbsent,
   createMemoryItem,
   createPersona,
+  createPersonaAppGrant,
   getMemoryItem,
   getPersona,
   getPersonaDeletionTombstone,
@@ -93,7 +101,9 @@ function effectiveFactoryRequest(
 ): Record<string, unknown> {
   return {
     name: input.name,
+    coreFlowRef: input.coreFlowRef,
     roleVersionId: roleVersion.id,
+    appRefs: input.appRefs ?? null,
     mission: input.mission ?? roleVersion.mission,
     presentation: input.presentation ?? roleVersion.defaults?.presentation ?? null,
     autonomyLevel: input.autonomyLevel ?? roleVersion.defaults?.autonomyLevel ?? 'locked',
@@ -223,6 +233,11 @@ async function materializeInitialMemories(
  */
 export async function createPersonaFromRole(value: unknown): Promise<PersonaBundle> {
   const input = CreatePersonaInputSchema.parse(value) as CreatePersonaInput;
+  if (!await flowService.getFlow(input.coreFlowRef)) {
+    throw new PersonaFactoryConflictError(
+      `Core Flow ${JSON.stringify(input.coreFlowRef)} does not exist in this workspace.`,
+    );
+  }
   const personaId = resolvePersonaId(input);
   assertSafeCollectionId(personaId);
 
@@ -274,6 +289,19 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
     const initialMemoryIds = await materializeInitialMemories(persona, input);
 
     if (persona.provisioningState !== 'ready') {
+      const initialAppRefs = await resolveAvailablePersonaAppRefs(
+        input.appRefs ?? roleVersion.capabilityRequirements?.preferredMcpServers ?? [],
+      );
+      await Promise.all(initialAppRefs.map((mcpServerName) => createPersonaAppGrant(
+        PersonaAppGrantSchema.parse({
+          schemaVersion: ENDURING_AGENT_SCHEMA_VERSION,
+          id: personaAppGrantId(persona!.id, mcpServerName),
+          personaId: persona!.id,
+          mcpServerName,
+          createdAt: persona!.createdAt,
+          updatedAt: persona!.createdAt,
+        }),
+      )));
       persona = await updatePersonaWithinRuntimeLock(PersonaSchema.parse({
         ...persona,
         lifecycleState: 'idle',
@@ -281,7 +309,8 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
         coreMemoryItemIds: initialMemoryIds,
         composition: {
           description: '',
-          appRefs: [],
+          coreFlowRef: input.coreFlowRef,
+          appRefs: initialAppRefs,
           memoryRefs: initialMemoryIds,
           behaviors: roleVersion.behaviorSlots.map((slot) => ({
             ref: stableEnduringAgentId('behavior', {

@@ -172,6 +172,7 @@ export class CodexAdapter implements CompletionAdapter {
       onToolProgress,
       signal,
       beforeToolDispatch,
+      authorizePersonaCoreMcp,
       afterToolDispatch,
       commitDurableMutation,
       conversationId,
@@ -434,6 +435,7 @@ export class CodexAdapter implements CompletionAdapter {
             );
             if (denied) return denied;
             await beforeToolDispatch?.();
+            await authorizePersonaCoreMcp?.(server, callerNodeId);
             log.debug('Codex tool call', { server, tool: originalTool, exposedAs: readableName });
             const toolStartedAt = Date.now();
             const result = await mcpService.callTool(

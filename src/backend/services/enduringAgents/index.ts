@@ -20,6 +20,7 @@ export * from './portability';
 export * from './personaAdmin';
 export * from './personaComposition';
 export * from './personaAppGrants';
+export * from './personaCoreApps';
 export * from './recordMigrations';
 export * from './roleAdmin';
 export * from './runtimeEvents';

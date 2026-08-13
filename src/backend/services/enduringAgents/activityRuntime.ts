@@ -11,6 +11,7 @@ import {
   EnduringAgentIdSchema,
   PERSONA_LIFECYCLE_STATES,
   PersonaActivitySchema,
+  PersonaInstructionContextSchema,
   PersonaLeaseSchema,
   PersonaMailboxItemSchema,
   type BehaviorRevision,
@@ -18,6 +19,7 @@ import {
   type Persona,
   type PersonaActivity,
   type PersonaActivityStatus,
+  type PersonaInstructionContext,
   type PersonaLease,
   type PersonaMailboxItem,
   type PersonaMailboxRelatedAction,
@@ -35,6 +37,11 @@ import { createLogger } from '@/utils/logger';
 import { canonicalJson } from './behaviorRevisions';
 import { resolveEffectiveBehaviorRevision } from './behaviorFlowResolver';
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
+import {
+  hashPersonaInstructionContext,
+  type PersonaActivitySnapshot,
+} from './personaActivitySnapshot';
+import { resolvePersonaCoreRevision } from './personaCoreResolver';
 import { randomEnduringAgentId, stableEnduringAgentId } from './ids';
 import {
   type PersonaRuntimeLock,
@@ -143,6 +150,16 @@ const UpdatePersonaActivityReferencesInputSchema = LeaseFenceSchema.extend({
   { message: 'At least one Activity reference field is required.' },
 );
 
+const PersistPersonaActivitySnapshotInputSchema = LeaseFenceSchema.extend({
+  coreFlowId: z.string().min(1).max(256),
+  coreFlowRevisionId: EnduringAgentIdSchema,
+  coreAppRefs: z.array(z.string().trim().min(1).max(200)).max(64),
+  instructionContext: PersonaInstructionContextSchema,
+  instructionContextDigest: z.string().regex(/^[a-f0-9]{64}$/),
+  instructionContextSchemaVersion: z.literal(1),
+  entryPointPayloadRef: z.string().min(1).max(4_096).optional(),
+}).strict();
+
 const CancelPersonaMailboxItemInputSchema = z.object({
   personaId: EnduringAgentIdSchema,
   mailboxItemId: EnduringAgentIdSchema,
@@ -240,6 +257,9 @@ export interface UpdatePersonaActivityReferencesInput extends PersonaLeaseFence 
   resourceRefs?: string[];
   outcomeRef?: string;
 }
+
+export interface PersistPersonaActivitySnapshotInput
+  extends PersonaLeaseFence, PersonaActivitySnapshot {}
 
 export interface CancelPersonaMailboxItemInput {
   personaId: string;
@@ -1569,6 +1589,8 @@ export async function enqueuePersonaMailboxItem(
 ): Promise<EnqueuePersonaMailboxResult> {
   const input = CreatePersonaMailboxItemInputSchema.parse(value) as RoutePersonaMailboxItemInput;
   assertSafeCollectionId(input.personaId);
+  const behaviorSlotKey = input.behaviorSlotKey ?? defaultBehaviorSlot(input.kind);
+  if (behaviorSlotKey === 'primary') await resolvePersonaCoreRevision(input.personaId);
 
   const result = await withPersonaRuntimeLock(input.personaId, async (lock) => {
     const routed = await admitPersonaMailboxItem(lock, input, false);
@@ -1591,6 +1613,8 @@ export async function routePersonaMailboxItem(
 ): Promise<RoutePersonaMailboxResult> {
   const input = CreatePersonaMailboxItemInputSchema.parse(value) as RoutePersonaMailboxItemInput;
   assertSafeCollectionId(input.personaId);
+  const behaviorSlotKey = input.behaviorSlotKey ?? defaultBehaviorSlot(input.kind);
+  if (behaviorSlotKey === 'primary') await resolvePersonaCoreRevision(input.personaId);
   const result = await withPersonaRuntimeLock(
     input.personaId,
     (lock) => admitPersonaMailboxItem(lock, input, true),
@@ -2135,6 +2159,74 @@ export async function updatePersonaActivityReferences(
       ...(input.meetingId !== undefined ? { meetingId: input.meetingId } : {}),
       ...(input.resourceRefs !== undefined ? { resourceRefs: [...input.resourceRefs] } : {}),
       ...(input.outcomeRef !== undefined ? { outcomeRef: input.outcomeRef } : {}),
+      updatedAt: now,
+    });
+  });
+}
+
+/** Persist the complete immutable Core/context bundle under the exact Activity fence. */
+export async function persistPersonaActivitySnapshot(
+  value: unknown,
+): Promise<PersonaActivity> {
+  const input = PersistPersonaActivitySnapshotInputSchema.parse(value) as
+    PersistPersonaActivitySnapshotInput;
+  return withPersonaRuntimeLock(input.personaId, async (lock) => {
+    const { activity } = await requireActiveRunnableLease(lock, input);
+    if (
+      activity.behaviorRevisionId !== input.coreFlowRevisionId
+      || input.instructionContext.personaId !== activity.personaId
+      || input.instructionContext.activityId !== activity.id
+      || input.instructionContext.behaviorRevisionId !== activity.behaviorRevisionId
+      || input.instructionContext.rootFlowId !== input.coreFlowId
+      || input.instructionContext.schemaVersion !== input.instructionContextSchemaVersion
+      || hashPersonaInstructionContext(input.instructionContext) !== input.instructionContextDigest
+    ) {
+      throw new PersonaRuntimeCorruptionError(
+        input.personaId,
+        'Persona Activity Core snapshot does not match its immutable revision and context.',
+      );
+    }
+
+    const requested = {
+      coreFlowId: input.coreFlowId,
+      coreFlowRevisionId: input.coreFlowRevisionId,
+      coreAppRefs: input.coreAppRefs,
+      instructionContext: input.instructionContext,
+      instructionContextDigest: input.instructionContextDigest,
+      instructionContextSchemaVersion: input.instructionContextSchemaVersion,
+      entryPointPayloadRef: input.entryPointPayloadRef ?? null,
+    };
+    if (activity.instructionContext) {
+      const existing = {
+        coreFlowId: activity.coreFlowId,
+        coreFlowRevisionId: activity.coreFlowRevisionId,
+        coreAppRefs: activity.coreAppRefs ?? [],
+        instructionContext: activity.instructionContext,
+        instructionContextDigest: activity.instructionContextDigest,
+        instructionContextSchemaVersion: activity.instructionContextSchemaVersion,
+        entryPointPayloadRef: activity.entryPointPayloadRef ?? null,
+      };
+      if (canonicalJson(existing) !== canonicalJson(requested)) {
+        throw new PersonaRuntimeCorruptionError(
+          input.personaId,
+          'Persona Activity Core snapshot is immutable and cannot be replaced.',
+        );
+      }
+      return activity;
+    }
+
+    const now = Math.max(Date.now(), activity.updatedAt, activity.startedAt ?? activity.createdAt);
+    return saveActivity(lock, {
+      ...activity,
+      coreFlowId: input.coreFlowId,
+      coreFlowRevisionId: input.coreFlowRevisionId,
+      coreAppRefs: [...input.coreAppRefs],
+      instructionContext: structuredClone(input.instructionContext),
+      instructionContextDigest: input.instructionContextDigest,
+      instructionContextSchemaVersion: input.instructionContextSchemaVersion,
+      ...(input.entryPointPayloadRef
+        ? { entryPointPayloadRef: input.entryPointPayloadRef }
+        : {}),
       updatedAt: now,
     });
   });

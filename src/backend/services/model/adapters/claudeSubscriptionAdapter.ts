@@ -316,6 +316,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     onModelDelta,
     onToolProgress,
     signal,
+    beforeToolDispatch,
+    authorizePersonaCoreMcp,
     conversationId,
     runId,
     nodeId,
@@ -634,6 +636,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           // Same timeout policy as the OpenAI-path tool loop: the MCP node's
           // toolTimeout (seconds, -1 = none), defaulting to 5 minutes.
           const effectiveArgs = await applyPresetArguments(args ?? {}, presetArgs, context);
+          await beforeToolDispatch?.();
+          await authorizePersonaCoreMcp?.(server, callerNodeId);
           const result = await mcpService.callTool(
             server,
             originalTool,

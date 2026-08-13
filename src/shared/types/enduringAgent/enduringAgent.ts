@@ -262,6 +262,8 @@ export interface InitialPersonaMemoryInput {
 export interface CreatePersonaInput {
   id?: string;
   name: string;
+  /** Required mutable authoring Flow used as the Persona's visible Core entry point. */
+  coreFlowRef: string;
   roleVersionId?: string;
   /** Human-confirmed exact MCP configuration names; omitted uses Role suggestions. */
   appRefs?: string[];
@@ -457,13 +459,13 @@ export interface CreatePersonaAppGrantInput {
   mcpServerName: string;
 }
 
-export interface PersonaAppLaunchInput {
 /** Compare-and-swap input for replacing one exact Persona App configuration. */
 export interface ReplacePersonaAppGrantInput {
   mcpServerName: string;
   expectedUpdatedAt: number;
 }
 
+export interface PersonaAppLaunchInput {
   /** MCP Apps resource selected from the granted config's live discovery. */
   uri: string;
 }
@@ -524,6 +526,15 @@ export interface PersonaActivity {
   source: PersonaActivitySource;
   behaviorId?: string;
   behaviorRevisionId?: string;
+  /** Immutable Activity-owned Core/context snapshot. Optional only for legacy records. */
+  coreFlowId?: string;
+  coreFlowRevisionId?: string;
+  /** Exact Persona App configuration names frozen when this Activity started. */
+  coreAppRefs?: string[];
+  instructionContext?: PersonaInstructionContext;
+  instructionContextDigest?: string;
+  instructionContextSchemaVersion?: typeof PERSONA_INSTRUCTION_CONTEXT_SCHEMA_VERSION;
+  entryPointPayloadRef?: string;
   leaseId?: string;
   conversationId?: string;
   runId?: string;
