@@ -247,7 +247,7 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
     );
   });
 
-  it('shows enabled Personas and stable Roles in the compact navigation drawer', () => {
+  it('shows enabled Waves, Personas, and stable Roles in the compact navigation drawer', () => {
     setCompactNavigation(true);
     mockPathname = '/automation/triggers';
     mockStorageValue = {
