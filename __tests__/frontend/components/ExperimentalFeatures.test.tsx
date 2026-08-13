@@ -370,19 +370,35 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
       updateSettings: mockUpdateSettings,
     };
     const originalFetch = global.fetch;
-    const fetchSpy = jest.fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          entries: [{
-            serverName: 'acme',
-            uri: 'ui://acme/dashboard',
-            decision: 'deny-always',
-            updatedAt: 1,
-          }],
-        }),
-      })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ status: 'granted' }) });
+    const fetchSpy = jest.fn(async (
+      input: Parameters<typeof fetch>[0],
+      init?: Parameters<typeof fetch>[1],
+    ) => {
+      const url = String(input);
+      if (url === '/api/snapshots') {
+        return { ok: false } as Response;
+      }
+      if (url === '/api/mcp/app-consent?manage=true') {
+        return {
+          ok: true,
+          json: async () => ({
+            entries: [{
+              serverName: 'acme',
+              uri: 'ui://acme/dashboard',
+              decision: 'deny-always',
+              updatedAt: 1,
+            }],
+          }),
+        } as Response;
+      }
+      if (url === '/api/mcp/app-consent' && init?.method === 'POST') {
+        return {
+          ok: true,
+          json: async () => ({ status: 'granted' }),
+        } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
     global.fetch = fetchSpy as typeof fetch;
 
     try {
