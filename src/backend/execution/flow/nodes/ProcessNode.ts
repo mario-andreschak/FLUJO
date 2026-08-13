@@ -149,7 +149,7 @@ export class ProcessNode extends BaseNode {
     // Subflow target's `invocationMode` can be read while partitioning targets.
     let flowNodesById: Map<string, FlowNode> | null = null;
     try {
-      const flow = await flowService.getFlow(sharedState.flowId);
+      const flow = sharedState.flowSnapshot ?? await flowService.getFlow(sharedState.flowId);
       if (flow) {
         flowNodesById = new Map(flow.nodes.map(n => [n.id, n]));
       }
@@ -385,6 +385,11 @@ export class ProcessNode extends BaseNode {
       throw new Error("Process node requires a bound model");
     }
 
+    // Immutable Persona behavior snapshots own the Flow permission boundary.
+    if (sharedState.flowSnapshot?.permissionRules) {
+      sharedState.permissionRules = sharedState.flowSnapshot.permissionRules;
+    }
+
     // Use the promptRenderer to build the complete prompt
     log.info('Using promptRenderer to build the complete prompt');
     const renderedPrompt = await promptRenderer.renderPrompt(flowId, nodeId, {
@@ -393,6 +398,9 @@ export class ProcessNode extends BaseNode {
       excludeModelPrompt,
       excludeStartNodePrompt,
       excludeSystemPrompt,
+      // A Persona execution is pinned to this immutable snapshot. Never fall
+      // back to the mutable Flow record while one is present.
+      ...(sharedState.flowSnapshot ? { flowSnapshot: sharedState.flowSnapshot } : {}),
       // Tier 3: announce each resource pill the renderer resolves as a live
       // resource:read event, attributed to this node. The renderer itself
       // stays state-agnostic — it just calls back.
@@ -406,8 +414,21 @@ export class ProcessNode extends BaseNode {
 
     // Tier 2c (named variables): inject `${var:NAME}` from the run-scoped
     // scratchpad AFTER rendering. Tier 3 then injects `${res:NAME}` resources.
+    const personaContext = sharedState.personaInstructionContext;
+    const appliesPersonaContext = Boolean(
+      personaContext
+      && sharedState.personaAttribution
+      && personaContext.personaId === sharedState.personaAttribution.personaId
+      && personaContext.activityId === sharedState.personaAttribution.activityId
+      && personaContext.behaviorRevisionId === sharedState.personaAttribution.behaviorRevisionId
+      && personaContext.rootFlowId === flowId,
+    );
+    const trustedPrompt = appliesPersonaContext
+      ? personaContext!.instruction + '\n\n' + renderedPrompt
+      : renderedPrompt;
+
     let completePrompt = await resolveRunResourceRefs(
-      resolveRunVars(renderedPrompt, sharedState.variables),
+      resolveRunVars(trustedPrompt, sharedState.variables),
       sharedState.ephemeral ? undefined : sharedState.conversationId,
       sharedState.emit,
       { nodeId }
@@ -533,8 +554,14 @@ export class ProcessNode extends BaseNode {
     // offered iff enabled, so flows that don't use it keep a byte-identical tool
     // set (preserving the #89 prefix-cache) and unattended flows can leave it
     // off entirely.
-    if (node_params?.properties?.allowQuestion === true &&
-        !availableTools.some((t) => t.name === QUESTION_TOOL_NAME)) {
+    const questionDeniedBySnapshot = (sharedState.permissionRules ?? []).some(
+      (rule: any) => rule?.effect === 'deny'
+        && rule?.action === 'question'
+        && (rule?.resource === '*' || rule?.resource === undefined),
+    );
+    if (node_params?.properties?.allowQuestion === true
+        && !questionDeniedBySnapshot
+        && !availableTools.some((t) => t.name === QUESTION_TOOL_NAME)) {
       availableTools = [...availableTools, buildQuestionTool()];
     }
 
@@ -719,7 +746,7 @@ export class ProcessNode extends BaseNode {
     let wireBase = prepResult.messages;
     if (!preserveFullHistoryForClaudeResume) {
       try {
-        const flow = await flowService.getFlow(flowId);
+        const flow = sharedState.flowSnapshot ?? await flowService.getFlow(flowId);
         const collapsedNodeIds = new Set(
           (flow?.nodes ?? [])
             .filter((n) => n.type === 'process' && n.data?.properties?.outputMode === 'latest-message')

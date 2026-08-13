@@ -704,7 +704,9 @@ export async function browserCallTool(
       const data = typeof args.url === 'string' && args.url.length > 0
         ? await navigate(session, args.url, timeout, signal)
         : { success: true, ...publicPageState(session) };
-      return success(data);
+      // Keep the session identity in the structured result at the process
+      // boundary; callers must not scrape the human-readable text payload.
+      return success({ ...data, sessionId: session.id });
     }
     if (name === 'browser_close') {
       let sessionId: string;

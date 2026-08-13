@@ -287,8 +287,6 @@ async function POST_handler(
               state,
               toolCallId,
               mappedAction,
-              body.always,
-              body.feedback,
             );
             if (decision.outcome === 'tool_not_found') {
               if (body.toolCallId) {

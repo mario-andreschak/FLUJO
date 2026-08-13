@@ -257,11 +257,8 @@ async function POST_handler(
       if (!sharedState.pendingToolCalls.some((toolCall) => toolCall.id === toolCallId)) {
         return NextResponse.json({ error: `Pending tool call with ID ${toolCallId} not found` }, { status: 404 });
       }
-      const always = (requestBody as {
-        action: 'approve' | 'reject';
-        toolCallId: string;
-        always?: boolean;
-      }).always;
+      // Approval decisions are intentionally limited to the persisted action and
+      // target call. Persona resumes must not accept ambient policy overrides.
       const dispatch = await resumePersonaFlowDispatch({
         personaId,
         activityId,
@@ -281,8 +278,6 @@ async function POST_handler(
             sharedState,
             toolCallId,
             action,
-            always,
-            feedback,
           );
           if (decision.outcome === 'tool_not_found') {
             throw new Error(`Pending tool call with ID ${toolCallId} disappeared during resume.`);
