@@ -358,6 +358,40 @@ describe('/v1/roles', () => {
     });
   });
 
+  it('keeps compatibility records aligned when archived Roles are requested', async () => {
+    listRoleDefinitionsMock.mockResolvedValue([
+      { id: 'role_active' },
+      { id: 'role_archived', archivedAt: 10 },
+    ]);
+    listRoleVersionsMock.mockResolvedValue([
+      { id: 'rolever_active', roleDefinitionId: 'role_active' },
+      { id: 'rolever_archived', roleDefinitionId: 'role_archived' },
+    ]);
+    listPublicRolesMock.mockResolvedValue([
+      { id: 'role_active', archived: false },
+      { id: 'role_archived', archived: true, archivedAt: 10 },
+    ]);
+
+    const response = await listRoles(request('/v1/roles?includeArchived=true') as never);
+
+    expect(response.status).toBe(200);
+    expect(listPublicRolesMock).toHaveBeenCalledWith({ includeArchived: true });
+    expect(await response.json()).toEqual({
+      roleDefinitions: [
+        { id: 'role_active' },
+        { id: 'role_archived', archivedAt: 10 },
+      ],
+      roleVersions: [
+        { id: 'rolever_active', roleDefinitionId: 'role_active' },
+        { id: 'rolever_archived', roleDefinitionId: 'role_archived' },
+      ],
+      roles: [
+        { id: 'role_active', archived: false },
+        { id: 'role_archived', archived: true, archivedAt: 10 },
+      ],
+    });
+  });
+
   it('creates a simple public Role without accepting internal Role fields', async () => {
     const body = {
       name: 'Researcher',

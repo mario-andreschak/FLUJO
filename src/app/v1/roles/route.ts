@@ -27,14 +27,14 @@ async function GET_handler(request: NextRequest) {
       listRoleVersions(),
       listPublicRoles({ includeArchived }),
     ]);
-    const activeRoleIds = new Set(
+    const visibleRoleIds = new Set(
       roleDefinitions
-        .filter((definition) => definition.archivedAt === undefined)
+        .filter((definition) => includeArchived || definition.archivedAt === undefined)
         .map((definition) => definition.id),
     );
     return NextResponse.json({
-      roleDefinitions: roleDefinitions.filter((definition) => activeRoleIds.has(definition.id)),
-      roleVersions: roleVersions.filter((version) => activeRoleIds.has(version.roleDefinitionId)),
+      roleDefinitions: roleDefinitions.filter((definition) => visibleRoleIds.has(definition.id)),
+      roleVersions: roleVersions.filter((version) => visibleRoleIds.has(version.roleDefinitionId)),
       roles,
     });
   } catch (error) {
