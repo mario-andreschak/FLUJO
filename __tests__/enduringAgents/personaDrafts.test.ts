@@ -85,23 +85,35 @@ describe('Persona creation drafts', () => {
     const first = await runWithWorkspace(firstWorkspace, () => (
       createPersonaCreationDraft({ id: 'draft_shared_id', payload })
     ));
-    await runWithWorkspace(secondWorkspace, async () => {
+    const second = await runWithWorkspace(secondWorkspace, async () => {
       expect(await getPersonaCreationDraft(first.id)).toBeNull();
-      const second = await createPersonaCreationDraft({
+      const created = await createPersonaCreationDraft({
         id: first.id,
         payload: { ...payload, name: 'Other workspace' },
       });
-      expect(second.workspaceId).toBe(secondWorkspace);
+      expect(created.workspaceId).toBe(secondWorkspace);
+      expect(await listPersonaCreationDrafts()).toEqual([created]);
+      return created;
     });
 
     await runWithWorkspace(firstWorkspace, async () => {
+      expect((await getPersonaCreationDraft(first.id))?.payload.name).toBe('');
       await deletePersonaCreationDraft(first.id, {
         expectedRevision: first.revision,
       });
       expect(await getPersonaCreationDraft(first.id)).toBeNull();
+      expect(await listPersonaCreationDrafts()).toEqual([]);
     });
     await runWithWorkspace(secondWorkspace, async () => {
-      expect((await getPersonaCreationDraft(first.id))?.payload.name).toBe('Other workspace');
+      const updated = await updatePersonaCreationDraft(second.id, {
+        expectedRevision: second.revision,
+        payload: { ...second.payload, mission: 'Updated only in workspace two' },
+      });
+      expect(updated.payload).toMatchObject({
+        name: 'Other workspace',
+        mission: 'Updated only in workspace two',
+      });
+      expect(await listPersonaCreationDrafts()).toEqual([updated]);
     });
   });
 

@@ -375,7 +375,9 @@ export default function PersonaCreationWizard({
             payload,
           })
         : await personasService.createDraft({
-            id: `draft_${uuidv4().replaceAll('-', '')}`,
+            // The final-create key is stable for this wizard session, so a
+            // transient POST retry addresses the same draft record.
+            id: `draft_${idempotencyKey.replaceAll('-', '')}`,
             payload,
           });
       setDraftRecord(saved);
