@@ -650,6 +650,51 @@ function isolatedStdioRuntime(serverName: string): IsolatedStdioRuntime {
 }
 
 /**
+ * Backfill the Windows environment variables a child needs in order to launch
+ * anything itself.
+ *
+ * We hand every stdio server an explicit `env`, and the MCP SDK's default
+ * Windows inherit list contains neither ComSpec nor windir/PATHEXT. Any server
+ * that shells out then breaks at spawn time rather than at run time: `npm run`
+ * takes its script shell from `process.env.ComSpec` without a fallback, so a
+ * missing value makes npm spawn `undefined` and abort with ERR_INVALID_ARG_TYPE
+ * before the script produces any diagnostics. Gap-filling only, so an explicit
+ * per-server `env` and the forced runtime boundary above both still win.
+ *
+ * A key that is present but blank counts as missing: a persisted config can
+ * carry `COMSPEC: ""`, and since Windows resolves environment variables
+ * case-insensitively, leaving that empty spelling beside the one we add would
+ * let the child inherit the blank value and crash exactly as before. So the
+ * blank spellings are dropped before the canonical name is written.
+ */
+function applyWindowsSpawnEssentials(env: Record<string, string>): void {
+  if (process.platform !== 'win32') return;
+  const nonEmpty = (
+    source: Record<string, string | undefined>,
+    key: string,
+  ): string | undefined => Object.entries(source).find(
+    ([name, value]) => name.toLowerCase() === key.toLowerCase() && (value ?? '').trim() !== '',
+  )?.[1];
+  const fromHost = (key: string): string | undefined => nonEmpty(process.env, key);
+  const systemRoot = fromHost('SystemRoot') ?? fromHost('windir') ?? 'C:\\Windows';
+  const defaults: Record<string, string> = {
+    SystemRoot: systemRoot,
+    windir: systemRoot,
+    ComSpec: fromHost('ComSpec') ?? path.join(systemRoot, 'System32', 'cmd.exe'),
+    PATHEXT: fromHost('PATHEXT') ?? '.COM;.EXE;.BAT;.CMD',
+  };
+  for (const [key, value] of Object.entries(defaults)) {
+    // A spelling that already carries a real value wins untouched, so a server
+    // reading `%windir%` keeps seeing the name it was configured with.
+    if (nonEmpty(env, key) !== undefined) continue;
+    for (const spelling of Object.keys(env)) {
+      if (spelling.toLowerCase() === key.toLowerCase()) delete env[spelling];
+    }
+    env[key] = value;
+  }
+}
+
+/**
  * Resolve a stdio config into concrete spawn parameters (see StdioLaunch).
  */
 export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
@@ -761,6 +806,7 @@ export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
   // over inherit-all launch modes; otherwise ordinary SDK defaults expose the
   // host account and let workspace A reuse workspace B's auth/config state.
   Object.assign(transformedEnv, runtime.env);
+  applyWindowsSpawnEssentials(transformedEnv);
   transformedEnv.FLUJO_DATA_DIR = getWorkspaceDataDir();
   transformedEnv.FLUJO_WORKSPACE = getCurrentWorkspace();
   if (shippedDescriptorForConfig(config)?.defaultName === 'browser') {

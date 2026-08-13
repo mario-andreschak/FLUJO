@@ -91,6 +91,47 @@ describe('stdio MCP runtime homes', () => {
     await expect(fs.stat(weatherLaunch.cwd)).resolves.toMatchObject({});
   });
 
+  // A stdio server inherits an explicit env, and the MCP SDK's Windows defaults
+  // carry no ComSpec. npm takes its script shell from ComSpec without a fallback,
+  // so omitting it makes every `npm run` inside a server abort at spawn time with
+  // ERR_INVALID_ARG_TYPE and no diagnostics.
+  (process.platform === 'win32' ? it : it.skip)(
+    'passes the Windows launch essentials a child needs to spawn its own tools',
+    () => {
+      const launch = runWithWorkspace('runtime-a', () => resolveStdioLaunch(config));
+      const comSpec = launch.env.ComSpec ?? launch.env.COMSPEC;
+      expect(comSpec).toBeTruthy();
+      expect(path.basename(comSpec!).toLowerCase()).toBe('cmd.exe');
+      expect(launch.env.SystemRoot ?? launch.env.SYSTEMROOT).toBeTruthy();
+      expect(launch.env.PATHEXT).toContain('.CMD');
+    },
+  );
+
+  // Windows resolves env vars case-insensitively, so a persisted config holding
+  // a blank `COMSPEC` must not survive next to the `ComSpec` we backfill: the
+  // child would inherit the empty one and npm would crash at spawn time again.
+  (process.platform === 'win32' ? it : it.skip)(
+    'replaces a blank Windows essential instead of shadowing it with a second spelling',
+    () => {
+      const blanked: MCPStdioConfig = {
+        ...config,
+        name: 'server-with-blank-comspec',
+        env: { ...config.env, COMSPEC: '', SYSTEMROOT: '   ' },
+      };
+      const launch = runWithWorkspace('runtime-a', () => resolveStdioLaunch(blanked));
+
+      for (const key of ['ComSpec', 'SystemRoot']) {
+        const spellings = Object.entries(launch.env).filter(
+          ([name]) => name.toLowerCase() === key.toLowerCase(),
+        );
+        // Exactly one spelling survives, and it carries a usable value.
+        expect(spellings).toHaveLength(1);
+        expect(spellings[0][1].trim()).not.toBe('');
+      }
+      expect(path.basename(launch.env.ComSpec).toLowerCase()).toBe('cmd.exe');
+    },
+  );
+
   it('keeps ordinary stdio commands in their configured server root', () => {
     const ordinary: MCPStdioConfig = {
       ...config,

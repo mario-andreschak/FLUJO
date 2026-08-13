@@ -901,6 +901,37 @@ function getBundledRipgrepDir(): string | null {
 }
 
 /**
+ * Read an env var case-insensitively, treating a blank value as absent. FLUJO
+ * launches this server with an explicit `env`, so vars can arrive defined but
+ * empty; an empty `ComSpec` is just as fatal as a missing one.
+ */
+function getNonEmptyEnv(name: string): string | undefined {
+  const value = getEnvCaseInsensitive(name);
+  return value && value.trim() !== '' ? value : undefined;
+}
+
+/**
+ * Ensure a Windows env var the child toolchain needs is present exactly once.
+ * A spelling that already carries a value wins, so a script reading `%windir%`
+ * or `$SYSTEMROOT` keeps seeing the name it was given; blank spellings are
+ * deleted first, because Node de-duplicates Windows env keys case-insensitively
+ * and must not settle on the empty one.
+ */
+function ensureWindowsEnvDefault(
+  target: NodeJS.ProcessEnv,
+  key: string,
+  value: string | undefined,
+): void {
+  if (!value) return;
+  const spellings = Object.keys(target).filter(
+    (candidate) => candidate.toLowerCase() === key.toLowerCase(),
+  );
+  if (spellings.some((candidate) => (target[candidate] ?? '').trim() !== '')) return;
+  for (const candidate of spellings) delete target[candidate];
+  target[key] = value;
+}
+
+/**
  * Build the child process environment. By default only the minimal allow-list is
  * inherited (secrets never leave the backend). Explicit per-command overrides
  * are then applied. Setting `FLUJO_BASH_INHERIT_ENV` to a truthy value restores
@@ -933,6 +964,28 @@ function buildChildEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEn
       if (key !== 'PATHEXT' && key.toLowerCase() === 'pathext') delete out[key];
     }
     out.PATHEXT = windowsExecutableExtensions().join(';');
+    // Windows essentials that must exist for the child to launch anything of
+    // its own. FLUJO passes stdio servers an explicit `env` and the MCP SDK's
+    // default Windows inherit list carries neither ComSpec nor windir, so these
+    // are absent here even though ENV_ALLOWLIST would have kept them.
+    // `npm run <script>` is the casualty: npm resolves its script shell from
+    // `process.env.ComSpec` with no fallback of its own, so a blank one makes it
+    // ask Node to spawn `undefined` and die with ERR_INVALID_ARG_TYPE — after
+    // printing its banner but before emitting one line of diagnostics, which is
+    // why `npm run test:mcp` looked like a silent, empty failure.
+    const systemRoot = getNonEmptyEnv('SystemRoot') ?? getNonEmptyEnv('windir') ?? 'C:\\Windows';
+    ensureWindowsEnvDefault(out, 'SystemRoot', systemRoot);
+    ensureWindowsEnvDefault(out, 'windir', systemRoot);
+    ensureWindowsEnvDefault(
+      out,
+      'SystemDrive',
+      getNonEmptyEnv('SystemDrive') ?? path.parse(systemRoot).root.replace(/[\\/]$/, ''),
+    );
+    ensureWindowsEnvDefault(
+      out,
+      'ComSpec',
+      resolveCmdExecutable() ?? path.join(systemRoot, 'System32', 'cmd.exe'),
+    );
   }
   // Deterministic text encoding and number formatting for children (issue #364):
   // without this, interpreters emit locale-dependent decimal commas and non-UTF-8
