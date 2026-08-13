@@ -9,7 +9,6 @@
 import os from 'os';
 import path from 'path';
 import fs from 'fs';
-import { _setConversationLogDirForTests } from '@/backend/execution/flow/conversationLog';
 import { setWorkspaceLayoutPreparation } from '@/backend/services/workspace/layoutReadiness';
 
 jest.setTimeout(15_000);
@@ -39,4 +38,12 @@ afterAll(() => {
   fs.rmSync(jestDataRoot, { recursive: true, force: true });
 });
 
-_setConversationLogDirForTests(path.join(os.tmpdir(), `flujo-test-convlogs-${process.pid}`));
+// Load the log after each test module has installed its mocks. Importing it at
+// setup evaluation time also loaded persistConversationState too early, binding
+// that module to the real storage backend instead of focused test fixtures.
+beforeAll(() => {
+  const { _setConversationLogDirForTests } = jest.requireActual<
+    typeof import('@/backend/execution/flow/conversationLog')
+  >('@/backend/execution/flow/conversationLog');
+  _setConversationLogDirForTests(path.join(os.tmpdir(), `flujo-test-convlogs-${process.pid}`));
+});
