@@ -127,11 +127,12 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
     expect(within(moreSections).getByRole('tab', { name: 'Settings' })).toHaveAttribute('href', '/settings');
     expect(within(moreSections).getByRole('tab', { name: 'Extensions' })).toHaveAttribute('href', '/packages');
     expect(within(moreSections).getByRole('tab', { name: 'Activity' })).toHaveAttribute('href', '/statistics');
+    expect(within(moreSections).queryByRole('tab', { name: 'Personas' })).toBeNull();
     expect(within(moreSections).queryByRole('tab', { name: 'Waves' })).toBeNull();
     expect(within(moreSections).queryByRole('tab', { name: 'Chain Chat' })).toBeNull();
   });
 
-  it('hides the experimental Waves and Chain Chat destinations while experiments are off', () => {
+  it('hides the experimental Personas, Waves, and Chain Chat destinations while experiments are off', () => {
     mockPathname = '/automation/triggers';
     mockStorageValue = { settings: {}, settingsHydrated: true, updateSettings: mockUpdateSettings };
     render(<Navigation />);
@@ -146,6 +147,7 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
       '/docs',
       '/settings',
     ]);
+    expect(within(moreSections).queryByRole('tab', { name: 'Personas' })).toBeNull();
     expect(within(moreSections).queryByRole('tab', { name: 'Waves' })).toBeNull();
     expect(within(moreSections).queryByRole('tab', { name: 'Chain Chat' })).toBeNull();
   });
@@ -187,7 +189,22 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
     expect(chainChat).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('puts Automations, Waves, Extensions, Activity, Chain Chat, Help, and Settings in More when experiments are enabled', () => {
+  it('selects Personas in More when a Persona desk is open', () => {
+    mockPathname = '/personas/jim';
+    mockStorageValue = {
+      settings: { experimental: { enabled: true } },
+      settingsHydrated: true,
+      updateSettings: mockUpdateSettings,
+    };
+    render(<Navigation />);
+
+    const moreSections = screen.getByRole('tablist', { name: 'More sections' });
+    const personas = within(moreSections).getByRole('tab', { name: 'Personas' });
+    expect(personas).toHaveAttribute('href', '/personas');
+    expect(personas).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('puts experimental Personas in More only when experiments are enabled', () => {
     mockPathname = '/automation/triggers';
     mockStorageValue = {
       settings: { experimental: { enabled: true } },
@@ -202,6 +219,7 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
       'Automations',
       'Waves',
       'Meetings',
+      'Personas',
       'Extensions',
       'Activity',
       'Chain Chat',
@@ -212,6 +230,7 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
       '/automation/triggers',
       '/automation/waves',
       '/meetings',
+      '/personas',
       '/packages',
       '/statistics',
       '/chain-chat',
@@ -224,7 +243,7 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
     );
   });
 
-  it('shows the enabled Waves destination in the compact navigation drawer', () => {
+  it('shows the enabled Personas and Waves destinations in the compact navigation drawer', () => {
     setCompactNavigation(true);
     mockPathname = '/automation/triggers';
     mockStorageValue = {
@@ -240,6 +259,10 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
     expect(within(drawer as HTMLElement).getByRole('link', { name: 'Waves' })).toHaveAttribute(
       'href',
       '/automation/waves',
+    );
+    expect(within(drawer as HTMLElement).getByRole('link', { name: 'Personas' })).toHaveAttribute(
+      'href',
+      '/personas',
     );
   });
 });

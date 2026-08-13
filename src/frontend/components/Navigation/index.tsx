@@ -81,7 +81,6 @@ type NavItem = NavLink | NavGroup;
 const navItems: NavItem[] = [
   { type: 'link', label: 'nav.aiSetup', path: '/models', tour: 'nav-models', icon: MemoryRounded },
   { type: 'link', label: 'nav.connectedApps', path: '/mcp', tour: 'nav-mcp', icon: HubRounded },
-  { type: 'link', label: 'nav.personas', path: '/personas', tour: 'nav-personas', icon: PeopleAltRounded },
   { type: 'link', label: 'nav.agents', path: '/flows', tour: 'nav-flows', icon: AccountTreeRounded },
   { type: 'link', label: 'nav.talk', path: '/chat', tour: 'nav-chat', icon: ChatBubbleRounded },
   {
@@ -112,6 +111,14 @@ const navItems: NavItem[] = [
         path: '/meetings',
         tour: 'nav-meetings',
         icon: GroupsRounded,
+      },
+      {
+        type: 'link',
+        label: 'nav.personas',
+        path: '/personas',
+        tour: 'nav-personas',
+        icon: PeopleAltRounded,
+        experimental: true,
       },
       {
         type: 'link',
