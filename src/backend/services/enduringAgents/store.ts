@@ -393,6 +393,99 @@ export function listPersonasStrict(): Promise<Persona[]> {
   });
 }
 
+export interface PersonaSummaryRecords {
+  roleVersions: RoleVersion[];
+  behaviorBindings: BehaviorBinding[];
+  appGrants: PersonaAppGrant[];
+  memoryItems: MemoryItem[];
+  workItems: PersonaWorkItem[];
+  activities: PersonaActivity[];
+  mailboxItems: PersonaMailboxItem[];
+}
+
+/**
+ * Read every collection needed by the Persona gallery once, then retain only
+ * records owned by the requested bounded Persona page. This is intentionally a
+ * read-only bulk projection boundary: it takes no runtime lock and performs no
+ * reconciliation.
+ */
+export async function listPersonaSummaryRecords(
+  personaIds: readonly string[],
+): Promise<PersonaSummaryRecords> {
+  const requested = new Set(personaIds);
+  requested.forEach((personaId) => assertSafeCollectionId(personaId));
+  if (requested.size === 0) {
+    return {
+      roleVersions: [],
+      behaviorBindings: [],
+      appGrants: [],
+      memoryItems: [],
+      workItems: [],
+      activities: [],
+      mailboxItems: [],
+    };
+  }
+
+  const [
+    roleVersions,
+    behaviorBindings,
+    appGrants,
+    memoryItems,
+    workItems,
+    activities,
+    mailboxItems,
+  ] = await Promise.all([
+    listRecords({
+      collection: ENDURING_AGENT_COLLECTIONS.roleVersions,
+      recordKind: 'RoleVersion',
+      schema: RoleVersionSchema,
+    }),
+    listRecords({
+      collection: ENDURING_AGENT_COLLECTIONS.behaviorBindings,
+      recordKind: 'BehaviorBinding',
+      schema: BehaviorBindingSchema,
+      strict: true,
+    }),
+    listRecords({
+      collection: ENDURING_AGENT_COLLECTIONS.appGrants,
+      recordKind: 'PersonaAppGrant',
+      schema: PersonaAppGrantSchema,
+      strict: true,
+    }),
+    listRecords({
+      collection: ENDURING_AGENT_COLLECTIONS.memoryItems,
+      recordKind: 'MemoryItem',
+      schema: MemoryItemSchema,
+    }),
+    listRecords({
+      collection: ENDURING_AGENT_COLLECTIONS.workItems,
+      recordKind: 'PersonaWorkItem',
+      schema: PersonaWorkItemSchema,
+    }),
+    listRecords({
+      collection: ENDURING_AGENT_COLLECTIONS.activities,
+      recordKind: 'PersonaActivity',
+      schema: PersonaActivitySchema,
+    }),
+    listRecords({
+      collection: ENDURING_AGENT_COLLECTIONS.mailboxItems,
+      recordKind: 'PersonaMailboxItem',
+      schema: PersonaMailboxItemSchema,
+      strict: true,
+    }),
+  ]);
+
+  return {
+    roleVersions,
+    behaviorBindings: behaviorBindings.filter((record) => requested.has(record.personaId)),
+    appGrants: appGrants.filter((record) => requested.has(record.personaId)),
+    memoryItems: memoryItems.filter((record) => requested.has(record.personaId)),
+    workItems: workItems.filter((record) => requested.has(record.personaId)),
+    activities: activities.filter((record) => requested.has(record.personaId)),
+    mailboxItems: mailboxItems.filter((record) => requested.has(record.personaId)),
+  };
+}
+
 export async function createPersona(value: Persona): Promise<Persona> {
   const record = parseRecord('Persona', PersonaSchema, value);
   assertSafeCollectionId(record.id);

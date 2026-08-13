@@ -276,6 +276,51 @@ function sanitizeEvent(event: PersonaRuntimeEvent): SanitizedPersonaRuntimeEvent
   return sanitized;
 }
 
+export interface PersonaRuntimeSnapshot {
+  bundle: PersonaBundle;
+  runtime: PersonaRuntimeObservation;
+}
+
+/**
+ * Read the current detail/runtime projection without acquiring a runtime lock
+ * or repairing persisted state. Recovery remains an explicit operation.
+ */
+export async function readPersonaRuntimeSnapshot(
+  personaId: string,
+  options: InspectPersonaRuntimeOptions = {},
+): Promise<PersonaRuntimeSnapshot | null> {
+  const bundle = await listPersonaBundle(personaId);
+  if (!bundle) return null;
+
+  const projection = projectBundle(bundle, Date.now());
+  const requestedLimit = options.recentEventLimit ?? 50;
+  const recentLimit = Number.isSafeInteger(requestedLimit)
+    ? Math.max(0, Math.min(200, requestedLimit))
+    : 50;
+  const allEvents = recentLimit === 0
+    ? []
+    : await readPersonaRuntimeEvents(personaId);
+  const detectedStuckIndicators = [
+    ...new Set(deriveStuckObservations(bundle, Date.now()).map(({ indicator }) => indicator)),
+  ].sort();
+
+  return {
+    bundle,
+    runtime: {
+      projection,
+      detectedStuckIndicators,
+      reconciliation: {
+        attempted: false,
+        changed: false,
+        remainingStuck: projection.stuck,
+      },
+      recentEvents: recentLimit === 0
+        ? []
+        : allEvents.slice(-recentLimit).map(sanitizeEvent),
+    },
+  };
+}
+
 /**
  * Inspect one Persona through the authoritative lazy-reconciliation boundary.
  *

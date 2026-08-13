@@ -1,31 +1,24 @@
 "use client";
 
 import {
-  AddRounded,
   AppsRounded,
-  ArrowBackRounded,
   AssignmentRounded,
   AutoStoriesRounded,
   BoltRounded,
-  CallRounded,
   ChatBubbleOutlineRounded,
   CheckCircleOutlineRounded,
   EditRounded,
   HistoryRounded,
-  HubRounded,
   MemoryRounded,
   OpenInNewRounded,
-  PersonAddRounded,
   PushPinRounded,
   RefreshRounded,
   ReplayRounded,
   SettingsRounded,
-  TimelineRounded,
   WorkOutlineRounded,
 } from '@mui/icons-material';
 import {
   Alert,
-  Avatar,
   Box,
   Button,
   Card,
@@ -46,14 +39,11 @@ import {
   Paper,
   Select,
   Stack,
-  Tab,
-  Tabs,
   TextField,
-  Tooltip,
   Typography,
   useMediaQuery,
 } from '@mui/material';
-import { alpha, useTheme } from '@mui/material/styles';
+import { useTheme } from '@mui/material/styles';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -65,6 +55,10 @@ import ServerCard from '@/frontend/components/mcp/MCPServerManager/ServerCard';
 import CardPickerGrid from '@/frontend/components/shared/CardPickerGrid';
 import FlowCard from '@/frontend/components/Flow/FlowDashboard/FlowCard';
 import RoleVersionCard from './RoleVersionCard';
+import PersonaDetailShell from './PersonaDetailShell';
+import PersonaSetup from './PersonaSetup';
+import PersonasGallery from './PersonasGallery';
+import { invalidatePersonaSummaryCache } from './personaQueries';
 import {
   personasService,
   type PersonaBundle,
@@ -82,39 +76,11 @@ import {
   type BehaviorBinding,
   type BehaviorRevision,
   type MemoryItem,
-  type Persona,
   type PersonaActivity,
   type PersonaPriority,
   type PersonaWorkItem,
   type PersonaWorkItemStatus,
 } from '@/shared/types/enduringAgent';
-
-const AREAS = [
-  'now',
-  'talk',
-  'work',
-  'memory',
-  'behaviors',
-  'apps',
-  'activity',
-  'settings',
-] as const;
-type DeskArea = (typeof AREAS)[number];
-
-const AREA_ICON = {
-  now: BoltRounded,
-  talk: ChatBubbleOutlineRounded,
-  work: WorkOutlineRounded,
-  memory: MemoryRounded,
-  behaviors: AutoStoriesRounded,
-  apps: AppsRounded,
-  activity: TimelineRounded,
-  settings: SettingsRounded,
-} satisfies Record<DeskArea, typeof BoltRounded>;
-
-function isDeskArea(value: string | null): value is DeskArea {
-  return value !== null && (AREAS as readonly string[]).includes(value);
-}
 
 function humanize(value: string): string {
   return value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
@@ -124,26 +90,10 @@ function activityTime(activity: PersonaActivity): number {
   return activity.completedAt ?? activity.startedAt ?? activity.updatedAt ?? activity.createdAt;
 }
 
-function queuedCount(detail?: PersonaDetail): number {
-  return detail?.mailboxItems.filter((item) => item.status === 'queued').length ?? 0;
-}
-
 function activeActivity(detail?: PersonaDetail): PersonaActivity | undefined {
   const activeId = detail?.runtime?.projection?.active?.activityId;
   return detail?.activities.find((activity) => activity.id === activeId)
     ?? detail?.activities.find((activity) => activity.status === 'running' || activity.status === 'waiting');
-}
-
-function candidateMemoryCount(detail?: PersonaDetail): number {
-  return detail?.memoryItems.filter((memory) => memory.status === 'candidate').length ?? 0;
-}
-
-function lifecycleColor(state: Persona['lifecycleState']): 'default' | 'success' | 'warning' | 'error' | 'info' {
-  if (state === 'idle') return 'success';
-  if (state === 'busy' || state === 'waiting') return 'info';
-  if (state === 'error') return 'error';
-  if (state === 'sleeping') return 'warning';
-  return 'default';
 }
 
 function statusColor(status: string): 'default' | 'success' | 'warning' | 'error' | 'info' | 'primary' {
@@ -162,8 +112,6 @@ interface PersonasDeskProps {
 export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
   const { t } = useI18n();
   const router = useRouter();
-  const [personas, setPersonas] = useState<Persona[]>([]);
-  const [details, setDetails] = useState<Record<string, PersonaDetail>>({});
   const [selected, setSelected] = useState<PersonaDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -173,23 +121,15 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
   const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    if (!initialPersonaId) {
+      setLoading(false);
+      setError(null);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
-      const list = await personasService.list();
-      setPersonas(list);
-      if (initialPersonaId) {
-        const detail = await personasService.get(initialPersonaId);
-        setSelected(detail);
-        setDetails((current) => ({ ...current, [detail.persona.id]: detail }));
-      } else {
-        const settled = await Promise.allSettled(list.map((persona) => personasService.get(persona.id)));
-        const next: Record<string, PersonaDetail> = {};
-        settled.forEach((result) => {
-          if (result.status === 'fulfilled') next[result.value.persona.id] = result.value;
-        });
-        setDetails(next);
-      }
+      setSelected(await personasService.get(initialPersonaId));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t('personas.loadFailed'));
     } finally {
@@ -201,12 +141,8 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
 
   const refreshSelected = useCallback(async () => {
     if (!initialPersonaId) return;
-    const detail = await personasService.get(initialPersonaId);
-    setSelected(detail);
-    setDetails((current) => ({ ...current, [detail.persona.id]: detail }));
-    setPersonas((current) => current.map((persona) => (
-      persona.id === detail.persona.id ? detail.persona : persona
-    )));
+    setSelected(await personasService.get(initialPersonaId));
+    invalidatePersonaSummaryCache();
   }, [initialPersonaId]);
 
   const mutate = useCallback(async (action: () => Promise<unknown>, success?: string) => {
@@ -224,7 +160,7 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
     }
   }, [refreshSelected, t]);
 
-  const startConversation = useCallback(async (persona: Persona) => {
+  const startConversation = useCallback(async (persona: { id: string; name: string }) => {
     setBusy(true);
     setActionError(null);
     try {
@@ -237,6 +173,7 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
         createdAt: now,
         updatedAt: now,
       });
+      invalidatePersonaSummaryCache();
       router.push(withWorkspaceUrl(magicLinkPath({ kind: 'conversation', id: conversation.id })));
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : t('personas.action.failed'));
@@ -249,31 +186,66 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
       {busy && <LinearProgress sx={{ position: 'fixed', inset: '0 0 auto', zIndex: 1500 }} />}
       {actionError && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setActionError(null)}>{actionError}</Alert>}
       {notice && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setNotice(null)}>{notice}</Alert>}
-      {loading ? (
+      {initialPersonaId && loading ? (
         <Stack alignItems="center" justifyContent="center" minHeight="55vh" spacing={2}>
           <CircularProgress />
           <Typography color="text.secondary">{t('personas.loading')}</Typography>
         </Stack>
-      ) : error ? (
+      ) : initialPersonaId && error ? (
         <Alert severity="error" action={<Button onClick={() => void load()}>{t('personas.refresh')}</Button>}>
           {error}
         </Alert>
       ) : initialPersonaId && selected ? (
-        <PersonaDetailView
+        <PersonaDetailShell
           detail={selected}
           busy={busy}
-          mutate={mutate}
           refresh={refreshSelected}
           startConversation={() => startConversation(selected.persona)}
+          renderArea={(area, subsection) => (
+            <>
+              {area === 'overview' && (
+                <NowArea detail={selected} busy={busy} mutate={mutate} />
+              )}
+              {area === 'setup' && (
+                <PersonaSetup detail={selected}>
+                  {(subsection === null || subsection === 'behaviors') && (
+                    <BehaviorsArea detail={selected} busy={busy} mutate={mutate} />
+                  )}
+                  {(subsection === null || subsection === 'apps') && (
+                    <AppsArea detail={selected} busy={busy} mutate={mutate} />
+                  )}
+                </PersonaSetup>
+              )}
+              {area === 'memory' && (
+                <MemoryArea detail={selected} busy={busy} mutate={mutate} />
+              )}
+              {area === 'conversations' && (
+                <TalkArea
+                  detail={selected}
+                  busy={busy}
+                  startConversation={() => startConversation(selected.persona)}
+                />
+              )}
+              {area === 'tasks' && (
+                <WorkArea detail={selected} busy={busy} mutate={mutate} />
+              )}
+              {area === 'settings' && subsection === 'history' && (
+                <ActivityArea detail={selected} />
+              )}
+              {area === 'settings' && subsection !== 'history' && (
+                <Stack spacing={2}>
+                  <SettingsArea detail={selected} busy={busy} mutate={mutate} />
+                  <ActivityArea detail={selected} />
+                </Stack>
+              )}
+            </>
+          )}
         />
       ) : (
-        <PersonaList
-          personas={personas}
-          details={details}
+        <PersonasGallery
           busy={busy}
           onCreate={() => setCreateOpen(true)}
-          onRefresh={load}
-          onChat={startConversation}
+          onTalk={startConversation}
         />
       )}
       <CreatePersonaDialog
@@ -281,167 +253,19 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
         onClose={() => setCreateOpen(false)}
         onCreated={(detail) => {
           setCreateOpen(false);
-          router.push(withWorkspaceUrl(`/personas/${encodeURIComponent(detail.persona.id)}`));
+          invalidatePersonaSummaryCache();
+          router.push(withWorkspaceUrl(
+            `/personas/${encodeURIComponent(detail.persona.id)}?area=overview`,
+          ));
         }}
       />
     </Container>
   );
 }
 
-function PersonaList({
-  personas,
-  details,
-  busy,
-  onCreate,
-  onRefresh,
-  onChat,
-}: {
-  personas: Persona[];
-  details: Record<string, PersonaDetail>;
-  busy: boolean;
-  onCreate: () => void;
-  onRefresh: () => Promise<void>;
-  onChat: (persona: Persona) => Promise<void>;
-}) {
-  const { t } = useI18n();
-  const theme = useTheme();
-  return (
-    <Stack spacing={3}>
-      <Box sx={{ display: 'flex', alignItems: { xs: 'flex-start', md: 'center' }, justifyContent: 'space-between', gap: 2, flexDirection: { xs: 'column', md: 'row' } }}>
-        <Box>
-          <Typography variant="overline" color="primary.main" fontWeight={800}>{t('personas.eyebrow')}</Typography>
-          <Typography variant="h3" component="h1" sx={{ fontWeight: 780, letterSpacing: '-0.045em' }}>{t('personas.title')}</Typography>
-          <Typography color="text.secondary" sx={{ maxWidth: 760, mt: 1 }}>{t('personas.description')}</Typography>
-        </Box>
-        <Stack direction="row" spacing={1}>
-          <Button startIcon={<RefreshRounded />} onClick={() => void onRefresh()} disabled={busy}>{t('personas.refresh')}</Button>
-          <Button variant="contained" startIcon={<PersonAddRounded />} onClick={onCreate}>{t('personas.create')}</Button>
-        </Stack>
-      </Box>
-      {personas.length === 0 ? (
-        <Paper variant="outlined" sx={{ p: 6, textAlign: 'center', borderRadius: 4 }}>
-          <Avatar sx={{ width: 64, height: 64, mx: 'auto', mb: 2, bgcolor: alpha(theme.palette.primary.main, 0.15), color: 'primary.main' }}><PersonAddRounded /></Avatar>
-          <Typography variant="h5" fontWeight={750}>{t('personas.empty')}</Typography>
-          <Typography color="text.secondary" sx={{ maxWidth: 520, mx: 'auto', my: 1.5 }}>{t('personas.emptyHelp')}</Typography>
-          <Button variant="contained" startIcon={<AddRounded />} onClick={onCreate}>{t('personas.create')}</Button>
-        </Paper>
-      ) : (
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))', xl: 'repeat(3, minmax(0, 1fr))' }, gap: 2 }}>
-          {personas.map((persona) => {
-            const detail = details[persona.id];
-            const active = activeActivity(detail);
-            return (
-              <Card key={persona.id} variant="outlined" sx={{ borderRadius: 4, overflow: 'visible', display: 'flex', flexDirection: 'column', minHeight: 290 }}>
-                <CardContent sx={{ flex: 1 }}>
-                  <Stack direction="row" spacing={2} alignItems="flex-start">
-                    <Avatar src={persona.presentation?.avatarUrl} alt={persona.name} sx={{ width: 58, height: 58, bgcolor: alpha(theme.palette.primary.main, 0.18), color: 'primary.main', fontWeight: 800 }}>
-                      {persona.name.slice(0, 2).toUpperCase()}
-                    </Avatar>
-                    <Box minWidth={0} flex={1}>
-                      <Typography variant="h5" fontWeight={760} noWrap>{persona.name}</Typography>
-                      <Typography variant="body2" color="text.secondary" noWrap>
-                        {detail ? t('personas.role', { role: detail.roleVersion.name, version: detail.roleVersion.version }) : t('common.loading')}
-                      </Typography>
-                    </Box>
-                    <Chip size="small" color={lifecycleColor(persona.lifecycleState)} label={humanize(persona.lifecycleState)} />
-                  </Stack>
-                  <Typography color="text.secondary" sx={{ my: 2, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', minHeight: 48 }}>
-                    {persona.mission}
-                  </Typography>
-                  <Stack spacing={1.25}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <BoltRounded fontSize="small" color={active ? 'primary' : 'disabled'} />
-                      <Typography variant="body2" fontWeight={650} noWrap>{active ? `${humanize(active.kind)} · ${humanize(active.status)}` : t('personas.noActivity')}</Typography>
-                    </Box>
-                    <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                      <Chip size="small" icon={<AssignmentRounded />} label={t('personas.queue', { count: queuedCount(detail) })} />
-                      <Chip size="small" color={candidateMemoryCount(detail) ? 'warning' : 'default'} icon={<MemoryRounded />} label={t('personas.memoryHealth', { count: candidateMemoryCount(detail) })} />
-                    </Stack>
-                  </Stack>
-                </CardContent>
-                <Divider />
-                <CardActions sx={{ px: 2, py: 1.5 }}>
-                  <Button component={Link} href={withWorkspaceUrl(`/personas/${encodeURIComponent(persona.id)}`)} size="small">{t('personas.openDesk')}</Button>
-                  <Button size="small" startIcon={<ChatBubbleOutlineRounded />} onClick={() => void onChat(persona)} disabled={busy || persona.lifecycleState === 'disabled' || persona.lifecycleState === 'error'}>{t('personas.chat')}</Button>
-                  <Button component={Link} href={withWorkspaceUrl(`/personas/${encodeURIComponent(persona.id)}?area=work`)} size="small">{t('personas.assign')}</Button>
-                  <Tooltip title={t('personas.callDeferred')}><span><Button size="small" disabled startIcon={<CallRounded />}>{t('personas.call')}</Button></span></Tooltip>
-                </CardActions>
-              </Card>
-            );
-          })}
-        </Box>
-      )}
-    </Stack>
-  );
-}
 
-function PersonaDetailView({
-  detail,
-  busy,
-  mutate,
-  refresh,
-  startConversation,
-}: {
-  detail: PersonaDetail;
-  busy: boolean;
-  mutate: (action: () => Promise<unknown>, success?: string) => Promise<void>;
-  refresh: () => Promise<void>;
-  startConversation: () => Promise<void>;
-}) {
-  const { t } = useI18n();
-  const router = useRouter();
-  const theme = useTheme();
-  const [area, setArea] = useState<DeskArea>('now');
 
-  useEffect(() => {
-    const requested = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('area');
-    if (isDeskArea(requested)) setArea(requested);
-  }, [detail.persona.id]);
 
-  const selectArea = (next: DeskArea) => {
-    setArea(next);
-    router.replace(withWorkspaceUrl(`/personas/${encodeURIComponent(detail.persona.id)}?area=${next}`));
-  };
-
-  return (
-    <Stack spacing={2.5}>
-      <Button component={Link} href={withWorkspaceUrl('/personas')} startIcon={<ArrowBackRounded />} sx={{ alignSelf: 'flex-start' }}>{t('personas.back')}</Button>
-      <Paper variant="outlined" sx={{ p: { xs: 2, md: 3 }, borderRadius: 4, background: `linear-gradient(135deg, ${alpha(theme.palette.primary.main, 0.12)}, ${alpha(theme.palette.background.paper, 0.92)} 48%, ${alpha(theme.palette.secondary.main, 0.08)})` }}>
-        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2.5} alignItems={{ xs: 'flex-start', sm: 'center' }}>
-          <Avatar src={detail.persona.presentation?.avatarUrl} sx={{ width: 76, height: 76, bgcolor: alpha(theme.palette.primary.main, 0.2), color: 'primary.main', fontSize: 26, fontWeight: 800 }}>
-            {detail.persona.name.slice(0, 2).toUpperCase()}
-          </Avatar>
-          <Box flex={1} minWidth={0}>
-            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-              <Typography variant="h3" component="h1" fontWeight={790} letterSpacing="-0.045em">{detail.persona.name}</Typography>
-              <Chip color={lifecycleColor(detail.persona.lifecycleState)} label={humanize(detail.persona.lifecycleState)} />
-            </Stack>
-            <Typography color="text.secondary" fontWeight={650}>{t('personas.role', { role: detail.roleVersion.name, version: detail.roleVersion.version })}</Typography>
-            <Typography sx={{ mt: 0.75, maxWidth: 900 }}>{detail.persona.mission}</Typography>
-          </Box>
-          <Button variant="contained" startIcon={<ChatBubbleOutlineRounded />} onClick={() => void startConversation()} disabled={busy || detail.persona.lifecycleState === 'disabled' || detail.persona.lifecycleState === 'error'}>{t('personas.chat')}</Button>
-        </Stack>
-      </Paper>
-      <Paper variant="outlined" sx={{ borderRadius: 3, overflow: 'hidden' }}>
-        <Tabs value={area} onChange={(_event, value: DeskArea) => selectArea(value)} variant="scrollable" scrollButtons="auto" aria-label="Persona desk areas">
-          {AREAS.map((key) => {
-            const Icon = AREA_ICON[key];
-            return <Tab key={key} value={key} icon={<Icon fontSize="small" />} iconPosition="start" label={t(`personas.area.${key}`)} />;
-          })}
-        </Tabs>
-      </Paper>
-      {area === 'now' && <NowArea detail={detail} busy={busy} mutate={mutate} />}
-      {area === 'talk' && <TalkArea detail={detail} busy={busy} startConversation={startConversation} />}
-      {area === 'work' && <WorkArea detail={detail} busy={busy} mutate={mutate} />}
-      {area === 'memory' && <MemoryArea detail={detail} busy={busy} mutate={mutate} />}
-      {area === 'behaviors' && <BehaviorsArea detail={detail} busy={busy} mutate={mutate} />}
-      {area === 'apps' && <AppsArea detail={detail} busy={busy} mutate={mutate} />}
-      {area === 'activity' && <ActivityArea detail={detail} />}
-      {area === 'settings' && <SettingsArea detail={detail} busy={busy} mutate={mutate} />}
-      <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}><Button startIcon={<RefreshRounded />} onClick={() => void refresh()} disabled={busy}>{t('personas.refresh')}</Button></Box>
-    </Stack>
-  );
-}
 
 function AreaShell({ title, icon, action, children }: { title: string; icon: React.ReactNode; action?: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -454,6 +278,8 @@ function AreaShell({ title, icon, action, children }: { title: string; icon: Rea
     </Paper>
   );
 }
+
+
 
 function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolean; mutate: (action: () => Promise<unknown>, success?: string) => Promise<void> }) {
   const { t, formatDate } = useI18n();
