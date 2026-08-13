@@ -63,6 +63,25 @@ beforeEach(() => {
 });
 
 describe('SubflowNode fan-out (issue #102)', () => {
+  it('falls back to the configured prompt when a parallel handoff omits prompt', async () => {
+    const node = makeNode();
+    const shared = makeShared({
+      handoffInput: {
+        targetNodeId: 'sub-1',
+        parallelFlows: ['a', 'b'],
+      },
+    });
+
+    const prep = await node.prep(shared, makeParams({
+      allowCallerFanout: true,
+      parallelSubflowIds: ['fallback'],
+    }));
+
+    expect(prep.inputText).toBe('GO');
+    expect(prep.lanes?.map((lane) => lane.subflowId)).toEqual(['a', 'b']);
+    expect(shared.handoffInput).toBeUndefined();
+  });
+
   it('runs lanes through a bounded worker pool (concurrencyLimit)', async () => {
     let active = 0;
     let maxActive = 0;

@@ -190,7 +190,7 @@ async function GET_handler(request: NextRequest) {
   // this route centrally too; kept inline for the internal control-plane sinks.
   const notLocal = assertLocalRequest(request);
   if (notLocal) return notLocal;
-  const personaControlAllowed = assertLocalRequest(request) === null;
+  const personaControlAllowed = assertLocalRequest(request, { strictLoopback: true }) === null;
 
   const startTime = Date.now();
   const requestId = `conv-list-${Date.now()}`;

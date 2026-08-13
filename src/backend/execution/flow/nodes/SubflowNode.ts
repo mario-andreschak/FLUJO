@@ -782,7 +782,7 @@ export class SubflowNode extends BaseNode {
       // matching the modal's display. Only an explicit `false` opts out.
       const allowCallerPrompt = node_params?.properties?.allowCallerPrompt !== false;
       // handoffForThisNode was already consumed (and cleared) at the top of prep().
-      if (allowCallerPrompt && handoffForThisNode?.prompt.trim()) {
+      if (allowCallerPrompt && handoffForThisNode?.prompt?.trim()) {
         prepResult.inputText = handoffForThisNode.prompt;
         log.info('Using caller-supplied prompt for isolated subflow', { nodeId: node_params?.id });
       } else {
