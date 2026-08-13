@@ -84,14 +84,22 @@ const logDir = () =>
  */
 const ck = (conversationId: string) => workspaceCacheKey('conversation-log', conversationId);
 
-/** Test seam: point the store at a temp directory. Returns the previous dir. */
+/**
+ * Test seam: point the store at a temp directory. Returns the previous
+ * override, or the newly installed directory on first setup.
+ *
+ * Install the override before resolving the return value. Global Jest setup
+ * runs after each suite's mocks are registered; asking workspace/path helpers
+ * for the production default at that point can execute an intentionally
+ * partial suite mock before the test has even started.
+ */
 export function _setConversationLogDirForTests(dir: string): string {
-  const previous = logDir();
+  const previous = logDirOverride;
   logDirOverride = dir;
   // Counters are seeded from the store on cold start; switching stores must
   // re-seed from the new directory rather than reuse a stale counter.
   nextSeq.clear();
-  return previous;
+  return previous ?? dir;
 }
 
 function logFilePath(conversationId: string): string {

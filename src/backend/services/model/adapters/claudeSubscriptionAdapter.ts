@@ -658,6 +658,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             // Issue #413: same canonical run owner key as the ModelHandler and
             // Codex paths, so run-owned Bash sessions are releasable here too.
             ownerScopeForRun({ runId, conversationId }),
+            conversationId ? { conversationId } : undefined,
           );
           if (runId) {
             const cancelled = Boolean(abortController.signal.aborted || toolCancellationReason(result));

@@ -153,7 +153,7 @@ async function GET_handler(
     // 3. Handle based on whether state was found
     if (sharedState) {
       if (isPersonaOwnedConversationState(sharedState)) {
-        const notLoopback = assertLocalRequest(request);
+        const notLoopback = assertLocalRequest(request, { strictLoopback: true });
         if (notLoopback) return notLoopback;
       }
       // --- Resolve the displayed messages ---
@@ -304,7 +304,7 @@ async function PATCH_handler(
     allowedUpdates.flowId = updateData.flowId;
   }
   if ('personaTargetId' in updateData) {
-    const personaNotLocal = assertLocalRequest(request);
+    const personaNotLocal = assertLocalRequest(request, { strictLoopback: true });
     if (personaNotLocal) return personaNotLocal;
     if (
       typeof updateData.personaTargetId !== 'string'
@@ -353,7 +353,7 @@ async function PATCH_handler(
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }
     if (isPersonaOwnedConversationState(existingState)) {
-      const personaNotLocal = assertLocalRequest(request);
+      const personaNotLocal = assertLocalRequest(request, { strictLoopback: true });
       if (personaNotLocal) return personaNotLocal;
     }
     if (existingState.personaArchived) {
@@ -545,7 +545,7 @@ async function DELETE_handler(
       );
     if (isPersonaOwnedConversationState(existingState)) {
       if (tombstonedBeforeLock) unmarkConversationDeleted(conversationId);
-      const personaNotLocal = assertLocalRequest(request);
+      const personaNotLocal = assertLocalRequest(request, { strictLoopback: true });
       if (personaNotLocal) return personaNotLocal;
       return NextResponse.json(
         { error: 'Persona-owned conversations must be deleted through the Persona lifecycle.' },

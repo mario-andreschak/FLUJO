@@ -3,7 +3,7 @@ import type { ExecutionEvent, RawExecutionEvent } from '@/shared/types/execution
 
 const assertLocalRequestMock = jest.fn((_request?: unknown, _options?: unknown): Response | null => null);
 jest.mock('@/utils/http/localRequest', () => ({
-  assertLocalRequest: (request: unknown, options?: unknown) => assertLocalRequestMock(request, options),
+  assertLocalRequest: (...args: [unknown, unknown?]) => assertLocalRequestMock(...args),
 }));
 
 jest.mock('@/utils/encryption/lockGate', () => ({

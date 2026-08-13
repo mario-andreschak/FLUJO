@@ -1111,8 +1111,11 @@ export class ProcessNode extends BaseNode {
       let modelResult;
       let usedToolFreeFallback = false;
       try {
-        const callModelWithTools = (attemptTools: OpenAI.ChatCompletionFunctionTool[] | undefined) =>
-          ModelHandler.callModel({
+        const callModelWithTools = async (
+          attemptTools: OpenAI.ChatCompletionFunctionTool[] | undefined,
+        ) => {
+          await prepResult.executionAuthority?.assertCurrent();
+          const result = await ModelHandler.callModel({
             modelId: prepResult.boundModel,
             prompt: prepResult.currentPrompt,
             messages: prepResult.messages,
@@ -1170,9 +1173,18 @@ export class ProcessNode extends BaseNode {
             onApprovalRequired: prepResult.onApprovalRequired,
             mcpNodes: node_params?.properties?.mcpNodes, // Issue #239: for native resource tools
             unattended: prepResult.unattended, // Issue #258: degrade the question tool in unattended runs
+            beforeToolDispatch: prepResult.executionAuthority?.assertCurrent,
+            beforeModelDispatch: prepResult.executionAuthority?.assertCurrent,
             executionAuthority: prepResult.executionAuthority,
             personaAttribution: prepResult.personaAttribution,
+            signal: prepResult.executionAuthority?.signal,
           });
+          // Provider abort is cooperative. A response can arrive after the
+          // Persona heartbeat/fence was lost, so reject it before any message,
+          // event, node, or conversation projection observes the stale result.
+          await prepResult.executionAuthority?.assertCurrent();
+          return result;
+        };
 
         // Provider catalogues can tell us before the request that a model lacks
         // tool support. Strip only handoff-only plumbing when routing remains
@@ -1308,20 +1320,23 @@ export class ProcessNode extends BaseNode {
 
       return execResult;
     } catch (error) {
-    // For critical tool errors or model errors, we want to rethrow them
-    // to abort the flow execution
-    if (error && typeof error === 'object' &&
-        ('isCriticalToolError' in error || 'isModelError' in error)) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      // If this error raced a higher-level lease loss, authority failure wins and
+      // escapes instead of being converted into a persistable Process-node error.
+      await prepResult.executionAuthority?.assertCurrent();
+      // For critical tool errors or model errors, we want to rethrow them
+      // to abort the flow execution
+      if (error && typeof error === 'object' &&
+          ('isCriticalToolError' in error || 'isModelError' in error)) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
 
-      log.error('Critical error detected - propagating to abort flow:', {
-        error: errorMessage,
-        isModelError: 'isModelError' in error,
-        isCriticalToolError: 'isCriticalToolError' in error
-      });
+        log.error('Critical error detected - propagating to abort flow:', {
+          error: errorMessage,
+          isModelError: 'isModelError' in error,
+          isCriticalToolError: 'isCriticalToolError' in error
+        });
 
-      // Rethrow the error to stop execution and propagate to the frontend
-      throw error;
+        // Rethrow the error to stop execution and propagate to the frontend
+        throw error;
       }
 
       // For other errors, create an error result

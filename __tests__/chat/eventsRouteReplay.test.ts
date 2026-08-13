@@ -25,7 +25,7 @@ jest.mock('@/utils/encryption/lockGate', () => ({
   assertUnlocked: (...a: unknown[]) => assertUnlockedMock(...(a as [])),
 }));
 jest.mock('@/utils/http/localRequest', () => ({
-  assertLocalRequest: (request: unknown, options?: unknown) => assertLocalRequestMock(request, options),
+  assertLocalRequest: (...args: [unknown, unknown?]) => assertLocalRequestMock(...args),
 }));
 jest.mock('@/backend/execution/flow/loadConversationState', () => ({
   loadConversationState: (...args: unknown[]) => loadConversationStateMock(...args),

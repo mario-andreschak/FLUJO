@@ -7,12 +7,40 @@ const ts = require('typescript');
 const Module = require('module');
 
 const repositoryRoot = process.cwd();
+const stdioOAuthDist = path.join(repositoryRoot, 'node_modules', 'mcp-stdio-oauth', 'dist');
+const stdioOAuthSubpaths = new Map([
+  ['mcp-stdio-oauth/client', path.join(stdioOAuthDist, 'client', 'index.js')],
+  ['mcp-stdio-oauth/client/transport', path.join(stdioOAuthDist, 'client', 'transport.js')],
+  ['mcp-stdio-oauth/protocol', path.join(stdioOAuthDist, 'protocol', 'index.js')],
+]);
 const originalResolve = Module._resolveFilename;
 Module._resolveFilename = function resolveAlias(request, parent, isMain, options) {
-  if (request.startsWith('@/')) {
+  if (stdioOAuthSubpaths.has(request)) {
+    // The application is transpiled to CommonJS in this deliberately bare
+    // subprocess, while mcp-stdio-oauth exposes import-only ESM conditions.
+    // Resolve its documented subpaths to their artifacts; the .js hook below
+    // performs the same ESM-to-CJS adaptation Jest applies in the parent.
+    request = stdioOAuthSubpaths.get(request);
+  } else if (request.startsWith('@/')) {
     request = path.join(repositoryRoot, 'src', request.slice(2));
   }
   return originalResolve.call(this, request, parent, isMain, options);
+};
+const originalJavaScriptLoader = require.extensions['.js'];
+require.extensions['.js'] = function transpileSelectedEsm(module, filename) {
+  if (!filename.startsWith(stdioOAuthDist + path.sep)) {
+    return originalJavaScriptLoader(module, filename);
+  }
+  const outputText = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
+    compilerOptions: {
+      allowJs: true,
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+      esModuleInterop: true,
+    },
+    fileName: filename,
+  }).outputText;
+  module._compile(outputText, filename);
 };
 require.extensions['.ts'] = function transpileTypeScript(module, filename) {
   const outputText = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {

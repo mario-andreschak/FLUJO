@@ -1015,8 +1015,6 @@ describe('Persona execution authority', () => {
       'currentMCPNodes',
       'armedSyntheticTools',
       'toolNameMap',
-      'permissionRules',
-      'savedPermissionRules',
       'handoffRequested',
       'handoffInput',
       'handoffNameMap',
@@ -1044,6 +1042,8 @@ describe('Persona execution authority', () => {
     ] as const) {
       expect(successor.sharedState[key]).toBeUndefined();
     }
+    expect(successor.sharedState.permissionRules).toEqual(successorBehavior.permissionRules ?? []);
+    expect(successor.sharedState.savedPermissionRules).toEqual(successorBehavior.permissionRules ?? []);
     expect(successor.sharedState.variables).toEqual({ fresh: 'v2' });
     expect(successor.sharedState.breakpoints).toEqual([]);
     expect(successor.sharedState.revertOperations).toEqual(retainedRevertOperations);

@@ -40,6 +40,7 @@ jest.mock('@/backend/execution/flow/conversationLog', () => ({
   projectMessages: jest.fn(() => []),
   flushConversationLog: jest.fn(),
   deleteConversationLog: jest.fn(),
+  repairTruncatedConversationLog: jest.fn(async () => undefined),
 }));
 
 // In-memory storage backing the route's loadItem/saveItem.

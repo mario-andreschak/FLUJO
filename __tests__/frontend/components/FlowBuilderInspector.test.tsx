@@ -24,6 +24,7 @@ jest.mock('@/frontend/contexts/AskFlujoContext', () => ({
 
 jest.mock('@/frontend/contexts/ThemeContext', () => ({
   useTheme: () => ({ toggleTheme: jest.fn(), isDarkMode: false, visualStyle: 'modern', livingWorldEnabled: false, themeHydrated: true, setVisualStyle: jest.fn(), setLivingWorldEnabled: jest.fn(), setThemePreset: jest.fn() }),
+  useOptionalTheme: () => ({ isDarkMode: false, visualStyle: 'modern' }),
 }));
 
 const processNode: any = {

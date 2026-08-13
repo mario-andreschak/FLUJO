@@ -277,6 +277,7 @@ describe('processToolCalls tool-args capture (#168)', () => {
       expect.any(AbortSignal),
       'model',
       'conversation:conv-1',
+      { conversationId: 'conv-1' },
     );
   });
 

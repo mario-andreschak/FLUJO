@@ -367,11 +367,16 @@ describe('SubflowNode', () => {
       },
     });
     FlowExecutor.conversationStates.set('parent-conv', state);
+    FlowExecutor.conversationStates.set(
+      'saved-child-conversation',
+      makeState({ conversationId: 'saved-child-conversation', flowId: 'inner-flow' }),
+    );
 
     try {
       await node.run(state);
     } finally {
       FlowExecutor.conversationStates.delete('parent-conv');
+      FlowExecutor.conversationStates.delete('saved-child-conversation');
       sessionGate.mockRestore();
     }
 

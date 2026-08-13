@@ -518,7 +518,7 @@ describe('compileFlowSpec — servers and tools', () => {
     expect(mcps.map((m) => m.data.properties!.enabledTools)).toEqual([['read_file'], ['write_file']]);
   });
 
-  it('servers on a non-process node are ignored with a warning', () => {
+  it('servers on an unsupported node are ignored with a warning', () => {
     const spec: FlowSpec = {
       nodes: [
         { key: 's', type: 'start', servers: [{ name: 'filesystem' }] } as any,
@@ -527,7 +527,7 @@ describe('compileFlowSpec — servers and tools', () => {
       edges: [{ from: 's', to: 'f' }],
     };
     const { flow, issues } = compileFlowSpec(spec, context);
-    expect(issues).toContainEqual(expect.objectContaining({ code: 'servers-on-non-process' }));
+    expect(issues).toContainEqual(expect.objectContaining({ code: 'servers-on-unsupported-node' }));
     expect(flow!.nodes.filter((n) => n.type === 'mcp')).toHaveLength(0);
   });
 });
