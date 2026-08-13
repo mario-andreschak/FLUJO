@@ -422,8 +422,11 @@ export async function unpinMemoryFromCore(
 export async function getCoreMemory(personaId: string): Promise<MemoryItem[]> {
   const persona = await getPersona(personaId);
   if (!persona) throw new PersonaDomainNotFoundError('Persona', personaId);
+  const coreMemoryItemIds = persona.coreMemoryItemIds ?? [];
+  if (coreMemoryItemIds.length === 0) return [];
+
   const byId = new Map((await listMemoryItems(personaId)).map((memory) => [memory.id, memory]));
-  return (persona.coreMemoryItemIds ?? [])
+  return coreMemoryItemIds
     .map((id) => byId.get(id))
     .filter((item): item is MemoryItem => Boolean(item));
 }
