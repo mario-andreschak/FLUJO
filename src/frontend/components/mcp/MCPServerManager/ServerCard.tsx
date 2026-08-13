@@ -58,6 +58,8 @@ import { useI18n } from "@/frontend/contexts/I18nContext";
 
 interface ServerCardProps {
   name: string;
+  /** Hide the visible name when an embedding surface already provides the identity heading. */
+  showName?: boolean;
   status:
     | "connected"
     | "disconnected"
@@ -123,6 +125,7 @@ interface AuthorizationPromptState {
 
 const ServerCard: React.FC<ServerCardProps> = ({
   name,
+  showName = true,
   status,
   path,
   enabled,
@@ -835,24 +838,26 @@ const ServerCard: React.FC<ServerCardProps> = ({
             )}
             <ServerLogo name={name} config={serverConfig} size={50} />
             <Box sx={{ flex: 1, minWidth: 0 }}>
-              <Typography
-                variant="h6"
-                component="h3"
-                noWrap
-                title={name}
-                sx={
-                  pickerMode
-                    ? {
-                        color: "text.primary",
-                        fontWeight: 700,
-                        fontSize: "1.02rem",
-                        lineHeight: 1.35,
-                      }
-                    : undefined
-                }
-              >
-                {name}
-              </Typography>
+              {showName && (
+                <Typography
+                  variant="h6"
+                  component="h3"
+                  noWrap
+                  title={name}
+                  sx={
+                    pickerMode
+                      ? {
+                          color: "text.primary",
+                          fontWeight: 700,
+                          fontSize: "1.02rem",
+                          lineHeight: 1.35,
+                        }
+                      : undefined
+                  }
+                >
+                  {name}
+                </Typography>
+              )}
               {path && path !== "." && (
                 <Typography
                   variant="caption"
@@ -920,26 +925,28 @@ const ServerCard: React.FC<ServerCardProps> = ({
                     sx={{ mr: 1, p: 0.5 }}
                   />
                 )}
-                <Typography
-                  variant="h6"
-                  component="h3"
-                  noWrap={pickerMode}
-                  title={pickerMode ? name : undefined}
-                  sx={{
-                    flex: 1,
-                    minWidth: 0,
-                    ...(pickerMode
-                      ? {
-                          color: "text.primary",
-                          fontWeight: 700,
-                          fontSize: "1.02rem",
-                          lineHeight: 1.35,
-                        }
-                      : {}),
-                  }}
-                >
-                  {name}
-                </Typography>
+                {showName && (
+                  <Typography
+                    variant="h6"
+                    component="h3"
+                    noWrap={pickerMode}
+                    title={pickerMode ? name : undefined}
+                    sx={{
+                      flex: 1,
+                      minWidth: 0,
+                      ...(pickerMode
+                        ? {
+                            color: "text.primary",
+                            fontWeight: 700,
+                            fontSize: "1.02rem",
+                            lineHeight: 1.35,
+                          }
+                        : {}),
+                    }}
+                  >
+                    {name}
+                  </Typography>
+                )}
               </Box>
               <Box
                 sx={{

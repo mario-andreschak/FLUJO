@@ -48,6 +48,7 @@ import ServerCard from '@/frontend/components/mcp/MCPServerManager/ServerCard';
 import { useMcpAppsDiscovery } from '@/frontend/components/mcp/useMcpAppsDiscovery';
 import CardPickerGrid from '@/frontend/components/shared/CardPickerGrid';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import type { TranslationKey } from '@/frontend/i18n/messages';
 import PersonaCreationWizard from './PersonaCreationWizard';
 import PersonaDetailShell from './PersonaDetailShell';
 import PersonaFlowsArea from './PersonaFlowsArea';
@@ -67,11 +68,21 @@ import {
   PERSONA_PRIORITIES,
   PERSONA_WORK_ITEM_STATUSES,
   type PersonaHistoryEntry,
+  type PersonaPresentationOutcome,
   type PersonaPriority,
   type PersonaTaskSummary,
   type PersonaWorkItem,
   type PersonaWorkItemStatus,
 } from '@/shared/types/enduringAgent';
+
+const PERSONA_OUTCOME_KEYS = {
+  queued: 'personas.outcome.queued',
+  working: 'personas.outcome.working',
+  waiting: 'personas.outcome.waiting',
+  completed: 'personas.outcome.completed',
+  cancelled: 'personas.outcome.cancelled',
+  needs_attention: 'personas.outcome.needs_attention',
+} satisfies Record<PersonaPresentationOutcome, TranslationKey>;
 
 function humanize(value: string): string {
   return value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
@@ -320,7 +331,7 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
           {current ? (
             <Stack spacing={1.25}>
               <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                <Chip color={statusColor(current.outcome)} label={t(`personas.outcome.${current.outcome}`)} />
+                <Chip color={statusColor(current.outcome)} label={t(PERSONA_OUTCOME_KEYS[current.outcome])} />
                 <Chip label={t(`personas.history.type.${current.kind}`)} />
                 <Chip variant="outlined" label={t(`personas.origin.${current.origin}`)} />
               </Stack>
@@ -368,7 +379,7 @@ function TalkArea({ detail, busy, startConversation }: { detail: PersonaDetail; 
                   {conversation.active && <Chip size="small" color="primary" label={t('personas.conversations.active')} />}
                   {conversation.queuedInputCount > 0 && <Chip size="small" label={t('personas.conversations.queuedInput', { count: conversation.queuedInputCount })} />}
                 </Stack>
-                <Typography variant="body2" color="text.secondary">{formatDate(conversation.occurredAt, { dateStyle: 'medium', timeStyle: 'short' })} · {t(`personas.outcome.${conversation.outcome}`)}</Typography>
+                <Typography variant="body2" color="text.secondary">{formatDate(conversation.occurredAt, { dateStyle: 'medium', timeStyle: 'short' })} · {t(PERSONA_OUTCOME_KEYS[conversation.outcome])}</Typography>
               </Box>
               <Button component={Link} href={withWorkspaceUrl(magicLinkPath({ kind: 'conversation', id: conversation.conversationId }))}>{t('personas.talk.open')}</Button>
             </Stack>
@@ -638,6 +649,7 @@ function AppsArea({ detail, busy, mutate }: {
                     <Box sx={{ mt: 2 }}>
                       <ServerCard
                         name={grant.mcpServerName}
+                        showName={false}
                         status={!server || server.error ? 'error' : 'connected'}
                         path={server?.config?.rootPath ?? ''}
                         enabled={server?.config ? !server.config.disabled : false}
