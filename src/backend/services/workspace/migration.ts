@@ -44,9 +44,10 @@ const APP_OWNED_MCP_ENTRIES = new Set([
 const LEGACY_DB_ROOTS = ['db', path.join('.next', 'storage'), 'storage'];
 const DIRECT_ROOTS = [
   'userdata',
-  // Shadow Git history is derived workspace data. Do not enumerate or copy it
-  // through the generic migration journal, which can otherwise materialize a
-  // second full object store across volumes.
+  // Keep the legacy snapshot store intact as one top-level migration candidate.
+  // The direct mover prefers an atomic directory rename, preserving metadata
+  // without adding individual Git objects to a migration journal.
+  'snapshots',
   'screenshots',
   'recordings',
   'browser-profile',
