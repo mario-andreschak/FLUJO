@@ -614,6 +614,21 @@ function AppsArea({ detail, busy, mutate }: {
                       </Box>
                       <Chip color={server && !server.error ? 'success' : 'warning'} label={server && !server.error ? t('personas.apps.available') : t('personas.apps.unavailable')} />
                     </Stack>
+                    <Box sx={{ mt: 2 }}>
+                      <ServerCard
+                        name={grant.mcpServerName}
+                        status={!server || server.error ? 'error' : 'connected'}
+                        path={server?.config?.rootPath ?? ''}
+                        enabled={server?.config ? !server.config.disabled : false}
+                        transport={server?.config?.transport ?? 'stdio'}
+                        pickerMode
+                        selectionManaged
+                        disabled={busy}
+                        selected
+                        serverConfig={server?.config}
+                        onClick={() => {}}
+                      />
+                    </Box>
                     {!server ? (
                       <Alert severity="warning" sx={{ mt: 2 }}>{t('personas.apps.stale')}</Alert>
                     ) : server.error ? (
@@ -646,7 +661,30 @@ function AppsArea({ detail, busy, mutate }: {
                       </Stack>
                     )}
                   </CardContent>
-                  <CardActions>
+                  <CardActions sx={{ flexWrap: 'wrap', gap: 1 }}>
+                    {!server ? (
+                      <Button component={Link} href={withWorkspaceUrl('/mcp')}>
+                        {t('personas.apps.connect')}
+                      </Button>
+                    ) : server.error ? (
+                      <Button disabled={refreshing} onClick={refresh}>
+                        {t('personas.retry')}
+                      </Button>
+                    ) : null}
+                    <Button
+                      disabled={busy || !selectedConfig}
+                      onClick={() => void mutate(
+                        () => personasService.replaceApp(
+                          detail.persona.id,
+                          grant.id,
+                          selectedConfig,
+                          grant.updatedAt,
+                        ),
+                        t('personas.apps.switched'),
+                      ).then(() => setSelectedConfig(''))}
+                    >
+                      {t('personas.apps.switch')}
+                    </Button>
                     <Button
                       color="error"
                       disabled={busy}
@@ -717,6 +755,13 @@ function CreatePersonaDialog({ open, onClose, onCreated }: { open: boolean; onCl
   const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
   const [roles, setRoles] = useState<RolesResponse | null>(null);
   const [roleVersionId, setRoleVersionId] = useState('');
+  const [appRefs, setAppRefs] = useState<string[]>([]);
+  const [appsEdited, setAppsEdited] = useState(false);
+  const {
+    servers: createAppServers,
+    loading: createAppsLoading,
+    error: createAppsError,
+  } = useMcpAppsDiscovery({ active: open });
   const [name, setName] = useState('');
   const [mission, setMission] = useState('');
   const [fact, setFact] = useState('');
@@ -730,6 +775,20 @@ function CreatePersonaDialog({ open, onClose, onCreated }: { open: boolean; onCl
       setRoleVersionId((current) => current || result.roleVersions[0]?.id || '');
     }).catch((cause) => setError(cause instanceof Error ? cause.message : t('personas.action.failed')));
   }, [open, t]);
+  useEffect(() => {
+    if (!open || appsEdited) return;
+    const role = roles?.roleVersions.find((candidate) => candidate.id === roleVersionId);
+    const eligible = new Set(createAppServers.map((server) => server.name));
+    setAppRefs((role?.capabilityRequirements?.preferredMcpServers ?? []).filter(
+      (name) => eligible.has(name),
+    ));
+  }, [appsEdited, createAppServers, open, roleVersionId, roles]);
+  const toggleCreateApp = (name: string) => {
+    setAppsEdited(true);
+    setAppRefs((current) => current.includes(name)
+      ? current.filter((candidate) => candidate !== name)
+      : [...current, name]);
+  };
   const submit = async () => {
     if (!name.trim()) return;
     setSaving(true); setError(null);
@@ -737,15 +796,16 @@ function CreatePersonaDialog({ open, onClose, onCreated }: { open: boolean; onCl
       const detail = await personasService.create({
         name: name.trim(),
         ...(roleVersionId ? { roleVersionId } : {}),
+        appRefs,
         ...(mission.trim() ? { mission: mission.trim() } : {}),
         idempotencyKey: uuidv4(),
         ...(fact.trim() ? { initialMemories: [{ content: fact.trim() }] } : {}),
       });
       onCreated(detail);
-      setName(''); setMission(''); setFact('');
+      setName(''); setMission(''); setFact(''); setAppRefs([]); setAppsEdited(false);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t('personas.action.failed'));
     } finally { setSaving(false); }
   };
-  return <Dialog open={open} onClose={saving ? undefined : onClose} fullScreen={fullScreen} fullWidth maxWidth="md"><DialogTitle>{t('personas.create.title')}</DialogTitle><DialogContent dividers><Stack spacing={2} sx={{ pt: 0.5 }}>{error && <Alert severity="error">{error}</Alert>}<TextField label={t('personas.create.name')} value={name} onChange={(event) => setName(event.target.value)} required autoFocus /><Box><Typography variant="subtitle2" sx={{ mb: 1 }}>{t('personas.create.role')}</Typography><CardPickerGrid searchable selectionMode="single" ariaLabel={t('personas.create.role')} isLoading={!roles && !error} emptyMessage={t('cardPicker.empty')} columns={{ xs: 12, sm: 6, md: 6 }} items={(roles?.roleVersions ?? []).map((role) => ({ key: role.id, label: `${role.name} v${role.version}`, selected: roleVersionId === role.id, searchText: `${role.name} ${role.mission} v${role.version}`, onSelect: () => setRoleVersionId(role.id), content: <RoleVersionCard role={role} selected={roleVersionId === role.id} onSelect={() => {}} /> }))} /></Box><TextField label={t('personas.create.mission')} value={mission} onChange={(event) => setMission(event.target.value)} multiline minRows={3} /><TextField label={t('personas.create.fact')} helperText={t('personas.create.factHelp')} value={fact} onChange={(event) => setFact(event.target.value)} multiline minRows={2} /></Stack></DialogContent><DialogActions><Button disabled={saving} onClick={onClose}>{t('personas.action.cancel')}</Button><Button variant="contained" disabled={saving || !name.trim() || !roleVersionId} onClick={() => void submit()}>{saving ? t('personas.action.saving') : t('personas.create')}</Button></DialogActions></Dialog>;
+  return <Dialog open={open} onClose={saving ? undefined : onClose} fullScreen={fullScreen} fullWidth maxWidth="md"><DialogTitle>{t('personas.create.title')}</DialogTitle><DialogContent dividers><Stack spacing={2} sx={{ pt: 0.5 }}>{error && <Alert severity="error">{error}</Alert>}<TextField label={t('personas.create.name')} value={name} onChange={(event) => setName(event.target.value)} required autoFocus /><Box><Typography variant="subtitle2" sx={{ mb: 1 }}>{t('personas.create.role')}</Typography><CardPickerGrid searchable selectionMode="single" ariaLabel={t('personas.create.role')} isLoading={!roles && !error} emptyMessage={t('cardPicker.empty')} columns={{ xs: 12, sm: 6, md: 6 }} items={(roles?.roleVersions ?? []).map((role) => ({ key: role.id, label: `${role.name} v${role.version}`, selected: roleVersionId === role.id, searchText: `${role.name} ${role.mission} v${role.version}`, onSelect: () => { setRoleVersionId(role.id); setAppsEdited(false); }, content: <RoleVersionCard role={role} selected={roleVersionId === role.id} onSelect={() => {}} /> }))} /></Box><Box><Typography variant="subtitle2" sx={{ mb: 1 }}>{t('personas.apps.title')}</Typography>{createAppsError && <Alert severity="warning" sx={{ mb: 1 }}>{createAppsError}</Alert>}<CardPickerGrid searchable selectionMode="multiple" ariaLabel={t('personas.apps.config')} isLoading={createAppsLoading} emptyMessage={t('personas.apps.noEligible')} columns={{ xs: 12, sm: 6, md: 6 }} items={createAppServers.map((server) => ({ key: server.name, label: server.name, selected: appRefs.includes(server.name), searchText: `${server.name} ${server.config?.rootPath ?? ''}`, onSelect: () => toggleCreateApp(server.name), content: <ServerCard name={server.name} status={server.error ? 'error' : 'connected'} path={server.config?.rootPath ?? ''} enabled={server.config ? !server.config.disabled : true} transport={server.config?.transport ?? 'stdio'} pickerMode selectionManaged selected={appRefs.includes(server.name)} serverConfig={server.config} onClick={() => {}} /> }))} /></Box><TextField label={t('personas.create.mission')} value={mission} onChange={(event) => setMission(event.target.value)} multiline minRows={3} /><TextField label={t('personas.create.fact')} helperText={t('personas.create.factHelp')} value={fact} onChange={(event) => setFact(event.target.value)} multiline minRows={2} /></Stack></DialogContent><DialogActions><Button disabled={saving} onClick={onClose}>{t('personas.action.cancel')}</Button><Button variant="contained" disabled={saving || !name.trim() || !roleVersionId} onClick={() => void submit()}>{saving ? t('personas.action.saving') : t('personas.create')}</Button></DialogActions></Dialog>;
 }

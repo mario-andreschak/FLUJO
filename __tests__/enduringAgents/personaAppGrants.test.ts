@@ -13,6 +13,7 @@ import {
   deletePersona,
   grantPersonaAppAccess,
   listPersonaDirectAppGrants,
+  replacePersonaAppAccess,
   revokePersonaAppAccess,
   routePersonaMailboxItem,
   previewPersonaDeletion,
@@ -184,6 +185,41 @@ describe('issue #415 phase 6 Persona direct-app grants', () => {
       await expect(authorizePersonaAppLaunch(persona.id, grant.id, {
         uri: 'ui://github/dashboard',
       })).rejects.toBeInstanceOf(PersonaDomainNotFoundError);
+    });
+  });
+
+  it('switches configurations atomically and rejects stale or invalid targets', async () => {
+    await inFreshWorkspace(async () => {
+      const { persona } = await createPersonaFromRole({
+        name: 'Jim',
+        idempotencyKey: 'phase6-atomic-switch',
+      });
+      const original = await grantPersonaAppAccess(persona.id, {
+        mcpServerName: 'github-jim',
+      });
+
+      await expect(replacePersonaAppAccess(persona.id, original.id, {
+        mcpServerName: 'disabled-app',
+        expectedUpdatedAt: original.updatedAt,
+      })).rejects.toBeInstanceOf(PersonaDomainConflictError);
+      expect(await listPersonaDirectAppGrants(persona.id)).toEqual([original]);
+
+      const replacement = await replacePersonaAppAccess(persona.id, original.id, {
+        mcpServerName: 'github-sarah',
+        expectedUpdatedAt: original.updatedAt,
+      });
+      expect(replacement).toMatchObject({
+        personaId: persona.id,
+        mcpServerName: 'github-sarah',
+        createdAt: original.createdAt,
+      });
+      expect(await getPersonaAppGrant(original.id)).toBeNull();
+      expect(await listPersonaDirectAppGrants(persona.id)).toEqual([replacement]);
+
+      await expect(replacePersonaAppAccess(persona.id, replacement.id, {
+        mcpServerName: 'github-jim',
+        expectedUpdatedAt: original.updatedAt,
+      })).rejects.toMatchObject({ code: 'PERSONA_APP_STALE_WRITE' });
     });
   });
 

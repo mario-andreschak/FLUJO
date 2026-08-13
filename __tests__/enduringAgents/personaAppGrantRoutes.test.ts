@@ -1,6 +1,7 @@
 const grantMock = jest.fn();
 const listMock = jest.fn();
 const revokeMock = jest.fn();
+const replaceMock = jest.fn();
 const launchMock = jest.fn();
 const assertLocalRequestMock = jest.fn();
 const assertUnlockedMock = jest.fn();
@@ -20,6 +21,7 @@ jest.mock('@/backend/services/enduringAgents', () => {
     grantPersonaAppAccess: (...args: unknown[]) => grantMock(...args),
     listPersonaDirectAppGrants: (...args: unknown[]) => listMock(...args),
     revokePersonaAppAccess: (...args: unknown[]) => revokeMock(...args),
+    replacePersonaAppAccess: (...args: unknown[]) => replaceMock(...args),
     authorizePersonaAppLaunch: (...args: unknown[]) => launchMock(...args),
   };
 });
@@ -41,7 +43,10 @@ import {
   GET as listPersonaAppGrants,
   POST as grantPersonaApp,
 } from '@/app/v1/personas/[personaId]/app-grants/route';
-import { DELETE as revokePersonaApp } from '@/app/v1/personas/[personaId]/app-grants/[grantId]/route';
+import {
+  DELETE as revokePersonaApp,
+  PATCH as replacePersonaApp,
+} from '@/app/v1/personas/[personaId]/app-grants/[grantId]/route';
 import { POST as launchPersonaApp } from '@/app/v1/personas/[personaId]/app-grants/[grantId]/launch/route';
 
 const request = (path: string, init?: RequestInit) => new Request(`http://localhost${path}`, init);
@@ -68,6 +73,7 @@ describe('Persona direct-app grant routes', () => {
       mcpServerName: 'github-jim',
       uri: 'ui://github/dashboard',
     });
+    replaceMock.mockResolvedValue({ ...grant, mcpServerName: 'github-sarah', updatedAt: 2 });
     revokeMock.mockResolvedValue(undefined);
 
     let response = await listPersonaAppGrants(
@@ -92,6 +98,19 @@ describe('Persona direct-app grant routes', () => {
     expect(await response.json()).toMatchObject({ mcpServerName: 'github-jim' });
     expect(launchMock).toHaveBeenCalledWith('jim', 'appgrant_123', {
       uri: 'ui://github/dashboard',
+    });
+
+    response = await replacePersonaApp(request(
+      '/v1/personas/jim/app-grants/appgrant_123',
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ mcpServerName: 'github-sarah', expectedUpdatedAt: 1 }),
+      },
+    ) as never, grantContext);
+    expect(response.status).toBe(200);
+    expect(replaceMock).toHaveBeenCalledWith('jim', 'appgrant_123', {
+      mcpServerName: 'github-sarah',
+      expectedUpdatedAt: 1,
     });
 
     response = await revokePersonaApp(request(
