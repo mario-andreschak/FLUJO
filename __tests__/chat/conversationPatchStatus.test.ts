@@ -76,6 +76,21 @@ function patchRequest(body: unknown) {
   return makeLocalRequest({ body });
 }
 
+function strictPersonaPatchRequest(
+  headers: Record<string, string> = {},
+) {
+  return new NextRequest('http://localhost/v1/chat/conversations/conv', {
+    method: 'PATCH',
+    headers: {
+      host: 'localhost',
+      origin: 'http://localhost',
+      'content-type': 'application/json',
+      ...headers,
+    },
+    body: JSON.stringify({ personaTargetId: 'persona-target' }),
+  });
+}
+
 async function patchFlow(conversationId: string) {
   const res = await PATCH(patchRequest({ flowId: 'flow-2' }), {
     params: Promise.resolve({ conversationId }),
@@ -156,6 +171,66 @@ describe('PATCH /v1/chat/conversations/:id status pass-through', () => {
       personaArchived: true,
     });
     expect(stored[`conversations/${id}`]).not.toHaveProperty('personaTargetId');
+  });
+
+  it('keeps Persona-target PATCH direct-loopback-only and rejects forwarding metadata', async () => {
+    const previousMode = process.env.FLUJO_EXPOSURE_MODE;
+    process.env.FLUJO_EXPOSURE_MODE = 'localhost';
+    try {
+      seedConversation('conv-direct-persona', undefined);
+      const direct = await PATCH(strictPersonaPatchRequest(), {
+        params: Promise.resolve({ conversationId: 'conv-direct-persona' }),
+      });
+      expect(direct.status).toBe(200);
+      expect(stored['conversations/conv-direct-persona']).toMatchObject({
+        flowId: '',
+        personaTargetId: 'persona-target',
+      });
+
+      for (const header of [
+        'forwarded',
+        'x-forwarded-for',
+        'x-forwarded-host',
+        'x-forwarded-proto',
+        'x-real-ip',
+      ]) {
+        const id = `conv-forwarded-${header}`;
+        seedConversation(id, undefined);
+        const response = await PATCH(strictPersonaPatchRequest({ [header]: 'for=203.0.113.10' }), {
+          params: Promise.resolve({ conversationId: id }),
+        });
+        expect(response.status).toBe(403);
+        expect(stored[`conversations/${id}`]).toMatchObject({ flowId: 'flow-1' });
+        expect(stored[`conversations/${id}`]).not.toHaveProperty('personaTargetId');
+      }
+    } finally {
+      if (previousMode === undefined) delete process.env.FLUJO_EXPOSURE_MODE;
+      else process.env.FLUJO_EXPOSURE_MODE = previousMode;
+    }
+  });
+
+  it.each([
+    ['network exposure', 'network', { host: 'localhost', origin: 'http://localhost' }],
+    ['public exposure', 'public', { host: 'localhost', origin: 'http://localhost' }],
+    ['non-loopback Host', 'localhost', { host: 'flujo.example.com', origin: 'http://localhost' }],
+    ['cross-origin Origin', 'localhost', { host: 'localhost', origin: 'https://attacker.example' }],
+    ['malformed Origin', 'localhost', { host: 'localhost', origin: 'not a URL' }],
+  ])('rejects Persona-target PATCH for %s', async (_label, mode, headers) => {
+    const previousMode = process.env.FLUJO_EXPOSURE_MODE;
+    process.env.FLUJO_EXPOSURE_MODE = mode;
+    const id = `conv-rejected-${mode}-${headers.host}`;
+    seedConversation(id, undefined);
+    try {
+      const response = await PATCH(strictPersonaPatchRequest(headers), {
+        params: Promise.resolve({ conversationId: id }),
+      });
+      expect(response.status).toBe(403);
+      expect(stored[`conversations/${id}`]).toMatchObject({ flowId: 'flow-1' });
+      expect(stored[`conversations/${id}`]).not.toHaveProperty('personaTargetId');
+    } finally {
+      if (previousMode === undefined) delete process.env.FLUJO_EXPOSURE_MODE;
+      else process.env.FLUJO_EXPOSURE_MODE = previousMode;
+    }
   });
 
   it('revalidates deletion after waiting before converting a Flow draft to a Persona', async () => {

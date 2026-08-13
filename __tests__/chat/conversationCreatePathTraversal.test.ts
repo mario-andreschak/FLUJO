@@ -69,7 +69,11 @@ beforeEach(async () => {
     '@/backend/execution/flow/conversationExecutionLock'
   ));
   mockPersonaDeleted = false;
-  mockGetPersona.mockClear();
+  mockGetPersona.mockReset().mockResolvedValue({
+    id: 'persona-target',
+    provisioningState: 'ready',
+    lifecycleState: 'idle',
+  });
   mockGetPersonaDeletionTombstone.mockClear();
 });
 
@@ -106,6 +110,88 @@ describe('POST /v1/chat/conversations path-traversal guard (issue #126)', () => 
     expect(stored.source).toBe('chat');
     // And nothing leaked to the db root.
     expect(await exists(path.join(dbDir, 'encryption_key.json'))).toBe(false);
+  });
+
+  it('creates a Persona-owned draft through a direct localhost POST', async () => {
+    const id = 'persona-draft';
+    const response = await POST(makeReq({
+      id,
+      title: 'Ask Persona',
+      flowId: null,
+      personaTargetId: 'persona-target',
+      createdAt: 1,
+      updatedAt: 1,
+    }));
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toMatchObject({
+      id,
+      flowId: null,
+      personaId: 'persona-target',
+    });
+    const stored = JSON.parse(await fs.readFile(
+      path.join(dbDir, 'conversations', `${id}.json`),
+      'utf-8',
+    ));
+    expect(stored).toMatchObject({
+      conversationId: id,
+      flowId: '',
+      personaTargetId: 'persona-target',
+    });
+  });
+
+  it('rejects an invalid Persona id before lookup or persistence', async () => {
+    const id = 'invalid-persona-draft';
+    const response = await POST(makeReq({
+      id,
+      title: 'Invalid Persona',
+      flowId: null,
+      personaTargetId: 'not a valid persona id',
+      createdAt: 1,
+      updatedAt: 1,
+    }));
+
+    expect(response.status).toBe(400);
+    expect(mockGetPersona).not.toHaveBeenCalled();
+    expect(await exists(path.join(dbDir, 'conversations', `${id}.json`))).toBe(false);
+  });
+
+  it('rejects a deleted Persona without persisting a draft', async () => {
+    const id = 'deleted-persona-draft';
+    mockPersonaDeleted = true;
+
+    const response = await POST(makeReq({
+      id,
+      title: 'Deleted Persona',
+      flowId: null,
+      personaTargetId: 'persona-target',
+      createdAt: 1,
+      updatedAt: 1,
+    }));
+
+    expect(response.status).toBe(409);
+    expect(await exists(path.join(dbDir, 'conversations', `${id}.json`))).toBe(false);
+  });
+
+  it('rejects an unavailable Persona without persisting a draft', async () => {
+    const id = 'unavailable-persona-draft';
+    mockGetPersona.mockResolvedValueOnce({
+      id: 'persona-target',
+      provisioningState: 'pending',
+      lifecycleState: 'idle',
+    });
+
+    const response = await POST(makeReq({
+      id,
+      title: 'Unavailable Persona',
+      flowId: null,
+      personaTargetId: 'persona-target',
+      createdAt: 1,
+      updatedAt: 1,
+    }));
+
+    expect(response.status).toBe(409);
+    expect(await exists(path.join(dbDir, 'conversations', `${id}.json`))).toBe(false);
   });
 
   it('cannot overwrite an existing Persona conversation and strip its attribution', async () => {
