@@ -124,11 +124,17 @@ function isTrustedHostname(hostname: string, mode: ExposureMode): boolean {
 function hostnameOf(hostHeader: string | null): string | null {
   if (!hostHeader) return null;
   const h = hostHeader.trim();
+  if (h === '::1') return h;
   if (h.startsWith('[')) {
-    const end = h.indexOf(']');
-    return end > 0 ? h.slice(1, end) : null;
+    const match = /^\[([^\]]+)\](?::(\d{1,5}))?$/.exec(h);
+    if (!match) return null;
+    if (match[2] && Number(match[2]) > 65_535) return null;
+    return match[1];
   }
-  return h.split(':')[0] || null;
+  const match = /^([^:@\s]+)(?::(\d{1,5}))?$/.exec(h);
+  if (!match) return null;
+  if (match[2] && Number(match[2]) > 65_535) return null;
+  return match[1] || null;
 }
 
 /**
@@ -162,6 +168,23 @@ export function isLocalRequest(host: string | null, origin: string | null): bool
   return true;
 }
 
+/**
+ * Strict loopback-only variant for trusted control-plane capabilities that are
+ * intentionally unavailable in network/public exposure modes. A missing
+ * Origin remains valid for native localhost clients; when present, Origin must
+ * also be loopback-family to retain the DNS-rebinding defense.
+ */
+export function isLoopbackRequest(host: string | null, origin: string | null): boolean {
+  const hostName = hostnameOf(host);
+  if (!hostName || !LOCAL_HOSTS.has(normalizeHostname(hostName))) return false;
+  if (!origin) return true;
+  try {
+    return LOCAL_HOSTS.has(normalizeHostname(new URL(origin).hostname));
+  } catch {
+    return false;
+  }
+}
+
 /** Host-only half of the exposure policy for intentionally public routes. */
 export function isRequestHostAllowed(host: string | null): boolean {
   const hostname = hostnameOf(host);
@@ -186,8 +209,27 @@ export function nonLocalResponse(): NextResponse {
  *
  * Reads only Host/Origin headers, so it works on both `NextRequest` and `Request`.
  */
-export function assertLocalRequest(request: Request): NextResponse | null {
-  if (!isLocalRequest(request.headers.get('host'), request.headers.get('origin'))) {
+export function assertLocalRequest(
+  request: Request,
+  options: { strictLoopback?: boolean } = {},
+): NextResponse | null {
+  const hasForwardingHeaders = [
+    'forwarded',
+    'x-forwarded-for',
+    'x-forwarded-host',
+    'x-forwarded-proto',
+    'x-real-ip',
+  ].some(header => request.headers.get(header) !== null);
+  const allowed = options.strictLoopback
+    // Host and Origin are client-controlled headers. They become a meaningful
+    // local trust boundary only while FLUJO's launcher has selected localhost
+    // exposure and bound Next to 127.0.0.1. In network/public mode a remote
+    // native client could otherwise spoof `Host: localhost`.
+    ? !hasForwardingHeaders
+      && getExposureMode() === 'localhost'
+      && isLoopbackRequest(request.headers.get('host'), request.headers.get('origin'))
+    : isLocalRequest(request.headers.get('host'), request.headers.get('origin'));
+  if (!allowed) {
     return nonLocalResponse();
   }
   return null;

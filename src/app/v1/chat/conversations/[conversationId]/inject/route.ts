@@ -1,13 +1,56 @@
+import { createHash } from 'crypto';
+
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import type { SharedState } from '@/backend/execution/flow/types';
 import { enqueueSteeringMessage } from '@/backend/execution/flow/steeringInbox';
+import { submitPersonaFlowDispatch } from '@/backend/services/enduringAgents/personaDispatcher';
 import { FlujoChatMessage } from '@/shared/types/chat';
+import type { StorageKey } from '@/shared/types/storage';
+import { assertSafeCollectionId, loadItem as loadItemBackend } from '@/utils/storage/backend';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/inject/route');
+
+type PersonaRelatedAction = 'steer' | 'coalesce';
+
+async function loadPersistedState(conversationId: string): Promise<SharedState | undefined> {
+  try {
+    assertSafeCollectionId(conversationId);
+    return await loadItemBackend<SharedState>(
+      `conversations/${conversationId}` as StorageKey,
+      undefined as never,
+    );
+  } catch {
+    // Keep the route's existing not-running boundary for unsafe ids and storage
+    // failures. In particular, do not adopt a persisted legacy state into the
+    // live map: only an executing local loop may drain the legacy inbox.
+    return undefined;
+  }
+}
+
+function personaRelatedAction(state: SharedState): PersonaRelatedAction | undefined {
+  if (state.status === 'running') return 'steer';
+  if (state.status === 'awaiting_tool_approval' || state.status === 'paused_debug') {
+    return 'coalesce';
+  }
+  return undefined;
+}
+
+function injectionIdempotencyKey(
+  conversationId: string,
+  messageId: string,
+  content: string,
+): string {
+  const digest = createHash('sha256')
+    .update(JSON.stringify({ conversationId, messageId, content }))
+    .digest('hex');
+  return `chat-inject:${digest}`;
+}
 
 /**
  * Mid-run steering: hand a user message to a run that is ALREADY in flight.
@@ -17,10 +60,10 @@ const log = createLogger('app/v1/chat/conversations/[conversationId]/inject/rout
  * that is going the wrong way instead of waiting for the whole run to finish
  * and then starting a separate turn.
  *
- * Only a live run can be steered. When the conversation is not running this
- * returns 409 `not_running` and the client sends the message the normal way —
- * the endpoint deliberately does NOT start a run of its own, so there is
- * exactly one code path that begins a turn.
+ * A legacy run must be live in this process. Persona-backed conversations use
+ * their trusted durable attribution and mailbox, which also permits related
+ * input to coalesce while the Activity is waiting. Terminal conversations still
+ * return 409 `not_running`; this endpoint never bypasses the Persona dispatcher.
  */
 async function POST_handler(
   request: NextRequest,
@@ -52,10 +95,12 @@ async function POST_handler(
     return NextResponse.json({ error: 'content is required' }, { status: 400 });
   }
 
-  // Only the in-memory state matters: a run in flight is by definition a loop
-  // executing in THIS process, and only such a loop can drain the inbox. A
-  // storage-loaded state would be stale by construction.
-  const sharedState = FlowExecutor.conversationStates.get(conversationId);
+  // Persona Activities own a durable mailbox and may be executing in another
+  // process, so their persisted attribution is sufficient for admission. The
+  // Persona runtime validates that the related Activity is still live/waiting.
+  // Persona-less steering deliberately retains the legacy local-only rule.
+  const liveState = FlowExecutor.conversationStates.get(conversationId);
+  const sharedState = liveState ?? await loadPersistedState(conversationId);
   if (!sharedState) {
     log.info('Inject rejected — no live state for conversation', { requestId, conversationId });
     return NextResponse.json(
@@ -63,7 +108,27 @@ async function POST_handler(
       { status: 409 }
     );
   }
-  if (sharedState.status !== 'running') {
+  if (isPersonaOwnedConversationState(sharedState)) {
+    const notLoopback = assertLocalRequest(request);
+    if (notLoopback) return notLoopback;
+  }
+  if (sharedState.personaArchived) {
+    return NextResponse.json(
+      { error: 'An anonymized Persona archive is read-only.', reason: 'persona_archived' },
+      { status: 409 },
+    );
+  }
+  if (isPersonaOwnedConversationState(sharedState) && !sharedState.personaAttribution) {
+    return NextResponse.json(
+      { error: 'Persona conversation attribution is incomplete.', reason: 'persona_attribution_incomplete' },
+      { status: 409 },
+    );
+  }
+  const relatedAction = sharedState.personaAttribution
+    ? personaRelatedAction(sharedState)
+    : undefined;
+  if ((!sharedState.personaAttribution && (!liveState || sharedState.status !== 'running'))
+    || (sharedState.personaAttribution && !relatedAction)) {
     log.info('Inject rejected — conversation is not running', { requestId, conversationId, status: sharedState.status });
     return NextResponse.json(
       {
@@ -79,8 +144,56 @@ async function POST_handler(
   // Keep the client-supplied id when present: the chat shows the message
   // optimistically and dedupes by id, so reusing it merges the canonical copy
   // into that bubble instead of rendering the message twice.
+  const messageId = body.id || crypto.randomUUID();
+
+  if (sharedState.personaAttribution && relatedAction) {
+    const submission = await submitPersonaFlowDispatch({
+      personaId: sharedState.personaAttribution.personaId,
+      idempotencyKey: injectionIdempotencyKey(conversationId, messageId, content),
+      kind: 'assignment',
+      source: { kind: 'chat', sourceId: conversationId },
+      relationKey: conversationId,
+      relatedAction,
+      summary: relatedAction === 'steer'
+        ? 'Mid-run conversation steering'
+        : 'Conversation input while Activity is waiting',
+      flowInput: {
+        messages: [{
+          id: messageId,
+          role: 'user',
+          content,
+          // The dispatcher replaces this with its durable creation timestamp
+          // before delivery. A constant keeps identical retries hash-identical.
+          timestamp: 0,
+          injected: true,
+        } as FlujoChatMessage],
+        mode: 'conversation',
+        conversationId,
+        userTurn: true,
+        source: 'chat',
+      },
+    }, { waitForCompletion: false });
+
+    log.info('Submitted durable Persona conversation input', {
+      requestId,
+      conversationId,
+      messageId,
+      dispatchId: submission.dispatch.id,
+      routingDecision: submission.decision,
+    });
+
+    return NextResponse.json({
+      status: submission.dispatch.state,
+      accepted: true,
+      conversation_id: conversationId,
+      message_id: messageId,
+      dispatch_id: submission.dispatch.id,
+      routing_decision: submission.decision,
+    }, { status: 202 });
+  }
+
   const message: FlujoChatMessage = {
-    id: body.id || crypto.randomUUID(),
+    id: messageId,
     role: 'user',
     content,
     timestamp: Date.now(),

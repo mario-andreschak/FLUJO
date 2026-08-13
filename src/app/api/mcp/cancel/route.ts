@@ -3,6 +3,7 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest, NextResponse } from 'next/server';
 import { mcpService } from '@/backend/services/mcp';
 import { createLogger } from '@/utils/logger';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 
 const log = createLogger('app/api/mcp/cancel/route');
 
@@ -20,6 +21,15 @@ async function POST_handler(request: NextRequest) {
   if (!serverName) {
     log.error('Missing serverName parameter');
     return NextResponse.json({ error: 'Missing serverName parameter' }, { status: 400 });
+  }
+
+  // Without a transport token this endpoint disconnects the entire server,
+  // cancelling every in-flight operation that uses it. That can include
+  // Persona-owned Activities, so the global force-cancel is a strict local
+  // control-plane action even when ordinary MCP administration is exposed.
+  if (!token) {
+    const notLoopback = assertLocalRequest(request, { strictLoopback: true });
+    if (notLoopback) return notLoopback;
   }
   
   try {

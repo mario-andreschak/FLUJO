@@ -486,3 +486,9 @@ describe('SchedulerService', () => {
     expect(readRuns('exec-x')).toHaveLength(10);
   });
 });
+jest.mock('@/backend/services/enduringAgents/runtimeLock', () => ({
+  withPersonaRuntimeLock: async (
+    _id: string,
+    task: (lock: { assertOwned(): Promise<void> }) => Promise<unknown>,
+  ) => task({ assertOwned: async () => undefined }),
+}));

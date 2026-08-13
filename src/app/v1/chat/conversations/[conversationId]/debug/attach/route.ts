@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { StorageKey } from '@/shared/types/storage';
 
@@ -38,6 +39,14 @@ async function POST_handler(
     const sharedState = await loadConversationState(conversationId);
     if (!sharedState) {
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+    }
+    if (isPersonaOwnedConversationState(sharedState)) {
+      const personaNotLocal = assertLocalRequest(request);
+      if (personaNotLocal) return personaNotLocal;
+      return NextResponse.json(
+        { error: 'Persona-owned conversation controls require the Persona dispatcher.' },
+        { status: 409 },
+      );
     }
 
     sharedState.debugPauseRequested = true;

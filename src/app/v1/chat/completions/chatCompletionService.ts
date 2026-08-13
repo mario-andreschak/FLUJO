@@ -15,8 +15,20 @@ import type { ModelMediaPart } from '@/shared/types/model/media';
 import { requireFunctionToolCalls } from '@/shared/types/openai';
 import { projectLazyToolPayloads } from '@/backend/execution/flow/lazyToolPayloads';
 import { normalizeChatError, deriveLastErrorFromLastResponse } from '@/backend/execution/flow/normalizeError';
+import { createHash } from 'crypto';
+import {
+  getPersonaFlowDispatch,
+  PersonaFlowDispatchTimeoutError,
+  submitPersonaFlowDispatch,
+  waitForPersonaFlowDispatch,
+  type PersonaFlowDispatchRecord,
+  type PersonaFlowDispatchSubmission,
+} from '@/backend/services/enduringAgents/personaDispatcher';
+import type { PersonaChatCompletionTarget } from './requestParser';
 
 const log = createLogger('app/v1/chat/completions/chatCompletionService');
+
+const PERSONA_COMPLETION_WAIT_MS = 30_000;
 
 // Simple token counter (approximation) - Keep as is
 export function countTokens(text: string): number {
@@ -193,6 +205,276 @@ async function processChatCompletionInternal(
   return NextResponse.json(responseData);
 }
 
+function personaIdempotencyKey(
+  target: PersonaChatCompletionTarget,
+  data: ChatCompletionRequest,
+  conversationId: string,
+  flags: {
+    flujo: boolean;
+    requireApproval: boolean;
+    flujodebug: boolean;
+    continueDebug: boolean;
+    userTurn: boolean;
+  },
+): string {
+  if (target.idempotencyKey) return target.idempotencyKey;
+  const requestDigest = createHash('sha256')
+    .update(JSON.stringify({
+      personaId: target.personaId,
+      behaviorSlotKey: target.behaviorSlotKey,
+      model: data.model,
+      messages: data.messages,
+      mcpAppContexts: data.mcpAppContexts,
+      processNodeId: data.processNodeId,
+      conversationId,
+      ...flags,
+    }))
+    .digest('hex');
+  return `chat:${conversationId}:${requestDigest}`;
+}
+
+function personaAcceptedResponse(
+  data: ChatCompletionRequest,
+  target: PersonaChatCompletionTarget,
+  submission: PersonaFlowDispatchSubmission,
+  conversationId: string,
+) {
+  return NextResponse.json({
+    id: `dispatch-${submission.dispatch.id}`,
+    object: 'chat.completion.accepted',
+    created: Math.floor(Date.now() / 1000),
+    model: data.model,
+    accepted: true,
+    status: submission.dispatch.state,
+    dispatch_id: submission.dispatch.id,
+    conversation_id: submission.dispatch.outcome?.conversationId ?? conversationId,
+    persona_id: target.personaId,
+    routing_decision: submission.decision,
+  }, { status: 202 });
+}
+
+function personaErrorResponse(record: PersonaFlowDispatchRecord) {
+  const cancelled = record.state === 'cancelled';
+  return NextResponse.json({
+    error: {
+      message: record.error?.message ?? (cancelled
+        ? 'Persona execution was cancelled.'
+        : 'Persona execution failed.'),
+      type: cancelled ? 'conflict_error' : 'api_error',
+      code: record.error?.code ?? (cancelled
+        ? 'persona_dispatch_cancelled'
+        : 'persona_dispatch_error'),
+      param: null,
+    },
+    dispatch_id: record.id,
+  }, { status: cancelled ? 409 : 500 });
+}
+
+function personaCompletionResponse(
+  data: ChatCompletionRequest,
+  target: PersonaChatCompletionTarget,
+  record: PersonaFlowDispatchRecord,
+  conversationId: string,
+  startedAt: number,
+) {
+  const outputText = record.outcome?.outputText ?? '';
+  const promptTokens = countTokens(JSON.stringify(data.messages));
+  const completionTokens = countTokens(outputText);
+  const finishReason: OpenAI.ChatCompletion.Choice['finish_reason'] =
+    record.outcome?.finalAction === STAY_ON_NODE_ACTION ? 'length' : 'stop';
+  const responseMessage: OpenAI.ChatCompletionAssistantMessageParam = {
+    role: 'assistant',
+    content: outputText,
+  };
+
+  return NextResponse.json({
+    id: `chatcmpl-${record.id}`,
+    object: 'chat.completion',
+    created: Math.floor(startedAt / 1000),
+    model: data.model,
+    choices: [{
+      index: 0,
+      message: responseMessage,
+      finish_reason: finishReason,
+    }],
+    usage: {
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+      total_tokens: promptTokens + completionTokens,
+    },
+    messages: [...data.messages, responseMessage] as unknown as FlujoChatMessage[],
+    conversation_id: record.outcome?.conversationId ?? conversationId,
+    status: record.outcome?.status ?? 'completed',
+    dispatch_id: record.id,
+    persona_id: target.personaId,
+  });
+}
+
+/**
+ * Replays a terminal Persona dispatch without depending on the process-local
+ * execution-event buffer. An idempotent retry can arrive after a restart, when
+ * the durable dispatch still exists but the original SSE events and live
+ * conversation projection do not.
+ */
+function personaTerminalStreamingResponse(
+  data: ChatCompletionRequest,
+  target: PersonaChatCompletionTarget,
+  record: PersonaFlowDispatchRecord,
+  conversationId: string,
+  startedAt: number,
+) {
+  const encoder = new TextEncoder();
+  const outputText = record.outcome?.outputText ?? '';
+  const finishReason = record.outcome?.finalAction === STAY_ON_NODE_ACTION ? 'length' : 'stop';
+  const durableConversationId = record.outcome?.conversationId ?? conversationId;
+  const baseChunk = (delta: unknown, finish_reason: string | null) => ({
+    id: `chatcmpl-${record.id}`,
+    object: 'chat.completion.chunk',
+    created: Math.floor(startedAt / 1000),
+    model: data.model,
+    choices: [{ index: 0, delta, finish_reason }],
+    conversation_id: durableConversationId,
+    dispatch_id: record.id,
+    persona_id: target.personaId,
+  });
+  const chunks = [
+    baseChunk({ role: 'assistant', content: '' }, null),
+    ...(outputText ? [baseChunk({ content: outputText }, null)] : []),
+    baseChunk({}, finishReason),
+  ];
+  const body = `${chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join('')}data: [DONE]\n\n`;
+
+  return new Response(encoder.encode(body), {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    },
+  });
+}
+
+async function processPersonaChatCompletion(
+  data: ChatCompletionRequest,
+  target: PersonaChatCompletionTarget,
+  flujo: boolean,
+  requireApproval: boolean,
+  flujodebug: boolean,
+  conversationId: string | undefined,
+  continueDebug: boolean,
+  userTurn: boolean,
+) {
+  const startedAt = Date.now();
+  const effectiveConvId = conversationId || crypto.randomUUID();
+  const submission = await submitPersonaFlowDispatch({
+    personaId: target.personaId,
+    idempotencyKey: personaIdempotencyKey(target, data, effectiveConvId, {
+      flujo,
+      requireApproval,
+      flujodebug,
+      continueDebug,
+      userTurn,
+    }),
+    kind: 'assignment',
+    source: { kind: 'chat', sourceId: effectiveConvId },
+    ...(target.behaviorSlotKey ? { behaviorSlotKey: target.behaviorSlotKey } : {}),
+    relationKey: effectiveConvId,
+    relatedAction: 'steer',
+    summary: 'Interactive chat completion',
+    flowInput: {
+      messages: data.messages,
+      mcpAppContexts: data.mcpAppContexts,
+      processNodeId: data.processNodeId,
+      mode: 'conversation',
+      conversationId: effectiveConvId,
+      flujo,
+      requireApproval,
+      debug: flujodebug,
+      continueDebug,
+      userTurn,
+      source: 'chat',
+    },
+  }, { waitForCompletion: false });
+
+  // A steer/coalesce admission has been durably delivered into an existing
+  // Activity. It is intentionally non-terminal from this request's point of
+  // view, so return its safe durable handle rather than waiting indefinitely.
+  if (submission.dispatch.state === 'waiting') {
+    return personaAcceptedResponse(data, target, submission, effectiveConvId);
+  }
+
+  if (data.stream === true) {
+    if (submission.dispatch.state === 'error' || submission.dispatch.state === 'cancelled') {
+      return personaErrorResponse(submission.dispatch);
+    }
+    if (submission.dispatch.state === 'completed') {
+      if (!submission.dispatch.outcome) {
+        return personaAcceptedResponse(data, target, submission, effectiveConvId);
+      }
+      if (
+        submission.dispatch.outcome.status === 'steered'
+        || submission.dispatch.outcome.status === 'coalesced'
+      ) {
+        return personaAcceptedResponse(data, target, submission, effectiveConvId);
+      }
+      return personaTerminalStreamingResponse(
+        data,
+        target,
+        submission.dispatch,
+        effectiveConvId,
+        startedAt,
+      );
+    }
+    // Persona execution emits through runFlow's existing conversation event
+    // bus. Its replay buffer closes the race between durable submit and SSE
+    // subscription, without starting a second fire-and-forget run here.
+    return createStreamingResponse(data.model, effectiveConvId);
+  }
+
+  let record = submission.dispatch;
+  if (record.state !== 'completed' && record.state !== 'error' && record.state !== 'cancelled') {
+    try {
+      record = await waitForPersonaFlowDispatch(record.id, {
+        timeoutMs: PERSONA_COMPLETION_WAIT_MS,
+      });
+    } catch (error) {
+      if (!(error instanceof PersonaFlowDispatchTimeoutError)) throw error;
+      record = await getPersonaFlowDispatch(record.id) ?? record;
+      return personaAcceptedResponse(
+        data,
+        target,
+        { ...submission, dispatch: record },
+        effectiveConvId,
+      );
+    }
+  }
+
+  if (record.state === 'error' || record.state === 'cancelled') {
+    return personaErrorResponse(record);
+  }
+  if (record.state !== 'completed' || !record.outcome) {
+    return personaAcceptedResponse(
+      data,
+      target,
+      { ...submission, dispatch: record },
+      effectiveConvId,
+    );
+  }
+  // Delivery-only dispatches finish once their message has been durably
+  // steered/coalesced into the active Activity. They do not own a completion
+  // payload, so keep the request at the accepted boundary instead of
+  // fabricating an empty assistant response.
+  if (record.outcome.status === 'steered' || record.outcome.status === 'coalesced') {
+    return personaAcceptedResponse(
+      data,
+      target,
+      { ...submission, dispatch: record },
+      effectiveConvId,
+    );
+  }
+
+  return personaCompletionResponse(data, target, record, effectiveConvId, startedAt);
+}
+
 // Main entry point for chat completion processing
 export async function processChatCompletion(
   data: ChatCompletionRequest,
@@ -201,8 +483,33 @@ export async function processChatCompletion(
   flujodebug: boolean,
   conversationId?: string,
   continueDebug: boolean = false,
-  userTurn: boolean = false
+  userTurn: boolean = false,
+  personaTarget?: PersonaChatCompletionTarget,
 ) {
+  if (personaTarget && typeof data.model === 'string' && data.model.startsWith('model-')) {
+    return NextResponse.json({
+      error: {
+        message: 'Persona targeting is only supported for Flow completions.',
+        type: 'invalid_request_error',
+        code: 'persona_model_not_supported',
+        param: 'model',
+      },
+    }, { status: 400 });
+  }
+
+  if (personaTarget) {
+    return processPersonaChatCompletion(
+      data,
+      personaTarget,
+      flujo,
+      requireApproval,
+      flujodebug,
+      conversationId,
+      continueDebug,
+      userTurn,
+    );
+  }
+
   // --- Direct model completions (`model-<identifier>`) ---
   // Issue #53: `/v1/chat/completions` differentiates `flow-` vs `model-`
   // requests. `model-` routes to a single-turn ModelService completion (no

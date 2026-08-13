@@ -9,6 +9,7 @@ import {
   type StatisticsSkipReason,
 } from '@/shared/types/statistics';
 import { createLogger } from '@/utils/logger';
+import { writeFileAtomic } from '@/utils/storage/backend';
 import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
 
 const log = createLogger('backend/services/statistics');
@@ -28,7 +29,7 @@ const statisticsDir = () =>
 // All three of these are keyed by workspace: a day partition, an installation
 // HMAC key and a "already pruned today" marker all belong to ONE workspace's
 // statistics directory.
-const appendChains = new Map<string, Promise<void>>();
+const appendChains = new Map<string, Promise<unknown>>();
 const keyPromises = new Map<string, Promise<Buffer>>();
 const lastPrunedDay = new Map<string, string>();
 
@@ -93,20 +94,108 @@ export function appendStatisticsEvent(event: StatisticsEvent): Promise<void> {
   const day = utcDay(sanitized.timestamp);
   // Same UTC day in two workspaces = two different files, so the append chain is
   // per (workspace, day) rather than per day (#406).
+  return runInStatisticsPartitionChain(day, async () => {
+    await fs.mkdir(statisticsDir(), { recursive: true });
+    await fs.appendFile(eventFile(day), `${JSON.stringify(sanitized)}\n`, 'utf8');
+    void pruneOldPartitions(day);
+  });
+}
+
+function runInStatisticsPartitionChain<T>(day: string, operation: () => Promise<T>): Promise<T> {
   const chain = workspaceCacheKey('statistics', day);
   const previous = appendChains.get(chain) ?? Promise.resolve();
-  const next = previous
-    .catch(() => undefined)
-    .then(async () => {
-      await fs.mkdir(statisticsDir(), { recursive: true });
-      await fs.appendFile(eventFile(day), `${JSON.stringify(sanitized)}\n`, 'utf8');
-      void pruneOldPartitions(day);
-    });
+  const next = previous.catch(() => undefined).then(operation);
   appendChains.set(chain, next);
   void next.finally(() => {
     if (appendChains.get(chain) === next) appendChains.delete(chain);
   }).catch(() => undefined);
   return next;
+}
+
+const SAFE_PERSONA_ATTRIBUTION_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+function malformedLineTargetsPersona(line: string, personaId: string): boolean {
+  // Statistics JSONL is one object per line and Persona ids need no JSON
+  // escaping. If a crash truncated an attributed line, that line is already
+  // ignored by replay; discard only that unusable target record rather than
+  // retaining an identity fragment indefinitely.
+  const pattern = new RegExp(
+    `"personaAttribution"\\s*:\\s*\\{[^}\\r\\n]*"personaId"\\s*:\\s*"${personaId}"`,
+  );
+  return pattern.test(line);
+}
+
+async function anonymizeStatisticsPartition(day: string, personaId: string): Promise<number> {
+  let body: string;
+  try {
+    body = await fs.readFile(eventFile(day), 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0;
+    throw error;
+  }
+
+  let changed = 0;
+  const rewritten = body.split('\n').map((line) => {
+    if (!line.trim()) return line;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line) as unknown;
+    } catch {
+      if (malformedLineTargetsPersona(line, personaId)) {
+        changed += 1;
+        return '';
+      }
+      return line;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return line;
+    const record = parsed as Record<string, unknown>;
+    const attribution = record.personaAttribution;
+    if (
+      !attribution
+      || typeof attribution !== 'object'
+      || Array.isArray(attribution)
+      || (attribution as Record<string, unknown>).personaId !== personaId
+    ) return line;
+
+    delete record.personaAttribution;
+    changed += 1;
+    // Valid records remain canonical. An invalid/manual record stays invalid
+    // and otherwise byte-equivalent in meaning, but no longer contains the
+    // deleted Persona identity.
+    return JSON.stringify(sanitizeStatisticsEvent(record) ?? record);
+  }).join('\n');
+
+  if (changed > 0) await writeFileAtomic(eventFile(day), rewritten);
+  return changed;
+}
+
+/**
+ * Privacy-policy exception to the append-only statistics log. It removes only
+ * the matching top-level Persona attribution triple, retaining every event and
+ * all unrelated metadata. Rewrites are atomic and serialized with same-day
+ * appends; exact retries are no-ops.
+ */
+export async function anonymizeStatisticsPersonaAttribution(personaId: string): Promise<number> {
+  if (!SAFE_PERSONA_ATTRIBUTION_ID.test(personaId)) {
+    throw new TypeError('Invalid Persona id for statistics anonymization');
+  }
+  // Include every event already enqueued by the quiesced Persona runtime before
+  // taking the partition inventory.
+  await flushStatisticsEvents();
+  let entries: import('fs').Dirent[];
+  try {
+    entries = await fs.readdir(statisticsDir(), { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0;
+    throw error;
+  }
+  const days = entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl'))
+    .map((entry) => entry.name.slice(0, -'.jsonl'.length))
+    .filter((day) => SAFE_UTC_DAY.test(day));
+  const counts = await Promise.all(days.map((day) =>
+    runInStatisticsPartitionChain(day, () => anonymizeStatisticsPartition(day, personaId))));
+  return counts.reduce((total, count) => total + count, 0);
 }
 
 /** Enqueue an event without allowing storage failure to alter execution. */

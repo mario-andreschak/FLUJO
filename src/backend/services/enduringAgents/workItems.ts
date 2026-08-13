@@ -1,0 +1,304 @@
+import { z } from 'zod';
+
+import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
+import {
+  CreatePersonaWorkItemInputSchema,
+  ENDURING_AGENT_SCHEMA_VERSION,
+  EnduringAgentIdSchema,
+  PERSONA_PRIORITIES,
+  PERSONA_WORK_ITEM_STATUSES,
+  PersonaWorkItemSchema,
+  UpdatePersonaWorkItemInputSchema,
+  type CreatePersonaWorkItemInput,
+  type PersonaPriority,
+  type PersonaWorkItem,
+  type PersonaWorkItemStatus,
+  type UpdatePersonaWorkItemInput,
+} from '@/shared/types/enduringAgent';
+import { getCurrentWorkspace } from '@/utils/workspace';
+
+import {
+  PersonaDomainConflictError,
+  PersonaDomainNotFoundError,
+  type PersonaDomainMutationOptions,
+  withPersonaDomainMutation,
+} from './domainMutation';
+import { randomEnduringAgentId, stableEnduringAgentId } from './ids';
+import { normalizeMemorySourceRefs } from './provenance';
+import {
+  deletePersonaWorkItemRecord,
+  getPersonaActivity,
+  getPersonaWorkItem,
+  listPersonaWorkItems as listStoredPersonaWorkItems,
+  savePersonaWorkItem,
+} from './store';
+
+const WorkItemListQuerySchema = z.object({
+  statuses: z.array(z.enum(PERSONA_WORK_ITEM_STATUSES)).optional(),
+  priorities: z.array(z.enum(PERSONA_PRIORITIES)).optional(),
+  dueBefore: z.number().int().nonnegative().optional(),
+  includeBlockedByDependencies: z.boolean().optional(),
+}).strict();
+
+const PromoteRunTodoInputSchema = z.object({
+  activityId: EnduringAgentIdSchema.optional(),
+  todoId: z.string().trim().min(1).max(512),
+  title: z.string().trim().min(1).max(500).optional(),
+  description: z.string().trim().max(100_000).optional(),
+  priority: z.enum(PERSONA_PRIORITIES).optional(),
+  nextAction: z.string().trim().max(20_000).optional(),
+  deadline: z.number().int().nonnegative().optional(),
+}).strict();
+
+export interface PersonaWorkItemListQuery {
+  statuses?: PersonaWorkItemStatus[];
+  priorities?: PersonaPriority[];
+  dueBefore?: number;
+  includeBlockedByDependencies?: boolean;
+}
+
+export interface PromoteRunTodoInput {
+  activityId?: string;
+  todoId: string;
+  title?: string;
+  description?: string;
+  priority?: PersonaPriority;
+  nextAction?: string;
+  deadline?: number;
+}
+
+const PRIORITY_RANK: Record<PersonaPriority, number> = {
+  urgent: 0,
+  high: 1,
+  normal: 2,
+  low: 3,
+};
+
+function requireOwnedWorkItem(item: PersonaWorkItem | null, personaId: string): PersonaWorkItem {
+  if (!item || item.personaId !== personaId) {
+    throw new PersonaDomainNotFoundError('PersonaWorkItem', item?.id ?? 'unknown');
+  }
+  return item;
+}
+
+function assertDependencyGraph(
+  personaId: string,
+  candidate: PersonaWorkItem,
+  records: readonly PersonaWorkItem[],
+): void {
+  const graph = new Map(records.map((item) => [item.id, item]));
+  graph.set(candidate.id, candidate);
+  for (const dependencyId of candidate.dependencyIds) {
+    const dependency = graph.get(dependencyId);
+    if (!dependency || dependency.personaId !== personaId) {
+      throw new PersonaDomainConflictError(
+        `WorkItem dependency ${JSON.stringify(dependencyId)} is missing or belongs to another Persona.`,
+      );
+    }
+  }
+
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (id: string): void => {
+    if (visiting.has(id)) {
+      throw new PersonaDomainConflictError('WorkItem dependencies must remain acyclic.');
+    }
+    if (visited.has(id)) return;
+    visiting.add(id);
+    for (const dependencyId of graph.get(id)?.dependencyIds ?? []) visit(dependencyId);
+    visiting.delete(id);
+    visited.add(id);
+  };
+  visit(candidate.id);
+
+  if (candidate.status === 'in_progress' || candidate.status === 'completed') {
+    const unfinished = candidate.dependencyIds.filter(
+      (id) => graph.get(id)?.status !== 'completed',
+    );
+    if (unfinished.length > 0) {
+      throw new PersonaDomainConflictError(
+        `WorkItem cannot be ${candidate.status} while dependencies remain incomplete.`,
+      );
+    }
+  }
+}
+
+export async function createPersonaWorkItem(
+  input: CreatePersonaWorkItemInput,
+  options: PersonaDomainMutationOptions = {},
+): Promise<PersonaWorkItem> {
+  const parsed = CreatePersonaWorkItemInputSchema.parse(input) as CreatePersonaWorkItemInput;
+  return withPersonaDomainMutation(parsed.personaId, options, async ({ activity }) => {
+    const now = Date.now();
+    const id = parsed.id ?? randomEnduringAgentId('work');
+    const existing = await getPersonaWorkItem(id);
+    if (existing) throw new PersonaDomainConflictError(`WorkItem ${JSON.stringify(id)} already exists.`);
+    if (parsed.createdByActivityId && activity && parsed.createdByActivityId !== activity.id) {
+      throw new PersonaDomainConflictError('A Flow cannot attribute a WorkItem to another Activity.');
+    }
+    const record = PersonaWorkItemSchema.parse({
+      schemaVersion: ENDURING_AGENT_SCHEMA_VERSION,
+      id,
+      personaId: parsed.personaId,
+      title: parsed.title,
+      ...(parsed.description ? { description: parsed.description } : {}),
+      status: 'open',
+      priority: parsed.priority ?? 'normal',
+      dependencyIds: parsed.dependencyIds ?? [],
+      ...(parsed.nextAction ? { nextAction: parsed.nextAction } : {}),
+      ...(parsed.deadline !== undefined ? { deadline: parsed.deadline } : {}),
+      ...(activity?.id || parsed.createdByActivityId
+        ? { createdByActivityId: activity?.id ?? parsed.createdByActivityId }
+        : {}),
+      ...(activity?.behaviorRevisionId
+        ? { behaviorRevisionId: activity.behaviorRevisionId }
+        : {}),
+      ...(parsed.sourceRefs?.length
+        ? { sourceRefs: normalizeMemorySourceRefs(parsed.sourceRefs, { now }) }
+        : {}),
+      createdAt: now,
+      updatedAt: now,
+    }) as PersonaWorkItem;
+    assertDependencyGraph(parsed.personaId, record, await listStoredPersonaWorkItems(parsed.personaId));
+    return savePersonaWorkItem(record);
+  });
+}
+
+export async function updatePersonaWorkItem(
+  personaId: string,
+  workItemId: string,
+  patch: UpdatePersonaWorkItemInput,
+  options: PersonaDomainMutationOptions = {},
+): Promise<PersonaWorkItem> {
+  EnduringAgentIdSchema.parse(personaId);
+  EnduringAgentIdSchema.parse(workItemId);
+  const parsed = UpdatePersonaWorkItemInputSchema.parse(patch) as UpdatePersonaWorkItemInput;
+  return withPersonaDomainMutation(personaId, options, async () => {
+    const existing = requireOwnedWorkItem(await getPersonaWorkItem(workItemId), personaId);
+    if (parsed.expectedUpdatedAt !== undefined && parsed.expectedUpdatedAt !== existing.updatedAt) {
+      throw new PersonaDomainConflictError('WorkItem changed since it was inspected.');
+    }
+    const now = Math.max(Date.now(), existing.updatedAt + 1);
+    const status = parsed.status ?? existing.status;
+    const candidate = PersonaWorkItemSchema.parse({
+      ...existing,
+      ...(parsed.title !== undefined ? { title: parsed.title } : {}),
+      description: parsed.description === null ? undefined : parsed.description ?? existing.description,
+      status,
+      ...(parsed.priority !== undefined ? { priority: parsed.priority } : {}),
+      ...(parsed.dependencyIds !== undefined ? { dependencyIds: parsed.dependencyIds } : {}),
+      nextAction: parsed.nextAction === null ? undefined : parsed.nextAction ?? existing.nextAction,
+      deadline: parsed.deadline === null ? undefined : parsed.deadline ?? existing.deadline,
+      updatedAt: now,
+      completedAt: status === 'completed' ? existing.completedAt ?? now : undefined,
+    }) as PersonaWorkItem;
+    assertDependencyGraph(personaId, candidate, await listStoredPersonaWorkItems(personaId));
+    return savePersonaWorkItem(candidate);
+  });
+}
+
+export async function deletePersonaWorkItem(
+  personaId: string,
+  workItemId: string,
+  options: PersonaDomainMutationOptions = {},
+): Promise<void> {
+  EnduringAgentIdSchema.parse(personaId);
+  EnduringAgentIdSchema.parse(workItemId);
+  await withPersonaDomainMutation(personaId, options, async () => {
+    requireOwnedWorkItem(await getPersonaWorkItem(workItemId), personaId);
+    const dependent = (await listStoredPersonaWorkItems(personaId)).find(
+      (item) => item.id !== workItemId && item.dependencyIds.includes(workItemId),
+    );
+    if (dependent) {
+      throw new PersonaDomainConflictError(
+        `WorkItem is still a dependency of ${JSON.stringify(dependent.id)}.`,
+      );
+    }
+    await deletePersonaWorkItemRecord(workItemId);
+  });
+}
+
+export async function queryPersonaWorkItems(
+  personaId: string,
+  query: PersonaWorkItemListQuery = {},
+): Promise<PersonaWorkItem[]> {
+  EnduringAgentIdSchema.parse(personaId);
+  const parsed = WorkItemListQuerySchema.parse(query) as PersonaWorkItemListQuery;
+  const records = await listStoredPersonaWorkItems(personaId);
+  const byId = new Map(records.map((item) => [item.id, item]));
+  return records.filter((item) => (
+    (!parsed.statuses?.length || parsed.statuses.includes(item.status))
+    && (!parsed.priorities?.length || parsed.priorities.includes(item.priority))
+    && (parsed.dueBefore === undefined || (item.deadline !== undefined && item.deadline <= parsed.dueBefore))
+    && (parsed.includeBlockedByDependencies !== false || item.dependencyIds.every(
+      (id) => byId.get(id)?.status === 'completed',
+    ))
+  )).sort((left, right) => (
+    PRIORITY_RANK[left.priority] - PRIORITY_RANK[right.priority]
+    || (left.deadline ?? Number.MAX_SAFE_INTEGER) - (right.deadline ?? Number.MAX_SAFE_INTEGER)
+    || right.updatedAt - left.updatedAt
+    || left.id.localeCompare(right.id)
+  ));
+}
+
+/** Explicitly copy one scratch todo into durable Persona work; no automatic path exists. */
+export async function promoteRunTodoToWorkItem(
+  personaId: string,
+  input: PromoteRunTodoInput,
+  options: PersonaDomainMutationOptions = {},
+): Promise<PersonaWorkItem> {
+  EnduringAgentIdSchema.parse(personaId);
+  const parsed = PromoteRunTodoInputSchema.parse(input) as PromoteRunTodoInput;
+  return withPersonaDomainMutation(personaId, options, async ({ activity: liveActivity }) => {
+    const activityId = liveActivity?.id ?? parsed.activityId;
+    if (!activityId) {
+      throw new PersonaDomainConflictError('Todo promotion requires an owning Activity.');
+    }
+    if (liveActivity && parsed.activityId && parsed.activityId !== liveActivity.id) {
+      throw new PersonaDomainConflictError('A live Activity cannot promote another Activity\'s todo.');
+    }
+    const activity = liveActivity ?? await getPersonaActivity(activityId);
+    if (!activity || activity.personaId !== personaId || !activity.conversationId) {
+      throw new PersonaDomainNotFoundError('PersonaActivity', activityId);
+    }
+    const state = await loadConversationState(activity.conversationId);
+    const todo = state?.todos?.find((item) => item.id === parsed.todoId);
+    if (!todo || todo.status === 'done' || todo.status === 'cancelled') {
+      throw new PersonaDomainNotFoundError('Promotable run todo', parsed.todoId);
+    }
+    const id = stableEnduringAgentId('work', {
+      purpose: 'run-todo-promotion-v1',
+      workspaceId: getCurrentWorkspace(),
+      personaId,
+      activityId: activity.id,
+      todoId: todo.id,
+    });
+    const existing = await getPersonaWorkItem(id);
+    if (existing) return requireOwnedWorkItem(existing, personaId);
+
+    const now = Date.now();
+    const sourceRefs = normalizeMemorySourceRefs([{
+      kind: 'activity',
+      id: activity.id,
+      uri: `flujo://activity/${activity.id}/todo/${todo.id}`,
+      observedAt: todo.updatedAt,
+    }], { now, producer: 'explicit-todo-promotion', digestMaterial: todo });
+    return savePersonaWorkItem(PersonaWorkItemSchema.parse({
+      schemaVersion: ENDURING_AGENT_SCHEMA_VERSION,
+      id,
+      personaId,
+      title: parsed.title ?? todo.content,
+      ...(parsed.description ? { description: parsed.description } : {}),
+      status: todo.status === 'in_progress' ? 'in_progress' : 'open',
+      priority: parsed.priority ?? 'normal',
+      dependencyIds: [],
+      nextAction: parsed.nextAction ?? todo.content,
+      ...(parsed.deadline !== undefined ? { deadline: parsed.deadline } : {}),
+      createdByActivityId: activity.id,
+      ...(activity.behaviorRevisionId ? { behaviorRevisionId: activity.behaviorRevisionId } : {}),
+      sourceRefs,
+      createdAt: now,
+      updatedAt: now,
+    }) as PersonaWorkItem);
+  });
+}

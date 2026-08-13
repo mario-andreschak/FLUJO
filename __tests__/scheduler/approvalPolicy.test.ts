@@ -33,6 +33,13 @@ jest.mock('@/utils/storage/backend', () => ({
   }),
 }));
 
+jest.mock('@/backend/services/enduringAgents/runtimeLock', () => ({
+  withPersonaRuntimeLock: async (
+    _id: string,
+    task: (lock: { assertOwned(): Promise<void> }) => Promise<unknown>,
+  ) => task({ assertOwned: async () => undefined }),
+}));
+
 const runFlowMock = jest.fn();
 jest.mock('@/backend/execution/flow/runFlow', () => ({
   runFlow: (...args: unknown[]) => runFlowMock(...args),

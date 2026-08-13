@@ -15,21 +15,25 @@ function mockWorkspaceStore(): Map<string, unknown> {
   return store;
 }
 
-jest.mock('@/utils/storage/backend', () => ({
-  loadItem: jest.fn(async (key: string, defaultValue: unknown) => {
-    mockStorageAccesses.push({ workspace: getCurrentWorkspace(), key });
-    const store = mockWorkspaceStore();
-    return store.has(key) ? store.get(key) : defaultValue;
-  }),
-  saveItem: jest.fn(async (key: string, value: unknown) => {
-    mockStorageAccesses.push({ workspace: getCurrentWorkspace(), key });
-    mockWorkspaceStore().set(key, value);
-  }),
-  clearItem: jest.fn(async (key: string) => {
-    mockStorageAccesses.push({ workspace: getCurrentWorkspace(), key });
-    mockWorkspaceStore().delete(key);
-  }),
-}));
+jest.mock('@/utils/storage/backend', () => {
+  const actual = jest.requireActual('@/utils/storage/backend');
+  return {
+    ...actual,
+    loadItem: jest.fn(async (key: string, defaultValue: unknown) => {
+      mockStorageAccesses.push({ workspace: getCurrentWorkspace(), key });
+      const store = mockWorkspaceStore();
+      return store.has(key) ? store.get(key) : defaultValue;
+    }),
+    saveItem: jest.fn(async (key: string, value: unknown) => {
+      mockStorageAccesses.push({ workspace: getCurrentWorkspace(), key });
+      mockWorkspaceStore().set(key, value);
+    }),
+    clearItem: jest.fn(async (key: string) => {
+      mockStorageAccesses.push({ workspace: getCurrentWorkspace(), key });
+      mockWorkspaceStore().delete(key);
+    }),
+  };
+});
 
 jest.mock('@/utils/encryption/secure', () => ({
   isEncryptionLocked: jest.fn(async () => false),

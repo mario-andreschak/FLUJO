@@ -11,6 +11,7 @@ import {
   commitPendingAfterOutcome,
   evaluateNewItems,
   evaluateOnChange,
+  hashResult,
   PollEvaluation,
 } from './pollEvaluators';
 
@@ -38,7 +39,12 @@ export interface McpPollDeps {
    * actually completed — otherwise a skipped/failed run leaves the change
    * un-consumed for the next poll to retry.
    */
-  onFire: (payload: { summary: string; context: unknown }) => Promise<{ status: RunRecordStatus }>;
+  onFire: (payload: {
+    summary: string;
+    context: unknown;
+    /** Stable identity of the normalized observed result/change. */
+    deliveryId: string;
+  }) => Promise<{ status: RunRecordStatus }>;
   onError: (message: string) => void;
   /**
    * Called after every successful poll+evaluation (fired or not), so a stale
@@ -114,15 +120,25 @@ export function armMcpPoll(config: McpPollTriggerConfig, deps: McpPollDeps): Arm
       } else if (!evaluation.fire) {
         deps.onSuccess?.();
       } else {
+        const fireContext = {
+          server: config.serverName,
+          tool: config.toolName,
+          ...(typeof evaluation.context === 'object' && evaluation.context !== null
+            ? (evaluation.context as Record<string, unknown>)
+            : { result: evaluation.context }),
+        };
         const { status } = await deps.onFire({
           summary: `Watched tool: ${evaluation.summary ?? 'condition met'}`,
-          context: {
-            server: config.serverName,
-            tool: config.toolName,
-            ...(typeof evaluation.context === 'object' && evaluation.context !== null
-              ? (evaluation.context as Record<string, unknown>)
-              : { result: evaluation.context }),
-          },
+          context: fireContext,
+          deliveryId: `mcp-poll-${hashResult({
+            context: fireContext,
+            evaluateMode: evaluate.mode,
+            attempt: state.pendingFailures ?? 0,
+            pendingState: evaluation.pendingState,
+            // Gate-mode state is committed before dispatch and makes repeated
+            // identical observations on distinct polls remain distinct.
+            gateState: evaluation.pendingState ? undefined : evaluation.newState,
+          })}`,
         });
         if (disposed) {
           return; // disarmed while the run was in flight

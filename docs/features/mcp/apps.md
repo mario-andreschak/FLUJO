@@ -60,6 +60,91 @@ On localhost, FLUJO automatically uses `<app>.localhost:4201`. On a plain-HTTP L
 
 For a configured wildcard HTTPS endpoint, **the reverse proxy must preserve the original `Host` header when forwarding requests to the sandbox listener.** The listener extracts the effective key from that header and rejects a token minted for any other hostname.
 
+The proxy must also support WebSocket upgrades on this wildcard route. This is
+needed when an App has registered a private sidecar runtime as described below.
+
+### Private sidecar runtime broker
+
+Some local stdio MCP servers own a real browser runtime on loopback. The
+`mcp-vscode` server, for example, keeps OpenVSCode and its gateway on
+`127.0.0.1`; a visitor's browser cannot connect to that address when FLUJO runs
+on another machine. FLUJO can carry selected gateway paths through the existing
+per-App sandbox origin without publishing the child's loopback port.
+
+This broker is a FLUJO host/deployment extension, not an MCP protocol message.
+The App remains specification-compliant: its resource declares the resulting
+HTTPS origin in `_meta.ui.csp.frameDomains` (and any required connection/resource
+domains) in the normal way.
+
+For each managed stdio connection with MCP Apps enabled, FLUJO injects two
+process-only variables:
+
+```text
+FLUJO_MCP_APP_RUNTIME_REGISTER_URL=http://127.0.0.1:4201/_flujo/runtime/register
+FLUJO_MCP_APP_RUNTIME_REGISTER_TOKEN=<single-use 256-bit bearer>
+```
+
+They are host-owned and override persisted server environment values. A
+throwaway **Test connection** process does not receive them. A participating
+server follows this version-1 contract before it exposes a public URL:
+
+1. Start its HTTP/WebSocket gateway on an explicit `127.0.0.1:<port>` origin.
+2. Answer `GET /.well-known/flujo/mcp-app-runtime`. FLUJO supplies a random
+   `X-Flujo-Runtime-Challenge`; the response is `204` with
+   `X-Flujo-Runtime-Proof` equal to base64url
+   `HMAC-SHA256(registerToken, "flujo-mcp-app-runtime-proof-v1:" + challenge)`.
+3. `POST` the registration URL with `Authorization: Bearer <registerToken>` and
+   JSON like:
+
+```json
+{
+  "version": 1,
+  "resourceUri": "ui://mcp-vscode/workbench.html",
+  "targetOrigin": "http://127.0.0.1:54321",
+  "routes": [
+    {
+      "path": "/ide/AbCdEf0123456789AbCdEf0123456789",
+      "match": "prefix",
+      "httpMethods": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+      "websocket": true
+    },
+    {
+      "path": "/stream",
+      "match": "exact",
+      "websocket": true
+    }
+  ]
+}
+```
+
+4. Use the `201` response's `publicOrigin`/`publicBaseUrl` when building the MCP
+   App resource and session payload:
+
+```json
+{
+  "version": 1,
+  "originKey": "app<60 lowercase hex characters>",
+  "publicOrigin": "https://app….sandbox.example.com",
+  "publicBaseUrl": "https://app….sandbox.example.com/"
+}
+```
+
+Registration succeeds only for an explicit loopback HTTP origin that passes the
+nonce proof. Paths must be absolute, normalized, non-reserved, and individually
+declare their HTTP methods and/or WebSocket permission. Matching is exact or on
+a path-segment boundary; query strings are forwarded but never participate in
+authorization. The bearer is deleted immediately after the first successful
+registration. The route is revoked when that MCP connection closes, errors,
+restarts, is disabled, or is deleted, so a later process reusing the loopback
+port cannot inherit it.
+
+For mcp-vscode, the intended public manifest is only its unguessable
+`/ide/<192-bit-base64url>/` prefix (HTTP plus WebSocket) and, when configured,
+the exact `/stream` WebSocket. `/bridge`, `/mcp`, `/app`, `/session.json`, and
+`/healthz` remain private. The server must remove both registration variables
+from the environment inherited by OpenVSCode and stop serving the proof endpoint
+after registration succeeds.
+
 ## Lifecycle and display modes
 
 FLUJO implements the MCP Apps initialization handshake, tool input/result/cancellation delivery, App-originated operations, host-context updates, and resource teardown. Messages received after replacement or unmount are ignored, listeners are removed, and pending work is cancelled.

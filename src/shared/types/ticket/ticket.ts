@@ -19,6 +19,9 @@ export interface Ticket {
   nodeId?: string;
   title?: string;
   source?: 'agent' | 'host';
+  personaId?: string;
+  activityId?: string;
+  behaviorRevisionId?: string;
 }
 
 export interface CreateTicketInput {

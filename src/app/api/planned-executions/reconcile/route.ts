@@ -4,6 +4,7 @@ import { createLogger } from '@/utils/logger';
 import { getSchedulerService } from '@/backend/services/scheduler';
 import { ensureBackendInitialized } from '@/backend/init';
 import { json } from '../_helpers';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 
 const log = createLogger('app/api/planned-executions/reconcile/route');
 
@@ -21,7 +22,11 @@ const log = createLogger('app/api/planned-executions/reconcile/route');
  * paused it no-ops arming, so the response echoes the pause state to tell the
  * caller nothing was armed.
  */
-async function POST_handler(_request: Request) {
+async function POST_handler(request: Request) {
+  // Reconciliation can arm and fire every persisted Persona trigger. It is a
+  // control-plane operation even when the scheduler is currently paused.
+  const notLocal = assertLocalRequest(request, { strictLoopback: true });
+  if (notLocal) return notLocal;
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 

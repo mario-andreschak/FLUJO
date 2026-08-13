@@ -5,6 +5,8 @@ import { createLogger } from '@/utils/logger';
 import { getSchedulerService } from '@/backend/services/scheduler';
 import { loadRunRecords } from '@/backend/services/scheduler/runHistory';
 import { json } from '../../_helpers';
+import { assertLocalRequest } from '@/utils/http/localRequest';
+import { isPersonaControlledPlannedExecution } from '@/shared/types/plannedExecution';
 
 const log = createLogger('app/api/planned-executions/[id]/runs/route');
 
@@ -26,6 +28,16 @@ async function GET_handler(
       return json({ error: `No planned execution with id "${id}"` }, 404);
     }
     const runs = await loadRunRecords(id);
+    if (
+      isPersonaControlledPlannedExecution(execution)
+      || runs.some(run => (
+        isPersonaControlledPlannedExecution(run)
+        || Boolean(run.activityId || run.behaviorRevisionId)
+      ))
+    ) {
+      const notLocal = assertLocalRequest(request, { strictLoopback: true });
+      if (notLocal) return notLocal;
+    }
     return json({ runs }, 200);
   } catch (error) {
     log.error('Error handling GET request', error);

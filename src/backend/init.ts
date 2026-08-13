@@ -8,6 +8,12 @@ import { getSchedulerService } from '@/backend/services/scheduler';
 import { isEncryptionLocked, isUserEncryptionEnabled } from '@/utils/encryption/secure';
 import { createLogger } from '@/utils/logger';
 import { ensureVendoredFlowGenerator } from '@/backend/services/flow/systemFlows';
+import {
+  ensureBuiltInDeveloperRole,
+  inspectAndReconcilePersonaRuntime,
+  listPersonas,
+  startPersonaFlowDispatcher,
+} from '@/backend/services/enduringAgents';
 import { migrateShippedMcpServers } from '@/backend/services/mcp/shippedServerMigration';
 import { sweepOldMcpRemoteTasks } from '@/backend/services/mcp/remoteTaskStore';
 import { resumeRemoteMcpTasks } from '@/backend/services/mcp/remoteTaskResume';
@@ -292,6 +298,17 @@ async function runInitialization(): Promise<void> {
   // Verify storage first - if this throws, callers (e.g. the route) surface it.
   await verifyStorage();
   await ensureVendoredFlowGenerator();
+  // Issue #415: seed the immutable Developer Role contract in every workspace.
+  // No Persona is fabricated at startup; actors are created only through the
+  // deterministic factory/API with explicit user-provided identity.
+  try {
+    await ensureBuiltInDeveloperRole();
+  } catch (error) {
+    // Enduring agents are additive. A corrupt/conflicting seed must remain
+    // visible, but cannot take legacy Persona-less Flow, MCP, or scheduler
+    // startup down with it. Persona APIs retry the seed and surface the error.
+    log.error('Failed to seed the built-in Developer Role:', error);
+  }
   // Detached task execution is process-local in v1. Any persisted working task
   // left behind by a prior process is visible as a terminal restart failure.
   reconcileOrphanedTasks().catch(error =>
@@ -363,6 +380,23 @@ function startSecretDependentServices(): Promise<void> {
         log.warn('Remote MCP task resume failed at startup:', error)
       );
 
+      // Repair durable Persona runtime projections and resume queued dispatches
+      // only after unlock + MCP startup, so recovered Behavior runs cannot race
+      // unavailable secrets or tool clients. Per-Persona failures stay visible
+      // through the runtime observation returned by GET /v1/personas/:id.
+      try {
+        const personas = await listPersonas();
+        await Promise.all(personas.map((persona) =>
+          inspectAndReconcilePersonaRuntime(persona.id).catch(error => {
+            log.warn(`Persona runtime reconciliation failed for ${persona.id}:`, error);
+            return null;
+          })
+        ));
+        await startPersonaFlowDispatcher();
+      } catch (error) {
+        log.error('Failed to start Persona Flow dispatcher:', error);
+      }
+
       // Arm planned-execution triggers AFTER the MCP sweep so a catch-up or
       // early scheduled run doesn't race servers that are still connecting.
       // start() is idempotent and catches per-execution arming failures.
@@ -405,5 +439,17 @@ export async function onUnlocked(): Promise<void> {
   log.info(
     `Encryption unlocked — starting deferred MCP/scheduler startup for ${getCurrentWorkspace()}`,
   );
+  const servicesAlreadyStarted = Boolean(getMemo('secret'));
   await startSecretDependentServices();
+  // The once-only startup memo may already be settled when a workspace is
+  // locked again and new Persona deliveries are admitted with startPump:false.
+  // Every unlock therefore performs an idempotent durable kick/reconciliation
+  // so those envelopes and scheduler projections cannot remain stranded.
+  if (!servicesAlreadyStarted) return;
+  await startPersonaFlowDispatcher().catch(error => {
+    log.error('Failed to resume Persona Flow dispatcher after unlock:', error);
+  });
+  await getSchedulerService().reconcilePersonaSchedulerProjections(false).catch(error => {
+    log.error('Failed to reconcile Persona scheduler projections after unlock:', error);
+  });
 }

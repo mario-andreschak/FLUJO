@@ -7,8 +7,12 @@
  * path.
  */
 const assertUnlockedMock = jest.fn(async () => null);
+const assertLocalRequestMock = jest.fn((_request?: unknown, _options?: unknown): Response | null => null);
 jest.mock('@/utils/encryption/lockGate', () => ({
   assertUnlocked: (...a: unknown[]) => assertUnlockedMock(...(a as [])),
+}));
+jest.mock('@/utils/http/localRequest', () => ({
+  assertLocalRequest: (request: unknown, options?: unknown) => assertLocalRequestMock(request, options),
 }));
 
 jest.mock('@/backend/init', () => ({
@@ -30,6 +34,7 @@ import { POST } from '@/app/api/planned-executions/reconcile/route';
 
 beforeEach(() => {
   assertUnlockedMock.mockReset().mockResolvedValue(null);
+  assertLocalRequestMock.mockReset().mockReturnValue(null);
   reconcileMock.mockReset().mockResolvedValue(undefined);
   isPausedMock.mockReset().mockResolvedValue(false);
   setPausedMock.mockReset().mockResolvedValue(undefined);
@@ -60,6 +65,16 @@ describe('reconcile route', () => {
     assertUnlockedMock.mockResolvedValueOnce(locked as never);
     const response = await POST();
     expect(response.status).toBe(423);
+    expect(reconcileMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-control-plane caller before initialization or reconciliation', async () => {
+    assertLocalRequestMock.mockReturnValueOnce(new Response('forbidden', { status: 403 }));
+    const response = await POST(new Request('https://flujo.example.com/api/planned-executions/reconcile', {
+      method: 'POST',
+    }));
+    expect(response.status).toBe(403);
+    expect(assertUnlockedMock).not.toHaveBeenCalled();
     expect(reconcileMock).not.toHaveBeenCalled();
   });
 });

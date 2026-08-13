@@ -3,6 +3,7 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { executionEventBus, GlobalEvent } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 
 const log = createLogger('app/v1/chat/events/route');
 
@@ -40,6 +41,11 @@ export const dynamic = 'force-dynamic';
  * It ends only when the client disconnects.
  */
 async function GET_handler(request: NextRequest) {
+  // Global events do not carry a durable ownership discriminator, so they
+  // follow the app-wide exposure policy rather than attempting Persona-level
+  // filtering here.
+  const notLocal = assertLocalRequest(request);
+  if (notLocal) return notLocal;
   const _lock = await assertUnlocked({ openai: true });
   if (_lock) return _lock;
 

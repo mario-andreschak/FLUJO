@@ -196,7 +196,8 @@ export async function executeSubflowToolCall(
     if (!targetNodeId) {
       return { success: false, error: `Unknown call_subflow tool "${name}" — no matching target node.` };
     }
-    const flow = await flowService.getFlow(sharedState.flowId);
+    const flow = sharedState.flowSnapshot
+      ?? await flowService.getFlow(sharedState.flowId);
     const flowNode = flow?.nodes.find((n) => n.id === targetNodeId);
     const props = flowNode?.data?.properties as SubflowNodeProperties | undefined;
     const subflowId = props?.subflowId;
@@ -239,6 +240,8 @@ export async function executeSubflowToolCall(
       chainDepth: sharedState.chainDepth,
       parentRunId: sharedState.conversationId,
       plannedExecutionId: sharedState.plannedExecutionId,
+      personaAttribution: sharedState.personaAttribution,
+      executionAuthority: sharedState.executionAuthority,
       // Tool-mode invocations attach no durable invocation record (v1 is
       // non-resumable), so this stays ephemeral regardless of the target
       // node's own `saveConversation` setting.

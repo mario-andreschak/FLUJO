@@ -1,6 +1,11 @@
 import { createLogger } from '@/utils/logger';
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
 import { findRunResourceByName, readRunResource } from '@/backend/services/runResources';
+import {
+  commitFlowDurableMutation,
+  rethrowFlowExecutionAuthorityError,
+  type FlowDurableMutationContext,
+} from './executionAuthority';
 
 /**
  * `${res:NAME}` — inject a NAMED run-scoped resource into prompt text.
@@ -43,7 +48,8 @@ export async function resolveRunResourceRefs(
   text: string,
   conversationId: string | undefined,
   emit?: EmitFn,
-  node?: NodeRef
+  node?: NodeRef,
+  durableContext: FlowDurableMutationContext = {},
 ): Promise<string> {
   if (!text || !text.includes('${res:') || !conversationId) {
     // No refs, or no conversation to resolve against (design-time render,
@@ -66,10 +72,25 @@ export async function resolveRunResourceRefs(
       if (!entry) {
         log.warn(`\${res:${name}} has no matching run resource; resolving to ''`, { conversationId });
       } else {
-        const read = await readRunResource(entry.uri, {
-          at: Date.now(),
-          source: 'res-ref',
-          nodeId: node?.nodeId,
+        const read = await commitFlowDurableMutation(durableContext, async () => {
+          const result = await readRunResource(entry.uri, {
+            at: Date.now(),
+            source: 'res-ref',
+            nodeId: node?.nodeId,
+          });
+          if (result) {
+            emit?.({
+              type: 'resource:read',
+              node,
+              server: 'flujo',
+              uri: entry.uri,
+              name,
+              mimeType: entry.mimeType,
+              size: entry.size,
+              source: 'res-ref',
+            });
+          }
+          return result;
         });
         if (read) {
           const item = read.contents.contents[0];
@@ -80,21 +101,12 @@ export async function resolveRunResourceRefs(
             // Binary (or link): a stub the model can follow via MCP.
             value = `[run resource "${name}": ${entry.mimeType ?? entry.kind} (${formatKb(entry.size)}) at ${entry.uri} — readable via the 'flujo' MCP server]`;
           }
-          emit?.({
-            type: 'resource:read',
-            node,
-            server: 'flujo',
-            uri: entry.uri,
-            name,
-            mimeType: entry.mimeType,
-            size: entry.size,
-            source: 'res-ref',
-          });
         } else {
           log.warn(`\${res:${name}} entry exists but payload read failed; resolving to ''`, { uri: entry.uri });
         }
       }
     } catch (error) {
+      rethrowFlowExecutionAuthorityError(error);
       // Resolution must never break a run.
       log.error(`Failed to resolve \${res:${name}}; resolving to ''`, error);
     }

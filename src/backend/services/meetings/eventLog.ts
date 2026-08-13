@@ -2,8 +2,11 @@ import { randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import path from 'path';
 import type { MeetingEvent, RawMeetingEvent } from '@/shared/types/meeting';
-import { MEETING_SCHEMA_VERSION } from '@/shared/types/meeting';
-import { assertSafeCollectionId } from '@/utils/storage/backend';
+import {
+  ARCHIVED_MEETING_PARTICIPANT_NAME,
+  MEETING_SCHEMA_VERSION,
+} from '@/shared/types/meeting';
+import { assertSafeCollectionId, writeFileAtomic } from '@/utils/storage/backend';
 import { createLogger } from '@/utils/logger';
 import { getWorkspaceDataDir, workspaceCacheKey } from '@/utils/workspace';
 
@@ -394,6 +397,86 @@ export async function flushMeetingEventLog(meetingId: string): Promise<void> {
   assertSafeCollectionId(meetingId);
   const pending = appendChains.get(cacheKey(meetingId));
   if (pending) await pending.then(() => undefined, () => undefined);
+}
+
+function anonymizeParticipantEvent(
+  value: unknown,
+  participantIds: ReadonlySet<string>,
+): number {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return 0;
+  const record = value as Record<string, unknown>;
+  if (record.kind === 'meeting-event-batch' && Array.isArray(record.events)) {
+    return record.events.reduce(
+      (count, event) => count + anonymizeParticipantEvent(event, participantIds),
+      0,
+    );
+  }
+  if (typeof record.participantId !== 'string' || !participantIds.has(record.participantId)) {
+    return 0;
+  }
+
+  let changed = false;
+  if (
+    typeof record.participantName === 'string'
+    && record.participantName !== ARCHIVED_MEETING_PARTICIPANT_NAME
+  ) {
+    record.participantName = ARCHIVED_MEETING_PARTICIPANT_NAME;
+    changed = true;
+  }
+  for (const key of ['personaId', 'activityId', 'behaviorRevisionId'] as const) {
+    if (Object.prototype.hasOwnProperty.call(record, key)) {
+      delete record[key];
+      changed = true;
+    }
+  }
+  return changed ? 1 : 0;
+}
+
+/**
+ * Privacy-erasure rewrite for cached participant attribution in the lossless
+ * meeting log. Association is deliberately limited to participant ids already
+ * resolved from the authoritative meeting snapshot; text and names are never
+ * used to infer ownership.
+ */
+export async function anonymizeMeetingParticipantEvents(
+  meetingId: string,
+  participantIds: readonly string[],
+): Promise<number> {
+  assertSafeCollectionId(meetingId);
+  const matchedIds = new Set(participantIds);
+  if (matchedIds.size === 0) return 0;
+
+  return enqueue(meetingId, async () => {
+    let content: string;
+    try {
+      content = await fs.readFile(logFilePath(meetingId), 'utf8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0;
+      throw error;
+    }
+
+    let changedEvents = 0;
+    const rewritten = content.split('\n').map((line) => {
+      if (!line.trim()) return line;
+      try {
+        const parsed = JSON.parse(line) as unknown;
+        const changed = anonymizeParticipantEvent(parsed, matchedIds);
+        changedEvents += changed;
+        return changed > 0 ? JSON.stringify(parsed) : line;
+      } catch {
+        // An unreadable line cannot be associated without guessing. Preserve it
+        // byte-for-byte, matching the normal tolerant reader.
+        return line;
+      }
+    }).join('\n');
+    if (changedEvents === 0) return 0;
+
+    await writeFileAtomic(logFilePath(meetingId), rewritten);
+    const key = cacheKey(meetingId);
+    states.delete(key);
+    stateInitializers.delete(key);
+    return changedEvents;
+  });
 }
 
 /** Delete the durable log and reset its in-process sequence/idempotency state. */

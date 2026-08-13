@@ -10,12 +10,13 @@ import {
 import type { SharedState } from './types';
 import { deriveLastErrorFromLastResponse } from './normalizeError';
 import type { NormalizedChatError } from '@/shared/types/execution/errors';
+import { isPersonaOwnedConversationState } from './personaConversationOwnership';
 
 const log = createLogger('backend/execution/flow/conversationSummaryStore');
 // Issue #383: bumped to 3 so every summary is rebuilt and picks up the new
 // compact `lastError` projection (stale v2 summaries lack the field, which is
 // fine since it's optional, but a rebuild lets the sidebar show it sooner).
-const SUMMARY_VERSION = 3;
+const SUMMARY_VERSION = 6;
 const SUMMARY_READ_CONCURRENCY = 32;
 
 export type ConversationStatus = NonNullable<SharedState['status']>;
@@ -34,6 +35,14 @@ export interface ConversationSummary {
   recovery?: SharedState['recovery'];
   /** Durable invocation origin used by the chat sidebar's origin filter/chip. */
   source?: SharedState['source'] | null;
+  /** Internal list-filter marker; never identifies the Persona or grants authority. */
+  personaOwned?: true;
+  /** Non-identifying marker for a read-only anonymized Persona archive. */
+  personaArchived?: true;
+  /** Trusted-local Persona attribution projection (drafts expose only personaId). */
+  personaId?: string;
+  activityId?: string;
+  behaviorRevisionId?: string;
   /**
    * Issue #383: a COMPACT error projection only — message/code/class, never
    * the redacted provider `details` blob or a stack trace — so bulk sidebar
@@ -79,6 +88,19 @@ export function summarizeConversation(state: SharedState, fallbackId: string): C
     ...(state.rootConversationId !== undefined ? { rootConversationId: state.rootConversationId } : {}),
     ...(state.recovery ? { recovery: state.recovery } : {}),
     ...(state.source !== undefined ? { source: state.source } : {}),
+    ...(isPersonaOwnedConversationState(state)
+      ? { personaOwned: true as const }
+      : {}),
+    ...(state.personaArchived ? { personaArchived: true as const } : {}),
+    ...((state.personaAttribution?.personaId ?? state.personaTargetId)
+      ? { personaId: state.personaAttribution?.personaId ?? state.personaTargetId }
+      : {}),
+    ...(state.personaAttribution?.activityId
+      ? { activityId: state.personaAttribution.activityId }
+      : {}),
+    ...(state.personaAttribution?.behaviorRevisionId
+      ? { behaviorRevisionId: state.personaAttribution.behaviorRevisionId }
+      : {}),
     ...(state.status === 'error' ? (() => {
       const err = state.lastError ?? deriveLastErrorFromLastResponse(state.lastResponse);
       return err
@@ -94,15 +116,28 @@ async function writeSummary(
   stats?: { mtimeMs: number; size: number },
 ): Promise<void> {
   assertSafeCollectionId(id);
-  const snapshotStats = stats ?? await fs.stat(snapshotPath(id));
-  const indexed: IndexedConversationSummary = {
-    version: SUMMARY_VERSION,
-    ...summarizeConversation(state, id),
-    snapshotMtimeMs: snapshotStats.mtimeMs,
-    snapshotSize: snapshotStats.size,
+  if (state.personaAttribution && !state.executionAuthority) {
+    throw new Error(
+      'Persona-attributed conversation summaries require current execution authority.',
+    );
+  }
+  const write = async () => {
+    const snapshotStats = stats ?? await fs.stat(snapshotPath(id));
+    const indexed: IndexedConversationSummary = {
+      version: SUMMARY_VERSION,
+      ...summarizeConversation(state, id),
+      snapshotMtimeMs: snapshotStats.mtimeMs,
+      snapshotSize: snapshotStats.size,
+    };
+    await runInWriteChain(`conversation-summaries/${id}`, () =>
+      writeFileAtomic(summaryPath(id), JSON.stringify(indexed, null, 2)));
   };
-  await runInWriteChain(`conversation-summaries/${id}`, () =>
-    writeFileAtomic(summaryPath(id), JSON.stringify(indexed, null, 2)));
+  if (state.executionAuthority?.commitWhileCurrent) {
+    await state.executionAuthority.commitWhileCurrent(write);
+  } else {
+    await state.executionAuthority?.assertCurrent();
+    await write();
+  }
 }
 
 /** Refresh the derived summary after the authoritative snapshot has been saved. */
@@ -114,6 +149,18 @@ export async function persistConversationSummary(id: string, state: SharedState)
     // successful conversation-state write into a failed run.
     log.warn(`Could not refresh conversation summary ${id}; it will be rebuilt on list.`, error);
   }
+}
+
+/**
+ * Privacy migrations cannot tolerate a stale identity-bearing sidecar. Unlike
+ * the normal rebuildable-index path, surface any failure to the deletion
+ * workflow so its durable tombstone remains retryable rather than completed.
+ */
+export async function persistConversationSummaryStrict(
+  id: string,
+  state: SharedState,
+): Promise<void> {
+  await writeSummary(id, state);
 }
 
 export async function deleteConversationSummary(id: string): Promise<void> {

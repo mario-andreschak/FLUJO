@@ -50,7 +50,10 @@ import type { SecretProposal } from '@/shared/types/package/secretProposal';
 import type { Model } from '@/shared/types/model';
 import type { Flow } from '@/shared/types/flow';
 import type { EnvVarValue, MCPServerConfig, MCPServerSource } from '@/shared/types/mcp';
-import type { PlannedExecution } from '@/shared/types/plannedExecution';
+import {
+  isPersonaControlledPlannedExecution,
+  type PlannedExecution,
+} from '@/shared/types/plannedExecution';
 import { isSecretEnvVar, isSecretHeaderKey } from '@/utils/shared/common';
 import { StorageKey } from '@/shared/types/storage';
 
@@ -816,6 +819,17 @@ export async function resolvePackageSelection(selection: PackageSelection): Prom
   entities: PackageEntities;
 }> {
   const entities = await loadPackageableEntities();
+  const requestedExecutionIds = new Set(selection.plannedExecutionIds ?? []);
+  if (entities.plannedExecutions.some((execution) => (
+    requestedExecutionIds.has(execution.id)
+    && isPersonaControlledPlannedExecution(execution)
+  ))) {
+    // Package workflows are portable legacy-Flow workflows. Refuse at the
+    // shared selection choke point so resolve, secret scanning/model passes,
+    // manifest building and publishing helpers cannot inspect or serialize a
+    // workspace-local Persona target.
+    throw new Error('Persona-targeted planned executions cannot be packaged.');
+  }
   const resolved = resolveDependencies(selection, entities);
   return { resolved, entities };
 }

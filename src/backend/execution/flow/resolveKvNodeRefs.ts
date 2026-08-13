@@ -8,6 +8,10 @@ import {
   type KvRefScope,
 } from '@/utils/shared/resolveKvRefs';
 import { kvGet, kvSet, type KvSetResult } from '@/backend/services/kvStore';
+import {
+  commitFlowDurableMutation,
+  type FlowDurableMutationContext,
+} from './executionAuthority';
 
 /**
  * `${kv:NAME}` — inject a PERSISTENT (cross-run) value into prompt text, and the
@@ -26,7 +30,7 @@ import { kvGet, kvSet, type KvSetResult } from '@/backend/services/kvStore';
 
 const log = createLogger('backend/flow/execution/resolveKvNodeRefs');
 
-export interface KvFlowContext {
+export interface KvFlowContext extends FlowDurableMutationContext {
   flowId?: string;
   /** The flow's optional user-assigned folder (Flow.folder). */
   folder?: string;
@@ -45,10 +49,15 @@ export function kvScopeId(scope: KvRefScope, ctx: KvFlowContext): string {
 
   if (scope === 'flow') return flowBoard();
 
-  // folder (default): a package of flows sharing one folder shares a board.
-  // This hash intentionally changes when the folder is renamed; use an explicit
-  // flow/ or global/ token when a value must survive a folder rename.
-  const folder = ctx.folder?.trim();
+  // folder (default): a package of ordinary flows sharing one folder shares a
+  // board. Persona Behavior content hashes deliberately predate and exclude the
+  // dashboard-only `Flow.folder` field. Treating that unhashed field as a
+  // runtime scope would let snapshot tampering redirect durable reads/writes
+  // without invalidating the pinned revision. Persona-attributed execution
+  // therefore always maps default/folder scope to its hash-covered Flow id.
+  // This also preserves the historical private-Behavior behavior: those ids
+  // had no live Flow record, so folder resolution already fell back to flow.
+  const folder = ctx.personaAttribution ? undefined : ctx.folder?.trim();
   if (folder) {
     const hash = createHash('sha256').update(folder).digest('hex').slice(0, 32);
     return `folder-${hash}`;
@@ -89,8 +98,10 @@ export type CaptureKvResult = KvSetResult | { skipped: 'invalid-name' };
 
 /**
  * The write side of `captureKv: "NAME"` (or `"folder/NAME"`, `"flow/NAME"`,
- * `"global/NAME"`). Persists `value` to the resolved board. Never throws; a bad
- * name / cap refusal comes back as a `{ skipped }` marker the caller logs.
+ * `"global/NAME"`). Persists `value` to the resolved board. A bad name / cap
+ * refusal comes back as a `{ skipped }` marker the caller logs. Persona and
+ * meeting writes are lock-coupled to their execution authority; losing that
+ * authority throws so a best-effort capture catch cannot let stale work run on.
  */
 export async function captureKvValue(
   captureToken: string,
@@ -99,5 +110,8 @@ export async function captureKvValue(
 ): Promise<CaptureKvResult> {
   const { scope, key } = parseKvRef(captureToken);
   if (!isValidKvName(key)) return { skipped: 'invalid-name' };
-  return kvSet(kvScopeId(scope, ctx), key, value ?? '');
+  return commitFlowDurableMutation(
+    ctx,
+    () => kvSet(kvScopeId(scope, ctx), key, value ?? ''),
+  );
 }

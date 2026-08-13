@@ -62,7 +62,7 @@ import {
 import LiveRunIndicator, { LiveRunStats } from './LiveRunIndicator';
 import TodoDock from './TodoDock';
 import ConversationStats from './ConversationStats';
-import FlowSelector from './FlowSelector';
+import ChatTargetSelector from './ChatTargetSelector';
 import QuickChatDialog, { QuickChatStartSelection } from './QuickChatDialog';
 import DebuggerCanvas from './DebuggerCanvas';
 import DebuggerConversation from './DebuggerConversation';
@@ -242,6 +242,12 @@ export interface Conversation {
   title: string;
   messages: ChatMessage[];
   flowId: string | null;
+  /** Trusted-local Persona target/attribution. Drafts expose only personaId. */
+  personaId?: string;
+  activityId?: string;
+  behaviorRevisionId?: string;
+  /** Read-only retained evidence after Persona identity anonymization. */
+  personaArchived?: true;
   requireApproval?: boolean;
   createdAt: number;
   updatedAt: number;
@@ -295,6 +301,12 @@ export interface ConversationListItem {
   id: string;
   title: string;
   flowId: string | null;
+  /** Trusted-local Persona target/attribution. Drafts expose only personaId. */
+  personaId?: string;
+  activityId?: string;
+  behaviorRevisionId?: string;
+  /** Read-only retained evidence after Persona identity anonymization. */
+  personaArchived?: true;
   createdAt: number;
   updatedAt: number;
   /** Timestamp of the most recent user-role message; used for sidebar sort.
@@ -347,6 +359,10 @@ const sameConversationLists = (a: ConversationListItem[], b: ConversationListIte
       x.id === y.id &&
       x.title === y.title &&
       x.flowId === y.flowId &&
+      x.personaId === y.personaId &&
+      x.activityId === y.activityId &&
+      x.behaviorRevisionId === y.behaviorRevisionId &&
+      x.personaArchived === y.personaArchived &&
       x.status === y.status &&
       x.recovery?.classification === y.recovery?.classification &&
       x.recovery?.updatedAt === y.recovery?.updatedAt &&
@@ -1211,6 +1227,9 @@ const Chat: React.FC = () => {
                 ...c,
                 title: conversation.title,
                 flowId: conversation.flowId,
+                personaId: conversation.personaId,
+                activityId: conversation.activityId,
+                behaviorRevisionId: conversation.behaviorRevisionId,
                 updatedAt: conversation.updatedAt,
                 // Status too — without it the sidebar dot for the viewed
                 // conversation stayed stale (e.g. 'running' after completion).
@@ -1372,8 +1391,10 @@ const Chat: React.FC = () => {
   // list. Referentially stable while the flow doesn't change (safe to hand to
   // memoized children).
   const currentFlow = useMemo(
-    () => flows.find(f => f.id === detailedConversation?.flowId) || null,
-    [flows, detailedConversation?.flowId]
+    () => detailedConversation?.personaId
+      ? null
+      : flows.find(f => f.id === detailedConversation?.flowId) || null,
+    [flows, detailedConversation?.flowId, detailedConversation?.personaId]
   );
 
   const handleAskFlujoAction = useCallback((action: AskFlujoUiAction) => {
@@ -1406,6 +1427,7 @@ const Chat: React.FC = () => {
     identifiers: {
       conversationId: detailedConversation?.id ?? currentConversationId,
       flowId: detailedConversation?.flowId ?? null,
+      personaId: detailedConversation?.personaId ?? null,
     },
     data: {
       conversation: detailedConversation,
@@ -1424,7 +1446,7 @@ const Chat: React.FC = () => {
         { kind: 'chat-field', field: 'title' },
       ],
       editableTargets: [{ kind: 'chat-field', field: 'title' }],
-      notes: ['The conversation id and flow id are always supplied explicitly.'],
+      notes: ['The conversation id and selected Flow or Persona are supplied explicitly.'],
     },
   }, handleAskFlujoAction, 100);
 
@@ -1476,7 +1498,28 @@ const Chat: React.FC = () => {
     return availableNodes[0]?.id ?? null;
   }, [nodeOverride, detailedConversation, availableNodes]);
 
-  // Create a new conversation (now persists to backend immediately)
+  const adoptCreatedConversation = (created: ConversationListItem) => {
+    setConversationList(prevList =>
+      [created, ...prevList]
+        .sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt))
+    );
+    setCurrentConversationId(created.id);
+    setDetailedConversation({
+      id: created.id,
+      title: created.title,
+      flowId: created.flowId,
+      ...(created.personaId ? { personaId: created.personaId } : {}),
+      ...(created.activityId ? { activityId: created.activityId } : {}),
+      ...(created.behaviorRevisionId ? { behaviorRevisionId: created.behaviorRevisionId } : {}),
+      createdAt: created.createdAt,
+      updatedAt: created.updatedAt,
+      messages: [],
+    });
+    setIsLoadingDetails(false);
+    setDetailsError(null);
+  };
+
+  // Create a new Flow conversation (legacy/default behavior).
   const createNewConversation = async (explicitFlowId?: string) => {
     log.debug('Attempting to create new conversation');
     setError(null); // Clear previous errors
@@ -1499,8 +1542,11 @@ const Chat: React.FC = () => {
         : undefined;
     const selectedFlowId = (explicitFlow ?? rememberedFlow ?? flows.find(f => f.favorite) ?? flows[0])?.id || null;
     if (!selectedFlowId) {
-      log.error('Cannot create conversation: No flows available or first flow has no ID.');
-      setError(t('chat.page.noAgents'));
+      // With no saved Flows, reveal the empty-state target chooser instead of
+      // disabling New Chat: an active Persona can still start a conversation.
+      log.debug('No Flow target available; showing the Flow/Persona chooser.');
+      setCurrentConversationId(null);
+      setDetailedConversation(null);
       return;
     }
 
@@ -1523,23 +1569,7 @@ const Chat: React.FC = () => {
       const createdConversationSummary = await chatService.createConversation(payload);
       log.info('Successfully created conversation on backend', { conversationId: createdConversationSummary.id });
 
-      // Update UI state *after* successful backend creation
-      setConversationList(prevList =>
-        [createdConversationSummary, ...prevList].sort((a, b) => (b.lastUserMessageAt ?? b.updatedAt) - (a.lastUserMessageAt ?? a.updatedAt)) // Add and re-sort
-      );
-      setCurrentConversationId(createdConversationSummary.id); // Select the new one
-
-      // Set basic detailed view based on the created summary
-      setDetailedConversation({
-        id: createdConversationSummary.id,
-        title: createdConversationSummary.title,
-        flowId: createdConversationSummary.flowId,
-        createdAt: createdConversationSummary.createdAt,
-        updatedAt: createdConversationSummary.updatedAt,
-        messages: [], // Start with empty messages
-      });
-      setIsLoadingDetails(false); // Ensure loading is off for the new view
-      setDetailsError(null); // Clear any previous errors
+      adoptCreatedConversation(createdConversationSummary);
 
     } catch (err) {
       log.error('Error creating conversation on backend:', err);
@@ -1551,6 +1581,30 @@ const Chat: React.FC = () => {
       }
       setError(errorMsg);
       // Do not update UI state if backend creation failed
+    }
+  };
+
+  // A Persona draft has no Flow authority. The separate target marker is
+  // replaced by the dispatcher with the full attribution triple on first run.
+  const createPersonaConversation = async (personaId: string) => {
+    setError(null);
+    setErrorInfo(null);
+    const now = Date.now();
+    const payload = {
+      id: uuidv4(),
+      title: t('chat.page.newTitle'),
+      flowId: null,
+      personaTargetId: personaId,
+      createdAt: now,
+      updatedAt: now,
+    };
+    try {
+      const created = await chatService.createConversation(payload);
+      adoptCreatedConversation(created);
+    } catch (err) {
+      log.error('Error creating Persona conversation on backend:', err);
+      const detail = err instanceof ChatApiError ? err.body?.error || err.message : err instanceof Error ? err.message : '';
+      setError(`${t('chat.page.createFailed')}${detail ? ` (${detail})` : ''}`);
     }
   };
 
@@ -2492,6 +2546,15 @@ const Chat: React.FC = () => {
       setError(t('chat.page.selectFirst'));
       return;
     }
+    if (
+      detailedConversation?.personaArchived
+      || currentConversationSummary?.personaArchived
+      || detailedConversation?.personaId
+      || currentConversationSummary?.personaId
+    ) {
+      setError(t('chat.target.locked'));
+      return;
+    }
     // Remember the user's manual pick so the NEXT new conversation defaults to
     // it (issue #134, item 6). Quick-chat snapshot ids are not real flows.
     if (!isQuickChatFlowId(flowId)) {
@@ -2590,6 +2653,72 @@ const Chat: React.FC = () => {
       setConversationList(previousConversationList);
       // --- End Rollback ---
     }
+  };
+
+  const applyPersonaSelect = async (personaId: string) => {
+    if (detailedConversation?.personaArchived || currentConversationSummary?.personaArchived) {
+      setError(t('chat.target.locked'));
+      return;
+    }
+    if (!currentConversationId) {
+      await createPersonaConversation(personaId);
+      return;
+    }
+    const previousDetailedConversation = detailedConversation;
+    const previousConversationList = conversationList;
+    setError(null);
+    setErrorInfo(null);
+    setDetailedConversation(prev => prev?.id === currentConversationId
+      ? { ...prev, flowId: null, personaId, activityId: undefined, behaviorRevisionId: undefined }
+      : prev);
+    setConversationList(prev => prev.map(item => item.id === currentConversationId
+      ? { ...item, flowId: null, personaId, activityId: undefined, behaviorRevisionId: undefined }
+      : item));
+    try {
+      const updated = await chatService.updateConversationPersonaTarget(currentConversationId, personaId);
+      setDetailedConversation(prev => prev?.id === currentConversationId
+        ? {
+            ...prev,
+            flowId: updated.flowId,
+            personaId: updated.personaId,
+            activityId: updated.activityId,
+            behaviorRevisionId: updated.behaviorRevisionId,
+            updatedAt: updated.updatedAt,
+          }
+        : prev);
+      setConversationList(prev => prev.map(item => item.id === currentConversationId ? updated : item));
+    } catch (err) {
+      log.error('Error targeting conversation to Persona:', { currentConversationId, personaId, err });
+      setDetailedConversation(previousDetailedConversation);
+      setConversationList(previousConversationList);
+      const detail = err instanceof ChatApiError ? err.body?.error || err.message : err instanceof Error ? err.message : '';
+      setError(`${t('chat.page.updateAgentFailed')}${detail ? ` (${detail})` : ''}`);
+    }
+  };
+
+  const handlePersonaSelect = (personaId: string) => {
+    if (detailedConversation?.personaArchived || currentConversationSummary?.personaArchived) {
+      setError(t('chat.target.locked'));
+      return;
+    }
+    const selectedPersonaId = detailedConversation?.personaId ?? currentConversationSummary?.personaId;
+    if (selectedPersonaId) {
+      if (selectedPersonaId !== personaId) setError(t('chat.target.locked'));
+      return;
+    }
+    if (!currentConversationId || !detailedConversation) {
+      void createPersonaConversation(personaId);
+      return;
+    }
+    const alreadyExecuted = detailedConversation.messages.length > 0
+      || currentConversationSummary?.status !== undefined;
+    // Never retarget authored/executed history. Start a clean Persona-owned
+    // conversation instead; fresh Flow drafts can be converted in place.
+    if (alreadyExecuted || isQuickChatFlowId(detailedConversation.flowId)) {
+      void createPersonaConversation(personaId);
+      return;
+    }
+    void applyPersonaSelect(personaId);
   };
 
   // --- Conversation rename (issue #134, item 2) ---
@@ -2716,7 +2845,11 @@ const Chat: React.FC = () => {
     // A queued message carries the node pick captured at enqueue time; a live
     // send reads the current one-shot nodeOverride state (and clears it).
     const manualNode = opts?.fromQueue ? (opts.nodeOverride ?? null) : nodeOverride;
-    if (manualNode) {
+    // Persona targeting resolves its immutable Behavior only inside the
+    // trusted dispatcher. The browser must not infer a Flow or node authority.
+    if (detailedConversation.personaId) {
+      if (!opts?.fromQueue) setNodeOverride(null);
+    } else if (manualNode) {
       // The user manually picked a node in the chat input's node picker: the
       // message resumes execution there. One-shot — consumed by this send.
       nodeIdToAssign = manualNode;
@@ -2788,8 +2921,9 @@ const Chat: React.FC = () => {
     };
     updateDetailedConversationState(updatedDetailedConv); // Use the callback
 
-    // Send to API if the conversation has a flow selected
-    if (updatedDetailedConv.flowId) {
+    // A Persona draft intentionally has no Flow selected; metadata.personaId
+    // routes it through the trusted dispatcher instead.
+    if (updatedDetailedConv.personaId || updatedDetailedConv.flowId) {
       const success = await sendToChatCompletions(updatedDetailedConv); // Pass the updated state
       // Refresh conversation list after successful send? Only if title/timestamp changed significantly.
       // The backend updates the timestamp, so the list will re-sort on next fetch.
@@ -3020,9 +3154,10 @@ const Chat: React.FC = () => {
   // Send conversation to chat completions API
   // Returns true on success, false on error
   const sendToChatCompletions = async (conversation: Conversation): Promise<boolean> => {
-    // Ensure we use the detailed conversation's ID and flowId
-    if (!conversation?.id || !conversation.flowId || !openaiRef.current) {
-       log.error("Cannot send to completions: Missing conversation ID or flow ID.", { id: conversation?.id, flowId: conversation?.flowId });
+    // Persona drafts intentionally carry no flowId; their trusted target is
+    // sent separately in metadata and resolved only by the dispatcher.
+    if (!conversation?.id || (!conversation.personaId && !conversation.flowId) || !openaiRef.current) {
+       log.error("Cannot send to completions: Missing conversation ID or target.", { id: conversation?.id, flowId: conversation?.flowId, personaId: conversation?.personaId });
        setError(t('chat.page.agentMissing'));
        return false;
     }
@@ -3062,10 +3197,17 @@ const Chat: React.FC = () => {
       // an existing conversation and resolves the flow from the snapshot. A
       // stable, non-"model-" label keeps it on the flow path.
       let modelName: string;
-      if (isQuickChatFlowId(conversation.flowId)) {
+      if (conversation.personaId) {
+        modelName = 'flow-Persona';
+        log.debug('Sending Persona-targeted chat to completions', {
+          personaId: conversation.personaId,
+          conversationId: conversation.id,
+        });
+      } else if (isQuickChatFlowId(conversation.flowId)) {
         modelName = 'flow-Quick Chat';
         log.debug('Sending quick chat to completions', { flowId: conversation.flowId, conversationId: conversation.id });
       } else {
+        if (!conversation.flowId) throw new Error('Conversation Flow is missing.');
         // Look up the flow by ID to get its name
         const flow = await flowService.getFlow(conversation.flowId);
         if (!flow) {
@@ -3161,6 +3303,7 @@ const Chat: React.FC = () => {
                 flujodebug: executeInDebugger ? "true" : undefined, // Add flujodebug flag
                 conversationId: conversation.id, // Pass the correct ID
                 compactToolPayloads: "true",
+                personaId: conversation.personaId,
                 // Undefined means "retain backend state"; only a hydrated or
                 // explicitly updated map is sent. This prevents navigation from
                 // accidentally clearing a conversation with `{}`.
@@ -3175,6 +3318,7 @@ const Chat: React.FC = () => {
             if (meta.flujodebug) filteredMeta.flujodebug = meta.flujodebug; // Include flujodebug
             if (meta.conversationId) filteredMeta.conversationId = meta.conversationId;
             if (meta.compactToolPayloads) filteredMeta.compactToolPayloads = meta.compactToolPayloads;
+            if (meta.personaId) filteredMeta.personaId = meta.personaId;
             if (meta.mcpAppContexts !== undefined) {
               filteredMeta.mcpAppContexts = meta.mcpAppContexts;
             }
@@ -3435,7 +3579,7 @@ const Chat: React.FC = () => {
     writeMcpAppsDismissed(owner, keys, true);
     setAutoOpenMcpAppsSuppressed(owner, true);
     const pending = keys.map((key) => {
-      const registered = canvasTeardownsRef.current.get(`${owner} ${key}`);
+      const registered = canvasTeardownsRef.current.get(`${owner}\u0000${key}`);
       return registered ? registered() : Promise.resolve();
     });
     void Promise.allSettled(pending).finally(() => {
@@ -3596,6 +3740,13 @@ const Chat: React.FC = () => {
       messages: messagesUpToEdit
     };
     updateDetailedConversationState(updatedDetailedConv); // Optimistic update
+
+    if (updatedDetailedConv.personaId) {
+      // Persona edits stay on the same trusted target and intentionally carry
+      // no caller-selected Process-node authority.
+      await sendToChatCompletions(updatedDetailedConv);
+      return;
+    }
 
     if (updatedDetailedConv.flowId) {
       // Create metadata with processNodeId for the API call
@@ -3767,6 +3918,7 @@ const Chat: React.FC = () => {
       title: t(half === 'head' ? 'chat.page.splitTitle' : 'chat.page.splitTailTitle', { title: detailedConversation.title }),
       messages: messagesBeforeSplit,
       flowId: detailedConversation.flowId,
+      ...(detailedConversation.personaId ? { personaId: detailedConversation.personaId } : {}),
       createdAt: Date.now(), // New creation time
       updatedAt: Date.now(),
     };
@@ -3776,6 +3928,7 @@ const Chat: React.FC = () => {
        id: newId,
        title: newSplitConversation.title,
        flowId: newSplitConversation.flowId,
+       ...(newSplitConversation.personaId ? { personaId: newSplitConversation.personaId } : {}),
        createdAt: newSplitConversation.createdAt,
        updatedAt: newSplitConversation.updatedAt,
     };
@@ -4790,12 +4943,16 @@ const Chat: React.FC = () => {
                   <Chip color="primary" variant="outlined" icon={<BoltIcon />} label={t('chat.page.quickChat')} />
                 ) : (
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                    <FlowSelector
-                      // Remove duplicate selectedFlowId prop
+                    <ChatTargetSelector
                       selectedFlowId={currentConversationSummary?.flowId || detailedConversation?.flowId || null} // Use summary first, fallback to detail
+                      selectedPersonaId={currentConversationSummary?.personaId || detailedConversation?.personaId || null}
                       onSelectFlow={handleFlowSelect}
-                      disabled={isDebugPaused} // Disable flow selection when debugging
-                      hideLabel
+                      onSelectPersona={handlePersonaSelect}
+                      disabled={Boolean(
+                        isDebugPaused
+                        || currentConversationSummary?.personaArchived
+                        || detailedConversation?.personaArchived
+                      )}
                       compact
                       fullScreenPicker={isPhoneLayout}
                     />
@@ -4804,7 +4961,8 @@ const Chat: React.FC = () => {
                     {(() => {
                       const builderFlowId =
                         currentConversationSummary?.flowId || detailedConversation?.flowId || null;
-                      if (!builderFlowId) return null;
+                      const personaId = currentConversationSummary?.personaId || detailedConversation?.personaId;
+                      if (!builderFlowId || personaId) return null;
                       return (
                         <Tooltip title={t('chat.page.openAgent')}>
                           <IconButton
@@ -5216,16 +5374,24 @@ const Chat: React.FC = () => {
                   ? t('chat.page.selectOrCreate')
                   : t('chat.page.createToStart')}
               </Typography>
-              <Button
-                variant="contained"
-                size="large"
-                startIcon={<AddCommentOutlinedIcon />}
-                onClick={() => createNewConversation()}
-                disabled={flows.length === 0}
-                sx={{ minHeight: 48, borderRadius: 999, px: 2.5 }}
-              >
-                {t('chat.page.newTitle')}
-              </Button>
+              {flows.length > 0 && (
+                <Button
+                  variant="contained"
+                  size="large"
+                  startIcon={<AddCommentOutlinedIcon />}
+                  onClick={() => createNewConversation()}
+                  sx={{ minHeight: 48, borderRadius: 999, px: 2.5 }}
+                >
+                  {t('chat.page.newTitle')}
+                </Button>
+              )}
+              <ChatTargetSelector
+                selectedFlowId={null}
+                onSelectFlow={(flowId) => void createNewConversation(flowId)}
+                onSelectPersona={(personaId) => void createPersonaConversation(personaId)}
+                compact
+                fullScreenPicker
+              />
               {conversationList.length > 0 && (
                 <Button
                   variant="text"
@@ -5238,11 +5404,19 @@ const Chat: React.FC = () => {
             </Box>
           ) : (
             // Message when no conversation is selected or loaded
-            <Typography variant="body1" color="textSecondary" align="center" sx={{ mt: 4 }}>
-              {conversationList.length > 0
-                ? t('chat.page.selectOrCreate')
-                : t('chat.page.createToStart')}
-            </Typography>
+            <Box sx={{ mt: 4, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.5 }}>
+              <Typography variant="body1" color="textSecondary" align="center">
+                {conversationList.length > 0
+                  ? t('chat.page.selectOrCreate')
+                  : t('chat.page.createToStart')}
+              </Typography>
+              <ChatTargetSelector
+                selectedFlowId={null}
+                onSelectFlow={(flowId) => void createNewConversation(flowId)}
+                onSelectPersona={(personaId) => void createPersonaConversation(personaId)}
+                compact
+              />
+            </Box>
           )}
         </Box>
         <ScrollNavCluster
@@ -5342,8 +5516,16 @@ const Chat: React.FC = () => {
             onSendMessage={handleSendMessage}
             // Keep the input enabled while a run is in flight so the user can type and
             // QUEUE follow-up messages (issue #177); still disabled for load, missing
-            // flow, a pending tool approval, or a debugger pause.
-            disabled={isLoadingDetails || !(detailedConversation?.flowId || currentConversationSummary?.flowId) || !!pendingToolCalls || isDebugPaused}
+            // target, a pending tool approval, or a debugger pause.
+            disabled={Boolean(
+              detailedConversation?.personaArchived
+              || currentConversationSummary?.personaArchived
+            ) || isLoadingDetails || !(
+              detailedConversation?.personaId
+              || currentConversationSummary?.personaId
+              || detailedConversation?.flowId
+              || currentConversationSummary?.flowId
+            ) || !!pendingToolCalls || isDebugPaused}
             requireApproval={requireApproval}
             onRequireApprovalChange={handleRequireApprovalChange}
             // ONE Debugger control (issue: two overlapping controls). The old

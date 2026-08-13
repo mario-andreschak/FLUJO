@@ -2,9 +2,10 @@ import { NextRequest } from 'next/server';
 
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { meetingEventBus } from '@/backend/services/meetings/MeetingEventBus';
-import { getMeeting } from '@/backend/services/meetings/store';
+import { getMeeting, isPersonaScopedMeeting } from '@/backend/services/meetings/store';
 import type { MeetingEvent } from '@/shared/types/meeting';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,7 +23,12 @@ async function GET_handler(
   if (locked) return locked;
   const { meetingId } = await params;
   try {
-    if (!(await getMeeting(meetingId))) return new Response('Meeting not found', { status: 404 });
+    const meeting = await getMeeting(meetingId);
+    if (!meeting) return new Response('Meeting not found', { status: 404 });
+    if (isPersonaScopedMeeting(meeting)) {
+      const notLocal = assertLocalRequest(request, { strictLoopback: true });
+      if (notLocal) return notLocal;
+    }
   } catch (error) {
     const invalid = error instanceof Error && /unsafe|invalid/i.test(error.message);
     return new Response(invalid ? 'Invalid meeting id' : 'Failed to load meeting', {

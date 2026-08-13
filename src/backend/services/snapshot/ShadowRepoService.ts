@@ -30,7 +30,8 @@ import simpleGit, { SimpleGit } from 'simple-git';
 import { createLogger } from '@/utils/logger';
 import { loadItem } from '@/utils/storage/backend';
 import { StorageKey, type Settings } from '@/shared/types/storage/storage';
-import { snapshotStore } from './SnapshotStore';
+<<import { snapshotStore } from './SnapshotStore';
+import { getWorkspaceDataDir } from '@/utils/workspace';
 
 const log = createLogger('backend/services/snapshot/ShadowRepoService');
 
@@ -54,10 +55,7 @@ export function _setShadowRepoDirForTests(dir: string | null): string | null {
 
 function resolveShadowRootDir(): string {
   if (shadowRootDir) return shadowRootDir;
-  // Lazy require so importing this module never eagerly touches paths/env.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   // Snapshots are workspace-owned user data (#406).
-  const { getWorkspaceDataDir } = require('@/utils/workspace');
   return path.join(getWorkspaceDataDir(), 'snapshots');
 }
 

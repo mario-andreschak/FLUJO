@@ -21,6 +21,25 @@ const log = createLogger('app/api/backup/route');
 // of scope here. Resolved per call because the workspace is per-request.
 const mcpServersDir = () => path.join(getWorkspaceDataDir(), 'mcp-servers');
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isPersonaConversationSnapshot(value: unknown): boolean {
+  return isRecord(value) && (
+    Object.prototype.hasOwnProperty.call(value, 'personaAttribution')
+    || Object.prototype.hasOwnProperty.call(value, 'personaTargetId')
+    || Object.prototype.hasOwnProperty.call(value, 'personaInstructionContext')
+    || value.personaArchived === true
+    || value.personaOwned === true
+  );
+}
+
+function historyContainsPersonaConversation(value: unknown): boolean {
+  return isPersonaConversationSnapshot(value)
+    || (Array.isArray(value) && value.some(isPersonaConversationSnapshot));
+}
+
 async function POST_handler(request: NextRequest) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
@@ -37,6 +56,37 @@ async function POST_handler(request: NextRequest) {
     if (!selections || !Array.isArray(selections) || selections.length === 0) {
       log.error(`Invalid selections [${requestId}]:`, selections);
       return NextResponse.json({ error: 'Invalid selections' }, { status: 400 });
+    }
+
+    // Freeze the exact chat-history snapshot before constructing an archive.
+    // A second read after the authority check would leave a TOCTOU window in
+    // which newly Persona-attributed state could enter a non-strict backup.
+    let chatHistorySnapshot: unknown = null;
+    let conversationSnapshots: Record<string, unknown>[] = [];
+    if (selections.includes('chatHistory')) {
+      const [historySnapshot, loadedConversations] = await Promise.all([
+        loadItem<unknown>(StorageKey.CHAT_HISTORY, null),
+        listCollectionItems<unknown>('conversations'),
+      ]);
+      chatHistorySnapshot = historySnapshot;
+      for (const conversation of loadedConversations) {
+        if (!isRecord(conversation) || typeof conversation.conversationId !== 'string') {
+          log.warn(`Skipped conversation without an id [${requestId}]`);
+          continue;
+        }
+        try {
+          assertSafeCollectionId(conversation.conversationId);
+          conversationSnapshots.push(conversation);
+        } catch (error) {
+          log.warn(`Skipped conversation with an unsafe id [${requestId}]:`, error);
+        }
+      }
+      const includesPersonaConversation = historyContainsPersonaConversation(chatHistorySnapshot)
+        || conversationSnapshots.some(isPersonaConversationSnapshot);
+      if (includesPersonaConversation) {
+        const notStrictLoopback = assertLocalRequest(request, { strictLoopback: true });
+        if (notStrictLoopback) return notStrictLoopback;
+      }
     }
     
     // Create a new zip file
@@ -96,6 +146,8 @@ async function POST_handler(request: NextRequest) {
           // single storage file as before.
           const data = storageKey === StorageKey.FLOWS
             ? await flowService.loadFlows()
+            : storageKey === StorageKey.CHAT_HISTORY
+              ? chatHistorySnapshot
             : await loadItem<unknown>(storageKey, null);
           if (data === null || (storageKey === StorageKey.FLOWS && Array.isArray(data) && data.length === 0)) {
             log.warn(`No data stored for key [${requestId}]:`, storageKey);
@@ -118,22 +170,12 @@ async function POST_handler(request: NextRequest) {
     // collection snapshots independently so mixed archives preserve both.
     if (selections.includes('chatHistory')) {
       try {
-        const conversations = await listCollectionItems<Record<string, unknown>>('conversations');
-        for (const conversation of conversations) {
-          const conversationId = conversation.conversationId;
-          if (typeof conversationId !== 'string') {
-            log.warn(`Skipped conversation without an id [${requestId}]`);
-            continue;
-          }
-          try {
-            assertSafeCollectionId(conversationId);
-            zip.file(
-              `storage/conversations/${conversationId}.json`,
-              JSON.stringify(conversation, null, 2),
-            );
-          } catch (error) {
-            log.warn(`Skipped conversation with an unsafe id [${requestId}]:`, error);
-          }
+        for (const conversation of conversationSnapshots) {
+          const conversationId = conversation.conversationId as string;
+          zip.file(
+            `storage/conversations/${conversationId}.json`,
+            JSON.stringify(conversation, null, 2),
+          );
         }
       } catch (error) {
         log.error(`Error adding conversations to backup [${requestId}]:`, error);

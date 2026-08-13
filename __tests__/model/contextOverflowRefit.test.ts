@@ -13,7 +13,7 @@
  * the full size, capturing any not-yet-captured result on the fly so the model
  * can read the whole thing back via read_resource.
  */
-import type { SharedState } from '@/backend/execution/flow/types';
+import type { FlowExecutionAuthority, SharedState } from '@/backend/execution/flow/types';
 import type OpenAI from 'openai';
 
 jest.mock('@/backend/execution/flow/FlowExecutor', () => ({
@@ -196,5 +196,105 @@ describe('context-length overflow refit', () => {
     expect(createCompletionMock).toHaveBeenCalledTimes(1);
     expect(writeRunResourceMock).not.toHaveBeenCalled();
     expect(result.success).toBe(false);
+  });
+
+  it('does not dispatch the provider when preflight outlives the current Persona lease', async () => {
+    let current = true;
+    const lost = new Error('Persona generation replaced during provider preflight');
+    const assertCurrent = jest.fn(async () => {
+      if (!current) throw lost;
+    });
+    const commitWhileCurrent = jest.fn(async <T>(task: () => Promise<T>): Promise<T> => {
+      if (!current) throw lost;
+      return task();
+    }) as unknown as jest.MockedFunction<NonNullable<FlowExecutionAuthority['commitWhileCurrent']>>;
+    resolveKeyMock.mockImplementationOnce(async () => {
+      current = false;
+      return 'sk-test';
+    });
+    seedState('conv-preflight');
+
+    const pending = ModelHandler.callModel({
+      modelId: 'model-1',
+      prompt: 'hello',
+      messages: [{ role: 'user', content: 'hello', id: 'u1', timestamp: 1 }],
+      iteration: 1,
+      maxIterations: 1,
+      nodeName: 'Node',
+      nodeId: 'node-1',
+      conversationId: 'conv-preflight',
+      executionAuthority: {
+        assertCurrent,
+        commitWhileCurrent,
+        signal: new AbortController().signal,
+      },
+      personaAttribution: { personaId: 'persona-1', activityId: 'activity-1' },
+    });
+
+    await expect(pending).rejects.toMatchObject({ code: 'flow_execution_authority_lost' });
+    expect(createCompletionMock).not.toHaveBeenCalled();
+    expect(writeRunResourceMock).not.toHaveBeenCalled();
+    expect(commitWhileCurrent).not.toHaveBeenCalled();
+  });
+
+  it('drops late provider media before resource creation when the Persona lease is lost in flight', async () => {
+    let releaseProvider!: () => void;
+    const providerGate = new Promise<void>((resolve) => { releaseProvider = resolve; });
+    let markStarted!: () => void;
+    const providerStarted = new Promise<void>((resolve) => { markStarted = resolve; });
+    createCompletionMock.mockImplementationOnce(async (input: { messages: OpenAI.ChatCompletionMessageParam[] }) => {
+      calls.push(input.messages);
+      markStarted();
+      await providerGate;
+      return {
+        completion: {
+          id: 'late-media',
+          object: 'chat.completion',
+          created: 3,
+          model: 'test-model',
+          choices: [
+            { index: 0, finish_reason: 'stop', logprobs: null, message: { role: 'assistant', content: '', refusal: null } },
+          ],
+        },
+        media: [{ type: 'image', mimeType: 'image/png', data: 'aGVsbG8=' }],
+      };
+    });
+
+    let current = true;
+    const lost = new Error('Persona generation replaced during provider call');
+    const assertCurrent = jest.fn(async () => {
+      if (!current) throw lost;
+    });
+    const commitWhileCurrent = jest.fn(async <T>(task: () => Promise<T>): Promise<T> => {
+      if (!current) throw lost;
+      return task();
+    }) as unknown as jest.MockedFunction<NonNullable<FlowExecutionAuthority['commitWhileCurrent']>>;
+    seedState('conv-late-media');
+
+    const pending = ModelHandler.callModel({
+      modelId: 'model-1',
+      prompt: 'draw',
+      messages: [{ role: 'user', content: 'draw', id: 'u1', timestamp: 1 }],
+      iteration: 1,
+      maxIterations: 1,
+      nodeName: 'Node',
+      nodeId: 'node-1',
+      conversationId: 'conv-late-media',
+      executionAuthority: {
+        assertCurrent,
+        commitWhileCurrent,
+        signal: new AbortController().signal,
+      },
+      personaAttribution: { personaId: 'persona-1', activityId: 'activity-1' },
+    });
+
+    await providerStarted;
+    current = false;
+    releaseProvider();
+
+    await expect(pending).rejects.toMatchObject({ code: 'flow_execution_authority_lost' });
+    expect(createCompletionMock).toHaveBeenCalledTimes(1);
+    expect(writeRunResourceMock).not.toHaveBeenCalled();
+    expect(commitWhileCurrent).not.toHaveBeenCalled();
   });
 });

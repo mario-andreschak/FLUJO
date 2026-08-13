@@ -703,6 +703,7 @@ describe('ClaudeSubscriptionAdapter — MCP App transcript lifecycle', () => {
 
     const { transcript } = await new ClaudeSubscriptionAdapter().createCompletion(
       baseInput({
+        conversationId: 'conversation-current',
         tools: [mcpAppTool],
         toolNameMap: {
           mcp_hashed_name: {
@@ -724,7 +725,8 @@ describe('ClaudeSubscriptionAdapter — MCP App transcript lifecycle', () => {
       undefined,
       expect.any(AbortSignal),
       'model',
-      undefined,
+      'conversation:conversation-current',
+      { conversationId: 'conversation-current' },
     );
     const toolMsg = transcript!.find(message => message.role === 'tool');
     expect(toolMsg?.ui).toEqual({

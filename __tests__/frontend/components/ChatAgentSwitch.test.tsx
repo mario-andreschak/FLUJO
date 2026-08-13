@@ -97,7 +97,12 @@ jest.mock('@/frontend/components/Chat/ChatMessages', () => ({
     <div data-testid="rendered-message-count">{messages?.length ?? 0}</div>
   ),
 }));
-jest.mock('@/frontend/components/Chat/ChatInput', () => ({ __esModule: true, default: () => null }));
+jest.mock('@/frontend/components/Chat/ChatInput', () => ({
+  __esModule: true,
+  default: ({ disabled }: { disabled?: boolean }) => (
+    <div data-testid="chat-input" data-disabled={String(Boolean(disabled))} />
+  ),
+}));
 jest.mock('@/frontend/components/Chat/DevCanvasDock', () => ({ __esModule: true, default: () => null }));
 jest.mock('@/frontend/components/Chat/LiveRunIndicator', () => ({ __esModule: true, default: () => null }));
 jest.mock('@/frontend/components/Chat/TodoDock', () => ({ __esModule: true, default: () => null }));
@@ -174,5 +179,23 @@ describe('Talk conversation Agent switch terminology', () => {
     expect(dialog).toHaveTextContent('that agent’s starting point');
     expect(within(dialog).getByRole('button', { name: 'Switch agent' })).toBeInTheDocument();
     expect(dialog).not.toHaveTextContent(/\bflow\b/i);
+  });
+
+  it('keeps the composer enabled for a Persona draft without a Flow id', async () => {
+    const personaConversation = {
+      id: 'conversation-current',
+      title: 'Ask Ada',
+      flowId: null,
+      personaId: 'persona-ada',
+      createdAt: 1,
+      updatedAt: 2,
+      messages: [],
+    };
+    mockListConversations.mockResolvedValueOnce([personaConversation]);
+    mockGetConversation.mockResolvedValueOnce(personaConversation);
+
+    render(<Chat />);
+
+    await waitFor(() => expect(screen.getByTestId('chat-input')).toHaveAttribute('data-disabled', 'false'));
   });
 });

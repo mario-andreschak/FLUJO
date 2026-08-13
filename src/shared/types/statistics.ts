@@ -1,3 +1,5 @@
+import type { PersonaAttribution } from './enduringAgent/enduringAgent';
+
 export const STATISTICS_SCHEMA_VERSION = 1 as const;
 
 /**
@@ -144,6 +146,7 @@ interface StatisticsEventBase {
   eventId: string;
   timestamp: string;
   runId: string;
+  personaAttribution?: PersonaAttribution;
 }
 
 export interface RunStartedStatisticsEvent extends StatisticsEventBase {
@@ -317,6 +320,7 @@ const PHASES = new Set<StatisticsPhase>(STATISTICS_PHASES);
 
 /** Correlation/revision identifiers are opaque and strictly bounded. */
 const SAFE_METADATA_ID = /^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,127}$/;
+const SAFE_PERSONA_ATTRIBUTION_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
@@ -404,6 +408,29 @@ function revisionIds(value: unknown): StatisticsRevisions | undefined {
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
+function personaAttribution(value: unknown): PersonaAttribution | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const source = value as Record<string, unknown>;
+  if (typeof source.personaId !== 'string' || !SAFE_PERSONA_ATTRIBUTION_ID.test(source.personaId)) {
+    return undefined;
+  }
+  const optionalId = (field: 'activityId' | 'behaviorRevisionId'): string | undefined => {
+    const id = source[field];
+    return typeof id === 'string' && SAFE_PERSONA_ATTRIBUTION_ID.test(id) ? id : undefined;
+  };
+  const activityId = optionalId('activityId');
+  const behaviorRevisionId = optionalId('behaviorRevisionId');
+  if ((source.activityId !== undefined && !activityId)
+    || (source.behaviorRevisionId !== undefined && !behaviorRevisionId)) {
+    return undefined;
+  }
+  return {
+    personaId: source.personaId,
+    ...(activityId ? { activityId } : {}),
+    ...(behaviorRevisionId ? { behaviorRevisionId } : {}),
+  };
+}
+
 function base(value: unknown): StatisticsEventBase & Record<string, unknown> | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const record = value as Record<string, unknown>;
@@ -438,11 +465,13 @@ function base(value: unknown): StatisticsEventBase & Record<string, unknown> | u
 export function sanitizeStatisticsEvent(value: unknown): StatisticsEvent | undefined {
   const record = base(value);
   if (!record || typeof record.type !== 'string') return undefined;
+  const attribution = personaAttribution(record.personaAttribution);
   const common = {
     schemaVersion: STATISTICS_SCHEMA_VERSION,
     eventId: record.eventId,
     timestamp: record.timestamp,
     runId: record.runId,
+    ...(attribution ? { personaAttribution: attribution } : {}),
   } as const;
   const errorClass = ERROR_CLASSES.has(record.errorClass as StatisticsErrorClass)
     ? record.errorClass as StatisticsErrorClass
@@ -574,6 +603,9 @@ export type StatisticsStatusFilter = StatisticsRunOutcome | 'paused' | 'skipped'
 
 /** All filter values are exact metadata identifiers; no display names are accepted. */
 export interface StatisticsFilters {
+  personaIds?: readonly string[];
+  activityIds?: readonly string[];
+  behaviorRevisionIds?: readonly string[];
   flowIds?: readonly string[];
   plannedExecutionIds?: readonly string[];
   sources?: readonly StatisticsRunSource[];
@@ -754,6 +786,7 @@ export interface StatisticsRunDetailRow {
   runId: string;
   day: string;
   timestamp: string;
+  personaAttribution?: PersonaAttribution;
   source?: StatisticsRunSource;
   flowId?: string;
   flowName?: string;

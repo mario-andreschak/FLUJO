@@ -25,6 +25,12 @@ import { writeRunResource } from '@/backend/services/runResources';
 import { DEFAULT_RUN_RESOURCE_SETTINGS } from '@/shared/types/runResources';
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
 import type { MCPResource, MCPResourceTemplate, MCPReadResourceResult } from '@/shared/types/mcp';
+import {
+  assertFlowExecutionCurrent,
+  commitFlowDurableMutation,
+  rethrowFlowExecutionAuthorityError,
+  type FlowDurableMutationContext,
+} from '@/backend/execution/flow/executionAuthority';
 
 const log = createLogger('backend/flow/execution/handlers/mcpResourceTools');
 
@@ -73,7 +79,7 @@ function filterTemplatesByEnabledResources(
 // Public interface
 // ---------------------------------------------------------------------------
 
-export interface MCPResourceToolContext {
+export interface MCPResourceToolContext extends FlowDurableMutationContext {
   conversationId?: string;
   nodeId?: string;
   ephemeral?: boolean;
@@ -345,8 +351,13 @@ export async function executeNativeReadResource(
   // 2. Call mcpService.readResource
   let readResult: { success: boolean; data?: MCPReadResourceResult; error?: string; statusCode?: number };
   try {
+    await assertFlowExecutionCurrent(ctx);
     readResult = await mcpService.readResource(owningServer, uri) as typeof readResult;
+    // Resource reads can block on a remote server.  Reject a late response
+    // before it is captured, emitted, or returned into a stale transcript.
+    await assertFlowExecutionCurrent(ctx);
   } catch (err) {
+    rethrowFlowExecutionAuthorityError(err);
     log.error('executeNativeReadResource: mcpService.readResource threw', { server: owningServer, uri, err });
     return {
       success: false,
@@ -414,51 +425,54 @@ export async function executeNativeReadResource(
 
     const mimeType = (contents[0] as { mimeType?: string })?.mimeType;
 
-    const written = await writeRunResource({
-      conversationId: ctx.conversationId,
-      mimeType,
-      kind,
-      data,
-      producedBy: {
-        source: 'capture',
-        nodeId: ctx.node?.nodeId,
-        nodeName: ctx.node?.nodeName,
-      },
-      origin: { server: owningServer, uri },
-    });
-
-    if ('skipped' in written) {
-      log.warn('executeNativeReadResource: auto-capture skipped by store cap', {
-        server: owningServer, uri, reason: written.skipped,
+    return await commitFlowDurableMutation(ctx, async () => {
+      const written = await writeRunResource({
+        conversationId: ctx.conversationId!,
+        mimeType,
+        kind,
+        data,
+        producedBy: {
+          source: 'capture',
+          nodeId: ctx.node?.nodeId,
+          nodeName: ctx.node?.nodeName,
+        },
+        origin: { server: owningServer, uri },
       });
-      // Fall back to inline truncated text
-      const fallback = hasBinary
-        ? `[binary resource ${mimeType ?? 'unknown'} from ${owningServer} — too large to store]`
-        : fullText.slice(0, TEXT_CAPTURE_THRESHOLD) + '\n…[truncated — store cap exceeded]';
-      return { success: true, data: { uri, server: owningServer, content: fallback } };
-    }
 
-    ctx.emit?.({
-      type: 'resource:write',
-      node: ctx.node,
-      server: owningServer,
-      uri: written.uri,
-      name: written.name,
-      mimeType: written.mimeType,
-      size: written.size,
-      source: 'capture',
+      if ('skipped' in written) {
+        log.warn('executeNativeReadResource: auto-capture skipped by store cap', {
+          server: owningServer, uri, reason: written.skipped,
+        });
+        // Fall back to inline truncated text
+        const fallback = hasBinary
+          ? `[binary resource ${mimeType ?? 'unknown'} from ${owningServer} — too large to store]`
+          : fullText.slice(0, TEXT_CAPTURE_THRESHOLD) + '\n…[truncated — store cap exceeded]';
+        return { success: true, data: { uri, server: owningServer, content: fallback } };
+      }
+
+      ctx.emit?.({
+        type: 'resource:write',
+        node: ctx.node,
+        server: owningServer,
+        uri: written.uri,
+        name: written.name,
+        mimeType: written.mimeType,
+        size: written.size,
+        source: 'capture',
+      });
+
+      const stub =
+        `[FLUJO stored the native resource "${uri}" from server "${owningServer}" as run resource ` +
+        `${written.uri} (${written.size} bytes, ${written.mimeType ?? written.kind}). ` +
+        `Use read_resource with URI ${written.uri} to retrieve the full content.]`;
+
+      log.info('executeNativeReadResource: auto-captured as run resource', {
+        server: owningServer, uri, runUri: written.uri, size: written.size,
+      });
+      return { success: true, data: { uri, server: owningServer, stub, runUri: written.uri } };
     });
-
-    const stub =
-      `[FLUJO stored the native resource "${uri}" from server "${owningServer}" as run resource ` +
-      `${written.uri} (${written.size} bytes, ${written.mimeType ?? written.kind}). ` +
-      `Use read_resource with URI ${written.uri} to retrieve the full content.]`;
-
-    log.info('executeNativeReadResource: auto-captured as run resource', {
-      server: owningServer, uri, runUri: written.uri, size: written.size,
-    });
-    return { success: true, data: { uri, server: owningServer, stub, runUri: written.uri } };
   } catch (err) {
+    rethrowFlowExecutionAuthorityError(err);
     log.error('executeNativeReadResource: auto-capture failed, returning inline fallback', { err });
     const fallback = hasBinary
       ? `[binary resource from ${owningServer} — capture failed]`

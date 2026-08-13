@@ -4,6 +4,8 @@ import { NextRequest } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { getSchedulerService } from '@/backend/services/scheduler';
 import { json } from '../../_helpers';
+import { assertLocalRequest } from '@/utils/http/localRequest';
+import { isPersonaControlledPlannedExecution } from '@/shared/types/plannedExecution';
 
 const log = createLogger('app/api/planned-executions/[id]/run/route');
 
@@ -27,7 +29,13 @@ async function POST_handler(
 
   try {
     const { id } = await params;
-    const result = await getSchedulerService().runNow(id);
+    const scheduler = getSchedulerService();
+    const execution = await scheduler.get(id);
+    if (isPersonaControlledPlannedExecution(execution)) {
+      const notLocal = assertLocalRequest(request, { strictLoopback: true });
+      if (notLocal) return notLocal;
+    }
+    const result = await scheduler.runNow(id);
     if (result.error || !result.record) {
       return json({ error: result.error ?? 'Failed to run' }, 404);
     }

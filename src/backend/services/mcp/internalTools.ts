@@ -55,6 +55,7 @@ import { compileSpec } from '@/backend/services/flow/compileFlow';
 import { explainCompiledFlow } from '@/backend/services/flow/explainFlow';
 import { truncate, MAX_FLOW_DESCRIPTION_CHARS } from '@/backend/services/flow/generationContext';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import {
   flushConversationLog,
   readConversationLog,
@@ -1263,6 +1264,7 @@ async function listPlannedExecutions(args: Record<string, unknown>): Promise<Cal
   const flowId = resolvedFlow?.id ?? flowRef;
   let entries = await getSchedulerService().list();
   entries = entries.filter((entry) =>
+    !entry.execution.personaId &&
     (!parsed.query || matchesPlannedExecutionSearch(entry, parsed.query)) &&
     (!states || states.some((state) => matchesPlannedExecutionStatus(entry, state as PlannedExecutionFilter))) &&
     (!triggerTypes || triggerTypes.includes(entry.execution.trigger.type)) &&
@@ -1302,6 +1304,10 @@ async function runPlannedExecution(args: Record<string, unknown>): Promise<CallT
   const id = String(args?.id ?? '').trim();
   if (!id) {
     return textResult({ error: 'Provide "id": a planned execution id (see list_planned_executions).' }, true);
+  }
+  const target = await resolvePlannedExecution(id);
+  if (target?.personaId) {
+    return textResult({ error: 'Persona planned executions require the trusted local control plane.' }, true);
   }
   const { record, error } = await getSchedulerService().runNow(id);
   if (error || !record) {
@@ -1398,6 +1404,9 @@ async function updatePlannedExecution(args: Record<string, unknown>): Promise<Ca
   const target = await resolvePlannedExecution(ref);
   if (!target) {
     return textResult({ error: `No planned execution with id or name "${ref}". Use list_planned_executions to see them.` }, true);
+  }
+  if (target.personaId) {
+    return textResult({ error: 'Persona planned executions require the trusted local control plane.' }, true);
   }
 
   const patch: Partial<Omit<PlannedExecution, 'id' | 'createdAt' | 'updatedAt'>> = {};
@@ -1501,6 +1510,9 @@ async function deletePlannedExecution(args: Record<string, unknown>): Promise<Ca
   if (!target) {
     return textResult({ error: `No planned execution with id or name "${ref}". Use list_planned_executions to see them.` }, true);
   }
+  if (target.personaId) {
+    return textResult({ error: 'Persona planned executions require the trusted local control plane.' }, true);
+  }
   const result = await getSchedulerService().delete(target.id);
   if (!result.success) {
     return textResult({ error: result.error ?? `Failed to delete "${target.name}".` }, true);
@@ -1537,15 +1549,19 @@ async function listConversations(args: Record<string, unknown>): Promise<CallToo
   const resolvedFlow = flowRef ? await resolveFlow(flowRef) : undefined;
   const flowId = resolvedFlow?.id ?? flowRef;
 
-  const stored = await listConversationSummaries();
+  const stored = (await listConversationSummaries()).filter((summary) => (
+    !summary.personaOwned
+    && !isPersonaOwnedConversationState(FlowExecutor.conversationStates.get(summary.id))
+  ));
   const summaries = stored.map((summary): ConversationSummary => {
     // Match the main conversations API: in-memory state wins while a run is in
     // flight, and a stored 'running' record with no event channel is interrupted.
     const live = FlowExecutor.conversationStates.get(summary.id);
     let status = live?.status ?? summary.status;
     if (status === 'running' && executionEventBus.currentSeq(summary.id) === 0) status = 'error';
+    const { personaOwned: _personaOwned, ...safeSummary } = summary;
     return {
-      ...summary,
+      ...safeSummary,
       title: live?.title ?? summary.title,
       flowId: live?.flowId ?? summary.flowId,
       ...(status ? { status } : {}),
@@ -1645,11 +1661,14 @@ async function readConversation(args: Record<string, unknown>): Promise<CallTool
     return textResult({ error: 'Provide "conversation": a conversation id (see list_conversations).' }, true);
   }
 
-  await flushConversationLog(id);
   const state = await loadConversationState(id);
   if (!state) {
     return textResult({ error: `No conversation with id "${id}". Use list_conversations to see the stored conversations.` }, true);
   }
+  if (isPersonaOwnedConversationState(state)) {
+    return textResult({ error: 'Persona conversations require the trusted local control plane.' }, true);
+  }
+  await flushConversationLog(id);
 
   const events = await readConversationLog(id);
   const projected = events ? projectMessages(events) : [];

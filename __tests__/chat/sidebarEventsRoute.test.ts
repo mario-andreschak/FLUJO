@@ -1,6 +1,11 @@
 import type { NextRequest } from 'next/server';
 import type { ExecutionEvent, RawExecutionEvent } from '@/shared/types/execution/events';
 
+const assertLocalRequestMock = jest.fn((_request?: unknown, _options?: unknown): Response | null => null);
+jest.mock('@/utils/http/localRequest', () => ({
+  assertLocalRequest: (request: unknown, options?: unknown) => assertLocalRequestMock(request, options),
+}));
+
 jest.mock('@/utils/encryption/lockGate', () => ({
   assertUnlocked: jest.fn(async () => undefined),
 }));
@@ -35,6 +40,10 @@ const readDataEvent = async (
 };
 
 describe('global sidebar lifecycle event stream', () => {
+  beforeEach(() => {
+    assertLocalRequestMock.mockReset().mockReturnValue(null);
+  });
+
   it('filters high-volume execution events before sending lifecycle changes', async () => {
     const abort = new AbortController();
     const request = {
@@ -66,5 +75,19 @@ describe('global sidebar lifecycle event stream', () => {
       abort.abort();
       await reader.cancel();
     }
+  });
+
+  it('rejects callers outside the selected exposure policy', async () => {
+    assertLocalRequestMock.mockReturnValueOnce(new Response('forbidden', { status: 403 }));
+    const request = {
+      nextUrl: new URL('https://flujo.example.com/v1/chat/events?scope=sidebar'),
+      headers: new Headers(),
+      signal: new AbortController().signal,
+    } as unknown as NextRequest;
+
+    const response = await GET(request);
+
+    expect(response.status).toBe(403);
+    expect(assertLocalRequestMock).toHaveBeenCalledWith(request);
   });
 });

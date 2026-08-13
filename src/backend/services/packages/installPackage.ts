@@ -61,6 +61,7 @@ import { getSchedulerService } from '@/backend/services/scheduler';
 import type { Model } from '@/shared/types/model';
 import type { ModelAdapter, ModelProvider } from '@/shared/types/model/provider';
 import type { Flow } from '@/shared/types/flow';
+import { isPersonaControlledPlannedExecution } from '@/shared/types/plannedExecution';
 import type { MCPServerConfig, EnvVarValue, MCPHeaderValue } from '@/shared/types/mcp';
 import { remapFlowModelBindings } from '@/utils/shared/flowModelReplacement';
 
@@ -389,6 +390,17 @@ export interface InstalledPackageInfo {
   entityCounts: { flows: number; models: number; servers: number; plannedExecutions: number };
 }
 
+export interface PackageUninstallInspection {
+  exists: boolean;
+  /** True when uninstall would delete at least one currently Persona-targeted plan. */
+  requiresPersonaControl: boolean;
+}
+
+export interface UninstallPackageOptions {
+  /** Set only by a route that already passed the strict-loopback boundary. */
+  allowPersonaPlannedExecutions?: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Deterministic ids (idempotent re-installs)
 // ---------------------------------------------------------------------------
@@ -417,6 +429,29 @@ export function deterministicExecutionId(packageName: string, name: string): str
   const base = `pkg-${slug(packageName)}-${slug(name)}`;
   const safe = base.replace(/[^A-Za-z0-9._:-]/g, '-');
   return safe.slice(0, 128);
+}
+
+function manifestContainsPersonaTarget(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const executions = (value as { plannedExecutions?: unknown }).plannedExecutions;
+  if (!Array.isArray(executions)) return false;
+  return executions.some((execution) => (
+    Boolean(execution)
+    && typeof execution === 'object'
+    && !Array.isArray(execution)
+    && isPersonaControlledPlannedExecution(execution)
+  ));
+}
+
+async function hasProtectedExecutionCollision(
+  manifest: Pick<FlujoPackage, 'name' | 'plannedExecutions'>,
+): Promise<boolean> {
+  const scheduler = getSchedulerService();
+  for (const execution of manifest.plannedExecutions ?? []) {
+    const existing = await scheduler.get(deterministicExecutionId(manifest.name, execution.name));
+    if (isPersonaControlledPlannedExecution(existing)) return true;
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -699,6 +734,17 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
     return s;
   }
 
+  // Defense in depth before schema parsing: registry content must never carry
+  // workspace-local Persona identity or Behavior binding fields. Keep this
+  // explicit check even though the shared schema rejects them, so a future
+  // parser/refactor cannot silently turn package install into a Persona target
+  // selection API.
+  if (manifestContainsPersonaTarget(raw)) {
+    const s = empty();
+    s.errors.push('Invalid package manifest: Persona-targeted planned executions are not portable.');
+    return s;
+  }
+
   // 2. Validate against the real #192 schema.
   const parsed = validatePackage(raw);
   if (!parsed.success || !parsed.data) {
@@ -746,6 +792,17 @@ export async function installPackage(input: InstallPackageInput): Promise<Instal
     const s = empty();
     s.dryRun = false;
     s.errors.push(...renameErrors);
+    return s;
+  }
+
+  // A Persona plan may occupy the deterministic id created by an older package
+  // install. Re-install must not update/disable that protected plan as an
+  // incidental conflict resolution. Preflight every id before installing any
+  // server/model/flow so denial is all-or-none.
+  if (await hasProtectedExecutionCollision(manifest)) {
+    const s = empty();
+    s.dryRun = false;
+    s.errors.push('Package install conflicts with a protected workspace execution.');
     return s;
   }
 
@@ -924,6 +981,43 @@ function isNotFoundError(error: string | undefined): boolean {
   return /not found|no planned execution with id|does not exist/i.test(error);
 }
 
+function plannedExecutionIdsRemovedByUninstall(record: PackageInstallRecord): string[] {
+  const ids = Array.isArray(record.entities?.plannedExecutions)
+    ? record.entities.plannedExecutions.filter((id): id is string => typeof id === 'string')
+    : [];
+  if (record.created === undefined) return [...new Set(ids)];
+  const createdIds = new Set(
+    Array.isArray(record.created.plannedExecutions)
+      ? record.created.plannedExecutions.filter((id): id is string => typeof id === 'string')
+      : [],
+  );
+  return [...new Set(ids.filter((id) => createdIds.has(id)))];
+}
+
+async function protectedPlannedExecutionsForUninstall(
+  record: PackageInstallRecord,
+): Promise<string[]> {
+  const scheduler = getSchedulerService();
+  const protectedIds: string[] = [];
+  for (const id of plannedExecutionIdsRemovedByUninstall(record)) {
+    if (isPersonaControlledPlannedExecution(await scheduler.get(id))) protectedIds.push(id);
+  }
+  return protectedIds;
+}
+
+/** Side-effect-free route preflight; never returns Persona ids or bindings. */
+export async function inspectPackageUninstall(
+  packageName: string,
+): Promise<PackageUninstallInspection> {
+  const file = await loadItem<PackageInstallsFile>(StorageKey.PACKAGE_INSTALLS, {});
+  const record = file[packageName];
+  if (!record) return { exists: false, requiresPersonaControl: false };
+  return {
+    exists: true,
+    requiresPersonaControl: (await protectedPlannedExecutionsForUninstall(record)).length > 0,
+  };
+}
+
 /**
  * Reverse a package install (issue #211).
  *
@@ -936,7 +1030,10 @@ function isNotFoundError(error: string | undefined): boolean {
  * Order: planned executions -> flows -> servers -> models (delete dependents
  * before dependencies; models last since flows may reference them).
  */
-export async function uninstallPackage(packageName: string): Promise<UninstallSummary> {
+export async function uninstallPackage(
+  packageName: string,
+  options: UninstallPackageOptions = {},
+): Promise<UninstallSummary> {
   const summary: UninstallSummary = {
     packageName,
     ok: true,
@@ -950,6 +1047,21 @@ export async function uninstallPackage(packageName: string): Promise<UninstallSu
   const record = file[packageName];
   if (!record) {
     // Unknown package / already uninstalled: clean no-op.
+    return summary;
+  }
+
+  // Re-evaluate inside the mutating service to close the route-preflight race
+  // and keep direct service callers fail-closed. No entity of any kind is
+  // removed before this all-or-none authorization decision.
+  const protectedExecutionIds = await protectedPlannedExecutionsForUninstall(record);
+  if (protectedExecutionIds.length > 0 && !options.allowPersonaPlannedExecutions) {
+    summary.ok = false;
+    summary.hasErrors = true;
+    summary.errors.push({
+      kind: 'plannedExecution',
+      id: 'protected',
+      reason: 'Persona-targeted planned executions require strict-loopback control.',
+    });
     return summary;
   }
 
@@ -2038,6 +2150,16 @@ async function installPlannedExecution(
   const id = deterministicExecutionId(packageName, pe.name);
   const displayName = effectiveName(executionRenames, pe.name, pe.name);
   const mappedFlowId = flowIdMap[pe.flowId] ?? pe.flowId;
+
+  // Re-check at the mutation boundary to close a concurrent retarget between
+  // the all-or-none orchestrator preflight and this create/update.
+  if (isPersonaControlledPlannedExecution(await scheduler.get(id))) {
+    const error = 'Package install conflicts with a protected workspace execution.';
+    summary.ok = false;
+    summary.errors.push(error);
+    summary.skipped.push({ type: 'plannedExecution', name: displayName, id, note: error });
+    return;
+  }
 
   // Strip manifest-local id/timestamps; force enabled:false; remap flowId.
   const { id: _localId, flowId: _fid, createdAt: _c, updatedAt: _u, ...rest } = pe as Record<string, unknown> & { id: string; flowId: string };

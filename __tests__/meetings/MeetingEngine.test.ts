@@ -3,6 +3,10 @@ import { randomUUID } from 'crypto';
 import type { FlowRunInput, FlowRunResult } from '@/backend/execution/flow/runFlow';
 import type { SharedState } from '@/backend/execution/flow/types';
 import { meetingEngine } from '@/backend/execution/meeting';
+import {
+  MEETING_START_INTENT_TTL_MS,
+  MeetingEngine,
+} from '@/backend/execution/meeting/MeetingEngine';
 import { meetingEventBus } from '@/backend/services/meetings/MeetingEventBus';
 import { deleteMeeting, getMeeting, saveMeeting } from '@/backend/services/meetings/store';
 import { readMeetingEvents } from '@/backend/services/meetings/eventLog';
@@ -141,6 +145,7 @@ describe('MeetingEngine', () => {
         userTurn: true,
         processNodeId: `${input.flowId}-start`,
       });
+      expect(input.executionAuthority).toBeDefined();
       expect((input.messages as FlujoChatMessage[]).at(-1)?.role).toBe('user');
       expect(String((input.messages as FlujoChatMessage[]).at(-1)?.content)).toContain('Opening brief');
     }
@@ -185,6 +190,83 @@ describe('MeetingEngine', () => {
     await meetingEngine.runToCompletion(meeting.id);
 
     expect(runFlowMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('serializes Flow-only starts across isolated process runtimes', async () => {
+    const meeting = await createMeeting(1);
+    let signalAdmitted!: () => void;
+    let releaseAdmission!: () => void;
+    const admitted = new Promise<void>((resolve) => { signalAdmitted = resolve; });
+    const admissionGate = new Promise<void>((resolve) => { releaseAdmission = resolve; });
+    const firstEngine = new MeetingEngine({
+      isolateProcessRuntime: true,
+      failpoints: {
+        afterAdmissionBeforeRunningPersist: async () => {
+          signalAdmitted();
+          await admissionGate;
+        },
+      },
+    });
+    const secondEngine = new MeetingEngine({ isolateProcessRuntime: true });
+
+    const firstStart = firstEngine.start(meeting.id);
+    await admitted;
+    const admittedRecord = await getMeeting(meeting.id);
+    expect(admittedRecord).toMatchObject({
+      status: 'draft',
+      personaReservationGeneration: 1,
+      personaReservationIntent: { generation: 1, state: 'reserving' },
+    });
+
+    const secondStart = await secondEngine.start(meeting.id);
+    expect(secondStart.status).toBe('draft');
+    expect(runFlowMock).not.toHaveBeenCalled();
+
+    releaseAdmission();
+    await firstStart;
+    const completed = await firstEngine.runToCompletion(meeting.id);
+    expect(completed.status).toBe('completed');
+    expect(completed.personaReservationGeneration).toBe(1);
+    expect(completed.personaReservationIntent).toBeUndefined();
+    expect(runFlowMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('never renews an already-expired meeting start intent', async () => {
+    const meeting = await createMeeting(1);
+    let signalAdmitted!: () => void;
+    let releaseAdmission!: () => void;
+    const admitted = new Promise<void>((resolve) => { signalAdmitted = resolve; });
+    const admissionGate = new Promise<void>((resolve) => { releaseAdmission = resolve; });
+    const engine = new MeetingEngine({
+      isolateProcessRuntime: true,
+      startIntentHeartbeatMs: 5,
+      failpoints: {
+        afterAdmissionBeforeRunningPersist: async () => {
+          signalAdmitted();
+          await admissionGate;
+        },
+      },
+    });
+
+    const startPromise = engine.start(meeting.id);
+    await admitted;
+    const admittedRecord = await getMeeting(meeting.id);
+    const originalExpiry = admittedRecord!.personaReservationIntent!.expiresAt;
+    expect(originalExpiry - admittedRecord!.personaReservationIntent!.createdAt)
+      .toBe(MEETING_START_INTENT_TTL_MS);
+    const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(originalExpiry + 1);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      const expired = await getMeeting(meeting.id);
+      expect(expired?.personaReservationIntent?.expiresAt).toBe(originalExpiry);
+      releaseAdmission();
+      await expect(startPromise).rejects.toThrow('start intent was lost');
+    } finally {
+      nowSpy.mockRestore();
+      releaseAdmission();
+      await startPromise.catch(() => undefined);
+    }
+    expect(runFlowMock).not.toHaveBeenCalled();
   });
 
   it('keeps cancellation terminal while in-flight participant calls unwind', async () => {

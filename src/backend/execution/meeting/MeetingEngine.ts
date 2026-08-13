@@ -1,6 +1,11 @@
 import { randomUUID } from 'crypto';
 
 import { runFlow, type FlowRunResult } from '@/backend/execution/flow/runFlow';
+import type { FlowExecutionAuthority } from '@/backend/execution/flow/types';
+import {
+  commitFlowDurableMutation,
+  rethrowFlowExecutionAuthorityError,
+} from '@/backend/execution/flow/executionAuthority';
 import { withConversationExecutionLock } from '@/backend/execution/flow/conversationExecutionLock';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
@@ -14,6 +19,7 @@ import { meetingEventBus } from '@/backend/services/meetings/MeetingEventBus';
 import { latestMeetingSequence, readMeetingEvents } from '@/backend/services/meetings/eventLog';
 import {
   createMeeting,
+  createMeetingRecord,
   getMeeting,
   saveMeeting,
 } from '@/backend/services/meetings/store';
@@ -34,6 +40,23 @@ import type {
 import { getStartNodeId } from '@/utils/shared/getStartNode';
 import { createLogger } from '@/utils/logger';
 import { getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
+import {
+  cancelMeetingPersonaReservations,
+  completeMeetingPersonaReservations,
+  meetingPersonaReservationAttemptId,
+  reserveMeetingPersonas,
+  startMeetingPersonaHeartbeat,
+  type MeetingPersonaHeartbeat,
+  type MeetingPersonaReservation,
+} from './personaReservations';
+import {
+  getBehaviorRevision,
+  getPersona,
+  getPersonaDeletionTombstone,
+  listBehaviorBindings,
+} from '@/backend/services/enduringAgents/store';
+import { withPersonaRuntimeLock } from '@/backend/services/enduringAgents/runtimeLock';
+import { withMeetingControlLock as withControlLock } from '@/backend/services/meetings/controlLock';
 
 const log = createLogger('backend/execution/meeting/MeetingEngine');
 
@@ -43,6 +66,33 @@ interface RuntimeHandle {
   abortController: AbortController;
   cancelRequested: boolean;
   cancelReason?: string;
+  personaReservations?: MeetingPersonaReservation[];
+  personaHeartbeat?: MeetingPersonaHeartbeat;
+  personaAdmissionStarted?: boolean;
+  personaReservationAttemptId?: string;
+  personaReservationGeneration?: number;
+  startIntentOwnerId: string;
+  startIntentHeartbeat?: MeetingStartIntentHeartbeat;
+}
+
+interface MeetingStartIntentHeartbeat {
+  lost(): boolean;
+  stop(): Promise<void>;
+}
+
+export interface MeetingEngineOptions {
+  /** Test/process-boundary harness: use a distinct process-local runtime map. */
+  isolateProcessRuntime?: boolean;
+  /** Test harness override for expiry/renewal races. */
+  startIntentHeartbeatMs?: number;
+  failpoints?: {
+    /** Pause after optimistic create validation, before locked admission. */
+    afterCreateValidationBeforePersist?: () => void | Promise<void>;
+    /** Simulate process loss without running reservation cleanup. */
+    afterPersonaClaimsBeforeRunningPersist?: () => void | Promise<void>;
+    /** Pause after durable admission (and Persona claims, when present). */
+    afterAdmissionBeforeRunningPersist?: () => void | Promise<void>;
+  };
 }
 
 interface ParticipantTurnOutcome {
@@ -66,32 +116,244 @@ declare global {
   // Next development bundles can instantiate this module more than once. A
   // process-global registry keeps the one-meeting/one-participant guarantees.
   var __flujo_meeting_runtimes: Map<string, RuntimeHandle> | undefined;
-  var __flujo_meeting_control_locks: Map<string, Promise<void>> | undefined;
+}
+
+async function withSortedPersonaRuntimeLocks<T>(
+  personaIds: readonly string[],
+  task: () => Promise<T>,
+): Promise<T> {
+  const ordered = [...new Set(personaIds)].sort();
+  const acquire = async (index: number): Promise<T> => {
+    if (index >= ordered.length) return task();
+    return withPersonaRuntimeLock(ordered[index], async (lock) => {
+      await lock.assertOwned();
+      return acquire(index + 1);
+    });
+  };
+  return acquire(0);
+}
+
+async function resolvePersonaBehaviorRevisionPins(
+  participants: CreateMeetingInput['participants'],
+): Promise<Map<string, string>> {
+  const pins = new Map<string, string>();
+  await Promise.all(participants.map(async (participant) => {
+    if (!participant.personaId) return;
+    if (participant.flowId) {
+      throw new Error(`Participant ${participant.name} must target one Flow or Persona, not both.`);
+    }
+    if (await getPersonaDeletionTombstone(participant.personaId)) {
+      throw new Error(`Participant Persona ${participant.personaId} is pending deletion.`);
+    }
+    const persona = await getPersona(participant.personaId);
+    if (!persona) throw new Error(`Participant Persona ${participant.personaId} was not found.`);
+    if (persona.provisioningState !== 'ready') {
+      throw new Error(`Participant Persona ${participant.personaId} is not ready.`);
+    }
+    if (persona.lifecycleState === 'disabled') {
+      throw new Error(`Participant Persona ${participant.personaId} is disabled.`);
+    }
+    const slotKey = participant.behaviorSlotKey ?? 'primary';
+    const matchingBindings = (await listBehaviorBindings(participant.personaId))
+      .filter((candidate) => candidate.slotKey === slotKey);
+    if (matchingBindings.length === 0) {
+      throw new Error(
+        `Participant Persona ${participant.personaId} has no Behavior for slot ${slotKey}.`,
+      );
+    }
+    if (matchingBindings.length > 1) {
+      throw new Error(
+        `Participant Persona ${participant.personaId} has multiple Behaviors for slot ${slotKey}.`,
+      );
+    }
+    const binding = matchingBindings[0];
+    const revision = await getBehaviorRevision(binding.activeRevisionId);
+    if (
+      binding.personaId !== participant.personaId
+      || binding.slotKey !== slotKey
+      || !revision
+      || revision.id !== binding.activeRevisionId
+      || revision.personaId !== participant.personaId
+      || revision.behaviorId !== binding.id
+      || revision.slotKey !== slotKey
+    ) {
+      throw new Error(`Participant Persona ${participant.personaId} has an invalid Behavior binding.`);
+    }
+    if (!getStartNodeId(revision.flowSnapshot)) {
+      throw new Error(`Participant Behavior ${revision.id} has no Start node.`);
+    }
+    pins.set(participant.personaId, revision.id);
+  }));
+  return pins;
 }
 
 const runtimes = global.__flujo_meeting_runtimes
   ?? (global.__flujo_meeting_runtimes = new Map());
-const controlLocks = global.__flujo_meeting_control_locks
-  ?? (global.__flujo_meeting_control_locks = new Map());
-
 function runtimeKey(meetingId: string): string {
   return workspaceCacheKey('meeting-runtime', meetingId);
 }
 
-async function withControlLock<T>(meetingId: string, task: () => Promise<T>): Promise<T> {
-  const key = runtimeKey(meetingId);
-  const predecessor = controlLocks.get(key) ?? Promise.resolve();
-  let release!: () => void;
-  const current = new Promise<void>((resolve) => { release = resolve; });
-  const tail = predecessor.catch(() => undefined).then(() => current);
-  controlLocks.set(key, tail);
-  await predecessor.catch(() => undefined);
-  try {
-    return await task();
-  } finally {
-    release();
-    if (controlLocks.get(key) === tail) controlLocks.delete(key);
+export const MEETING_START_INTENT_TTL_MS = 30_000;
+const MEETING_START_INTENT_HEARTBEAT_MS = 5_000;
+
+class SimulatedMeetingProcessCrashError extends Error {
+  constructor(cause: unknown) {
+    super('Simulated meeting process crash after Persona claims.', { cause });
+    this.name = 'SimulatedMeetingProcessCrashError';
   }
+}
+
+function ownsStartIntent(meeting: MeetingRecord, handle: RuntimeHandle): boolean {
+  const intent = meeting.personaReservationIntent;
+  return Boolean(
+    intent
+    && intent.ownerId === handle.startIntentOwnerId
+    && intent.generation === handle.personaReservationGeneration
+    && intent.attemptId === handle.personaReservationAttemptId,
+  );
+}
+
+function assertOwnedStartIntent(meeting: MeetingRecord, handle: RuntimeHandle): void {
+  if (!ownsStartIntent(meeting, handle) || meeting.personaReservationIntent!.expiresAt <= Date.now()) {
+    throw new Error('Meeting Persona start intent was lost to a newer runtime generation.');
+  }
+}
+
+function carryForwardOwnedStartIntent(
+  target: MeetingRecord,
+  durable: MeetingRecord,
+  handle: RuntimeHandle,
+): void {
+  if (handle.personaReservationGeneration === undefined) return;
+  assertOwnedStartIntent(durable, handle);
+  target.personaReservationGeneration = durable.personaReservationGeneration;
+  target.personaReservationIntent = structuredClone(durable.personaReservationIntent);
+}
+
+function runtimeOwnershipLost(handle: RuntimeHandle): boolean {
+  return Boolean(handle.startIntentHeartbeat?.lost() || handle.personaHeartbeat?.lost());
+}
+
+function throwIfRuntimeAborted(handle: RuntimeHandle): void {
+  if (!handle.abortController.signal.aborted) return;
+  throw handle.abortController.signal.reason ?? new Error('Meeting execution authority was lost.');
+}
+
+/**
+ * Compose the meeting generation fence with the optional Persona Activity
+ * fence. The control lock is always acquired before a Persona lock, and is
+ * held across authoritative Flow commits so neither owner can change midway.
+ */
+function meetingExecutionAuthority(
+  meetingId: string,
+  participantId: string,
+  handle: RuntimeHandle,
+): FlowExecutionAuthority {
+  const personaAuthority = handle.personaHeartbeat?.authorityFor(participantId);
+
+  const assertMeetingOwner = async (): Promise<void> => {
+    throwIfRuntimeAborted(handle);
+    const meeting = await getMeeting(meetingId);
+    if (!meeting) throw new Error(`Meeting ${meetingId} not found.`);
+    assertOwnedStartIntent(meeting, handle);
+  };
+
+  return {
+    signal: handle.abortController.signal,
+    assertCurrent: () => withControlLock(meetingId, async () => {
+      await assertMeetingOwner();
+      await personaAuthority?.assertCurrent();
+      await assertMeetingOwner();
+    }),
+    commitWhileCurrent: <T>(task: () => Promise<T>): Promise<T> =>
+      withControlLock(meetingId, async () => {
+        await assertMeetingOwner();
+        const commit = async (): Promise<T> => {
+          await assertMeetingOwner();
+          const result = await task();
+          await assertMeetingOwner();
+          return result;
+        };
+        if (personaAuthority?.commitWhileCurrent) {
+          return personaAuthority.commitWhileCurrent(commit);
+        }
+        await personaAuthority?.assertCurrent();
+        return commit();
+      }),
+    ...(personaAuthority?.commitPersonaMutation
+      ? {
+          commitPersonaMutation: <T>(task: Parameters<NonNullable<FlowExecutionAuthority['commitPersonaMutation']>>[0]) => (
+            withControlLock(meetingId, async () => {
+              await assertMeetingOwner();
+              const result = await personaAuthority.commitPersonaMutation!(task);
+              await assertMeetingOwner();
+              return result as T;
+            })
+          ),
+        }
+      : {}),
+  };
+}
+
+async function retireOwnedStartIntent(meetingId: string, handle: RuntimeHandle): Promise<void> {
+  if (handle.personaReservationGeneration === undefined) return;
+  await withControlLock(meetingId, async () => {
+    const meeting = await getMeeting(meetingId);
+    if (!meeting || !ownsStartIntent(meeting, handle)) return;
+    meeting.personaReservationIntent = undefined;
+    await saveMeeting(meeting);
+  });
+}
+
+function startMeetingIntentHeartbeat(
+  meetingId: string,
+  handle: RuntimeHandle,
+  intervalMs = MEETING_START_INTENT_HEARTBEAT_MS,
+): MeetingStartIntentHeartbeat {
+  let stopped = false;
+  let leaseLost = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let inFlight: Promise<void> | undefined;
+
+  const schedule = () => {
+    if (stopped || leaseLost) return;
+    timer = setTimeout(() => {
+      if (stopped || leaseLost) return;
+      inFlight = withControlLock(meetingId, async () => {
+        const meeting = await getMeeting(meetingId);
+        if (!meeting) {
+          throw new Error('Meeting Persona start intent was superseded.');
+        }
+        assertOwnedStartIntent(meeting, handle);
+        const now = Math.max(Date.now(), meeting.personaReservationIntent!.updatedAt);
+        meeting.personaReservationIntent = {
+          ...meeting.personaReservationIntent!,
+          updatedAt: now,
+          expiresAt: now + MEETING_START_INTENT_TTL_MS,
+        };
+        await saveMeeting(meeting);
+      })
+        .catch((error) => {
+          leaseLost = true;
+          handle.abortController.abort(error);
+        })
+        .finally(() => {
+          inFlight = undefined;
+          schedule();
+        });
+    }, intervalMs);
+    timer.unref?.();
+  };
+  schedule();
+
+  return {
+    lost: () => leaseLost,
+    stop: async () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      if (inFlight) await inFlight;
+    },
+  };
 }
 
 function errorMessage(error: unknown): string {
@@ -214,29 +476,33 @@ async function meetingUsage(meeting: MeetingRecord): Promise<UsageTotals | undef
 async function copyMediaForParticipant(
   media: ModelMediaPart[] | undefined,
   conversationId: string,
+  executionAuthority: FlowExecutionAuthority,
 ): Promise<ModelMediaPart[]> {
   if (!media?.length) return [];
   return Promise.all(media.map(async (part) => {
     if (!part.resourceUri) return { ...part };
     try {
-      const copied = await copyRunResourceToConversation({
-        uri: part.resourceUri,
-        conversationId,
-        name: part.name,
-        producedBy: { source: 'model-output' },
+      return await commitFlowDurableMutation({ executionAuthority }, async () => {
+        const copied = await copyRunResourceToConversation({
+          uri: part.resourceUri!,
+          conversationId,
+          name: part.name,
+          producedBy: { source: 'model-output' },
+        });
+        if (!copied || 'skipped' in copied) return { ...part };
+        const localPath = await getRunResourceLocalPath(copied.uri);
+        return {
+          ...part,
+          resourceUri: copied.uri,
+          ...(localPath ? { localPath } : {}),
+          url:
+            `/v1/chat/conversations/${encodeURIComponent(conversationId)}`
+            + `/resources/${encodeURIComponent(copied.id)}/content`
+            + `?workspace=${encodeURIComponent(getCurrentWorkspace())}`,
+        };
       });
-      if (!copied || 'skipped' in copied) return { ...part };
-      const localPath = await getRunResourceLocalPath(copied.uri);
-      return {
-        ...part,
-        resourceUri: copied.uri,
-        ...(localPath ? { localPath } : {}),
-        url:
-          `/v1/chat/conversations/${encodeURIComponent(conversationId)}`
-          + `/resources/${encodeURIComponent(copied.id)}/content`
-          + `?workspace=${encodeURIComponent(getCurrentWorkspace())}`,
-      };
     } catch (error) {
+      rethrowFlowExecutionAuthorityError(error);
       log.warn('Could not copy meeting media into participant conversation', {
         conversationId,
         resourceUri: part.resourceUri,
@@ -253,6 +519,7 @@ async function buildTurnMessage(
   round: MeetingRound,
   events: MeetingEvent[],
   startNodeId: string,
+  executionAuthority: FlowExecutionAuthority,
 ): Promise<FlujoChatMessage> {
   const visible = events.filter((event) =>
     event.seq > participant.lastDeliveredSeq
@@ -265,7 +532,11 @@ async function buildTurnMessage(
     .filter((line): line is string => Boolean(line));
   const media = (await Promise.all(visible.flatMap((event) => {
     if (event.type !== 'participant:spoke' && event.type !== 'private-message') return [];
-    return [copyMediaForParticipant(event.media, participant.conversationId)];
+    return [copyMediaForParticipant(
+      event.media,
+      participant.conversationId,
+      executionAuthority,
+    )];
   }))).flat();
   if ((round.number === 1 || participant.lastDeliveredSeq < 0) && meeting.openingMedia?.length) {
     media.push(...await copyMediaForParticipant(meeting.openingMedia, participant.conversationId));
@@ -332,15 +603,31 @@ async function runParticipantTurn(
       return { participantId: participant.id, turnId, content: '', actions: [] };
     }
     try {
-      const flow = await flowService.getFlow(participant.flowId);
-      if (!flow) throw new Error(`Flow ${participant.flowId} no longer exists.`);
+      const reservation = participant.personaId
+        ? handle.personaReservations?.find((item) => item.participantId === participant.id)
+        : undefined;
+      if (participant.personaId && !reservation) {
+        throw new Error(`Persona ${participant.personaId} is not reserved by this meeting.`);
+      }
+      const flow = reservation
+        ? structuredClone(reservation.revision.flowSnapshot)
+        : participant.flowId
+          ? await flowService.getFlow(participant.flowId)
+          : null;
+      if (!flow) throw new Error(`Flow ${participant.flowId ?? 'unknown'} no longer exists.`);
       const startNodeId = getStartNodeId(flow);
-      if (!startNodeId) throw new Error(`Flow ${participant.flowId} has no Start node.`);
+      if (!startNodeId) {
+        throw new Error(
+          `${reservation ? `Behavior ${reservation.revision.id}` : `Flow ${participant.flowId}`} has no Start node.`,
+        );
+      }
       const existing = await loadConversationState(participant.conversationId);
       if (existing) {
         const owner = existing.meetingParticipant;
         if (
-          existing.flowId !== participant.flowId
+          (!reservation && existing.flowId !== participant.flowId)
+          || (reservation
+            && existing.personaAttribution?.personaId !== participant.personaId)
           || owner?.meetingId !== meeting.id
           || owner.participantId !== participant.id
         ) {
@@ -351,16 +638,24 @@ async function runParticipantTurn(
       }
       const previousMessages = existing?.messages ?? [];
       const previousIds = new Set(previousMessages.map((message) => message.id));
+      const executionAuthority = meetingExecutionAuthority(
+        meeting.id,
+        participant.id,
+        handle,
+      );
       const turnMessage = await buildTurnMessage(
         meeting,
         participant,
         round,
         events,
         startNodeId,
+        executionAuthority,
       );
 
       const result = await runFlow({
-        flowId: participant.flowId,
+        ...(reservation
+          ? { flowDefinition: structuredClone(reservation.revision.flowSnapshot) }
+          : { flowId: participant.flowId! }),
         conversationId: participant.conversationId,
         title: `${meeting.title} · ${participant.name}`,
         mode: 'conversation',
@@ -372,6 +667,20 @@ async function runParticipantTurn(
         userTurn: true,
         source: 'meeting',
         abortSignal: handle.abortController.signal,
+        executionAuthority,
+        ...(reservation
+            ? {
+              personaAttribution: {
+                personaId: reservation.personaId,
+                activityId: reservation.claim.activity.id,
+                behaviorRevisionId: reservation.revision.id,
+              },
+              // This was frozen at reservation time from the exact Persona,
+              // pinned Role version, Behavior revision, and claimed Activity.
+              // Never re-resolve mutable identity metadata during a round.
+              personaInstructionContext: structuredClone(reservation.instructionContext),
+            }
+          : {}),
         meetingParticipant: {
           protocolVersion: 1,
           meetingId: meeting.id,
@@ -381,6 +690,9 @@ async function runParticipantTurn(
         },
         meetingTurn: { turnId, roundId: round.id, actions: [] },
       });
+      if (runtimeOwnershipLost(handle)) {
+        throw new Error('Meeting execution authority was lost.');
+      }
       if (result.status === 'error') {
         throw new Error(result.error?.message ?? 'Participant flow failed.');
       }
@@ -592,6 +904,33 @@ function latestTerminalEvent(events: MeetingEvent[]): TerminalMeetingEvent | und
     || event.type === 'meeting:error');
 }
 
+type MeetingReservationOutcome = 'completed' | 'cancelled' | 'error';
+
+async function durableMeetingReservationOutcome(
+  meetingId: string,
+  fallbackCancelled = false,
+): Promise<{ status: MeetingReservationOutcome; error?: string }> {
+  return withControlLock(meetingId, async () => {
+    const meeting = await getMeeting(meetingId);
+    if (!meeting) {
+      return {
+        status: fallbackCancelled ? 'cancelled' : 'error',
+        error: `Meeting ${meetingId} not found.`,
+      };
+    }
+    const terminal = latestTerminalEvent(await readMeetingEvents(meetingId));
+    if (terminal?.type === 'meeting:completed') return { status: 'completed' };
+    if (terminal?.type === 'meeting:cancelled') return { status: 'cancelled' };
+    if (terminal?.type === 'meeting:error') {
+      return { status: 'error', error: terminal.error };
+    }
+    if (meeting.status === 'completed') return { status: 'completed' };
+    if (meeting.status === 'cancelled') return { status: 'cancelled' };
+    if (meeting.status === 'error') return { status: 'error', error: meeting.error };
+    return { status: fallbackCancelled ? 'cancelled' : 'error', error: meeting.error };
+  });
+}
+
 /** Repair a snapshot when a durable terminal batch won the crash race. */
 function projectTerminalEvent(
   meeting: MeetingRecord,
@@ -635,40 +974,162 @@ function projectTerminalEvent(
   }
 }
 
+/**
+ * Persist a pin for pre-pin meeting snapshots and reject any restart whose
+ * active binding no longer names the revision originally admitted by the
+ * meeting. Recovery may use the old immutable snapshot or fail closed; it
+ * must never silently adopt a newly activated revision.
+ */
+function isActivePersonaParticipant(
+  participant: MeetingParticipant,
+): participant is MeetingParticipant & { personaId: string } {
+  return typeof participant.personaId === 'string'
+    && participant.status !== 'left'
+    && !participant.personaRetired
+    && !participant.personaArchived;
+}
+
+async function validateMeetingPersonaBehaviorPins(
+  meeting: MeetingRecord,
+): Promise<MeetingRecord> {
+  let changed = false;
+  await Promise.all(meeting.participants.map(async (participant) => {
+    if (!isActivePersonaParticipant(participant)) return;
+    const persona = await getPersona(participant.personaId);
+    if (!persona) throw new Error(`Participant Persona ${participant.personaId} was not found.`);
+    if (persona.provisioningState !== 'ready') {
+      throw new Error(`Participant Persona ${participant.personaId} is not ready.`);
+    }
+    if (persona.lifecycleState === 'disabled') {
+      throw new Error(`Participant Persona ${participant.personaId} is disabled.`);
+    }
+
+    const slotKey = participant.behaviorSlotKey ?? 'primary';
+    const matchingBindings = (await listBehaviorBindings(participant.personaId))
+      .filter((candidate) => candidate.slotKey === slotKey);
+    if (matchingBindings.length === 0) {
+      throw new Error(
+        `Participant Persona ${participant.personaId} has no Behavior for slot ${slotKey}.`,
+      );
+    }
+    if (matchingBindings.length > 1) {
+      throw new Error(
+        `Participant Persona ${participant.personaId} has multiple Behaviors for slot ${slotKey}.`,
+      );
+    }
+    const binding = matchingBindings[0];
+    if (binding.personaId !== participant.personaId || binding.slotKey !== slotKey) {
+      throw new Error(`Participant Persona ${participant.personaId} has an invalid Behavior binding.`);
+    }
+
+    const pinnedRevisionId = participant.behaviorRevisionId;
+    if (pinnedRevisionId && binding.activeRevisionId !== pinnedRevisionId) {
+      throw new Error(
+        `Meeting participant ${participant.id} is pinned to Behavior revision `
+        + `${pinnedRevisionId}, but slot ${slotKey} now points to ${binding.activeRevisionId}.`,
+      );
+    }
+    const revisionId = pinnedRevisionId ?? binding.activeRevisionId;
+    const revision = await getBehaviorRevision(revisionId);
+    if (
+      !revision
+      || revision.id !== revisionId
+      || revision.personaId !== participant.personaId
+      || revision.behaviorId !== binding.id
+      || revision.slotKey !== slotKey
+    ) {
+      throw new Error(`Participant Persona ${participant.personaId} has an invalid Behavior revision pin.`);
+    }
+    if (!getStartNodeId(revision.flowSnapshot)) {
+      throw new Error(`Participant Behavior ${revision.id} has no Start node.`);
+    }
+    if (!pinnedRevisionId) {
+      participant.behaviorRevisionId = revision.id;
+      changed = true;
+    }
+  }));
+  return changed ? saveMeeting(meeting) : meeting;
+}
+
 export class MeetingEngine {
-  async create(input: CreateMeetingInput): Promise<MeetingRecord> {
-    const resolvedFlows = await Promise.all(
-      input.participants.map((participant) => flowService.getFlow(participant.flowId)),
+  private readonly runtimeRegistry: Map<string, RuntimeHandle>;
+  private readonly failpoints: NonNullable<MeetingEngineOptions['failpoints']>;
+  private readonly startIntentHeartbeatMs: number;
+
+  constructor(options: MeetingEngineOptions = {}) {
+    this.runtimeRegistry = options.isolateProcessRuntime ? new Map() : runtimes;
+    this.failpoints = options.failpoints ?? {};
+    this.startIntentHeartbeatMs = Math.max(
+      1,
+      options.startIntentHeartbeatMs ?? MEETING_START_INTENT_HEARTBEAT_MS,
     );
-    const missingIndex = resolvedFlows.findIndex((flow) => !flow);
-    if (missingIndex >= 0) {
-      throw new Error(`Participant flow ${input.participants[missingIndex].flowId} was not found.`);
+  }
+
+  async create(input: CreateMeetingInput): Promise<MeetingRecord> {
+    // Validate/normalize the request before deriving a filesystem lock id. When
+    // the caller omitted an id, carry this generated id into the eventual
+    // persisted constructor so the admission lock protects the exact record.
+    const meetingId = createMeetingRecord(input).id;
+    const creationInput = input.id ? input : { ...input, id: meetingId };
+    const seenPersonaIds = new Set<string>();
+    for (const participant of input.participants) {
+      if (!participant.personaId) continue;
+      if (seenPersonaIds.has(participant.personaId)) {
+        throw new Error(`Duplicate Persona participant: ${participant.personaId}`);
+      }
+      seenPersonaIds.add(participant.personaId);
     }
-    const missingStartIndex = resolvedFlows.findIndex((flow) => !getStartNodeId(flow));
-    if (missingStartIndex >= 0) {
-      throw new Error(`Participant flow ${input.participants[missingStartIndex].flowId} has no Start node.`);
-    }
+    // This first pass gives callers prompt validation errors without entering a
+    // multi-owner critical section. It is deliberately repeated under the
+    // meeting -> sorted Persona lock order immediately before persistence.
+    await resolvePersonaBehaviorRevisionPins(input.participants);
+    await Promise.all(input.participants.map(async (participant) => {
+      if (participant.personaId) return;
+      if (!participant.flowId) {
+        throw new Error(`Participant ${participant.name} must target a Flow or Persona.`);
+      }
+      const flow = await flowService.getFlow(participant.flowId);
+      if (!flow) throw new Error(`Participant flow ${participant.flowId} was not found.`);
+      if (!getStartNodeId(flow)) {
+        throw new Error(`Participant flow ${participant.flowId} has no Start node.`);
+      }
+    }));
     for (const participant of input.participants) {
       if (!participant.conversationId) continue;
       if (await loadConversationState(participant.conversationId)) {
         throw new Error(`Conversation ${participant.conversationId} is already in use.`);
       }
     }
-    let meeting = await createMeeting(input);
-    const event = await meetingEventBus.emit(meeting.id, {
-      type: 'meeting:created',
-      audience: 'public',
-      title: meeting.title,
-      eventId: `${meeting.id}:created`,
-    });
-    meeting.lastEventSeq = event.seq;
-    meeting = await saveMeeting(meeting);
-    return meeting;
+    await this.failpoints.afterCreateValidationBeforePersist?.();
+
+    const personaIds = [...seenPersonaIds].sort();
+    return withControlLock(meetingId, () => withSortedPersonaRuntimeLocks(
+      personaIds,
+      async () => {
+        // A deletion intent is written under the same Persona lock before its
+        // meeting scan. Re-resolving here makes either ordering safe: creation
+        // commits first and is subsequently retired, or the tombstone wins and
+        // this admission fails without writing identifying evidence.
+        const personaBehaviorRevisionPins = await resolvePersonaBehaviorRevisionPins(
+          input.participants,
+        );
+        let meeting = await createMeeting(creationInput, personaBehaviorRevisionPins);
+        const event = await meetingEventBus.emit(meeting.id, {
+          type: 'meeting:created',
+          audience: 'public',
+          title: meeting.title,
+          eventId: `${meeting.id}:created`,
+        });
+        meeting.lastEventSeq = event.seq;
+        meeting = await saveMeeting(meeting);
+        return meeting;
+      },
+    ));
   }
 
   async start(meetingId: string): Promise<MeetingRecord> {
     const key = runtimeKey(meetingId);
-    const running = runtimes.get(key);
+    const running = this.runtimeRegistry.get(key);
     if (running) {
       return running.initialized;
     }
@@ -680,6 +1141,7 @@ export class MeetingEngine {
     const handle: RuntimeHandle = {
       abortController: new AbortController(),
       cancelRequested: false,
+      startIntentOwnerId: randomUUID(),
       initialized: new Promise<MeetingRecord>((resolve, reject) => {
         initializeRun = resolve;
         rejectInitialization = reject;
@@ -691,15 +1153,123 @@ export class MeetingEngine {
     };
     // Reserve synchronously before the first storage await. Concurrent start
     // requests now observe this handle instead of launching duplicate rounds.
-    runtimes.set(key, handle);
+    this.runtimeRegistry.set(key, handle);
     void handle.initialized.catch(() => undefined);
     void handle.promise.catch(() => undefined);
 
     let meeting: MeetingRecord | null;
     try {
+      const admission = await withControlLock(meetingId, async () => {
+        let candidate = await getMeeting(meetingId);
+        if (!candidate) throw new Error(`Meeting ${meetingId} not found.`);
+        if (
+          candidate.status === 'completed'
+          || candidate.status === 'cancelled'
+          || candidate.status === 'error'
+        ) {
+          throw new Error(`Meeting ${meetingId} is already ${candidate.status}.`);
+        }
+        const now = Date.now();
+        const priorIntent = candidate.personaReservationIntent;
+        if (priorIntent && priorIntent.expiresAt > now) {
+          return { candidate, ownedElsewhere: true as const };
+        }
+
+        const hasPersonaParticipants = candidate.participants.some(
+          isActivePersonaParticipant,
+        );
+        if (hasPersonaParticipants) {
+          candidate = await validateMeetingPersonaBehaviorPins(candidate);
+        }
+        const generation = Math.max(
+          candidate.personaReservationGeneration ?? 0,
+          priorIntent?.generation ?? 0,
+        ) + 1;
+        const attemptId = meetingPersonaReservationAttemptId(candidate, generation);
+        candidate.personaReservationGeneration = generation;
+        candidate.personaReservationIntent = {
+          generation,
+          attemptId,
+          ownerId: handle.startIntentOwnerId,
+          state: 'reserving',
+          createdAt: now,
+          updatedAt: now,
+          expiresAt: now + MEETING_START_INTENT_TTL_MS,
+        };
+        // Attribution from an expired generation must never look current while
+        // its successor is still waiting to assemble all Persona leases.
+        for (const participant of candidate.participants) {
+          if (isActivePersonaParticipant(participant)) participant.activityId = undefined;
+        }
+        candidate = await saveMeeting(candidate);
+        return {
+          candidate,
+          generation,
+          attemptId,
+          hasPersonaParticipants,
+          staleAttemptId: priorIntent?.attemptId,
+        };
+      });
+
+      if (admission.ownedElsewhere) {
+        if (this.runtimeRegistry.get(key) === handle) this.runtimeRegistry.delete(key);
+        initializeRun(admission.candidate);
+        settleRun(admission.candidate);
+        return admission.candidate;
+      }
+
+      const reservationCandidate = admission.candidate;
+      handle.personaReservationAttemptId = admission.attemptId;
+      handle.personaReservationGeneration = admission.generation;
+      handle.startIntentHeartbeat = startMeetingIntentHeartbeat(
+        meetingId,
+        handle,
+        this.startIntentHeartbeatMs,
+      );
+      if (admission.hasPersonaParticipants) {
+        handle.personaAdmissionStarted = true;
+        if (admission.staleAttemptId) {
+          await cancelMeetingPersonaReservations(
+            reservationCandidate,
+            admission.staleAttemptId,
+          );
+        }
+        handle.personaReservations = await reserveMeetingPersonas(reservationCandidate, {
+          signal: handle.abortController.signal,
+          attemptId: handle.personaReservationAttemptId,
+          onWaiting: async () => {
+            await withControlLock(meetingId, async () => {
+              const waiting = await getMeeting(meetingId);
+              if (!waiting || waiting.status === 'cancelled') return;
+              assertOwnedStartIntent(waiting, handle);
+              waiting.status = 'paused';
+              waiting.error = 'Waiting for Persona participants to become available.';
+              await saveMeeting(waiting);
+            });
+          },
+        });
+        handle.personaHeartbeat = startMeetingPersonaHeartbeat(
+          handle.personaReservations,
+          handle.abortController,
+        );
+        if (this.failpoints.afterPersonaClaimsBeforeRunningPersist) {
+          try {
+            await this.failpoints.afterPersonaClaimsBeforeRunningPersist();
+          } catch (failpointError) {
+            throw new SimulatedMeetingProcessCrashError(failpointError);
+          }
+          throw new SimulatedMeetingProcessCrashError(
+            new Error('Configured after-claims failpoint reached.'),
+          );
+        }
+      }
+      await this.failpoints.afterAdmissionBeforeRunningPersist?.();
       meeting = await withControlLock(meetingId, async () => {
         let current = await getMeeting(meetingId);
         if (!current) throw new Error(`Meeting ${meetingId} not found.`);
+        if (handle.personaReservationGeneration !== undefined) {
+          assertOwnedStartIntent(current, handle);
+        }
         const persistedEvents = await readMeetingEvents(current.id);
         const terminal = latestTerminalEvent(persistedEvents);
         if (terminal) {
@@ -789,6 +1359,30 @@ export class MeetingEngine {
         current.phase = current.roundNumber === 0 ? 'opening' : 'discussion';
         current.startedAt ??= Date.now();
         current.error = undefined;
+        if (handle.personaReservationGeneration !== undefined) {
+          const now = Math.max(Date.now(), current.personaReservationIntent!.updatedAt);
+          current.personaReservationIntent = {
+            ...current.personaReservationIntent!,
+            state: 'running',
+            updatedAt: now,
+            expiresAt: now + MEETING_START_INTENT_TTL_MS,
+          };
+        }
+        for (const reservation of handle.personaReservations ?? []) {
+          const participant = current.participants.find(
+            (candidate) => candidate.id === reservation.participantId,
+          );
+          if (!participant || participant.personaId !== reservation.personaId) {
+            throw new Error('Meeting Persona reservation no longer matches its participant.');
+          }
+          if (participant.behaviorRevisionId !== reservation.revision.id) {
+            throw new Error(
+              `Meeting participant ${participant.id} reservation does not match its pinned `
+              + `Behavior revision ${participant.behaviorRevisionId ?? 'missing'}.`,
+            );
+          }
+          participant.activityId = reservation.claim.activity.id;
+        }
         for (const participant of current.participants) {
           if (participant.status === 'running') participant.status = 'idle';
         }
@@ -805,14 +1399,51 @@ export class MeetingEngine {
       initializeRun(meeting);
 
       const loop = this.runLoop(meeting, handle)
-      .catch((error) => this.failMeeting(meetingId, error))
-      .finally(() => {
-        if (runtimes.get(key) === handle) runtimes.delete(key);
+      .catch((error) => this.failMeeting(meetingId, error, handle))
+      .finally(async () => {
+        await handle.startIntentHeartbeat?.stop();
+        await handle.personaHeartbeat?.stop();
+        if (handle.personaReservations?.length) {
+          const outcome = await durableMeetingReservationOutcome(
+            meetingId,
+            handle.cancelRequested,
+          );
+          await completeMeetingPersonaReservations(
+            handle.personaReservations,
+            outcome.status,
+            outcome.status === 'error' ? outcome.error : undefined,
+          );
+        }
+        await retireOwnedStartIntent(meetingId, handle);
+        if (this.runtimeRegistry.get(key) === handle) this.runtimeRegistry.delete(key);
       });
       void loop.then(settleRun, rejectRun);
       return meeting;
     } catch (error) {
-      if (runtimes.get(key) === handle) runtimes.delete(key);
+      const simulatedCrash = error instanceof SimulatedMeetingProcessCrashError;
+      await handle.startIntentHeartbeat?.stop();
+      await handle.personaHeartbeat?.stop();
+      if (!simulatedCrash && handle.personaReservations?.length) {
+        const outcome = await durableMeetingReservationOutcome(
+          meetingId,
+          handle.cancelRequested,
+        );
+        await completeMeetingPersonaReservations(
+          handle.personaReservations,
+          outcome.status,
+          outcome.status === 'error' ? outcome.error ?? errorMessage(error) : undefined,
+        );
+      } else if (!simulatedCrash && handle.personaAdmissionStarted) {
+        const queuedMeeting = await getMeeting(meetingId);
+        if (queuedMeeting?.participants.some(isActivePersonaParticipant)) {
+          await cancelMeetingPersonaReservations(
+            queuedMeeting,
+            handle.personaReservationAttemptId,
+          );
+        }
+      }
+      if (!simulatedCrash) await retireOwnedStartIntent(meetingId, handle);
+      if (this.runtimeRegistry.get(key) === handle) this.runtimeRegistry.delete(key);
       rejectInitialization(error);
       rejectRun(error);
       throw error;
@@ -824,7 +1455,7 @@ export class MeetingEngine {
     if (!existing) throw new Error(`Meeting ${meetingId} not found.`);
     if (existing.status === 'completed' || existing.status === 'cancelled') return existing;
     await this.start(meetingId);
-    const handle = runtimes.get(runtimeKey(meetingId));
+    const handle = this.runtimeRegistry.get(runtimeKey(meetingId));
     if (!handle) {
       const meeting = await getMeeting(meetingId);
       if (!meeting) throw new Error(`Meeting ${meetingId} not found.`);
@@ -834,7 +1465,7 @@ export class MeetingEngine {
   }
 
   async cancel(meetingId: string, reason = 'Cancelled by user.'): Promise<MeetingRecord> {
-    const handle = runtimes.get(runtimeKey(meetingId));
+    const handle = this.runtimeRegistry.get(runtimeKey(meetingId));
     if (handle) {
       handle.cancelRequested = true;
       handle.cancelReason = reason;
@@ -868,6 +1499,7 @@ export class MeetingEngine {
       meeting.status = 'cancelled';
       meeting.phase = 'completed';
       meeting.completedAt = Date.now();
+      meeting.personaReservationIntent = undefined;
       if (meeting.activeRound?.status === 'running') {
         meeting.activeRound.status = 'cancelled';
         meeting.activeRound.completedAt = Date.now();
@@ -886,7 +1518,7 @@ export class MeetingEngine {
   }
 
   isRunning(meetingId: string): boolean {
-    return runtimes.has(runtimeKey(meetingId));
+    return this.runtimeRegistry.has(runtimeKey(meetingId));
   }
 
   /**
@@ -897,16 +1529,32 @@ export class MeetingEngine {
    */
   async reconcileInterrupted(meetingId: string): Promise<MeetingRecord | null> {
     if (this.isRunning(meetingId)) return getMeeting(meetingId);
-    return withControlLock(meetingId, async () => {
+    let staleAttempt: { meeting: MeetingRecord; attemptId: string } | undefined;
+    const reconciled = await withControlLock(meetingId, async () => {
       const meeting = await getMeeting(meetingId);
       if (!meeting || this.isRunning(meetingId)) return meeting;
+      const intent = meeting.personaReservationIntent;
+      if (intent?.expiresAt && intent.expiresAt > Date.now()) {
+        // A healthy owner in another process is authoritative even though this
+        // process has no RuntimeHandle for it.
+        return meeting;
+      }
+      if (intent) {
+        staleAttempt = { meeting: structuredClone(meeting), attemptId: intent.attemptId };
+        meeting.personaReservationIntent = undefined;
+        for (const participant of meeting.participants) {
+          if (isActivePersonaParticipant(participant)) participant.activityId = undefined;
+        }
+      }
       const events = await readMeetingEvents(meeting.id);
       const terminal = latestTerminalEvent(events);
       if (terminal) {
         projectTerminalEvent(meeting, terminal, events);
         return saveMeeting(meeting);
       }
-      if (meeting.status !== 'running') return meeting;
+      if (meeting.status !== 'running') {
+        return intent ? saveMeeting(meeting) : meeting;
+      }
       if (projectCommittedRound(meeting, events)) {
         const reason = `Round ${meeting.activeRound!.number} committed before its projection snapshot was saved; the durable batch was recovered.`;
         meeting.status = 'paused';
@@ -946,6 +1594,10 @@ export class MeetingEngine {
       meeting.lastEventSeq = event.seq;
       return saveMeeting(meeting);
     });
+    if (staleAttempt) {
+      await cancelMeetingPersonaReservations(staleAttempt.meeting, staleAttempt.attemptId);
+    }
+    return reconciled;
   }
 
   private async emit(meeting: MeetingRecord, event: RawMeetingEvent): Promise<MeetingEvent> {
@@ -967,6 +1619,9 @@ export class MeetingEngine {
   }
 
   private async runLoop(meeting: MeetingRecord, handle: RuntimeHandle): Promise<MeetingRecord> {
+    if (runtimeOwnershipLost(handle)) {
+      throw new Error('A Persona reservation lease was lost before the meeting began.');
+    }
     let terminationReason = 'Maximum rounds reached.';
     let acceptedMotion = meeting.motions.find((motion) => motion.status === 'accepted');
     if (acceptedMotion) {
@@ -1042,6 +1697,9 @@ export class MeetingEngine {
       && !acceptedMotion
       && discussionRounds < meeting.policy.maxRounds
     ) {
+      if (runtimeOwnershipLost(handle)) {
+        throw new Error('A Persona reservation lease was lost during the meeting.');
+      }
       const eligible = discussionParticipants();
       if (!eligible.length) {
         terminationReason = 'No active discussion participants remain.';
@@ -1049,6 +1707,9 @@ export class MeetingEngine {
       }
 
       const outcome = await this.executeRound(meeting, eligible, 'discussion', handle);
+      if (runtimeOwnershipLost(handle)) {
+        throw new Error('A Persona reservation lease was lost during the meeting.');
+      }
       discussionRounds += 1;
       meeting = (await getMeeting(meeting.id)) ?? meeting;
       if (handle.cancelRequested || meeting.status === 'cancelled') break;
@@ -1071,6 +1732,9 @@ export class MeetingEngine {
     if (handle.cancelRequested || meeting.status === 'cancelled') {
       return this.cancel(meeting.id, handle.cancelReason ?? 'Cancelled by user.');
     }
+    if (runtimeOwnershipLost(handle)) {
+      throw new Error('A Persona reservation lease was lost during the meeting.');
+    }
     if (acceptedMotion?.kind === 'cancel') {
       return this.cancel(meeting.id, terminationReason);
     }
@@ -1090,6 +1754,9 @@ export class MeetingEngine {
           ) {
             return null;
           }
+          if (handle.personaReservationGeneration !== undefined) {
+            assertOwnedStartIntent(latest, handle);
+          }
           latest.phase = 'closing';
           await this.emit(latest, {
             type: 'meeting:closing',
@@ -1105,6 +1772,9 @@ export class MeetingEngine {
             participant.id === moderator.id)!;
           await this.executeRound(meeting, [closingModerator], 'closing', handle);
           meeting = (await getMeeting(meeting.id)) ?? meeting;
+          if (runtimeOwnershipLost(handle)) {
+            throw new Error('A Persona reservation lease was lost during the meeting.');
+          }
         }
       }
     }
@@ -1112,12 +1782,22 @@ export class MeetingEngine {
     if (handle.cancelRequested || meeting.status === 'cancelled') {
       return this.cancel(meeting.id, handle.cancelReason ?? 'Cancelled by user.');
     }
+    if (runtimeOwnershipLost(handle)) {
+      throw new Error('A Persona reservation lease was lost during the meeting.');
+    }
     const finalized = await withControlLock(meeting.id, async () => {
       const latest = (await getMeeting(meeting.id)) ?? meeting;
       if (latest.status === 'cancelled' || handle.cancelRequested) return latest;
+      if (handle.personaReservationGeneration !== undefined) {
+        assertOwnedStartIntent(latest, handle);
+      }
+      if (runtimeOwnershipLost(handle)) {
+        throw new Error('A Persona reservation lease was lost during the meeting.');
+      }
       latest.status = 'completed';
       latest.phase = 'completed';
       latest.completedAt = Date.now();
+      latest.personaReservationIntent = undefined;
       latest.activeRound = latest.activeRound
         ? { ...latest.activeRound, status: 'completed', completedAt: latest.activeRound.completedAt ?? Date.now() }
         : undefined;
@@ -1160,6 +1840,7 @@ export class MeetingEngine {
       ) {
         return false;
       }
+      if (durable) carryForwardOwnedStartIntent(meeting, durable, handle);
 
       // Freeze and publish the whole round-start batch under the control lock.
       // If cancellation arrives after entry it waits, so participant:start can
@@ -1242,6 +1923,7 @@ export class MeetingEngine {
       ) {
         return { spokeCount: 0, attemptedCount: outcomes.length, errorCount: 0 };
       }
+      if (durableAtCommit) carryForwardOwnedStartIntent(meeting, durableAtCommit, handle);
 
       let spokeCount = 0;
       let errorCount = 0;
@@ -1489,7 +2171,11 @@ export class MeetingEngine {
     }
   }
 
-  private async failMeeting(meetingId: string, error: unknown): Promise<MeetingRecord> {
+  private async failMeeting(
+    meetingId: string,
+    error: unknown,
+    handle?: RuntimeHandle,
+  ): Promise<MeetingRecord> {
     return withControlLock(meetingId, async () => {
       const meeting = await getMeeting(meetingId);
       if (!meeting) throw error;
@@ -1504,6 +2190,9 @@ export class MeetingEngine {
         || meeting.status === 'completed'
         || meeting.status === 'error'
       ) return meeting;
+      if (handle?.personaReservationGeneration !== undefined) {
+        assertOwnedStartIntent(meeting, handle);
+      }
       // A round boundary may have reached the event log before its projection
       // save failed and routed control here. Fold either the completed barrier
       // or its orphaned start before applying the one terminal error.
@@ -1515,6 +2204,7 @@ export class MeetingEngine {
       meeting.phase = 'completed';
       meeting.error = message;
       meeting.completedAt = Date.now();
+      meeting.personaReservationIntent = undefined;
       if (meeting.activeRound?.status === 'running') {
         meeting.activeRound.status = 'error';
         meeting.activeRound.error = message;

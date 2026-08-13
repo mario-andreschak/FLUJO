@@ -6,11 +6,13 @@ import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import { StorageKey } from '@/shared/types/storage';
 import { processChatCompletion } from '@/app/v1/chat/completions/chatCompletionService'; // Import the main service
 import { ChatCompletionRequest } from '@/app/v1/chat/completions/requestParser'; // Import request type
 import { flowService } from '@/backend/services/flow/index'; // Import flowService
 import { normalizeChatError } from '@/backend/execution/flow/normalizeError';
+import { resumePersonaFlowDispatch } from '@/backend/services/enduringAgents/personaDispatcher';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/debug/continue/route');
 
@@ -44,12 +46,79 @@ async function POST_handler(
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }
 
+    if (isPersonaOwnedConversationState(sharedState)) {
+      const notLoopback = assertLocalRequest(request);
+      if (notLoopback) return notLoopback;
+    }
+    if (sharedState.personaArchived) {
+      return NextResponse.json(
+        { error: 'An anonymized Persona archive cannot be resumed.' },
+        { status: 409 },
+      );
+    }
+    if (isPersonaOwnedConversationState(sharedState) && !sharedState.personaAttribution) {
+      return NextResponse.json({
+        error: 'Persona conversation attribution is incomplete; refusing an unfenced resume.',
+      }, { status: 409 });
+    }
+
     // 2. Continue is also "leave the debugger". Only a parked debugger run has
     // something meaningful to continue; accepting this on arbitrary states can
     // accidentally start a second execution for an already-running conversation.
     if (sharedState.status !== 'paused_debug') {
       log.warn(`Debug continue requested but conversation status is not 'paused_debug'`, { requestId, conversationId, status: sharedState.status });
       return NextResponse.json({ error: `Cannot continue, conversation status is '${sharedState.status}'` }, { status: 409 });
+    }
+
+    if (sharedState.personaAttribution) {
+      const { personaId, activityId, behaviorRevisionId } = sharedState.personaAttribution;
+      if (!activityId || !behaviorRevisionId) {
+        return NextResponse.json({
+          error: 'Persona conversation attribution is incomplete; refusing an unfenced resume.',
+        }, { status: 409 });
+      }
+      const dispatch = await resumePersonaFlowDispatch({
+        personaId,
+        activityId,
+        behaviorRevisionId,
+        conversationId,
+        reason: 'debug',
+        flowInputPatch: {
+          messages: sharedState.messages,
+          requireApproval: sharedState.requireApproval ?? false,
+          debug: false,
+          continueDebug: true,
+          userTurn: false,
+        },
+        prepare: async ({ installExecutionAuthority }) => {
+          installExecutionAuthority(sharedState);
+          sharedState.debugMode = false;
+          sharedState.debugPauseRequested = false;
+          sharedState.breakpoints = [];
+          sharedState.lastBreakNodeId = undefined;
+          sharedState.status = 'running';
+          sharedState.debugResumeAfterDetach = true;
+          FlowExecutor.conversationStates.set(conversationId, sharedState);
+          await persistConversationState(storageKey, sharedState);
+          return 'resume' as const;
+        },
+      });
+      const state = await loadConversationState(conversationId);
+      if (dispatch.state === 'error' || dispatch.state === 'cancelled') {
+        return NextResponse.json({
+          error: dispatch.error?.message ?? `Persona dispatch ended in ${dispatch.state}.`,
+          code: dispatch.error?.code ?? `persona_dispatch_${dispatch.state}`,
+          dispatch_id: dispatch.id,
+        }, { status: dispatch.state === 'cancelled' ? 409 : 500 });
+      }
+      return NextResponse.json({
+        status: state?.status ?? dispatch.outcome?.status ?? dispatch.state,
+        conversation_id: conversationId,
+        ...(state?.status === 'paused_debug' ? { debugState: state } : {}),
+        pendingToolCalls: state?.pendingToolCalls,
+        messages: state?.messages,
+        dispatch_id: dispatch.id,
+      }, { status: dispatch.state === 'queued' || dispatch.state === 'running' ? 202 : 200 });
     }
 
     // 3. Prepare data for processChatCompletion
@@ -118,7 +187,10 @@ async function POST_handler(
       error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : String(error)
     });
     // Attempt to update state with error status if possible
-     if (FlowExecutor.conversationStates.has(conversationId)) {
+     if (
+       FlowExecutor.conversationStates.has(conversationId)
+       && !isPersonaOwnedConversationState(FlowExecutor.conversationStates.get(conversationId))
+     ) {
         const state = FlowExecutor.conversationStates.get(conversationId)!;
         state.status = 'error';
         const errorMessage = error instanceof Error ? error.message : 'Unknown error during debug continue processing';

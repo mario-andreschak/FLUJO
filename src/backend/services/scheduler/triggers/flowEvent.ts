@@ -1,4 +1,5 @@
 import { FlowEventTriggerConfig } from '@/shared/types/plannedExecution';
+import { createHash } from 'crypto';
 import { createLogger } from '@/utils/logger';
 import { ArmedTrigger } from './types';
 import { getFlowRunEventBus, FlowRunEvent, isFlowSignalEvent } from '../flowRunEventBus';
@@ -26,7 +27,9 @@ export interface FlowEventDeps {
      *  the produced run records it as `parentConversationId` and the sidebar can
      *  nest the real per-run tree. */
     sourceConversationId?: string;
-  }) => void;
+    /** Stable upstream event identity for durable Persona mailbox admission. */
+    deliveryId?: string;
+  }) => void | Promise<void>;
   /**
    * Record a `skipped` run instead of firing (loop safety: the event-chain
    * depth reached `maxChainDepth`). Preserves the audit trail.
@@ -116,12 +119,13 @@ export function armFlowEvent(config: FlowEventTriggerConfig, deps: FlowEventDeps
 
   // Shared loop-safety gate: refuse to extend a chain at the cap, clamp the
   // cooldown, then fire at chainDepth + 1 (the new run is one hop deeper).
-  const attemptFire = (
+  const attemptFire = async (
     sourceDepth: number,
     summary: string,
     context: unknown,
     sourceConversationId?: string,
-  ): void => {
+    deliveryId?: string,
+  ): Promise<void> => {
     if (sourceDepth >= maxChainDepth) {
       const reason = `Flow-event chain reached the depth limit (${maxChainDepth}); not firing again`;
       log.info(reason);
@@ -133,11 +137,25 @@ export function armFlowEvent(config: FlowEventTriggerConfig, deps: FlowEventDeps
       log.debug(`Flow-event cooldown active (${config.minIntervalMs}ms); ignoring event`);
       return;
     }
+    const priorFireMs = lastFireMs;
     lastFireMs = now;
-    deps.onFire({ summary, context, chainDepth: sourceDepth + 1, sourceConversationId });
+    try {
+      await deps.onFire({
+        summary,
+        context,
+        chainDepth: sourceDepth + 1,
+        sourceConversationId,
+        deliveryId,
+      });
+    } catch (error) {
+      // Durable publication will replay after failed Persona admission. Do not
+      // let the process-local cooldown turn that retry into a false ACK.
+      if (lastFireMs === now) lastFireMs = priorFireMs;
+      throw error;
+    }
   };
 
-  const unsubscribe = getFlowRunEventBus().subscribe((event) => {
+  const unsubscribe = getFlowRunEventBus().subscribe(async (event) => {
     try {
       if (isTopicTrigger) {
         // A topic trigger reacts ONLY to signal-node emissions (issue #117);
@@ -151,7 +169,7 @@ export function armFlowEvent(config: FlowEventTriggerConfig, deps: FlowEventDeps
         if (!matchesOutput(event.payload)) {
           return;
         }
-        attemptFire(
+        await attemptFire(
           event.chainDepth,
           `Signal "${event.topic}"`,
           {
@@ -164,6 +182,9 @@ export function armFlowEvent(config: FlowEventTriggerConfig, deps: FlowEventDeps
             firedBy: event.firedBy,
           },
           event.conversationId,
+          `flow-event-${createHash('sha256')
+            .update(JSON.stringify(event))
+            .digest('hex')}`,
         );
         return;
       }
@@ -183,7 +204,7 @@ export function armFlowEvent(config: FlowEventTriggerConfig, deps: FlowEventDeps
         return;
       }
       const label = event.flowName ?? event.flowId;
-      attemptFire(
+      await attemptFire(
         event.chainDepth,
         `Flow "${label}" ${event.status}`,
         {
@@ -198,11 +219,20 @@ export function armFlowEvent(config: FlowEventTriggerConfig, deps: FlowEventDeps
           error: event.error,
         },
         event.conversationId,
+        event.deliveryId
+          ? `flow-event-${createHash('sha256').update(event.deliveryId).digest('hex')}`
+          : `flow-event-${createHash('sha256')
+            .update(`${event.executionId ?? event.flowId}\0${event.runId}\0${event.status}`)
+            .digest('hex')}`,
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log.warn(`Flow-event handling failed: ${message}`);
       deps.onError(message);
+      // Durable publishers retain their outbox receipt until downstream
+      // Persona admission succeeds. Legacy publish() observes/logs this
+      // rejected listener promise without changing its fire-and-forget API.
+      throw error;
     }
   });
 

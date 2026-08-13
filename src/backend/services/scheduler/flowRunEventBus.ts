@@ -50,6 +50,12 @@ export interface FlowRunEvent {
   chainDepth: number;
   /** ISO timestamp the run finished. */
   timestamp: string;
+  /**
+   * Stable identity of this terminal publication. Durable scheduler publishers
+   * reuse it when replaying a pending outbox receipt after a crash; Persona
+   * consumers derive their mailbox idempotency key from it.
+   */
+  deliveryId?: string;
 }
 
 /**
@@ -90,7 +96,10 @@ export function isFlowSignalEvent(event: FlowEvent): event is FlowSignalEvent {
   return event.kind === 'signal';
 }
 
-export type FlowRunEventListener = (event: FlowEvent) => void;
+// `unknown` intentionally preserves JavaScript's standard void-callback
+// compatibility (e.g. `event => array.push(event)` returns a number). Durable
+// publication still awaits promise-like listener results.
+export type FlowRunEventListener = (event: FlowEvent) => unknown;
 
 /**
  * Process-global emitter for terminal flow runs. Global-backed for the same
@@ -118,10 +127,31 @@ export class FlowRunEventBus {
     // dispatch can't mutate the set mid-iteration.
     for (const listener of [...this.listeners]) {
       try {
-        listener(event);
+        const result = listener(event);
+        if (
+          result !== null
+          && (typeof result === 'object' || typeof result === 'function')
+          && 'then' in result
+          && typeof result.then === 'function'
+        ) {
+          void Promise.resolve(result).catch((error) => {
+            log.warn('An asynchronous flow-run event listener threw:', error);
+          });
+        }
       } catch (error) {
         log.warn('A flow-run event listener threw:', error);
       }
+    }
+  }
+
+  /**
+   * Durable-publisher variant: wait until every listener has acknowledged the
+   * event. Persona flow-event listeners resolve only after mailbox admission,
+   * allowing the scheduler outbox receipt to be retired safely.
+   */
+  async publishDurably(event: FlowEvent): Promise<void> {
+    for (const listener of [...this.listeners]) {
+      await listener(event);
     }
   }
 

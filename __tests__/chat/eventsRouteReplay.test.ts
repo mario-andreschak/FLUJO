@@ -19,8 +19,16 @@ import type { NextRequest } from 'next/server';
 import type { ExecutionEvent, RawExecutionEvent } from '@/shared/types/execution/events';
 
 const assertUnlockedMock = jest.fn(async () => undefined);
+const assertLocalRequestMock = jest.fn((_request?: unknown, _options?: unknown): Response | null => null);
+const loadConversationStateMock = jest.fn();
 jest.mock('@/utils/encryption/lockGate', () => ({
   assertUnlocked: (...a: unknown[]) => assertUnlockedMock(...(a as [])),
+}));
+jest.mock('@/utils/http/localRequest', () => ({
+  assertLocalRequest: (request: unknown, options?: unknown) => assertLocalRequestMock(request, options),
+}));
+jest.mock('@/backend/execution/flow/loadConversationState', () => ({
+  loadConversationState: (...args: unknown[]) => loadConversationStateMock(...args),
 }));
 
 import { GET } from '@/app/v1/chat/conversations/[conversationId]/events/route';
@@ -129,7 +137,33 @@ const readUntilClosed = async (
 const emit = (conversationId: string, raw: Record<string, unknown>): ExecutionEvent =>
   executionEventBus.emit(conversationId, raw as unknown as RawExecutionEvent);
 
+beforeEach(() => {
+  assertLocalRequestMock.mockReset().mockReturnValue(null);
+  loadConversationStateMock.mockReset().mockResolvedValue({ conversationId: 'legacy' });
+});
+
 describe('events route SSE replay across runs', () => {
+  it('rejects a Persona event stream before replay or subscription', async () => {
+    loadConversationStateMock.mockResolvedValueOnce({
+      conversationId: 'persona-events',
+      personaAttribution: {
+        personaId: 'persona_1',
+        activityId: 'activity_1',
+        behaviorRevisionId: 'revision_1',
+      },
+    });
+    assertLocalRequestMock.mockReturnValueOnce(new Response('forbidden', { status: 403 }));
+    const abort = new AbortController();
+    const request = makeRequest('persona-events', 0, abort.signal);
+
+    const response = await GET(request, {
+      params: Promise.resolve({ conversationId: 'persona-events' }),
+    });
+
+    expect(response.status).toBe(403);
+    expect(assertLocalRequestMock).toHaveBeenCalledWith(request);
+  });
+
   it('clamps a fromSeq=0 replay to the latest run and stays open for the live run', async () => {
     const conv = 'conv-events-replay-clamp';
     // Run 1: started, produced a message, and FINISHED (errored/stopped).

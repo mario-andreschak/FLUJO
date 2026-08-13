@@ -116,6 +116,9 @@ type TabKey =
 type RankingMode = 'runs' | 'providers' | 'tools' | 'subflows';
 
 const IDENTIFIER_FILTERS: Array<{ field: ArrayFilterKey; labelKey: TranslationKey }> = [
+  { field: 'personaIds', labelKey: 'statistics.field.persona' },
+  { field: 'activityIds', labelKey: 'statistics.field.activity' },
+  { field: 'behaviorRevisionIds', labelKey: 'statistics.field.behaviorRevision' },
   { field: 'flowIds', labelKey: 'statistics.filter.flowIds' },
   { field: 'plannedExecutionIds', labelKey: 'statistics.filter.executionIds' },
   { field: 'modelIds', labelKey: 'statistics.filter.modelIds' },
@@ -609,6 +612,9 @@ export default function Statistics() {
   const activeFilters = useMemo(() => {
     const labels: Array<{ field: ArrayFilterKey; value: string; label: string }> = [];
     const fieldLabels: Record<ArrayFilterKey, string> = {
+      personaIds: t('statistics.field.persona'),
+      activityIds: t('statistics.field.activity'),
+      behaviorRevisionIds: t('statistics.field.behaviorRevision'),
       flowIds: t('statistics.field.flow'),
       plannedExecutionIds: t('statistics.field.execution'),
       sources: t('statistics.field.source'),
@@ -1473,6 +1479,15 @@ export default function Statistics() {
                       {row.kind === 'subflow' && row.waitMs !== undefined && ` · ${duration(row.waitMs)}`}
                       {row.errorClass && ` · ${row.errorClass}`}
                     </Typography>
+                    {row.kind === 'run' && row.personaAttribution && (
+                      <Typography variant="caption" color="text.secondary" component="div">
+                        {`${t('statistics.field.persona')}: ${row.personaAttribution.personaId}`}
+                        {row.personaAttribution.activityId
+                          && ` · ${t('statistics.field.activity')}: ${row.personaAttribution.activityId}`}
+                        {row.personaAttribution.behaviorRevisionId
+                          && ` · ${t('statistics.field.behaviorRevision')}: ${row.personaAttribution.behaviorRevisionId}`}
+                      </Typography>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}

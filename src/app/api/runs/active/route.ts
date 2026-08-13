@@ -4,6 +4,8 @@ import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import type { FlowInvocationSource } from '@/backend/execution/flow/types';
 import { flowService } from '@/backend/services/flow';
+import { assertLocalRequest } from '@/utils/http/localRequest';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 
 const log = createLogger('app/api/runs/active/route');
 
@@ -16,6 +18,9 @@ interface ActiveRun {
   startedAt?: string;
   source?: FlowInvocationSource;
   plannedExecutionId?: string;
+  personaId?: string;
+  activityId?: string;
+  behaviorRevisionId?: string;
 }
 
 /** Statuses that mean a run is holding resources / not yet terminal. A
@@ -45,7 +50,7 @@ function json(body: unknown, status = 200): Response {
  * origin. It NEVER returns prompt text, messages, resolved variables, or any
  * decrypted binding.
  */
-async function GET_handler(_request: Request) {
+async function GET_handler(request: Request) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
@@ -72,8 +77,13 @@ async function GET_handler(_request: Request) {
     };
 
     const active: ActiveRun[] = [];
+    let personaControlDenied: Response | null | undefined;
     for (const state of FlowExecutor.conversationStates.values()) {
       if (!state || !ACTIVE_STATUSES.has(state.status ?? '')) continue;
+      if (isPersonaOwnedConversationState(state)) {
+        personaControlDenied ??= assertLocalRequest(request, { strictLoopback: true });
+        if (personaControlDenied) continue;
+      }
       active.push({
         conversationId: state.conversationId,
         flowId: state.flowId,
@@ -85,6 +95,15 @@ async function GET_handler(_request: Request) {
             : undefined,
         source: state.source,
         ...(state.plannedExecutionId ? { plannedExecutionId: state.plannedExecutionId } : {}),
+        ...(state.personaAttribution?.personaId
+          ? { personaId: state.personaAttribution.personaId }
+          : {}),
+        ...(state.personaAttribution?.activityId
+          ? { activityId: state.personaAttribution.activityId }
+          : {}),
+        ...(state.personaAttribution?.behaviorRevisionId
+          ? { behaviorRevisionId: state.personaAttribution.behaviorRevisionId }
+          : {}),
       });
     }
 

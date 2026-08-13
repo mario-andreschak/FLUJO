@@ -34,13 +34,15 @@ export class ChatApiError extends Error {
 export interface CreateConversationPayload {
   id: string;
   title: string;
-  flowId: string;
+  flowId: string | null;
   createdAt: number;
   updatedAt: number;
   /** Quick-Chats (issue #61): seed an in-memory flow snapshot onto the new
    *  conversation instead of referencing a stored flow. `flowId` is the
    *  snapshot's id (quickchat-<id>). */
   flowSnapshot?: Flow;
+  /** Strict-local, non-authoritative target for a fresh Persona chat. */
+  personaTargetId?: string;
 }
 
 // Handlers for the live execution event stream (SSE).
@@ -223,6 +225,20 @@ class ChatService {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ flowId }),
+    });
+    return parse<ConversationListItem>(response);
+  }
+
+  /** PATCH a fresh conversation to a Persona target (never runtime authority). */
+  async updateConversationPersonaTarget(
+    id: string,
+    personaTargetId: string
+  ): Promise<ConversationListItem> {
+    log.debug('updateConversationPersonaTarget: Entering method', { conversationId: id, personaTargetId });
+    const response = await fetch(`${BASE}/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ personaTargetId }),
     });
     return parse<ConversationListItem>(response);
   }

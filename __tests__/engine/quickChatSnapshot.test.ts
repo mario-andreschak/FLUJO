@@ -33,11 +33,15 @@ function snapshotFlow(): ReactFlow {
   } as unknown as ReactFlow;
 }
 
-function snapshotState(currentNodeId?: string) {
+function snapshotState(
+  currentNodeId?: string,
+  flowSnapshot = snapshotFlow(),
+  conversationId = 'c1',
+) {
   return {
-    conversationId: 'c1',
-    flowId: 'quickchat-c1',
-    flowSnapshot: snapshotFlow(),
+    conversationId,
+    flowId: flowSnapshot.id,
+    flowSnapshot,
     currentNodeId,
     messages: [],
   } as any;
@@ -70,6 +74,34 @@ describe('PocketflowEngine — quick-chat snapshot resolution (issue #61)', () =
     const h = await engine.resolveHandoff(snapshotState(START), `${START}-${PROCESS}`);
     expect(h.isSuccessorEdge).toBe(true);
     expect(h.targetNodeId).toBe(PROCESS);
+    expect(getFlow).not.toHaveBeenCalled();
+  });
+
+  it('isolates concurrent same-id snapshot revisions in the compiled graph cache', async () => {
+    const v1 = snapshotFlow();
+    const startV2 = '2d65336e-7d64-4fd6-b9a7-670e4e75e0b8';
+    const processV2 = '65c1fb27-101a-432e-8086-9ef603c902df';
+    const finishV2 = '5e21f4f2-1b73-44b0-a173-52c267377c5c';
+    const v2 = {
+      ...snapshotFlow(),
+      name: 'Same root id, revision 2',
+      nodes: [
+        { id: startV2, type: 'start', position: { x: 0, y: 0 }, data: { label: 'Start v2', type: 'start', properties: {} } },
+        { id: processV2, type: 'process', position: { x: 0, y: 1 }, data: { label: 'Chat v2', type: 'process', properties: {} } },
+        { id: finishV2, type: 'finish', position: { x: 0, y: 2 }, data: { label: 'Finish v2', type: 'finish', properties: {} } },
+      ],
+      edges: [
+        { id: `${startV2}-${processV2}`, source: startV2, target: processV2, data: { edgeType: 'standard' } },
+        { id: `${processV2}-${finishV2}`, source: processV2, target: finishV2, data: { edgeType: 'standard' } },
+      ],
+    } as unknown as ReactFlow;
+
+    await expect(engine.resolveNode(snapshotState(PROCESS, v1, 'persona-v1')))
+      .resolves.toMatchObject({ id: PROCESS, type: 'process' });
+    await expect(engine.resolveNode(snapshotState(processV2, v2, 'persona-v2')))
+      .resolves.toMatchObject({ id: processV2, type: 'process' });
+    await expect(engine.resolveNode(snapshotState(PROCESS, v1, 'persona-v1')))
+      .resolves.toMatchObject({ id: PROCESS, type: 'process' });
     expect(getFlow).not.toHaveBeenCalled();
   });
 

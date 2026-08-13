@@ -121,6 +121,7 @@ describe('armUrlWatch', () => {
     jest.advanceTimersByTime(1100);
     await flush();
     expect(deps.onFire).toHaveBeenCalledTimes(1);
+    const failedDeliveryId = deps.onFire.mock.calls[0][0].deliveryId;
     expect(getState().lastHash).toBe(primedHash); // unchanged
     expect(getState().pendingFailures).toBe(1);
 
@@ -128,6 +129,7 @@ describe('armUrlWatch', () => {
     jest.advanceTimersByTime(1100);
     await flush();
     expect(deps.onFire).toHaveBeenCalledTimes(2);
+    expect(deps.onFire.mock.calls[1][0].deliveryId).not.toBe(failedDeliveryId);
     expect(getState().lastHash).not.toBe(primedHash); // committed after success
     expect(getState().pendingFailures).toBe(0);
 

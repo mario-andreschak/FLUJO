@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import {
   _setStatisticsDirForTests,
+  anonymizeStatisticsPersonaAttribution,
   appendStatisticsEvent,
   createStatisticsEvent,
   flushStatisticsEvents,
@@ -11,6 +12,7 @@ import {
   _clearStatisticsAggregateCacheForTests,
   aggregateStatistics,
   parseStatisticsRequest,
+  statisticsDetails,
   statisticsPercentile,
 } from '@/backend/services/statistics/aggregation';
 
@@ -182,6 +184,115 @@ describe('statistics aggregation', () => {
     });
   });
 
+  it('filters attributed runs and returns their immutable Persona provenance in details', async () => {
+    const personaAttribution = {
+      personaId: 'persona-1',
+      activityId: 'activity-1',
+      behaviorRevisionId: 'behavior-revision-1',
+    };
+    for (const [runId, attribution] of [
+      ['run-persona', personaAttribution],
+      ['run-other', { personaId: 'persona-2', activityId: 'activity-2', behaviorRevisionId: 'behavior-revision-2' }],
+    ] as const) {
+      await appendStatisticsEvent(createStatisticsEvent({
+        type: 'run.started',
+        runId,
+        timestamp: '2026-07-30T11:00:00.000Z',
+        source: 'api',
+        flow: { id: 'flow-attributed' },
+        personaAttribution: attribution,
+      }));
+      await appendStatisticsEvent(createStatisticsEvent({
+        type: 'run.finished',
+        runId,
+        timestamp: '2026-07-30T11:00:01.000Z',
+        source: 'api',
+        flow: { id: 'flow-attributed' },
+        outcome: 'completed',
+        durationMs: 1,
+        personaAttribution: attribution,
+      }));
+    }
+
+    const filters = {
+      personaIds: ['persona-1'],
+      activityIds: ['activity-1'],
+      behaviorRevisionIds: ['behavior-revision-1'],
+    } as const;
+    const aggregate = await aggregateStatistics({
+      range: { from: '2026-07-30', to: '2026-07-30' },
+      filters,
+    });
+    const details = await statisticsDetails({
+      range: { from: '2026-07-30', to: '2026-07-30' },
+      filters,
+      kind: 'runs',
+    });
+
+    expect(aggregate.summary.runs).toBe(1);
+    expect(details.rows).toEqual([
+      expect.objectContaining({
+        kind: 'run',
+        runId: 'run-persona',
+        personaAttribution,
+      }),
+    ]);
+  });
+
+  it('removes an anonymized Persona from statistics filters and detail provenance only', async () => {
+    const target = {
+      personaId: 'persona-1',
+      activityId: 'activity-1',
+      behaviorRevisionId: 'behavior-revision-1',
+    };
+    const other = {
+      personaId: 'persona-2',
+      activityId: 'activity-2',
+      behaviorRevisionId: 'behavior-revision-2',
+    };
+    for (const [runId, personaAttribution] of [
+      ['run-target', target],
+      ['run-other', other],
+    ] as const) {
+      await appendStatisticsEvent(createStatisticsEvent({
+        type: 'run.started',
+        runId,
+        timestamp: '2026-07-30T11:00:00.000Z',
+        source: 'api',
+        flow: { id: 'flow-attributed' },
+        personaAttribution,
+      }));
+      await appendStatisticsEvent(createStatisticsEvent({
+        type: 'run.finished',
+        runId,
+        timestamp: '2026-07-30T11:00:01.000Z',
+        source: 'api',
+        flow: { id: 'flow-attributed' },
+        outcome: 'completed',
+        durationMs: 1,
+        personaAttribution,
+      }));
+    }
+
+    await anonymizeStatisticsPersonaAttribution(target.personaId);
+    const filtered = await statisticsDetails({
+      range: { from: '2026-07-30', to: '2026-07-30' },
+      filters: { personaIds: [target.personaId] },
+      kind: 'runs',
+    });
+    const all = await statisticsDetails({
+      range: { from: '2026-07-30', to: '2026-07-30' },
+      filters: {},
+      kind: 'runs',
+    });
+
+    expect(filtered.rows).toEqual([]);
+    expect(all.rows.find((row) => row.runId === 'run-target')).not.toHaveProperty('personaAttribution');
+    expect(all.rows.find((row) => row.runId === 'run-other')).toEqual(expect.objectContaining({
+      personaAttribution: other,
+    }));
+  });
+
   it('invalidates a cached response when a selected partition changes', async () => {
     const request = { range: { from: '2026-07-30', to: '2026-07-30' } } as const;
     const empty = await aggregateStatistics(request);
@@ -201,9 +312,17 @@ describe('statistics aggregation', () => {
       range: { from: '2026-07-24', to: '2026-07-30' },
       filters: { providerIds: ['p1', 'p2'] },
     });
+    expect(parseStatisticsRequest(new URLSearchParams(
+      'personaId=persona-1&activityId=activity-1&behaviorRevisionId=behavior-revision-1',
+    )).filters).toEqual({
+      personaIds: ['persona-1'],
+      activityIds: ['activity-1'],
+      behaviorRevisionIds: ['behavior-revision-1'],
+    });
     expect(() => parseStatisticsRequest(new URLSearchParams('from=2026-02-30'))).toThrow('valid UTC calendar date');
     expect(() => parseStatisticsRequest(new URLSearchParams('from=2026-01-01&to=2026-07-30'))).toThrow('limited to 90 days');
     expect(() => parseStatisticsRequest(new URLSearchParams('credentialId=sk-secret'))).toThrow('Invalid credentialId filter');
+    expect(() => parseStatisticsRequest(new URLSearchParams('personaId=../unsafe'))).toThrow('Invalid personaId filter');
     expect(() => parseStatisticsRequest(new URLSearchParams('raw=true'))).toThrow('Unknown statistics query parameter');
   });
 

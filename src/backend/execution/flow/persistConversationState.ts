@@ -45,6 +45,25 @@ export async function persistConversationState(key: StorageKey, state: SharedSta
     log.info(`Refusing to persist state for deleted conversation ${state.conversationId} (key ${key}).`);
     return Promise.resolve();
   }
-  await saveItemBackend(key, { ...state, executionTrace: undefined, emit: undefined });
+  if (state.personaAttribution && !state.executionAuthority) {
+    throw new Error(
+      'Persona-attributed conversation persistence requires current execution authority.',
+    );
+  }
+  // Persona-attributed work may persist only while its exact Activity fence is
+  // current. The capability itself remains runtime-only and is stripped from
+  // the durable snapshot below.
+  const writeSnapshot = () => saveItemBackend(key, {
+      ...state,
+      executionTrace: undefined,
+      emit: undefined,
+      executionAuthority: undefined,
+    });
+  if (state.executionAuthority?.commitWhileCurrent) {
+    await state.executionAuthority.commitWhileCurrent(writeSnapshot);
+  } else {
+    await state.executionAuthority?.assertCurrent();
+    await writeSnapshot();
+  }
   await persistConversationSummary(idFromKey, state);
 }

@@ -27,6 +27,7 @@ import path from 'path';
 import { createLogger } from '@/utils/logger';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { listConversationSummaries } from '@/backend/execution/flow/conversationSummaryStore';
 import type { ConversationSummary } from '@/backend/execution/flow/conversationSummaryStore';
@@ -163,6 +164,7 @@ async function GET_handler(request: NextRequest) {
   if (_lock) return _lock;
   const notLocal = assertLocalRequest(request);
   if (notLocal) return notLocal;
+  const personaControlAllowed = assertLocalRequest(request) === null;
 
   const url = new URL(request.url);
   const rawRoot = (url.searchParams.get('root') ?? '').trim();
@@ -185,7 +187,13 @@ async function GET_handler(request: NextRequest) {
   }
 
   try {
-    const summaries = await listConversationSummaries();
+    const summaries = (await listConversationSummaries()).filter((summary) => (
+      personaControlAllowed
+      || (
+        !summary.personaOwned
+        && !isPersonaOwnedConversationState(FlowExecutor.conversationStates.get(summary.id))
+      )
+    ));
     const resolved = summaries.map(resolveConversation);
     const byId = new Map(resolved.map((item) => [item.id, item]));
 

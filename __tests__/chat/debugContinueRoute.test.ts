@@ -32,6 +32,11 @@ jest.mock('@/app/v1/chat/completions/chatCompletionService', () => ({
   processChatCompletion: jest.fn(),
 }));
 
+const resumePersonaFlowDispatchMock = jest.fn();
+jest.mock('@/backend/services/enduringAgents/personaDispatcher', () => ({
+  resumePersonaFlowDispatch: (...args: unknown[]) => resumePersonaFlowDispatchMock(...args),
+}));
+
 import { POST } from '@/app/v1/chat/conversations/[conversationId]/debug/continue/route';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { processChatCompletion } from '@/app/v1/chat/completions/chatCompletionService';
@@ -88,6 +93,7 @@ beforeEach(() => {
     };
     return Response.json({ status: 'completed' });
   });
+  resumePersonaFlowDispatchMock.mockReset();
 });
 
 describe('debug continue route', () => {
@@ -129,5 +135,50 @@ describe('debug continue route', () => {
     expect(response.status).toBe(409);
     expect(processChatCompletionMock).not.toHaveBeenCalled();
     expect(persistMock).not.toHaveBeenCalled();
+  });
+
+  it('reacquires a Persona Activity through the dispatcher and never uses the legacy resume', async () => {
+    const state = seedState({
+      personaAttribution: {
+        personaId: 'persona_test',
+        activityId: 'activity_test',
+        behaviorRevisionId: 'revision_test',
+      },
+    });
+    resumePersonaFlowDispatchMock.mockImplementation(async (input: any) => {
+      await input.prepare({
+        dispatch: { id: 'dispatch_test' },
+        executionAuthority: { signal: new AbortController().signal, assertCurrent: jest.fn() },
+        installExecutionAuthority(target: SharedState) {
+          Object.defineProperty(target, 'executionAuthority', {
+            value: { signal: new AbortController().signal, assertCurrent: jest.fn() },
+            enumerable: false,
+            configurable: true,
+          });
+        },
+      });
+      state.status = 'completed';
+      return {
+        id: 'dispatch_test',
+        personaId: 'persona_test',
+        state: 'completed',
+        outcome: { status: 'completed' },
+      };
+    });
+
+    const response = await continueRun();
+
+    expect(response.status).toBe(200);
+    expect(resumePersonaFlowDispatchMock).toHaveBeenCalledWith(expect.objectContaining({
+      personaId: 'persona_test',
+      activityId: 'activity_test',
+      behaviorRevisionId: 'revision_test',
+      conversationId: CONV_ID,
+      reason: 'debug',
+      flowInputPatch: expect.objectContaining({ continueDebug: true, userTurn: false }),
+    }));
+    expect(processChatCompletionMock).not.toHaveBeenCalled();
+    expect(persistMock).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(state)).not.toContain('executionAuthority');
   });
 });

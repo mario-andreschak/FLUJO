@@ -211,22 +211,39 @@ function chainWrite(conversationId: string, content: string): Promise<void> {
  * default, since every legitimate emitter has the state registered before it
  * emits (runFlow registers it before run:start; control routes load it first).
  */
-function isPersistable(conversationId: string): boolean {
+function persistableState(conversationId: string): SharedState | undefined {
   try {
     // A deleted conversation's in-flight run keeps emitting until its next
     // cancellation check; those events must not re-create the just-deleted log.
-    if (isConversationDeleted(conversationId)) return false;
+    if (isConversationDeleted(conversationId)) return undefined;
     // Lazy require to avoid a static import cycle (FlowExecutor → engine →
     // nodes → handlers → executionEventBus → this module).
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { FlowExecutor } = require('@/backend/execution/flow/FlowExecutor');
     const state: SharedState | undefined = FlowExecutor.conversationStates.get(conversationId);
-    if (!state) return false;
-    return !state.ephemeral;
+    if (!state || state.ephemeral) return undefined;
+    return state;
   } catch (err) {
     log.warn(`Could not resolve persistence policy for ${conversationId}; not persisting.`, { err });
-    return false;
+    return undefined;
   }
+}
+
+async function commitConversationWrite<T>(
+  state: SharedState,
+  task: () => Promise<T>,
+): Promise<T> {
+  if (state.personaAttribution && !state.executionAuthority) {
+    throw new Error(
+      'Persona-attributed transcript persistence requires current execution authority.',
+    );
+  }
+  if (!state.executionAuthority) return task();
+  if (state.executionAuthority?.commitWhileCurrent) {
+    return state.executionAuthority.commitWhileCurrent(task);
+  }
+  await state.executionAuthority.assertCurrent();
+  return task();
 }
 
 function serialize(event: ExecutionEvent): string {
@@ -246,8 +263,12 @@ export function appendFromBus(event: ExecutionEvent): void {
     log.warn(`Refusing to log event for unsafe conversation id`, { conversationId: event.conversationId });
     return;
   }
-  if (!isPersistable(event.conversationId)) return;
-  void chainAppend(event.conversationId, serialize(event)).catch((err) =>
+  const state = persistableState(event.conversationId);
+  if (!state) return;
+  void commitConversationWrite(
+    state,
+    () => chainAppend(event.conversationId, serialize(event)),
+  ).catch((err) =>
     log.warn(`Failed to append event to conversation log ${event.conversationId}`, { err })
   );
 }
@@ -271,9 +292,12 @@ export async function appendRawForState(state: SharedState, raws: RawExecutionEv
     .map((raw) => serialize({ ...raw, conversationId, seq: allocateSeq(conversationId), timestamp: Date.now() } as ExecutionEvent))
     .join('');
   try {
-    await chainAppend(conversationId, lines);
+    await commitConversationWrite(state, () => chainAppend(conversationId, lines));
   } catch (err) {
     log.warn(`Failed to append ${raws.length} event(s) to conversation log ${conversationId}`, { err });
+    // Persona-related input is acknowledged only after this append succeeds;
+    // surface the failure so runFlow can requeue the stable message ids.
+    if (state.executionAuthority || state.personaAttribution) throw err;
   }
 }
 
@@ -621,6 +645,11 @@ export async function repairTruncatedConversationLog(
   state: SharedState,
 ): Promise<FlujoChatMessage[] | undefined> {
   if (state.ephemeral) return undefined;
+  if (state.personaAttribution && !state.executionAuthority) {
+    // A read/detail route must never rewrite a Persona-owned transcript. The
+    // dispatcher may perform this repair only after reinstalling live authority.
+    return undefined;
+  }
   const conversationId = state.conversationId;
   if (!conversationId || !SAFE_ID.test(conversationId)) return undefined;
 
@@ -641,9 +670,9 @@ export async function repairTruncatedConversationLog(
   const content = snapshot
     .map((m) => serialize({ type: 'message', message: m, conversationId, seq: rebuiltSeq++, timestamp: Date.now() } as ExecutionEvent))
     .join('');
-  nextSeq.set(ck(conversationId), rebuiltSeq);
   try {
-    await chainWrite(conversationId, content);
+    await commitConversationWrite(state, () => chainWrite(conversationId, content));
+    nextSeq.set(ck(conversationId), rebuiltSeq);
     log.info(
       `Rebuilt truncated conversation log for ${conversationId} from snapshot (${projectedParent.length} → ${snapshot.length} message(s)); issue #49 self-heal.`
     );

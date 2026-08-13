@@ -3,6 +3,7 @@ import type { ModelMediaPart } from './model/media';
 
 /** Persisted schema version for the first multi-agent meeting runtime. */
 export const MEETING_SCHEMA_VERSION = 1 as const;
+export const ARCHIVED_MEETING_PARTICIPANT_NAME = 'Archived participant' as const;
 
 export type MeetingStatus =
   | 'draft'
@@ -33,7 +34,28 @@ export type MeetingParticipantStatus =
 export interface MeetingParticipant {
   id: string;
   name: string;
-  flowId: string;
+  /** Legacy direct-Flow target; absent for a Persona participant. */
+  flowId?: string;
+  /** Trusted Persona target. Absence means intentionally Persona-less. */
+  personaId?: string;
+  /**
+   * Nonidentifying tombstone for a participant whose Persona attribution was
+   * erased. Archived participants are retained as meeting evidence but cannot
+   * be scheduled for another turn.
+  */
+  personaArchived?: true;
+  /** Permanent runtime fence when a deleted Persona id remains as evidence. */
+  personaRetired?: true;
+  /** Optional Role Behavior slot used when reserving the Persona. */
+  behaviorSlotKey?: string;
+  /** Safe attribution for the currently owned meeting Activity lease. */
+  activityId?: string;
+  /**
+   * Durable immutable BehaviorRevision admitted for this participant. New
+   * meetings persist it at creation; legacy snapshots backfill it once before
+   * reservation so pause/crash recovery cannot adopt a changed binding.
+   */
+  behaviorRevisionId?: string;
   /** A participant owns a private, durable flow conversation. */
   conversationId: string;
   role: MeetingParticipantRole;
@@ -87,6 +109,21 @@ export interface MeetingRound {
   error?: string;
 }
 
+/**
+ * Durable owner/fence for a Persona meeting runtime. The generation is never
+ * reused: a successor that observes an expired intent advances it before it
+ * routes any new Persona mailbox work.
+ */
+export interface MeetingPersonaReservationIntent {
+  generation: number;
+  attemptId: string;
+  ownerId: string;
+  state: 'reserving' | 'running';
+  createdAt: number;
+  updatedAt: number;
+  expiresAt: number;
+}
+
 export type MeetingMotionKind = 'finish' | 'cancel' | 'followup';
 export type MeetingVoteChoice = 'yes' | 'no' | 'abstain';
 export type MeetingMotionStatus = 'open' | 'accepted' | 'rejected' | 'cancelled';
@@ -131,6 +168,10 @@ export interface MeetingRecord {
   usage?: UsageTotals;
   /** Snapshot high-water mark in the append-only meeting event log. */
   lastEventSeq: number;
+  /** Highest durable start/reservation generation ever allocated for this meeting. */
+  personaReservationGeneration?: number;
+  /** Internal live start/runtime ownership fence (also identifies Persona reservations). */
+  personaReservationIntent?: MeetingPersonaReservationIntent;
   createdAt: number;
   updatedAt: number;
   startedAt?: number;
@@ -141,7 +182,10 @@ export interface MeetingRecord {
 export interface CreateMeetingParticipantInput {
   id?: string;
   name: string;
-  flowId: string;
+  /** Exactly one of flowId or personaId is required. */
+  flowId?: string;
+  personaId?: string;
+  behaviorSlotKey?: string;
   conversationId?: string;
   role?: MeetingParticipantRole;
 }

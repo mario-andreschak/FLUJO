@@ -102,7 +102,7 @@ import { runFlow } from '@/backend/execution/flow/runFlow';
 import { authoringCallTool } from '@/backend/services/mcp/flowAuthoringTools';
 import { compileSpec } from '@/backend/services/flow/compileFlow';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
-import { readConversationLog, projectMessages } from '@/backend/execution/flow/conversationLog';
+import { flushConversationLog, readConversationLog, projectMessages } from '@/backend/execution/flow/conversationLog';
 
 const flows = flowService as unknown as {
   loadFlows: jest.Mock;
@@ -120,6 +120,7 @@ const scheduler = (
 const runFlowMock = runFlow as jest.Mock;
 const compileSpecMock = compileSpec as jest.Mock;
 const loadConversationStateMock = loadConversationState as jest.Mock;
+const flushConversationLogMock = flushConversationLog as jest.Mock;
 const readConversationLogMock = readConversationLog as jest.Mock;
 const projectMessagesMock = projectMessages as jest.Mock;
 
@@ -1237,6 +1238,7 @@ describe('list_conversations', () => {
 
 describe('read_conversation', () => {
   beforeEach(() => {
+    flushConversationLogMock.mockClear();
     readConversationLogMock.mockResolvedValue(undefined);
     projectMessagesMock.mockReturnValue([]);
   });
@@ -1246,6 +1248,47 @@ describe('read_conversation', () => {
     const r = await internalCallTool(makeService(), 'read_conversation', { conversation: 'nope' });
     expect(r.isError).toBe(true);
     expect(text(r)).toContain('nope');
+  });
+
+  it('rejects Persona conversations before flushing or reading their log', async () => {
+    loadConversationStateMock.mockResolvedValue({
+      conversationId: 'persona-conversation',
+      personaAttribution: {
+        personaId: 'persona-1',
+        activityId: 'activity-1',
+        behaviorRevisionId: 'revision-1',
+      },
+    });
+
+    const result = await internalCallTool(makeService(), 'read_conversation', {
+      conversation: 'persona-conversation',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('Persona conversations');
+    expect(flushConversationLogMock).not.toHaveBeenCalled();
+    expect(readConversationLogMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['pending target', { personaTargetId: 'persona-1' }],
+    ['frozen instruction context', { personaInstructionContext: { personaId: 'persona-1' } }],
+    ['corrupt null attribution', { personaAttribution: null }],
+    ['corrupt empty target', { personaTargetId: '' }],
+  ])('rejects %s ownership markers before flushing or reading the log', async (_label, markers) => {
+    loadConversationStateMock.mockResolvedValue({
+      conversationId: 'persona-conversation',
+      ...markers,
+    });
+
+    const result = await internalCallTool(makeService(), 'read_conversation', {
+      conversation: 'persona-conversation',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('Persona conversations');
+    expect(flushConversationLogMock).not.toHaveBeenCalled();
+    expect(readConversationLogMock).not.toHaveBeenCalled();
   });
 
   it('falls back to snapshot messages and excludes system-role messages', async () => {

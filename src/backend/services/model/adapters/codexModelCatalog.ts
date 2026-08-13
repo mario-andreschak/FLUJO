@@ -8,6 +8,40 @@ import type { Settings } from '@/shared/types/storage/storage';
 
 const log = createLogger('backend/services/model/adapters/codexModelCatalog');
 
+// Codex Desktop may refresh ~/.codex/models_cache.json with a schema that an
+// older bundled CLI cannot deserialize. Keep this in lockstep with the
+// @openai/codex-sdk version in package.json and only reuse catalogs produced by
+// the same CLI compatibility line.
+const CODEX_CATALOG_COMPATIBILITY_LINE = '0.147.';
+
+type CodexCatalog = {
+  client_version?: unknown;
+  models?: unknown;
+};
+
+function isCompatibleCatalog(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+
+  const catalog = value as CodexCatalog;
+  if (
+    typeof catalog.client_version !== 'string'
+    || !catalog.client_version.startsWith(CODEX_CATALOG_COMPATIBILITY_LINE)
+    || !Array.isArray(catalog.models)
+    || catalog.models.length === 0
+  ) {
+    return false;
+  }
+
+  return catalog.models.every((model) => {
+    if (!model || typeof model !== 'object' || Array.isArray(model)) return false;
+    const entry = model as Record<string, unknown>;
+    return typeof entry.slug === 'string'
+      && Boolean(entry.model_messages)
+      && typeof entry.model_messages === 'object'
+      && !Array.isArray(entry.model_messages);
+  });
+}
+
 /**
  * Resolve Codex's last known-good local model catalog when explicitly enabled.
  *
@@ -36,7 +70,10 @@ export async function resolveCodexModelCatalogPath(): Promise<string | undefined
 
   try {
     const stat = await fs.stat(catalogPath);
-    return stat.isFile() ? catalogPath : undefined;
+    if (!stat.isFile()) return undefined;
+
+    const contents = await fs.readFile(catalogPath, 'utf8');
+    return isCompatibleCatalog(JSON.parse(contents)) ? catalogPath : undefined;
   } catch {
     return undefined;
   }

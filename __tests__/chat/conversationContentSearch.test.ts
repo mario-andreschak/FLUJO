@@ -14,6 +14,7 @@
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
+import { NextRequest } from 'next/server';
 import { makeLocalRequest } from '../utils/localRequest';
 
 jest.mock('@/utils/encryption/lockGate', () => ({
@@ -28,6 +29,10 @@ type Route = typeof import('@/app/v1/chat/conversations/route');
 let tmpDir: string;
 let convDir: string;
 let GET: Route['GET'];
+let DELETE: Route['DELETE'];
+let withConversationExecutionLock:
+  typeof import('@/backend/execution/flow/conversationExecutionLock').withConversationExecutionLock;
+const originalExposureMode = process.env.FLUJO_EXPOSURE_MODE;
 
 const writeConv = async (id: string, obj: Record<string, unknown>) => {
   await fs.writeFile(
@@ -43,18 +48,25 @@ const getJson = async (query = '') => {
 };
 
 beforeEach(async () => {
+  process.env.FLUJO_EXPOSURE_MODE = 'localhost';
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-conv-search-'));
   convDir = path.join(tmpDir, 'workspaces', 'default-workspace', 'db', 'conversations');
   await fs.mkdir(convDir, { recursive: true });
   process.env.FLUJO_DATA_DIR = tmpDir;
   delete (global as any).__flujo_flowsCache;
   jest.resetModules();
-  ({ GET } = await import('@/app/v1/chat/conversations/route'));
+  ({ DELETE, GET } = await import('@/app/v1/chat/conversations/route'));
+  ({ withConversationExecutionLock } = await import('@/backend/execution/flow/conversationExecutionLock'));
 });
 
 afterEach(async () => {
   delete process.env.FLUJO_DATA_DIR;
   await fs.rm(tmpDir, { recursive: true, force: true });
+});
+
+afterAll(() => {
+  if (originalExposureMode === undefined) delete process.env.FLUJO_EXPOSURE_MODE;
+  else process.env.FLUJO_EXPOSURE_MODE = originalExposureMode;
 });
 
 describe('GET /v1/chat/conversations content search (issue #182)', () => {
@@ -221,5 +233,109 @@ describe('GET /v1/chat/conversations content search (issue #182)', () => {
     expect(root.source).toBe('chat');
     // A top-level conversation has no parent link.
     expect(root.parentConversationId).toBeNull();
+  });
+
+  it('omits Persona-owned conversations from every public-mode list projection', async () => {
+    await writeConv('legacy', { title: 'Legacy', messages: [{ role: 'user', content: 'visible' }] });
+    await writeConv('persona', {
+      title: 'Persona private',
+      messages: [{ role: 'user', content: 'private needle' }],
+      personaAttribution: {
+        personaId: 'persona-1',
+        activityId: 'activity-1',
+        behaviorRevisionId: 'revision-1',
+      },
+    });
+    process.env.FLUJO_EXPOSURE_MODE = 'public';
+    const remote = async (query = '') => {
+      const response = await GET(new NextRequest(
+        `https://flujo.example.com/v1/chat/conversations${query}`,
+        { headers: { host: 'flujo.example.com' } },
+      ));
+      return response.json();
+    };
+
+    expect((await remote()).map((item: any) => item.id)).toEqual(['legacy']);
+    expect((await remote('?paged=1&limit=50')).items.map((item: any) => item.id))
+      .toEqual(['legacy']);
+    expect(await remote('?presence=1')).toEqual({ count: 1 });
+    expect(await remote('?search=needle&dimension=content')).toEqual([]);
+  });
+
+  it('bulk deletion leaves Persona-owned conversations intact', async () => {
+    await writeConv('legacy', { title: 'Legacy', messages: [] });
+    await writeConv('persona', {
+      title: 'Persona private',
+      messages: [],
+      personaAttribution: {
+        personaId: 'persona-1',
+        activityId: 'activity-1',
+        behaviorRevisionId: 'revision-1',
+      },
+    });
+
+    const response = await DELETE(makeLocalRequest({
+      body: { ids: ['legacy', 'persona'] },
+      url: 'http://localhost:4200/v1/chat/conversations',
+    }));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ deleted: 1, errors: 1 });
+    await expect(fs.access(path.join(convDir, 'legacy.json'))).rejects.toThrow();
+    await expect(fs.access(path.join(convDir, 'persona.json'))).resolves.toBeUndefined();
+  });
+
+  it('bulk deletion leaves a pending Persona draft intact', async () => {
+    await writeConv('persona-draft', {
+      flowId: '',
+      title: 'Pending Persona draft',
+      messages: [],
+      personaTargetId: 'persona-1',
+    });
+
+    const response = await DELETE(makeLocalRequest({
+      body: { ids: ['persona-draft'] },
+      url: 'http://localhost:4200/v1/chat/conversations',
+    }));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ deleted: 0, errors: 1 });
+    await expect(fs.access(path.join(convDir, 'persona-draft.json'))).resolves.toBeUndefined();
+  });
+
+  it.each([
+    ['a concurrent Persona-target PATCH', 'bulk-patch-race', { flowId: '', personaTargetId: 'persona-1' }],
+    ['concurrent Persona anonymization', 'bulk-anonymize-race', { personaArchived: true }],
+  ])('serializes bulk deletion after %s', async (_scenario, id, personaMarkers) => {
+    await writeConv(id, { title: 'Fresh conversation', messages: [] });
+
+    let enteredLock!: () => void;
+    const lockEntered = new Promise<void>((resolve) => { enteredLock = resolve; });
+    let releaseLock!: () => void;
+    const holdLock = new Promise<void>((resolve) => { releaseLock = resolve; });
+    const personaMutation = withConversationExecutionLock(id, async () => {
+      enteredLock();
+      await holdLock;
+      await writeConv(id, {
+        title: 'Persona-owned after mutation',
+        messages: [],
+        ...personaMarkers,
+      });
+    });
+    await lockEntered;
+
+    const deletion = DELETE(makeLocalRequest({
+      body: { ids: [id] },
+      url: 'http://localhost:4200/v1/chat/conversations',
+    }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    releaseLock();
+    await personaMutation;
+
+    const response = await deletion;
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ deleted: 0, errors: 1 });
+    const durable = JSON.parse(await fs.readFile(path.join(convDir, `${id}.json`), 'utf-8'));
+    expect(durable).toMatchObject(personaMarkers);
   });
 });

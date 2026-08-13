@@ -170,6 +170,12 @@ export interface CompletionInput {
    * onto the AbortController that owns its whole agentic loop.
    */
   signal?: AbortSignal;
+  /** Runtime-only lease/fence assertion immediately before a tool side effect. */
+  beforeToolDispatch?: () => Promise<void>;
+  /** Runtime-only lease/generation assertion immediately after a long tool call. */
+  afterToolDispatch?: () => Promise<void>;
+  /** Hold the current execution fence across one durable resource mutation. */
+  commitDurableMutation?: <T>(task: () => Promise<T>) => Promise<T>;
   /**
    * Optional live sink for self-orchestrating adapters (Claude subscription)
    * that run their own agentic loop inside a single createCompletion call. It is

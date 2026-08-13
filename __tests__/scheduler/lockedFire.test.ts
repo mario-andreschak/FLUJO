@@ -164,3 +164,9 @@ describe('SchedulerService locked-encryption fire guard (#78)', () => {
     expect(statuses).toEqual(['completed', 'skipped']);
   });
 });
+jest.mock('@/backend/services/enduringAgents/runtimeLock', () => ({
+  withPersonaRuntimeLock: async (
+    _id: string,
+    task: (lock: { assertOwned(): Promise<void> }) => Promise<unknown>,
+  ) => task({ assertOwned: async () => undefined }),
+}));

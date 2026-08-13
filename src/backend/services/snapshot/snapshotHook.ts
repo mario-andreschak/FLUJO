@@ -18,6 +18,11 @@ import { SharedState } from '@/backend/execution/flow/types';
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
 import { writeRunResource } from '@/backend/services/runResources';
 import { shadowRepoService } from './ShadowRepoService';
+import {
+  assertFlowExecutionCurrent,
+  commitFlowDurableMutation,
+  rethrowFlowExecutionAuthorityError,
+} from '@/backend/execution/flow/executionAuthority';
 
 const log = createLogger('backend/services/snapshot/snapshotHook');
 
@@ -142,67 +147,81 @@ export async function captureAfterAndEmit(
     for (const root of ctx.roots) {
       const startSha = ctx.start.get(root) || null;
       const endSha = await shadowRepoService.capture(root);
+      await assertFlowExecutionCurrent(sharedState);
       if (endSha) {
-        emit?.({ type: 'node:snapshot', node: nodeRef(node), phase: 'after', root, snapshotId: endSha });
+        await commitFlowDurableMutation(sharedState, async () => {
+          emit?.({ type: 'node:snapshot', node: nodeRef(node), phase: 'after', root, snapshotId: endSha });
+        });
       }
       if (startSha && endSha) {
         const changedFiles = await shadowRepoService.files(root, startSha, endSha);
+        await assertFlowExecutionCurrent(sharedState);
         if (changedFiles.length > 0) {
           let patchResourceUri: string | undefined;
           const conversationId = sharedState.conversationId;
           if (conversationId) {
             try {
               const patch = await shadowRepoService.diff(root, startSha, endSha);
+              await assertFlowExecutionCurrent(sharedState);
               if (patch.trim().length > 0) {
-                const written = await writeRunResource({
-                  conversationId,
-                  kind: 'text',
-                  mimeType: 'text/x-patch',
-                  data: { text: patch },
-                  producedBy: {
-                    source: 'snapshot',
-                    nodeId: node.id,
-                    nodeName: node.name,
-                    server: ctx.rootServers.get(root)?.[0],
-                  },
+                const written = await commitFlowDurableMutation(sharedState, async () => {
+                  const resource = await writeRunResource({
+                    conversationId,
+                    kind: 'text',
+                    mimeType: 'text/x-patch',
+                    data: { text: patch },
+                    producedBy: {
+                      source: 'snapshot',
+                      nodeId: node.id,
+                      nodeName: node.name,
+                      server: ctx.rootServers.get(root)?.[0],
+                    },
+                  });
+                  if (!('skipped' in resource)) {
+                    emit?.({
+                      type: 'resource:write',
+                      node: nodeRef(node),
+                      server: 'flujo',
+                      uri: resource.uri,
+                      name: resource.name,
+                      mimeType: resource.mimeType,
+                      size: resource.size,
+                      source: 'snapshot',
+                      snapshot: {
+                        root,
+                        startSnapshot: startSha,
+                        endSnapshot: endSha,
+                        changedFiles,
+                      },
+                    });
+                  }
+                  return resource;
                 });
                 if (!('skipped' in written)) {
                   patchResourceUri = written.uri;
-                  emit?.({
-                    type: 'resource:write',
-                    node: nodeRef(node),
-                    server: 'flujo',
-                    uri: written.uri,
-                    name: written.name,
-                    mimeType: written.mimeType,
-                    size: written.size,
-                    source: 'snapshot',
-                    snapshot: {
-                      root,
-                      startSnapshot: startSha,
-                      endSnapshot: endSha,
-                      changedFiles,
-                    },
-                  });
                 }
               }
             } catch (err) {
+              rethrowFlowExecutionAuthorityError(err);
               log.warn('Snapshot patch persistence failed', { root, err });
             }
           }
-          emit?.({
-            type: 'node:changed-files',
-            node: nodeRef(node),
-            root,
-            startSnapshot: startSha,
-            endSnapshot: endSha,
-            changedFiles,
-            patchResourceUri,
+          await commitFlowDurableMutation(sharedState, async () => {
+            emit?.({
+              type: 'node:changed-files',
+              node: nodeRef(node),
+              root,
+              startSnapshot: startSha,
+              endSnapshot: endSha,
+              changedFiles,
+              patchResourceUri,
+            });
           });
         }
       }
     }
   } catch (err) {
+    rethrowFlowExecutionAuthorityError(err);
     log.warn('captureAfterAndEmit failed', { err });
   }
 }

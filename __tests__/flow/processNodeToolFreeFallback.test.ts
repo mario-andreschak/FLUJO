@@ -124,6 +124,28 @@ describe('ProcessNode unsupported-tool fallback', () => {
     await expect(node.post(prep(), exec, state(), nodeParams)).resolves.toBe('e-finish');
   });
 
+  it('rejects a provider response that arrives after Persona authority is lost', async () => {
+    const leaseLost = new Error('Persona lease is no longer current');
+    const assertCurrent = jest
+      .fn<Promise<void>, []>()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValue(leaseLost);
+    const callModel = jest
+      .spyOn(ModelHandler, 'callModel')
+      .mockResolvedValue(successfulCompletion as any);
+    const prepared: ProcessNodePrepResult = {
+      ...prep(),
+      executionAuthority: {
+        assertCurrent,
+        signal: new AbortController().signal,
+      },
+    };
+
+    await expect(nodeWithFinish().execCore(prepared, params())).rejects.toBe(leaseLost);
+    expect(callModel).toHaveBeenCalledTimes(1);
+    expect(assertCurrent).toHaveBeenCalledTimes(3);
+  });
+
   it('retries a sole-handoff node without tools and automatically takes its only edge', async () => {
     const callModel = jest
       .spyOn(ModelHandler, 'callModel')

@@ -19,7 +19,10 @@ import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { NextRequest, NextResponse } from 'next/server';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
-import { uninstallPackage, listInstalledPackages } from '@/backend/services/packages/installPackage';
+import {
+  inspectPackageUninstall,
+  uninstallPackage,
+} from '@/backend/services/packages/installPackage';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('app/api/packages/uninstall/route');
@@ -42,15 +45,23 @@ async function POST_handler(request: NextRequest) {
     return NextResponse.json({ error: 'packageName is required' }, { status: 400 });
   }
 
-  // 404 for a package with no install record (before mutating anything).
-  const installed = await listInstalledPackages();
-  if (!installed.some((p) => p.packageName === packageName)) {
+  // Resolve every package-owned planned execution before mutating anything.
+  // Persona plans retain the same strict-loopback posture as their dedicated
+  // scheduler route; legacy-only package uninstall remains network-compatible.
+  const inspection = await inspectPackageUninstall(packageName);
+  if (!inspection.exists) {
     return NextResponse.json({ error: `No install record for package "${packageName}"` }, { status: 404 });
+  }
+  if (inspection.requiresPersonaControl) {
+    const notLoopback = assertLocalRequest(request, { strictLoopback: true });
+    if (notLoopback) return notLoopback;
   }
 
   log.info(`Uninstalling package "${packageName}"`);
 
-  const summary = await uninstallPackage(packageName);
+  const summary = await uninstallPackage(packageName, {
+    allowPersonaPlannedExecutions: inspection.requiresPersonaControl,
+  });
   return NextResponse.json(summary, { status: 200 });
 }
 

@@ -3,10 +3,77 @@ import { createLogger } from '@/utils/logger';
 import OpenAI from 'openai';
 import { ChatCompletionMetadata } from '@/shared/types'; // Import the new shared type
 import type { McpAppModelContextMap } from '@/shared/types/chat';
+import {
+  BehaviorSlotKeySchema,
+  EnduringAgentIdSchema,
+} from '@/shared/types/enduringAgent';
 import { parseMcpAppModelContexts } from '@/backend/mcpApps/modelContext';
 import { requireFunctionToolCalls, requireFunctionTools } from '@/shared/types/openai';
 
 const log = createLogger('app/v1/chat/completions/requestParser');
+
+export class InvalidPersonaChatMetadataError extends Error {
+  readonly code = 'invalid_persona_metadata';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidPersonaChatMetadataError';
+  }
+}
+
+export interface PersonaChatCompletionTarget {
+  personaId: string;
+  behaviorSlotKey?: string;
+  idempotencyKey?: string;
+}
+
+function optionalPersonaMetadataString(
+  value: unknown,
+  field: string,
+  validate: (candidate: string) => boolean,
+): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') {
+    throw new InvalidPersonaChatMetadataError(`metadata.${field} must be a string.`);
+  }
+  const candidate = value.trim();
+  if (!validate(candidate)) {
+    throw new InvalidPersonaChatMetadataError(`metadata.${field} is invalid.`);
+  }
+  return candidate;
+}
+
+function parsePersonaTarget(
+  metadata: ChatCompletionMetadata | undefined,
+): PersonaChatCompletionTarget | undefined {
+  const personaId = optionalPersonaMetadataString(
+    metadata?.personaId,
+    'personaId',
+    (candidate) => EnduringAgentIdSchema.safeParse(candidate).success,
+  );
+  const behaviorSlotKey = optionalPersonaMetadataString(
+    metadata?.behaviorSlotKey,
+    'behaviorSlotKey',
+    (candidate) => BehaviorSlotKeySchema.safeParse(candidate).success,
+  );
+  const idempotencyKey = optionalPersonaMetadataString(
+    metadata?.idempotencyKey,
+    'idempotencyKey',
+    (candidate) => candidate.length > 0 && candidate.length <= 512,
+  );
+  if (!personaId && (behaviorSlotKey || idempotencyKey)) {
+    throw new InvalidPersonaChatMetadataError(
+      'metadata.personaId is required when Persona routing metadata is supplied.',
+    );
+  }
+  return personaId
+    ? {
+        personaId,
+        ...(behaviorSlotKey ? { behaviorSlotKey } : {}),
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+      }
+    : undefined;
+}
 
 // Types for better TypeScript support using OpenAI SDK types directly
 export interface ChatCompletionRequest {
@@ -44,6 +111,8 @@ export interface ParsedChatCompletionRequest extends Omit<ChatCompletionRequest,
   flujodebug: boolean; // Add flujodebug here
   processNodeId?: string; // Add processNodeId for message edits
   compactToolPayloads: boolean;
+  /** Validated trusted-control-plane Persona target, never forwarded as model input. */
+  personaTarget?: PersonaChatCompletionTarget;
 }
 
 // Parse request parameters from either query string or body
@@ -116,6 +185,15 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
       
       const data: ChatCompletionRequest = await request.json(); // Add type annotation
 
+      // `personaTarget` is an internal parsed field, not a public wire field.
+      // Rejecting it here prevents an unvalidated top-level JSON property from
+      // surviving the later object spread when validated metadata is absent.
+      if ('personaTarget' in (data as ChatCompletionRequest & { personaTarget?: unknown })) {
+        throw new InvalidPersonaChatMetadataError(
+          'Persona routing must be supplied through request metadata.',
+        );
+      }
+
       // SDK 7 models tools and tool calls as function/custom unions. FLUJO's
       // execution protocol is function-only, so reject unsupported wire shapes
       // before they can create an unanswerable assistant/tool transcript.
@@ -133,6 +211,7 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
       const requireApproval = data.metadata?.requireApproval === "true";
       const flujodebug = data.metadata?.flujodebug === "true"; // Extract flujodebug
       const compactToolPayloads = data.metadata?.compactToolPayloads === "true";
+      const personaTarget = parsePersonaTarget(data.metadata);
       const parsedAppContexts = parseMcpAppModelContexts(data.metadata?.mcpAppContexts);
       if (parsedAppContexts.error) {
         log.warn('Ignoring invalid MCP App model context metadata', {
@@ -153,7 +232,8 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
         flujo,
         conversationId,
         requireApproval,
-        flujodebug // Log the new flag
+        flujodebug,
+        personaTargeted: Boolean(personaTarget),
       });
 
       // Remove metadata and deprecated conversation_id before returning
@@ -167,6 +247,7 @@ export async function parseRequestParameters(request: NextRequest): Promise<Pars
         requireApproval, 
         flujodebug,
         compactToolPayloads,
+        ...(personaTarget ? { personaTarget } : {}),
         mcpAppContexts: parsedAppContexts.contexts,
         processNodeId: data.processNodeId // Pass through processNodeId if provided
       };

@@ -4,6 +4,7 @@ import { assertLocalRequest } from '@/utils/http/localRequest';
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/debug/state/route');
 
@@ -39,6 +40,10 @@ async function GET_handler(
     const sharedState = await loadConversationState(conversationId);
     if (!sharedState) {
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+    }
+    if (isPersonaOwnedConversationState(sharedState)) {
+      const notLoopback = assertLocalRequest(request);
+      if (notLoopback) return notLoopback;
     }
     return NextResponse.json({
       status: sharedState.status ?? 'completed',

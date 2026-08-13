@@ -3,6 +3,9 @@ import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
 import { listRunResources } from '@/backend/services/runResources';
+import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
+import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/resources/route');
 
@@ -23,6 +26,12 @@ async function GET_handler(
   const { conversationId } = await params;
   if (!conversationId) {
     return NextResponse.json({ error: 'Missing conversationId parameter' }, { status: 400 });
+  }
+
+  const state = await loadConversationState(conversationId);
+  if (!state || isPersonaOwnedConversationState(state)) {
+    const notLocal = assertLocalRequest(request);
+    if (notLocal) return notLocal;
   }
 
   try {

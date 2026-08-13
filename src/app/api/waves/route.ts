@@ -8,6 +8,7 @@ import { resolveWaves, WaveResolverExecutionEntry } from '@/backend/services/wav
 import { scheduleNextRuns } from '@/backend/services/scheduler/triggers/schedule';
 import { intervalMsToCron } from '@/utils/shared/cron';
 import type { TriggerConfig } from '@/shared/types/plannedExecution';
+import { assertLocalRequest } from '@/utils/http/localRequest';
 
 const log = createLogger('app/api/waves/route');
 
@@ -17,16 +18,31 @@ const log = createLogger('app/api/waves/route');
  * for the /waves visualization. Never arms, fires or persists anything.
  * Response: WavesResponse { paused, generatedAt, waves, orphans }.
  */
-async function GET_handler(_request: Request) {
+async function GET_handler(request: Request) {
   const _lock = await assertUnlocked();
   if (_lock) return _lock;
 
   try {
-    await ensureBackendInitialized().catch(() => { /* surfaced at startup */ });
     const scheduler = getSchedulerService();
-    const [paused, listEntries, flows] = await Promise.all([
+    // Inspect persisted scheduler config before initialization. Backend init can
+    // reconcile/arm triggers, so a public-mode read must not use it to wake
+    // Persona work before ownership has been classified.
+    const preflightEntries = await scheduler.list();
+    const containsPersonaWork = preflightEntries.some((entry) => Boolean(entry.execution.personaId));
+    const personaControlAllowed = assertLocalRequest(request, { strictLoopback: true }) === null;
+
+    let listEntries = preflightEntries;
+    if (personaControlAllowed || !containsPersonaWork) {
+      await ensureBackendInitialized().catch(() => { /* surfaced at startup */ });
+      // Initialization may populate live status; refresh after it completes.
+      listEntries = await scheduler.list();
+    }
+    if (!personaControlAllowed) {
+      listEntries = listEntries.filter((entry) => !entry.execution.personaId);
+    }
+
+    const [paused, flows] = await Promise.all([
       scheduler.isPaused(),
-      scheduler.list(),
       flowService.loadFlows(),
     ]);
 

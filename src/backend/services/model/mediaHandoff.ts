@@ -19,11 +19,15 @@ type WirePart = Record<string, any>;
  */
 export async function materializeRunResourceMediaPaths(
   parts: ModelMediaPart[],
+  commitDurableMutation?: <T>(task: () => Promise<T>) => Promise<T>,
 ): Promise<ModelMediaPart[]> {
   let changed = false;
   const resolved = await Promise.all(parts.map(async (part) => {
     if (!part.resourceUri?.startsWith('flujo://run/')) return part;
-    const localPath = await getRunResourceLocalPath(part.resourceUri);
+    const resolve = () => getRunResourceLocalPath(part.resourceUri!);
+    const localPath = commitDurableMutation
+      ? await commitDurableMutation(resolve)
+      : await resolve();
     if (localPath === part.localPath) return part;
     changed = true;
     const { localPath: _stalePath, ...withoutPath } = part;
@@ -147,7 +151,10 @@ function replaceReferencedUri(
 export async function hydrateRunResourceMedia(
   messages: OpenAI.ChatCompletionMessageParam[],
   nodeId?: string,
-  options: { strictOpenAiAudioFormats?: boolean } = {},
+  options: {
+    strictOpenAiAudioFormats?: boolean;
+    commitDurableMutation?: <T>(task: () => Promise<T>) => Promise<T>;
+  } = {},
 ): Promise<OpenAI.ChatCompletionMessageParam[]> {
   return Promise.all(messages.map(async (message) => {
     if (!Array.isArray(message.content)) return message;
@@ -157,12 +164,16 @@ export async function hydrateRunResourceMedia(
       if (!uri?.startsWith('flujo://run/')) return rawPart;
       let read: Awaited<ReturnType<typeof readRunResource>> = null;
       try {
-        read = await readRunResource(uri, {
-          at: Date.now(),
-          source: 'node',
-          nodeId,
-        });
+        const load = () => readRunResource(uri, {
+            at: Date.now(),
+            source: 'node',
+            nodeId,
+          });
+        read = options.commitDurableMutation
+          ? await options.commitDurableMutation(load)
+          : await load();
       } catch (error) {
+        if ((error as { code?: unknown })?.code === 'flow_execution_authority_lost') throw error;
         log.warn(`Failed to read media run resource ${uri}; sending a placeholder instead`, error);
       }
       const contentItem = read?.contents.contents[0];
