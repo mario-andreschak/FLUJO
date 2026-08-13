@@ -59,8 +59,8 @@ describe('direct workspace migration startup behavior', () => {
   });
 
   it('prints a plain-English completion summary with moved and skipped reasons', async () => {
-    await fs.mkdir(path.join(root, 'snapshots'), { recursive: true });
-    await fs.writeFile(path.join(root, 'snapshots', 'one.json'), 'snapshot', 'utf8');
+    await fs.mkdir(path.join(root, 'userdata'), { recursive: true });
+    await fs.writeFile(path.join(root, 'userdata', 'one.json'), 'userdata', 'utf8');
     const info = jest.spyOn(console, 'info').mockImplementation(() => undefined);
     try {
       await migrateWorkspaceLayout();
@@ -97,6 +97,26 @@ describe('direct workspace migration startup behavior', () => {
       .filter(candidate => candidate === payloadRoot || candidate.startsWith(`${payloadRoot}${path.sep}`));
     readdir.mockRestore();
     expect(targetReads).toEqual([]);
+  });
+
+  it('automatically migrates legacy data that appears after the completion marker', async () => {
+    await migrateWorkspaceLayout();
+    const source = path.join(root, 'userdata', 'late.txt');
+    const destination = path.join(
+      root,
+      'workspaces',
+      'default-workspace',
+      'userdata',
+      'late.txt',
+    );
+    await fs.mkdir(path.dirname(source), { recursive: true });
+    await fs.writeFile(source, 'migrate-me', 'utf8');
+    _resetWorkspaceMigrationState();
+
+    await migrateWorkspaceLayout();
+
+    await expect(fs.readFile(destination, 'utf8')).resolves.toBe('migrate-me');
+    await expect(fs.lstat(source)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('collapses an error-free all-skipped run to nothing-to-do and the browser link', async () => {

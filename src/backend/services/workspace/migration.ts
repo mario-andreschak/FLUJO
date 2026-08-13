@@ -18,7 +18,6 @@ import {
   setWorkspaceLayoutPreparation,
 } from './layoutReadiness';
 import { WORKSPACE_LAYOUT_VERSION } from './layoutVersion';
-import { snapshotStore } from '@/backend/services/snapshot/SnapshotStore';
 import {
   reportWorkspaceMigration as migrationConsole,
   resetWorkspaceMigrationProgress,
@@ -31,7 +30,6 @@ const MARKER_FILE = '.workspace-layout.json';
 const LOCK_DIR = '.workspace-layout.lock';
 const JOURNAL_FILE = '.workspace-layout.transaction.json';
 const FAST_JOURNAL_FILE = '.workspace-layout.fast-transaction.json';
-const SNAPSHOT_JOURNAL_FILE = '.workspace-layout.snapshot-transaction.json';
 const TRANSACTIONS_DIR = '.workspace-migrations';
 const APP_OWNED_MCP_ENTRIES = new Set([
   'readme.md',
@@ -65,24 +63,11 @@ export type SubtreeOutcome =
   | 'reconciled'
   | 'skipped';
 
-export interface SnapshotMigrationSummary {
-  outcome: SubtreeOutcome;
-  strategy: 'none' | 'rename' | 'copy' | 'merge';
-  repositoryCount: number;
-  fileCount: number;
-  logicalBytes: number;
-  onDiskBytes: number;
-  sameVolume: boolean;
-  verified: boolean;
-  timestampsPreserved: boolean;
-}
-
 export interface WorkspaceLayoutMarker {
   version: number;
   completedAt: string;
   defaultWorkspace: string;
   subtrees: Record<string, SubtreeOutcome>;
-  snapshots?: SnapshotMigrationSummary;
   errors?: string[];
 }
 
@@ -543,307 +528,6 @@ function applicationSharesDataRoot(): boolean {
   return appRoot.toLowerCase() === path.resolve(getDataDir()).toLowerCase();
 }
 
-interface SnapshotTreeInventory {
-  fileCount: number;
-  onDiskBytes: number;
-  timestamps: Map<string, { atimeMs: number; mtimeMs: number }>;
-}
-
-interface SnapshotMigrationResult {
-  summary: SnapshotMigrationSummary;
-  removeSourceAfterMarker: boolean;
-}
-
-function snapshotJournalPath(): string {
-  return path.join(getWorkspacesDir(), SNAPSHOT_JOURNAL_FILE);
-}
-
-async function snapshotTreeInventory(root: string): Promise<SnapshotTreeInventory> {
-  const result: SnapshotTreeInventory = {
-    fileCount: 0,
-    onDiskBytes: 0,
-    timestamps: new Map(),
-  };
-  const walk = async (directory: string): Promise<void> => {
-    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
-      const absolute = path.join(directory, entry.name);
-      const relative = path.relative(root, absolute);
-      if (entry.isSymbolicLink()) {
-        throw new WorkspaceMigrationUnsafePathError(
-          'Snapshot history contains a symbolic link and cannot be migrated safely.',
-        );
-      }
-      if (entry.isDirectory()) {
-        await walk(absolute);
-        continue;
-      }
-      if (!entry.isFile()) continue;
-      const stat = await fs.stat(absolute);
-      result.fileCount += 1;
-      result.onDiskBytes += stat.size;
-      result.timestamps.set(relative, {
-        atimeMs: stat.atimeMs,
-        mtimeMs: stat.mtimeMs,
-      });
-    }
-  };
-  await walk(root);
-  return result;
-}
-
-async function sameFilesystem(source: string, destination: string): Promise<boolean> {
-  try {
-    const sourceStat = await fs.stat(source);
-    let destinationParent = path.dirname(destination);
-    while (!(await lstatOptional(destinationParent))) {
-      const parent = path.dirname(destinationParent);
-      if (parent === destinationParent) break;
-      destinationParent = parent;
-    }
-    const destinationStat = await fs.stat(destinationParent);
-    return sourceStat.dev === destinationStat.dev;
-  } catch {
-    return path.parse(path.resolve(source)).root.toLowerCase()
-      === path.parse(path.resolve(destination)).root.toLowerCase();
-  }
-}
-
-async function ensureSnapshotCopySpace(destination: string, requiredBytes: number): Promise<void> {
-  let parent = path.dirname(destination);
-  while (!(await lstatOptional(parent))) {
-    const next = path.dirname(parent);
-    if (next === parent) break;
-    parent = next;
-  }
-  try {
-    const stats = await fs.statfs(parent);
-    const available = Number(stats.bavail) * Number(stats.bsize);
-    migrationConsole('snapshot free-space check', {
-      requiredBytes,
-      availableBytes: available,
-    });
-    if (available < requiredBytes) {
-      throw new WorkspaceMigrationConflictError(
-        'Not enough free space to copy filesystem snapshot history safely.',
-      );
-    }
-  } catch (error) {
-    if (error instanceof WorkspaceMigrationConflictError) throw error;
-    migrationConsole('snapshot free-space check unavailable');
-  }
-}
-
-function timestampsMatch(
-  expected: SnapshotTreeInventory,
-  actual: SnapshotTreeInventory,
-): boolean {
-  if (expected.fileCount !== actual.fileCount) return false;
-  for (const [relative, timestamp] of expected.timestamps) {
-    const observed = actual.timestamps.get(relative);
-    if (!observed || Math.abs(observed.mtimeMs - timestamp.mtimeMs) > 2_000) return false;
-  }
-  return true;
-}
-
-async function snapshotSummaryFor(
-  root: string,
-  tree: SnapshotTreeInventory,
-  outcome: SubtreeOutcome,
-  strategy: SnapshotMigrationSummary['strategy'],
-  sameVolume: boolean,
-  timestampsPreserved: boolean,
-): Promise<SnapshotMigrationSummary> {
-  const usage = await snapshotStore.usageAt(root);
-  if (usage.repositories.some(repository => repository.health !== 'healthy')) {
-    throw new WorkspaceMigrationConflictError(
-      'Filesystem snapshot repository integrity verification failed.',
-    );
-  }
-  return {
-    outcome,
-    strategy,
-    repositoryCount: usage.repositoryCount,
-    fileCount: tree.fileCount,
-    logicalBytes: usage.logicalBytes,
-    onDiskBytes: tree.onDiskBytes,
-    sameVolume,
-    verified: true,
-    timestampsPreserved,
-  };
-}
-
-async function writeSnapshotJournal(
-  state: 'discovered' | 'transferred' | 'verified' | 'published',
-  summary: Omit<SnapshotMigrationSummary, 'outcome'> | SnapshotMigrationSummary,
-): Promise<void> {
-  await writeFileAtomic(snapshotJournalPath(), JSON.stringify({
-    version: 1,
-    state,
-    updatedAt: new Date().toISOString(),
-    sourceAuthority: state !== 'published',
-    summary,
-  }, null, 2));
-}
-
-async function migrateSnapshotStore(
-  errors: string[],
-  narration: MigrationNarration[],
-): Promise<SnapshotMigrationResult> {
-  const source = path.join(getDataDir(), 'snapshots');
-  const destination = path.join(getWorkspaceDir(DEFAULT_WORKSPACE), 'snapshots');
-
-  return snapshotStore.withMigrationAccess([source, destination], async () => {
-    const sourceStat = await lstatOptional(source);
-    const destinationStat = await lstatOptional(destination);
-    if (destinationStat && (!destinationStat.isDirectory() || destinationStat.isSymbolicLink())) {
-      throw new WorkspaceMigrationUnsafePathError(
-        'Workspace filesystem snapshot target is not a real directory.',
-      );
-    }
-    if (!sourceStat) {
-      await fs.mkdir(destination, { recursive: true });
-      const tree = await snapshotTreeInventory(destination);
-      const summary = await snapshotSummaryFor(
-        destination,
-        tree,
-        destinationStat ? 'already-migrated' : 'created',
-        'none',
-        true,
-        true,
-      );
-      migrationConsole('snapshot migration summary', { ...summary });
-      return { summary, removeSourceAfterMarker: false };
-    }
-    if (!sourceStat.isDirectory() || sourceStat.isSymbolicLink()) {
-      throw new WorkspaceMigrationUnsafePathError(
-        'Legacy filesystem snapshot history is not a real directory.',
-      );
-    }
-
-    migrationConsole('snapshot discovery started', {});
-    const sourceTree = await snapshotTreeInventory(source);
-    const sourceUsage = await snapshotStore.usageAt(source);
-    if (sourceUsage.repositories.some(repository => repository.health !== 'healthy')) {
-      throw new WorkspaceMigrationConflictError(
-        'Legacy filesystem snapshot history is corrupt; the source remains authoritative.',
-      );
-    }
-    const sameVolume = await sameFilesystem(source, destination);
-    const base = {
-      strategy: (sameVolume ? 'rename' : 'copy') as SnapshotMigrationSummary['strategy'],
-      repositoryCount: sourceUsage.repositoryCount,
-      fileCount: sourceTree.fileCount,
-      logicalBytes: sourceUsage.logicalBytes,
-      onDiskBytes: sourceTree.onDiskBytes,
-      sameVolume,
-      verified: false,
-      timestampsPreserved: false,
-    };
-    await writeSnapshotJournal('discovered', base);
-    migrationConsole('snapshot discovery complete', base);
-
-    let strategy: SnapshotMigrationSummary['strategy'];
-    let removeSourceAfterMarker = false;
-    const destinationEntries = destinationStat?.isDirectory()
-      ? await fs.readdir(destination)
-      : [];
-
-    if (destinationEntries.length > 0) {
-      // A restart after a verified cross-volume copy legitimately leaves both
-      // copies until the workspace marker is durable. Select the destination
-      // only when aggregate bytes, timestamps, repository identities, and Git
-      // integrity all still match. Any divergent populated target is left
-      // untouched and the legacy source remains authoritative.
-      const destinationTree = await snapshotTreeInventory(destination);
-      const destinationUsage = await snapshotStore.usageAt(destination);
-      const identical = destinationTree.fileCount === sourceTree.fileCount
-        && destinationTree.onDiskBytes === sourceTree.onDiskBytes
-        && timestampsMatch(sourceTree, destinationTree)
-        && destinationUsage.repositoryCount === sourceUsage.repositoryCount
-        && destinationUsage.logicalBytes === sourceUsage.logicalBytes
-        && destinationUsage.repositories.every(repository => repository.health === 'healthy');
-      if (!identical) {
-        throw new WorkspaceMigrationConflictError(
-          'Snapshot destination already contains conflicting history; the source remains authoritative.',
-        );
-      }
-      strategy = sameVolume ? 'merge' : 'copy';
-      removeSourceAfterMarker = true;
-      const recovered = await snapshotSummaryFor(
-        destination,
-        destinationTree,
-        'recovered-identical',
-        strategy,
-        sameVolume,
-        true,
-      );
-      await writeSnapshotJournal('verified', recovered);
-      narration.push({
-        status: 'MERGED',
-        subject: 'snapshots',
-        source,
-        destination,
-        reason: 'restart recovery selected the verified identical destination; source retained until marker publication',
-      });
-      migrationConsole('snapshot recovery selected verified destination', { ...recovered });
-      migrationConsole('snapshot migration summary', { ...recovered });
-      return { summary: recovered, removeSourceAfterMarker };
-    }
-
-    if (sameVolume) {
-      if (destinationStat) await fs.rmdir(destination);
-      await fs.rename(source, destination);
-      strategy = 'rename';
-    } else {
-      await ensureSnapshotCopySpace(destination, sourceTree.onDiskBytes);
-      const temporary = `${destination}.copy-${process.pid}`;
-      await fs.rm(temporary, { recursive: true, force: true });
-      await fs.cp(source, temporary, {
-        recursive: true,
-        force: false,
-        errorOnExist: true,
-        preserveTimestamps: true,
-      });
-      await fs.rm(destination, { recursive: true, force: true });
-      await fs.rename(temporary, destination);
-      strategy = 'copy';
-      removeSourceAfterMarker = true;
-    }
-
-    await writeSnapshotJournal('transferred', { ...base, strategy });
-    migrationConsole('snapshot verification started', { strategy });
-    const destinationTree = await snapshotTreeInventory(destination);
-    const preserved = timestampsMatch(sourceTree, destinationTree);
-    if (
-      destinationTree.fileCount !== sourceTree.fileCount
-      || destinationTree.onDiskBytes !== sourceTree.onDiskBytes
-      || !preserved
-    ) {
-      throw new WorkspaceMigrationConflictError(
-        'Filesystem snapshot copy verification failed; the source remains authoritative.',
-      );
-    }
-    const summary = await snapshotSummaryFor(
-      destination,
-      destinationTree,
-      strategy === 'copy' ? 'copied' : 'moved',
-      strategy,
-      sameVolume,
-      preserved,
-    );
-    await writeSnapshotJournal('verified', summary);
-    narration.push({
-      status: 'MOVED',
-      subject: 'snapshots',
-      source,
-      destination,
-      reason: `${strategy} completed with Git integrity, byte accounting, and timestamp verification`,
-    });
-    migrationConsole('snapshot migration summary', { ...summary });
-    return { summary, removeSourceAfterMarker };
-  });
-}
-
 async function candidates(
   errors: string[],
   narration: MigrationNarration[],
@@ -921,18 +605,7 @@ async function runDirectMigration(): Promise<WorkspaceLayoutMarker> {
         return undefined;
       })),
     })))).filter(item => item.present);
-    const legacySnapshotSource = path.join(getDataDir(), 'snapshots');
-    if (await lstatOptional(legacySnapshotSource)) {
-      legacySourcesPresent.push({
-        candidate: {
-          subtree: 'snapshots',
-          source: legacySnapshotSource,
-          destination: path.join(getWorkspaceDir(DEFAULT_WORKSPACE), 'snapshots'),
-        },
-        present: true,
-      });
-    }
-    if (current?.snapshots && legacySourcesPresent.length === 0) {
+    if (current && legacySourcesPresent.length === 0) {
       await rewritePersistedMcpServerPaths(errors, narration);
       narration.push({
         status: 'SKIPPED',
@@ -947,7 +620,7 @@ async function runDirectMigration(): Promise<WorkspaceLayoutMarker> {
       if (errors.length > 0) log.warn('Could not remove every obsolete migration artifact', errors);
       return current;
     }
-    if (current) {
+    if (current && legacySourcesPresent.length > 0) {
       migrationConsole('legacy workspace data found after completion marker', {
         sources: legacySourcesPresent.length,
         strategy: 'direct rename/merge',
@@ -955,7 +628,6 @@ async function runDirectMigration(): Promise<WorkspaceLayoutMarker> {
     }
 
     await fs.mkdir(getWorkspaceDir(DEFAULT_WORKSPACE), { recursive: true });
-    const snapshotMigration = await migrateSnapshotStore(errors, narration);
 
     migrationConsole('preflight started', {
       candidates: planned.length,
@@ -967,13 +639,6 @@ async function runDirectMigration(): Promise<WorkspaceLayoutMarker> {
     const merged = new Set<string>();
     const present = new Set<string>();
     const targetExisting = new Set<string>();
-    if (snapshotMigration.summary.outcome === 'moved' || snapshotMigration.summary.outcome === 'copied') {
-      moved.add('snapshots');
-    } else if (snapshotMigration.summary.outcome === 'reconciled') {
-      moved.add('snapshots');
-      merged.add('snapshots');
-    }
-    if (snapshotMigration.summary.outcome !== 'created') present.add('snapshots');
 
     for (const subtree of WORKSPACE_SUBTREES) {
       if (await lstatOptional(path.join(getWorkspaceDir(DEFAULT_WORKSPACE), subtree))) {
@@ -1085,21 +750,14 @@ async function runDirectMigration(): Promise<WorkspaceLayoutMarker> {
           ? 'skipped'
           : 'created',
     ])) as Record<string, SubtreeOutcome>;
-    subtrees.snapshots = snapshotMigration.summary.outcome;
     const marker: WorkspaceLayoutMarker = {
       version: WORKSPACE_LAYOUT_VERSION,
       completedAt: new Date().toISOString(),
       defaultWorkspace: DEFAULT_WORKSPACE,
       subtrees,
-      snapshots: snapshotMigration.summary,
       ...(errors.length > 0 ? { errors } : {}),
     };
     await writeMarker(marker);
-    await writeSnapshotJournal('published', snapshotMigration.summary);
-    if (snapshotMigration.removeSourceAfterMarker) {
-      await fs.rm(path.join(getDataDir(), 'snapshots'), { recursive: true, force: true });
-    }
-    await fs.rm(snapshotJournalPath(), { force: true });
     migrationConsole('completion marker published', {
       marker: markerPath(),
       strategy: 'direct rename/merge',

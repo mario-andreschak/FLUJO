@@ -77,50 +77,6 @@ describe('direct workspace layout migration', () => {
     await expect(exists(paths.transactions)).resolves.toBe(false);
   });
 
-  it('migrates snapshot history separately with a verified summary and timestamps', async () => {
-    const source = await write('snapshots/snapshot.json', '{"sha":"abc"}');
-    const timestamp = new Date('2024-01-02T03:04:05.000Z');
-    await fs.utimes(source, timestamp, timestamp);
-
-    const marker = await migrateWorkspaceLayout();
-
-    const destination = path.join(workspaceRoot(), 'snapshots', 'snapshot.json');
-    await expect(fs.readFile(destination, 'utf8')).resolves.toBe('{"sha":"abc"}');
-    expect(Math.abs((await fs.stat(destination)).mtimeMs - timestamp.getTime())).toBeLessThan(2_000);
-    expect(marker.subtrees.snapshots).toBe('moved');
-    expect(marker.snapshots).toEqual(expect.objectContaining({
-      outcome: 'moved',
-      strategy: 'rename',
-      fileCount: 1,
-      verified: true,
-      timestampsPreserved: true,
-    }));
-    await expect(exists(path.join(dataRoot, 'snapshots'))).resolves.toBe(false);
-  });
-
-  it('recovers an identical verified snapshot destination before publishing authority', async () => {
-    const source = await write('snapshots/snapshot.json', '{"sha":"recovery"}');
-    const destination = await write(
-      'workspaces/default-workspace/snapshots/snapshot.json',
-      '{"sha":"recovery"}',
-    );
-    const timestamp = new Date('2024-03-04T05:06:07.000Z');
-    await Promise.all([
-      fs.utimes(source, timestamp, timestamp),
-      fs.utimes(destination, timestamp, timestamp),
-    ]);
-
-    const marker = await migrateWorkspaceLayout();
-
-    expect(marker.snapshots).toEqual(expect.objectContaining({
-      outcome: 'recovered-identical',
-      verified: true,
-      timestampsPreserved: true,
-    }));
-    await expect(fs.readFile(destination, 'utf8')).resolves.toBe('{"sha":"recovery"}');
-    await expect(exists(path.join(dataRoot, 'snapshots'))).resolves.toBe(false);
-  });
-
   it('merges directories, overwrites collisions, and retains disjoint destination files', async () => {
     await Promise.all([
       write('userdata/same.txt', 'legacy-wins'),
