@@ -539,7 +539,11 @@ async function buildTurnMessage(
     )];
   }))).flat();
   if ((round.number === 1 || participant.lastDeliveredSeq < 0) && meeting.openingMedia?.length) {
-    media.push(...await copyMediaForParticipant(meeting.openingMedia, participant.conversationId));
+    media.push(...await copyMediaForParticipant(
+      meeting.openingMedia,
+      participant.conversationId,
+      executionAuthority,
+    ));
   }
   const roster = meeting.participants
     .filter((item) => item.status !== 'left')

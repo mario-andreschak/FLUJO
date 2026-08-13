@@ -181,7 +181,14 @@ export default function MeetingsManager() {
       ].filter((line): line is string => line !== undefined).join('\n'),
       openingMedia: selectedMeeting.openingMedia,
       parentMeetingId: selectedMeeting.id,
-      participants: selectedMeeting.participants.map(({ id, name, flowId, role }) => ({ id, name, flowId, role })),
+      participants: selectedMeeting.participants.map(({
+        id,
+        name,
+        flowId,
+        personaId,
+        behaviorSlotKey,
+        role,
+      }) => ({ id, name, flowId, personaId, behaviorSlotKey, role })),
       moderatorParticipantId: selectedMeeting.moderatorParticipantId,
       policy: { ...selectedMeeting.policy },
     };
@@ -214,7 +221,14 @@ export default function MeetingsManager() {
       openingPrompt: `Define the next decision or action that follows from “${selectedMeeting.title}”.\n\nRelevant context from the original brief:\n${selectedMeeting.openingPrompt}`,
       openingMedia: selectedMeeting.openingMedia,
       parentMeetingId: selectedMeeting.id,
-      participants: selectedMeeting.participants.map(({ id, name, flowId, role }) => ({ id, name, flowId, role })),
+      participants: selectedMeeting.participants.map(({
+        id,
+        name,
+        flowId,
+        personaId,
+        behaviorSlotKey,
+        role,
+      }) => ({ id, name, flowId, personaId, behaviorSlotKey, role })),
       moderatorParticipantId: selectedMeeting.moderatorParticipantId,
       policy: { ...selectedMeeting.policy },
     });

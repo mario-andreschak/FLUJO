@@ -72,7 +72,9 @@ interface MeetingWizardProps {
 
 interface DraftParticipant {
   id: string;
-  flowId: string;
+  flowId?: string;
+  personaId?: string;
+  behaviorSlotKey?: string;
   flowName: string;
   name: string;
 }
@@ -138,6 +140,8 @@ export default function MeetingWizard({
     setParticipants(initialInput?.participants.map((participant) => ({
       id: participant.id ?? makeId(),
       flowId: participant.flowId,
+      personaId: participant.personaId,
+      behaviorSlotKey: participant.behaviorSlotKey,
       flowName: participant.name,
       name: participant.name,
     })) ?? []);
@@ -230,6 +234,8 @@ export default function MeetingWizard({
       participants: participants.map((participant) => ({
         id: participant.id,
         flowId: participant.flowId,
+        personaId: participant.personaId,
+        behaviorSlotKey: participant.behaviorSlotKey,
         name: participant.name.trim(),
         role: moderatorMode !== 'none' && participant.id === moderatorParticipantId
           ? 'moderator'
