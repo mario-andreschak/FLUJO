@@ -30,6 +30,7 @@ import simpleGit, { SimpleGit } from 'simple-git';
 import { createLogger } from '@/utils/logger';
 import { loadItem } from '@/utils/storage/backend';
 import { StorageKey, type Settings } from '@/shared/types/storage/storage';
+import { snapshotStore } from './SnapshotStore';
 
 const log = createLogger('backend/services/snapshot/ShadowRepoService');
 
@@ -159,6 +160,12 @@ class ShadowRepoService {
         `snapshot ${new Date().toISOString()}`,
       ]);
       const sha = (await git.raw([...gitArgs(root), 'rev-parse', 'HEAD'])).trim();
+      // Retention is independent from capture enablement. Maintenance can only
+      // remove the isolated workspace store; failures never affect the run.
+      const policy = await snapshotStore.policy();
+      if (policy.enabled && policy.automaticCleanup) {
+        await snapshotStore.cleanup().catch((error) => log.warn('snapshot cleanup failed', { error }));
+      }
       return sha || null;
     } catch (err) {
       log.warn('capture failed — degrading to no snapshot', { root, err });

@@ -50,6 +50,10 @@ async function resolveTarget(conversationId: string, messageId: string): Promise
 
 async function buildPreview(conversationId: string, target: RevertTarget) {
   const fullDiff = await shadowRepoService.diff(target.root, target.startSnapshot);
+  // Changed-file events are immutable, but their derived snapshot history may
+  // legitimately expire under retention. Never turn that lifecycle state into
+  // an empty diff that looks like a valid no-op.
+  if (!fullDiff) return null;
   const previewId = crypto
     .createHash('sha256')
     .update(JSON.stringify([conversationId, target.messageId, target.startSnapshot, target.endSnapshot, fullDiff]))
@@ -82,7 +86,11 @@ async function GET_handler(
   }
   const target = await resolveTarget(conversationId, messageId);
   if (!target) return NextResponse.json({ error: 'No revertable changes for this message' }, { status: 404 });
-  return NextResponse.json(await buildPreview(conversationId, target));
+  const preview = await buildPreview(conversationId, target);
+  if (!preview) {
+    return NextResponse.json({ error: 'Snapshot history expired or was cleaned; project files were not deleted' }, { status: 410 });
+  }
+  return NextResponse.json(preview);
 }
 
 async function POST_handler(
@@ -124,6 +132,9 @@ async function POST_handler(
   const target = await resolveTarget(conversationId, body.messageId);
   if (!target) return NextResponse.json({ error: 'No revertable changes for this message' }, { status: 404 });
   const preview = await buildPreview(conversationId, target);
+  if (!preview) {
+    return NextResponse.json({ error: 'Snapshot history expired or was cleaned; project files were not deleted' }, { status: 410 });
+  }
   if (preview.previewId !== body.previewId) {
     return NextResponse.json({ error: 'The worktree changed after preview; refresh and review again' }, { status: 409 });
   }

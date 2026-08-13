@@ -17,6 +17,7 @@ import { createLogger } from '@/utils/logger';
 import { ExperimentalSettings } from '@/shared/types/storage/storage';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useStorage } from '@/frontend/contexts/StorageContext';
+import SnapshotStorageSettings from './SnapshotStorageSettings';
 
 const log = createLogger('frontend/components/Settings/ExperimentalFeaturesSettings');
 
@@ -529,6 +530,8 @@ export default function ExperimentalFeaturesSettings() {
           {t('settings.experimental.snapshotsDescription')}
         </Typography>
       </FormControl>
+
+      <SnapshotStorageSettings />
 
       <FormControl fullWidth sx={{ mb: 2 }}>
         <FormControlLabel

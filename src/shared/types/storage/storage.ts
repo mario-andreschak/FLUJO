@@ -69,7 +69,9 @@ export enum StorageKey {
   REGISTRY_SETTINGS = 'registry_settings',
   // Anonymous daily-activity delivery state. Contains only UTC dates and the
   // current day's rotating random id; never a permanent installation id.
-  TELEMETRY_STATE = 'telemetry_state'
+  TELEMETRY_STATE = 'telemetry_state',
+  /** Workspace-scoped retention policy for derived filesystem snapshots (#414). */
+  SNAPSHOT_RETENTION_POLICY = 'snapshot_retention_policy'
 }
 
 export const StorageKeys = {
@@ -108,6 +110,7 @@ export const StorageKeys = {
   REGISTRY_ACCOUNT: StorageKey.REGISTRY_ACCOUNT,
   REGISTRY_SETTINGS: StorageKey.REGISTRY_SETTINGS,
   TELEMETRY_STATE: StorageKey.TELEMETRY_STATE,
+  SNAPSHOT_RETENTION_POLICY: StorageKey.SNAPSHOT_RETENTION_POLICY,
 } as const;
 
 /**
