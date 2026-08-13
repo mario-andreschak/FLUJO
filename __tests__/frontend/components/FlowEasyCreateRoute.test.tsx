@@ -154,7 +154,26 @@ describe('easy agent creation deep link', () => {
     await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/flows?flow=draft-assistant&mode=edit'));
   });
 
-  it('offers a third creation path that starts directly in Expert view', async () => {
+  it('opens a dashboard draft in Simple view using the canonical editor route', async () => {
+    window.history.replaceState({}, '', '/flows');
+    render(<FlowsPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Start simple' }));
+
+    expect(await screen.findByTestId('flow-builder')).toHaveTextContent('Untitled agent');
+    expect(screen.getByTestId('flow-builder')).toHaveAttribute('data-authoring-mode', 'guided');
+    expect(window.localStorage.getItem(workspaceLocalStorageKey('flujo-ui:flow-builder:mode')))
+      .toBe(JSON.stringify('guided'));
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith('/flows?flow=draft-assistant&mode=edit');
+    });
+    expect(mockPush).not.toHaveBeenCalledWith(expect.stringMatching(/^\/chat/));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Your new agent is ready. Give it a name, add a task, then try it.',
+    );
+  });
+
+  it('opens a dashboard draft in Expert view using the canonical editor route', async () => {
     window.localStorage.setItem(WORKSPACE_STORAGE_KEY, 'team-b');
     window.history.replaceState({}, '', '/flows');
     render(<FlowsPage />);
@@ -164,9 +183,17 @@ describe('easy agent creation deep link', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start expert' }));
 
     expect(await screen.findByTestId('flow-builder')).toHaveTextContent('Untitled agent');
+    expect(screen.getByTestId('flow-builder')).toHaveAttribute('data-authoring-mode', 'advanced');
     expect(window.localStorage.getItem(workspaceLocalStorageKey('flujo-ui:flow-builder:mode')))
       .toBe(JSON.stringify('advanced'));
     expect(window.localStorage.getItem('flujo-ui:flow-builder:mode')).toBeNull();
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith('/flows?flow=draft-assistant&mode=edit');
+    });
+    expect(mockPush).not.toHaveBeenCalledWith(expect.stringMatching(/^\/chat/));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Your new agent is ready in Expert view. Add and connect the nodes you need.',
+    );
   });
 
   it('opens an AI-generated draft in the simple builder even when it has expert features', async () => {
