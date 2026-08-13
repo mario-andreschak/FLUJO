@@ -261,8 +261,8 @@ export interface InitialPersonaMemoryInput {
 export interface CreatePersonaInput {
   id?: string;
   name: string;
-  /** Required mutable authoring Flow used as the Persona's visible Core entry point. */
-  coreFlowRef: string;
+  /** Mutable authoring Core Flow; omitted keeps the deterministic primary Role binding. */
+  coreFlowRef?: string;
   roleVersionId?: string;
   /** Human-confirmed exact MCP configuration names; omitted uses Role suggestions. */
   appRefs?: string[];

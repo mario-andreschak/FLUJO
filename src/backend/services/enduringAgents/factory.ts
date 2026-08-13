@@ -103,7 +103,7 @@ function effectiveFactoryRequest(
 ): Record<string, unknown> {
   return {
     name: input.name,
-    coreFlowRef: input.coreFlowRef,
+    coreFlowRef: input.coreFlowRef ?? null,
     roleVersionId: roleVersion.id,
     appRefs: input.appRefs ?? null,
     ...(input.behaviorFlowRefs?.length
@@ -306,7 +306,9 @@ async function materializeInitialMemories(
  */
 export async function createPersonaFromRole(value: unknown): Promise<PersonaBundle> {
   const input = CreatePersonaInputSchema.parse(value) as CreatePersonaInput;
-  await requireReadySharedFlow(input.coreFlowRef, 'Core Flow');
+  if (input.coreFlowRef) {
+    await requireReadySharedFlow(input.coreFlowRef, 'Core Flow');
+  }
   const behaviorFlows = await Promise.all(
     (input.behaviorFlowRefs ?? []).map(
       (flowRef) => requireReadySharedFlow(flowRef, 'Behavior Flow'),
@@ -386,7 +388,7 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
         coreMemoryItemIds: initialMemoryIds,
         composition: {
           description: '',
-          coreFlowRef: input.coreFlowRef,
+          ...(input.coreFlowRef ? { coreFlowRef: input.coreFlowRef } : {}),
           appRefs: initialAppRefs,
           memoryRefs: initialMemoryIds,
           behaviors: [

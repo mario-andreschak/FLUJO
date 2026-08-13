@@ -414,7 +414,7 @@ export const InitialPersonaMemoryInputSchema = z.object({
 export const CreatePersonaInputSchema = z.object({
   id: EnduringAgentIdSchema.optional(),
   name: NonEmptyText(160),
-  coreFlowRef: WorkspaceFlowRefSchema,
+  coreFlowRef: WorkspaceFlowRefSchema.optional(),
   roleVersionId: EnduringAgentIdSchema.optional(),
   appRefs: z.array(PersonaAppRefSchema).max(128)
     .refine((refs) => new Set(refs).size === refs.length, 'App references must be unique.')
@@ -429,7 +429,7 @@ export const CreatePersonaInputSchema = z.object({
   idempotencyKey: z.string().min(1).max(512).optional(),
   initialMemories: z.array(InitialPersonaMemoryInputSchema).max(100).optional(),
 }).strict().superRefine((input, ctx) => {
-  if (input.behaviorFlowRefs?.includes(input.coreFlowRef)) {
+  if (input.coreFlowRef && input.behaviorFlowRefs?.includes(input.coreFlowRef)) {
     ctx.addIssue({
       code: 'custom',
       path: ['behaviorFlowRefs'],
