@@ -27,10 +27,6 @@ import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 
 import { personaCapabilities } from './personaCapabilities';
 
-function humanize(value: string): string {
-  return value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
 function statusColor(
   status: PersonaSummary['status'],
 ): 'success' | 'warning' | 'error' | 'info' {
@@ -112,8 +108,7 @@ export default function PersonaSummaryCard({
             <BoltRounded fontSize="small" color={summary.currentWork ? 'primary' : 'disabled'} />
             <Typography variant="body2" fontWeight={650} noWrap>
               {summary.currentWork
-                ? summary.currentWork.summary
-                  ?? `${humanize(summary.currentWork.kind)} · ${humanize(summary.currentWork.status)}`
+                ? summary.currentWork.summary ?? t('personas.status.working')
                 : t('personas.noActivity')}
             </Typography>
           </Box>

@@ -47,10 +47,6 @@ const AREA_ICON = {
   settings: SettingsRounded,
 } satisfies Record<PersonaArea, typeof BoltRounded>;
 
-function humanize(value: string): string {
-  return value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
 function lifecycleColor(
   state: Persona['lifecycleState'],
 ): 'default' | 'success' | 'warning' | 'error' | 'info' {
@@ -79,6 +75,13 @@ export default function PersonaDetailShell({
   const theme = useTheme();
   const [area, setArea] = useState<PersonaArea>('overview');
   const [subsection, setSubsection] = useState<PersonaAreaSubsection>(null);
+  const lifecycleLabel = detail.persona.lifecycleState === 'busy'
+    ? t('personas.status.working')
+    : detail.persona.lifecycleState === 'waiting'
+      ? t('personas.status.waiting-for-you')
+      : detail.persona.lifecycleState === 'error' || detail.persona.lifecycleState === 'disabled'
+        ? t('personas.status.needs-attention')
+        : t('personas.status.up-next');
 
   useEffect(() => {
     const syncFromLocation = () => {
@@ -144,6 +147,7 @@ export default function PersonaDetailShell({
         >
           <Avatar
             src={detail.persona.presentation?.avatarUrl}
+            alt={detail.persona.name}
             sx={{
               width: 76,
               height: 76,
@@ -167,7 +171,8 @@ export default function PersonaDetailShell({
               </Typography>
               <Chip
                 color={lifecycleColor(detail.persona.lifecycleState)}
-                label={humanize(detail.persona.lifecycleState)}
+                label={lifecycleLabel}
+                aria-live="polite"
               />
             </Stack>
             <Typography color="text.secondary" fontWeight={650}>
@@ -198,7 +203,7 @@ export default function PersonaDetailShell({
           onChange={(_event, value: PersonaArea) => selectArea(value)}
           variant="scrollable"
           scrollButtons="auto"
-          aria-label="Persona areas"
+          aria-label={t('personas.title')}
         >
           {PERSONA_AREAS.map((key) => {
             const Icon = AREA_ICON[key];
