@@ -66,7 +66,7 @@ import type { QueuedMessage } from './chatQueue'; // #221: inline pending bubble
 import OpenAI from 'openai'; // Import OpenAI types for tool calls
 import { displayToolName } from '@/utils/shared/common'; // Friendly tool-name decode
 import { HANDOFF_TOOL_PREFIX, slugifyHandoffTarget } from '@/shared/utils/handoffNaming';
-import { type ToolCallPair, groupToolCallsByAnchor, collectHandoffToolCallIds } from './toolCallPairing'; // #95: merge tool call + result onto the narration anchor
+import { type CapturedToolResource, type ToolCallPair, groupToolCallsByAnchor, collectHandoffToolCallIds } from './toolCallPairing'; // #95: merge tool call + result onto the narration anchor
 import type { FlujoFunctionToolCall } from '@/shared/types/openai';
 import McpAppFrame from './McpAppFrame'; // #97: read-only, sandboxed MCP App (ui:// resource) renderer
 import { createLogger } from '@/utils/logger'; // Import the logger
@@ -117,6 +117,8 @@ export interface PendingQuestion {
 
 interface ChatMessagesProps {
   messages: ChatMessage[];
+  /** Live resource:write metadata keyed by its stable producing tool-call id. */
+  capturedResourcesByToolCall?: Readonly<Record<string, CapturedToolResource>>;
   pendingToolCalls?: OpenAI.ChatCompletionMessageFunctionToolCall[] | null; // Add pending calls prop
   /** Active elicitation request from the server, if any. */
   pendingElicitation?: PendingElicitation | null;
@@ -592,7 +594,7 @@ const ToolCallDetails: React.FC<{
   /** Issue #357: cancel THIS still-running tool call (confirmed first). */
   onCancelToolCall?: (toolCallId: string) => void;
 }> = ({ pair, showRaw, onRawChange, onCancelToolCall }) => {
-  const { t } = useI18n();
+  const { t, formatNumber } = useI18n();
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [cancelRequested, setCancelRequested] = useState(false);
   const args = useLazyToolPayload(pair.argumentPayload, pair.toolCall.function.arguments);
@@ -624,6 +626,14 @@ const ToolCallDetails: React.FC<{
   // This preview is intentionally display-only; execution and approval continue
   // to use the authoritative raw argument string.
   const formattedArgs = useMemo(() => formatPartialJson(args.value), [args.value]);
+  const capturedSize = pair.capturedResource?.size;
+  const formattedCapturedSize = typeof capturedSize === 'number'
+    ? capturedSize < 1024
+      ? `${formatNumber(capturedSize)} B`
+      : capturedSize < 1024 * 1024
+        ? `${formatNumber(Math.round(capturedSize / 1024))} KB`
+        : `${formatNumber(capturedSize / (1024 * 1024), { maximumFractionDigits: 1 })} MB`
+    : undefined;
 
   return (
     <Box sx={{ mt: 1, p: 1, borderRadius: 1, bgcolor: 'rgba(0, 0, 0, 0.03)' }}>
@@ -677,11 +687,58 @@ const ToolCallDetails: React.FC<{
         )}
       </Box>
       {pair.result ? (
-        <DeferredToolResultView
-          content={pair.result.content}
-          payload={pair.resultPayload}
-          showRaw={showRaw}
-        />
+        <>
+          {pair.capturedResource && (
+            <Box
+              role="status"
+              aria-label={`${t('chat.messages.storedResource')}: ${pair.capturedResource.uri}${formattedCapturedSize ? `, ${formattedCapturedSize}` : ''}`}
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 0.75,
+                mb: 1,
+                p: 0.75,
+                border: '1px solid',
+                borderColor: 'info.main',
+                borderRadius: 1,
+                bgcolor: 'action.hover',
+                minWidth: 0,
+              }}
+            >
+              <LinkRoundedIcon fontSize="small" color="info" />
+              <Box sx={{ minWidth: 0, flex: 1 }}>
+                <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
+                  {t('chat.messages.storedResource')}
+                </Typography>
+                <Typography
+                  variant="caption"
+                  component="code"
+                  title={pair.capturedResource.uri}
+                  sx={{ display: 'block', color: 'text.secondary', overflowWrap: 'anywhere' }}
+                >
+                  {pair.capturedResource.uri}
+                </Typography>
+              </Box>
+              {formattedCapturedSize && (
+                <Chip label={formattedCapturedSize} size="small" variant="outlined" sx={{ flexShrink: 0 }} />
+              )}
+              <Tooltip title={t('chat.actions.copy')}>
+                <IconButton
+                  size="small"
+                  aria-label={`${t('chat.actions.copy')}: ${pair.capturedResource.uri}`}
+                  onClick={() => { void copyText(pair.capturedResource!.uri); }}
+                >
+                  <ContentCopyRoundedIcon fontSize="inherit" />
+                </IconButton>
+              </Tooltip>
+            </Box>
+          )}
+          <DeferredToolResultView
+            content={pair.result.content}
+            payload={pair.resultPayload}
+            showRaw={showRaw}
+          />
+        </>
       ) : (
         <Typography variant="body2" fontStyle="italic" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <CircularProgress size={14} thickness={6} /> {t('chat.messages.waitingTool')}
@@ -1641,6 +1698,7 @@ const QuestionCard: React.FC<QuestionCardProps> = ({ question, onAnswer, onDecli
 
 const ChatMessages: React.FC<ChatMessagesProps> = ({
   messages,
+  capturedResourcesByToolCall,
   pendingToolCalls, // Destructure new prop
   pendingElicitation,
   availableNodes = [], // Destructure with default empty array
@@ -1747,14 +1805,21 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
       const pairs = pairsByAnchorId.get(group.anchorId) ?? [];
       const handoffs = handoffsByAnchorId.get(group.anchorId) ?? [];
       const effectiveId = group.memberIds.find((id) => visibleIdSet.has(id)) ?? group.anchorId;
-      if (pairs.length > 0) renderPairsById.set(effectiveId, pairs);
+      if (pairs.length > 0) {
+        renderPairsById.set(effectiveId, pairs.map((pair) => {
+          const structured = pair.toolCall.id
+            ? capturedResourcesByToolCall?.[pair.toolCall.id]
+            : undefined;
+          return structured ? { ...pair, capturedResource: structured } : pair;
+        }));
+      }
       if (handoffs.length > 0) renderHandoffsById.set(effectiveId, handoffs);
       for (const id of group.hoistedIds) {
         if (id !== effectiveId) suppressedIds.add(id);
       }
     }
     return { renderPairsById, renderHandoffsById, suppressedIds };
-  }, [groups, pairsByAnchorId, handoffsByAnchorId, visibleIdSet]);
+  }, [groups, pairsByAnchorId, handoffsByAnchorId, visibleIdSet, capturedResourcesByToolCall]);
 
   // Auto-scroll is owned by the parent (Chat/index.tsx), which holds the scroll
   // container ref and implements position-aware stick-to-bottom + a jump-to-latest

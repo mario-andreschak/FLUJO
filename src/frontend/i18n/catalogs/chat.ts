@@ -264,6 +264,7 @@ export const chatMessageRows = {
   'chat.messages.showTool': ['Show call and result', 'Mostrar llamada y resultado', 'Aufruf und Ergebnis anzeigen', 'Afficher l’appel et le résultat', 'Mostra chiamata e risultato', 'Mostrar chamada e resultado', '显示调用和结果'],
   'chat.messages.parameters': ['Parameters', 'Parámetros', 'Parameter', 'Paramètres', 'Parametri', 'Parâmetros', '参数'],
   'chat.messages.result': ['Result', 'Resultado', 'Ergebnis', 'Résultat', 'Risultato', 'Resultado', '结果'],
+  'chat.messages.storedResource': ['Stored as resource', 'Guardado como recurso', 'Als Ressource gespeichert', 'Stocké comme ressource', 'Salvato come risorsa', 'Armazenado como recurso', '已存储为资源'],
   'chat.messages.raw': ['Raw', 'Sin procesar', 'Roh', 'Brut', 'Grezzo', 'Bruto', '原始数据'],
   'chat.messages.toolTester': ['Run in Tool Tester', 'Ejecutar en el probador de herramientas', 'Im Tool-Tester ausführen', 'Exécuter dans le testeur d’outils', 'Esegui nel tester strumenti', 'Executar no testador de ferramentas', '在工具测试器中运行'],
   'chat.messages.waitingTool': ['Waiting for the tool to respond…', 'Esperando la respuesta de la herramienta…', 'Warten auf die Antwort des Tools…', 'En attente de la réponse de l’outil…', 'In attesa della risposta dello strumento…', 'Aguardando a resposta da ferramenta…', '正在等待工具响应…'],

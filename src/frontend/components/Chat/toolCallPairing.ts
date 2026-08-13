@@ -19,6 +19,24 @@ import type OpenAI from 'openai';
 import type { FlujoChatMessage, LazyToolPayloadRef } from '@/shared/types/chat';
 import { HANDOFF_TOOL_PREFIX } from '@/shared/utils/handoffNaming';
 
+/** Compact metadata used by Chat to identify an auto-captured tool result. */
+export interface CapturedToolResource {
+  uri: string;
+  size?: number;
+  mimeType?: string;
+}
+
+// Exact persisted marker fallback for conversations created before Chat retained
+// structured resource:write events. This helper is called only with role=tool
+// result content; arbitrary user/model text is never scanned.
+const RUN_RESOURCE_MARKER = /(?:^|[^A-Za-z0-9_:/.-])(flujo:\/\/run\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+)(?![A-Za-z0-9_\/-])/;
+
+export function capturedResourceFromToolResult(content: unknown): CapturedToolResource | undefined {
+  if (typeof content !== 'string') return undefined;
+  const match = RUN_RESOURCE_MARKER.exec(content);
+  return match ? { uri: match[1] } : undefined;
+}
+
 /** A single assistant tool call paired with the tool result that answered it (if any yet). */
 export interface ToolCallPair<TMessage extends FlujoChatMessage = FlujoChatMessage> {
   toolCall: OpenAI.ChatCompletionMessageFunctionToolCall;
@@ -29,6 +47,8 @@ export interface ToolCallPair<TMessage extends FlujoChatMessage = FlujoChatMessa
   /** Exact parameters/result fetched only when this pair is expanded. */
   argumentPayload?: LazyToolPayloadRef;
   resultPayload?: LazyToolPayloadRef;
+  /** Structured live metadata, or an exact-marker fallback for hydrated history. */
+  capturedResource?: CapturedToolResource;
 }
 
 export interface ToolCallPairing<TMessage extends FlujoChatMessage = FlujoChatMessage> {
@@ -142,6 +162,7 @@ export function pairToolCallsWithResults<TMessage extends FlujoChatMessage>(
         mcpDestination: id ? message.mcpToolCalls?.[id] : undefined,
         argumentPayload: id ? message.toolPayloads?.[id]?.arguments : undefined,
         resultPayload: id ? result?.toolPayloads?.[id]?.result : undefined,
+        capturedResource: capturedResourceFromToolResult(result?.content),
       });
     }
 
@@ -297,6 +318,7 @@ export function groupToolCallsByAnchor<TMessage extends FlujoChatMessage>(
         mcpDestination: id ? message.mcpToolCalls?.[id] : undefined,
         argumentPayload: id ? message.toolPayloads?.[id]?.arguments : undefined,
         resultPayload: id ? result?.toolPayloads?.[id]?.result : undefined,
+        capturedResource: capturedResourceFromToolResult(result?.content),
       });
     }
 

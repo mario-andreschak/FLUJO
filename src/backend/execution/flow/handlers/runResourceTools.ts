@@ -13,6 +13,7 @@ import {
 } from '@/backend/services/runResources';
 import { ToolDefinition, ResourceNodeReference, MCPNodeReference } from '../types';
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
+import { RUN_RESOURCE_SCHEME } from '@/shared/types/runResources';
 import { executeNativeReadResource } from './mcpResourceTools';
 
 /**
@@ -240,7 +241,13 @@ async function executeReadResource(
   }
   const parsed = parseRunResourceUri(uri);
   if (!parsed) {
-    // Not a flujo://run/ URI — try native MCP server dispatch if mcpNodes are available.
+    // The run-resource scheme is reserved for FLUJO. Malformed values must
+    // fail here rather than falling through to native MCP advertisement, which
+    // would produce the misleading "no server advertises this resource" error.
+    if (uri.startsWith(RUN_RESOURCE_SCHEME)) {
+      return { success: false, error: `Invalid run-resource URI: ${uri}` };
+    }
+    // Non-FLUJO URIs may be served by a native MCP server.
     if (ctx.mcpNodes && ctx.mcpNodes.length > 0) {
       return executeNativeReadResource(uri, {
         conversationId: ctx.conversationId,

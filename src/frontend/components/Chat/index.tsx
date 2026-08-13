@@ -25,6 +25,7 @@ import { useLocalStorage, StorageKey } from '@/utils/storage';
 import ChatHistory from './ChatHistory';
 import ChatMessages from './ChatMessages';
 import type { CanvasLaunchInfo, PendingElicitation, PendingQuestion } from './ChatMessages';
+import type { CapturedToolResource } from './toolCallPairing';
 import { buildSplitMessages, type SplitHalf } from './conversationSplit';
 import ChatInput from './ChatInput';
 import DevCanvasDock, { type CanvasDockLayout } from './DevCanvasDock'; // #216: docked MCP Apps canvas
@@ -433,6 +434,12 @@ const Chat: React.FC = () => {
     null
   );
   const currentConversationIdRef = useRef<string | null>(currentConversationId);
+  const [capturedResourcesByToolCall, setCapturedResourcesByToolCall] = useState<
+    Record<string, CapturedToolResource>
+  >({});
+  useEffect(() => {
+    setCapturedResourcesByToolCall({});
+  }, [currentConversationId]);
   const observedMcpAppResultIdsRef = useRef<Map<string, Set<string>>>(new Map());
   const [autoOpenMcpAppResultIds, setAutoOpenMcpAppResultIds] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -2141,6 +2148,29 @@ const Chat: React.FC = () => {
         // canvas). resource:write also bumps resourceVersion so the run-data
         // panel refetches.
         const kind = event.type === 'resource:read' ? 'read' as const : 'write' as const;
+        if (
+          event.type === 'resource:write'
+          && event.source === 'tool-result'
+          && event.toolCallId
+          && event.uri.startsWith('flujo://run/')
+          && event.conversationId === currentConversationIdRef.current
+        ) {
+          const toolCallId = event.toolCallId;
+          const captured: CapturedToolResource = {
+            uri: event.uri,
+            ...(typeof event.size === 'number' ? { size: event.size } : {}),
+            ...(event.mimeType ? { mimeType: event.mimeType } : {}),
+          };
+          setCapturedResourcesByToolCall((prev) => {
+            const current = prev[toolCallId];
+            if (
+              current?.uri === captured.uri
+              && current.size === captured.size
+              && current.mimeType === captured.mimeType
+            ) return prev;
+            return { ...prev, [toolCallId]: captured };
+          });
+        }
         if (
           event.type === 'resource:write'
           && event.source === 'snapshot'
@@ -5160,6 +5190,7 @@ const Chat: React.FC = () => {
               <Box data-tour="chat-messages">
               <ChatMessages
                 messages={detailedConversation.messages} // Pass messages from detailed state
+                capturedResourcesByToolCall={capturedResourcesByToolCall}
                 pendingToolCalls={pendingToolCalls}
                 pendingElicitation={pendingElicitation}
                 availableNodes={availableNodes} // Memoized nodes for the attribution pill
