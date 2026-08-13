@@ -80,6 +80,7 @@ export async function previewPersonaExecution(
     },
     revision,
     context: instructionContext,
+    coreAppRefs: [],
   });
 
   return {

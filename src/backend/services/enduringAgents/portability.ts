@@ -200,7 +200,7 @@ export function materializeReviewedRoleDraft(draft: RolePersonaDraft): {
 export function buildAgentConfigurationExport(input: {
   roleDefinition: RoleDefinition;
   roleVersions: RoleVersion[];
-  persona?: Persona & Record<string, unknown>;
+  persona?: Persona;
   behaviorTemplates?: PackagedBehaviorTemplate[];
 }): {
   roleTemplates: PackagedRoleTemplate[];

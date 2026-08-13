@@ -115,11 +115,14 @@ export async function executeBehaviorToolCall(
       return { success: false, error: `Unknown Behavior tool ${JSON.stringify(name)}.` };
     }
     const attribution = sharedState.personaAttribution;
+    const executionAuthority = sharedState.executionAuthority;
+    const commitWhileCurrent = executionAuthority?.commitWhileCurrent;
     if (
       !attribution?.activityId
       || !attribution.behaviorRevisionId
       || attribution.personaId !== target.personaId
-      || !sharedState.executionAuthority?.commitWhileCurrent
+      || !executionAuthority
+      || !commitWhileCurrent
     ) {
       return { success: false, error: 'Behavior tool is not authorized for this Persona Activity.' };
     }
@@ -127,7 +130,7 @@ export async function executeBehaviorToolCall(
     const task = typeof args.task === 'string' ? args.task.trim() : '';
     if (!task) return { success: false, error: 'Behavior call requires a non-empty task.' };
 
-    authority = sharedState.executionAuthority;
+    authority = executionAuthority;
     const fallbackCallKey = createHash('sha256')
       .update(JSON.stringify({
         conversationId: ctx.conversationId,
@@ -151,8 +154,8 @@ export async function executeBehaviorToolCall(
       callKey,
     });
 
-    await authority.assertCurrent();
-    durablePin = await getBehaviorCallPin(pinId);
+    await executionAuthority.assertCurrent();
+    durablePin = await getBehaviorCallPin(pinId) ?? undefined;
     if (durablePin?.status === 'completed') {
       return {
         success: true,
@@ -178,8 +181,8 @@ export async function executeBehaviorToolCall(
         target.personaId,
         target.behaviorId,
       );
-      await authority.assertCurrent();
-      durablePin = await authority.commitWhileCurrent(() => createBehaviorCallPin({
+      await executionAuthority.assertCurrent();
+      durablePin = await commitWhileCurrent(() => createBehaviorCallPin({
         personaId: target.personaId,
         activityId: attribution.activityId!,
         parentBehaviorRevisionId: attribution.behaviorRevisionId!,
@@ -187,7 +190,7 @@ export async function executeBehaviorToolCall(
         callKey,
       }));
     }
-    await authority.assertCurrent();
+    await executionAuthority.assertCurrent();
 
     const { runFlow } = await import('../runFlow');
     const result = await runFlow({
@@ -199,22 +202,22 @@ export async function executeBehaviorToolCall(
       depth: (sharedState.runDepth ?? 0) + 1,
       chainDepth: sharedState.chainDepth,
       emit: ctx.emit,
-      executionAuthority: authority,
+      executionAuthority,
       personaAttribution: {
         ...attribution,
         behaviorRevisionId: durablePin.behaviorRevisionId,
       },
     });
 
-    await authority.assertCurrent();
+    await executionAuthority.assertCurrent();
     if (result.error || result.status === 'error') {
       const message = result.error?.message ?? 'Behavior Flow execution failed.';
-      await authority.commitWhileCurrent(() => (
+      await commitWhileCurrent(() => (
         completeBehaviorCallPin(durablePin!, 'error', message)
       ));
       return { success: false, error: message };
     }
-    await authority.commitWhileCurrent(() => (
+    await commitWhileCurrent(() => (
       completeBehaviorCallPin(durablePin!, 'completed', undefined, result.outputText)
     ));
     return {

@@ -1,5 +1,6 @@
 import { validateFlowObjectForRun } from '@/backend/execution/flow/validateFlowForRun';
 import { flowService } from '@/backend/services/flow';
+import type { Flow } from '@/shared/types/flow';
 import { loadServerConfigs } from '@/backend/services/mcp/config';
 import {
   CopyPersonaFlowInputSchema,
@@ -216,9 +217,9 @@ async function ensureBehaviorAuthoringFlow(
     personaId: bundle.persona.id,
     behaviorId: durableBinding.id,
   });
-  let flow = await flowService.getFlow(flowId);
+  const flow = await flowService.getFlow(flowId);
   if (!flow) {
-    flow = {
+    const migratedFlow: Flow = {
       ...JSON.parse(JSON.stringify(revision.flowSnapshot)),
       id: flowId,
       name: `${behavior.name} · ${bundle.persona.name}`,
@@ -226,7 +227,7 @@ async function ensureBehaviorAuthoringFlow(
       updatedAt: undefined,
       personaOwnership: { personaId: bundle.persona.id },
     };
-    const saved = await flowService.saveFlow(flow);
+    const saved = await flowService.saveFlow(migratedFlow);
     if (!saved.success) {
       throw new PersonaDomainConflictError(
         saved.error || 'The legacy Behavior Flow could not be migrated.',
