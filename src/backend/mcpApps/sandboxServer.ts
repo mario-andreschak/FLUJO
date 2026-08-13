@@ -1237,7 +1237,13 @@ function handleSandboxRequest(
   // Never let an untrusted/malformed Host header participate in URL parsing.
   const url = new URL(req.url || '/', 'http://localhost');
 
-  const effectiveOriginKey = deriveOriginKeyFromHost(req.headers.host);
+  const hostOriginKey = deriveOriginKeyFromHost(req.headers.host);
+  const queryOriginKey = url.searchParams.get('originKey');
+  const effectiveOriginKey = hostOriginKey || (
+    getExposureMode() !== 'localhost' && isValidSandboxOriginKey(queryOriginKey)
+      ? queryOriginKey
+      : undefined
+  );
   if (handleMcpAppRuntimeHttpRequest(req, res, {
     originKey: effectiveOriginKey,
     publicUrlForOriginKey: originKey => deriveSandboxPublicUrl(
