@@ -1,6 +1,7 @@
 import type OpenAI from 'openai';
 import type { FlujoChatMessage } from './chat';
 import type { VisualCompactionDiagnostic } from './visualArchive';
+import type { ContextCompactionDiagnostic } from './contextCompaction';
 
 export type ModelDispatchOutcome = 'running' | 'completed' | 'error' | 'cancelled';
 
@@ -47,7 +48,16 @@ export interface ModelTurnMediaDescriptor {
 export interface ModelTurnProvenanceEntry {
   id?: string;
   role: string;
-  status: 'system' | 'sent' | 'folded' | 'scoped-out' | 'handoff-stripped';
+  status:
+    | 'system'
+    | 'sent'
+    | 'folded'
+    | 'scoped-out'
+    | 'handoff-stripped'
+    | 'summarized'
+    | 'visually-archived'
+    | 'emergency-stripped'
+    | 'content-truncated';
   reason?: string;
   preview?: string;
   toolCallNames?: string[];
@@ -81,8 +91,13 @@ export interface ModelTurnSnapshot {
     folded: number;
     scopedOut: number;
     handoffStripped: number;
+    summarized?: number;
+    visuallyArchived?: number;
+    emergencyStripped?: number;
+    contentTruncated?: number;
   };
   visualCompaction?: VisualCompactionDiagnostic;
+  contextCompaction?: ContextCompactionDiagnostic;
 }
 
 export interface ModelTurnTimelineResponse {

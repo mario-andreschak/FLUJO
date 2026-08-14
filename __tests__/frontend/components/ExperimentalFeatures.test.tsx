@@ -348,6 +348,44 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
     });
   });
 
+  it('exposes AI summarization and visual evaluation as separate persisted controls', () => {
+    mockStorageValue = {
+      settings: {
+        speech: { enabled: true },
+        experimental: { enabled: true, visualCompactionEnabled: true },
+      },
+      settingsHydrated: true,
+      updateSettings: mockUpdateSettings,
+    };
+    render(<ExperimentalFeaturesSettings />);
+
+    const summarization = screen.getByRole('checkbox', { name: /AI conversation summarization/i });
+    const evaluation = screen.getByRole('checkbox', { name: /Evaluate visual routing without sending images/i });
+    expect(summarization).not.toBeChecked();
+    expect(evaluation).not.toBeChecked();
+    expect(evaluation).not.toBeDisabled();
+
+    fireEvent.click(summarization);
+    expect(mockUpdateSettings).toHaveBeenLastCalledWith({
+      speech: { enabled: true },
+      experimental: {
+        enabled: true,
+        visualCompactionEnabled: true,
+        compactionEnabled: true,
+      },
+    });
+
+    fireEvent.click(evaluation);
+    expect(mockUpdateSettings).toHaveBeenLastCalledWith({
+      speech: { enabled: true },
+      experimental: {
+        enabled: true,
+        visualCompactionEnabled: true,
+        visualCompactionEvaluationMode: true,
+      },
+    });
+  });
+
   it('hides explicitly tool-less provider models by default and persists the reveal toggle', () => {
     mockStorageValue = {
       settings: {

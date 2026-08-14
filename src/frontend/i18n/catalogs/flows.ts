@@ -938,6 +938,7 @@ export const flowMessageRows = {
   'flows.process.model': ['Model', 'Modelo', 'Modell', 'Modèle', 'Modello', 'Modelo', '模型'],
   'flows.process.io': ['Input / output', 'Entrada / salida', 'Eingabe / Ausgabe', 'Entrée / sortie', 'Input / output', 'Entrada / saída', '输入 / 输出'],
   'flows.process.task': ['Task', 'Tarea', 'Aufgabe', 'Tâche', 'Attività', 'Tarefa', '任务'],
+  'flows.process.persona': ['Persona', 'Persona', 'Persona', 'Persona', 'Persona', 'Persona', 'Persona'],
   'flows.process.advanced': ['Advanced', 'Avanzado', 'Erweitert', 'Avancé', 'Avanzato', 'Avançado', '高级'],
   'flows.process.toolsAria': ['Task tools', 'Herramientas de la tarea', 'Aufgaben-Tools', 'Outils de la tâche', 'Strumenti dell’attività', 'Ferramentas da tarefa', '任务工具'],
   'flows.process.mcpTab': ['MCP', 'MCP', 'MCP', 'MCP', 'MCP', 'MCP', 'MCP'],

@@ -52,11 +52,11 @@ import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal');
 
-// Issue #300: the 5 top-level sections. The modal renders all of them stacked
+// Issue #300: the top-level sections. The modal renders all of them stacked
 // in a single scroll container; the tab bar both scrolls a section into view
 // (on click) and reflects the section currently in view (via IntersectionObserver).
-type SectionKey = 'basic' | 'model' | 'io' | 'task' | 'advanced';
-const SECTIONS: SectionKey[] = ['basic', 'model', 'io', 'task', 'advanced'];
+type SectionKey = 'basic' | 'model' | 'io' | 'task' | 'persona' | 'advanced';
+const SECTIONS: SectionKey[] = ['basic', 'model', 'io', 'task', 'persona', 'advanced'];
 
 const TASK_TOOLS_WIDTH_STORAGE_KEY = 'flujo.processNode.taskToolsPaneWidth';
 const DEFAULT_TASK_TOOLS_WIDTH = 340;
@@ -118,6 +118,7 @@ export const ProcessNodePropertiesModal = ({
     model: t('flows.process.model'),
     io: t('flows.process.io'),
     task: t('flows.process.task'),
+    persona: t('flows.process.persona'),
     advanced: t('flows.process.advanced'),
   };
   const { nodeData, setNodeData, handlePropertyChange } = useNodeData(node);
@@ -149,7 +150,7 @@ export const ProcessNodePropertiesModal = ({
   const [isResizingTaskPanes, setIsResizingTaskPanes] = useState(false);
   const visibleSections = authoringMode === 'advanced'
     ? SECTIONS
-    : SECTIONS.filter((section) => ['basic', 'model', 'task'].includes(section));
+    : SECTIONS.filter((section) => ['basic', 'model', 'task', 'persona'].includes(section));
 
   // Refs for each section, used both for tab-click scroll-into-view and for the
   // IntersectionObserver that keeps the tab bar in sync while the user scrolls.
@@ -158,6 +159,7 @@ export const ProcessNodePropertiesModal = ({
   const modelRef = useRef<HTMLDivElement>(null);
   const ioRef = useRef<HTMLDivElement>(null);
   const taskRef = useRef<HTMLDivElement>(null);
+  const personaRef = useRef<HTMLDivElement>(null);
   const advancedRef = useRef<HTMLDivElement>(null);
   const taskSplitContainerRef = useRef<HTMLDivElement>(null);
   const taskToolsWidthRef = useRef(taskToolsWidth);
@@ -167,6 +169,7 @@ export const ProcessNodePropertiesModal = ({
     model: modelRef,
     io: ioRef,
     task: taskRef,
+    persona: personaRef,
     advanced: advancedRef,
   };
   // While a programmatic (tab-click) smooth scroll is in flight, ignore the
@@ -751,7 +754,7 @@ export const ProcessNodePropertiesModal = ({
           </Tabs>
         </Box>
 
-        {/* Single scroll surface: all five sections stacked, with per-page
+        {/* Single scroll surface: all sections stacked, with per-page
             scroll-snap so scrolling moves whole sections (issue #300). */}
         <Box
           ref={scrollContainerRef}
@@ -824,7 +827,6 @@ export const ProcessNodePropertiesModal = ({
               resizable tools/editor panes on larger screens. */}
           <Box ref={taskRef} data-section="task" sx={sectionSx}>
             <Typography variant="h6" sx={{ mb: 2 }}>{t('flows.process.task')}</Typography>
-            <PersonaAbilities value={personaAbilities} onChange={setPersonaAbilities} />
             <Box
               ref={taskSplitContainerRef}
               data-testid="process-task-split-container"
@@ -909,6 +911,12 @@ export const ProcessNodePropertiesModal = ({
                 />
               </Box>
             </Box>
+          </Box>
+
+          {/* Persona */}
+          <Box ref={personaRef} data-section="persona" sx={sectionSx}>
+            <Typography variant="h6" sx={{ mb: 2 }}>{t('flows.process.persona')}</Typography>
+            <PersonaAbilities value={personaAbilities} onChange={setPersonaAbilities} />
           </Box>
 
           {/* Advanced */}

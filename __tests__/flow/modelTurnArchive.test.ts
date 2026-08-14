@@ -51,6 +51,29 @@ describe('modelTurnArchive', () => {
         input: [{ type: 'local_image', path: localImage }],
         signedUrl: 'https://example.test/media?token=secret&keep=yes',
       },
+      modelInput: {
+        systemMessage: null,
+        wireMessages: [],
+        provenance: [{ id: 'user_1', role: 'user', status: 'emergency-stripped' }],
+        counts: {
+          threaded: 1,
+          sent: 0,
+          folded: 0,
+          scopedOut: 0,
+          handoffStripped: 0,
+          emergencyStripped: 1,
+        },
+        contextCompaction: {
+          events: [{
+            kind: 'emergency-refit',
+            reason: 'test hard limit',
+            before: 1_100_000,
+            after: 980_000,
+            unit: 'characters',
+            omittedMessages: 1,
+          }],
+        },
+      },
     });
 
     expect(entry.mediaCount).toBe(1);
@@ -69,6 +92,12 @@ describe('modelTurnArchive', () => {
       encoding: 'file',
     });
     expect(JSON.stringify(snapshot?.sdkRequest)).not.toContain(localImage);
+    expect(snapshot?.provenance?.[0].status).toBe('emergency-stripped');
+    expect(snapshot?.contextCompaction?.events[0]).toMatchObject({
+      kind: 'emergency-refit',
+      before: 1_100_000,
+      after: 980_000,
+    });
 
     const archivedMedia = await readModelTurnMedia(
       'conversation_1',

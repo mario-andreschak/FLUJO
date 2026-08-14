@@ -198,6 +198,69 @@ describe('context-length overflow refit', () => {
     expect(result.success).toBe(false);
   });
 
+  it('recognizes Codex input_too_large and retries a self-orchestrating adapter with an emergency marker', async () => {
+    getModelMock.mockResolvedValue({
+      id: 'model-1',
+      name: 'test-codex',
+      provider: 'codex',
+      adapter: 'codex-cli',
+    });
+    createCompletionMock
+      .mockImplementationOnce((input: { messages: OpenAI.ChatCompletionMessageParam[] }) => {
+        calls.push(input.messages);
+        return Promise.resolve({
+          completion: {
+            error: {
+              message: 'turn/start failed: Input exceeds the maximum length of 1048576 characters.',
+              code: -32602,
+              data: { input_error_code: 'input_too_large' },
+            },
+          },
+        });
+      })
+      .mockImplementationOnce((input: { messages: OpenAI.ChatCompletionMessageParam[] }) => {
+        calls.push(input.messages);
+        return Promise.resolve({
+          completion: {
+            id: 'cmpl-codex-retry',
+            object: 'chat.completion',
+            created: 2,
+            model: 'test-codex',
+            choices: [
+              { index: 0, finish_reason: 'stop', logprobs: null, message: { role: 'assistant', content: 'recovered', refusal: null } },
+            ],
+          },
+        });
+      });
+    seedState('conv-codex-overflow');
+
+    const messages = [
+      { role: 'user' as const, content: 'original task', id: 'u0', timestamp: 1 },
+      ...Array.from({ length: 12 }, (_, index) => ({
+        role: 'assistant' as const,
+        content: `old-${index}-${'x'.repeat(4_000)}`,
+        id: `a${index}`,
+        timestamp: index + 2,
+      })),
+      { role: 'user' as const, content: 'latest task', id: 'u1', timestamp: 20 },
+    ];
+    const result = await ModelHandler.callModel({
+      modelId: 'model-1',
+      prompt: 'continue',
+      messages,
+      iteration: 1,
+      maxIterations: 1,
+      nodeName: 'Node',
+      nodeId: 'node-1',
+      conversationId: 'conv-codex-overflow',
+    });
+
+    expect(result.success).toBe(true);
+    expect(createCompletionMock).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(calls[1])).toContain('[FLUJO emergency context compaction]');
+    expect(JSON.stringify(calls[1]).length).toBeLessThan(JSON.stringify(calls[0]).length);
+  });
+
   it('does not dispatch the provider when preflight outlives the current Persona lease', async () => {
     let current = true;
     const lost = new Error('Persona generation replaced during provider preflight');

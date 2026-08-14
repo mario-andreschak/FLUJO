@@ -7,6 +7,7 @@ import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import type { MCPToolParameterPresets } from '@/shared/types/mcp';
 import OpenAI from 'openai';
 import type { VisualCompactionDiagnostic } from '@/shared/types/visualArchive';
+import type { ContextCompactionDiagnostic } from '@/shared/types/contextCompaction';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import type { NormalizedChatError } from '@/shared/types/execution/errors';
 import type { MeetingToolAction } from '@/shared/types/meeting';
@@ -62,7 +63,16 @@ export function isUnattendedFlowInvocation(source: FlowInvocationSource): boolea
  *   - 'handoff-stripped' — removed/rewritten by stripHandoffPlumbing (handoff
  *                          tool-call/result + synthetic "Continue").
  */
-export type WireStatus = 'system' | 'sent' | 'folded' | 'scoped-out' | 'handoff-stripped';
+export type WireStatus =
+  | 'system'
+  | 'sent'
+  | 'folded'
+  | 'scoped-out'
+  | 'handoff-stripped'
+  | 'summarized'
+  | 'visually-archived'
+  | 'emergency-stripped'
+  | 'content-truncated';
 
 /** Per-message provenance in a ModelInputSnapshot (see WireStatus). Carries only
  *  a short content preview, never the full payload, so the snapshot stays bounded. */
@@ -70,7 +80,7 @@ export interface ModelInputProvenanceEntry {
   id?: string;
   role: string;
   status: WireStatus;
-  /** Human-readable why (for scoped-out/folded/handoff-stripped). */
+  /** Human-readable explanation of the wire transformation. */
   reason?: string;
   /** Truncated content preview for the annotated history view. */
   preview?: string;
@@ -96,10 +106,22 @@ export interface ModelInputSnapshot {
   /** One entry per message in the node's full threaded history. */
   provenance: ModelInputProvenanceEntry[];
   /** Summary counts for a one-line "18 in history → 11 sent · 5 folded …". */
-  counts: { threaded: number; sent: number; folded: number; scopedOut: number; handoffStripped: number };
+  counts: {
+    threaded: number;
+    sent: number;
+    folded: number;
+    scopedOut: number;
+    handoffStripped: number;
+    summarized?: number;
+    visuallyArchived?: number;
+    emergencyStripped?: number;
+    contentTruncated?: number;
+  };
   inputMode?: 'full-history' | 'latest-message' | 'isolated';
   /** Final wire-time visual routing metrics, captured by ModelHandler. */
   visualCompaction?: VisualCompactionDiagnostic;
+  /** Ordered late-wire transformations, including emergency provider refits. */
+  contextCompaction?: ContextCompactionDiagnostic;
 }
 
 export type WirePreviewUnavailableReason =

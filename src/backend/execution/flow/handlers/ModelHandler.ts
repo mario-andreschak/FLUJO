@@ -13,6 +13,15 @@ import { createModelError, createToolError } from '../errorFactory';
 import { decodeToolName, assertToolIdentityFresh, type DecodedTool } from './toolNamespace';
 import { stripHandoffPlumbing, toApiMessages } from '../buildNodeContext';
 import { compactForWire, couldCompact, wireHasRunResourceUri } from './compactForWire';
+import {
+  emergencyRefitMessages,
+  EMERGENCY_CONTEXT_REFIT_MARKER,
+} from './emergencyContextRefit';
+import {
+  cloneModelInputSnapshot,
+  markModelInputMessages,
+  recordContextCompaction,
+} from './modelInputCompaction';
 import OpenAI from 'openai';
 import { modelService } from '@/backend/services/model';
 import { ownerScopeForRun } from '@/backend/services/mcp/ownerScope';
@@ -25,7 +34,12 @@ import { resolveEffectiveMaxTurns } from './maxTurns';
 import { resolveEffectiveMaxTokens } from './maxTokens';
 import { resolveEffectiveCompaction, resolveEffectiveVisualCompaction } from './resolveEffectiveCompaction';
 import { compactMessagesVisually, type EffectiveVisualCompaction } from './visualCompaction';
-import { compactHistory, estimateTokens, type CompactHistoryResult } from './summarizingCompaction';
+import {
+  compactHistory,
+  COMPACTION_SUMMARY_MARKER,
+  estimateTokens,
+  type CompactHistoryResult,
+} from './summarizingCompaction';
 import { digestProjectedMessages, digestProjectionIdentity } from '../compaction/digest';
 import {
   COMPACTION_ARTIFACT_SCHEMA_VERSION,
@@ -34,7 +48,11 @@ import {
   type CompactionProjectionIdentity,
 } from '../compaction/types';
 import { normalizeMaxTokens } from '@/shared/types/model';
-import { isSelfOrchestratingAdapter, normalizeModelTemperature } from '@/shared/types/model/provider';
+import { normalizeModelTemperature } from '@/shared/types/model/provider';
+import {
+  CODEX_EMERGENCY_COMPACTION_MARKER,
+  refitCodexMessagesForInputLimit,
+} from '@/backend/services/model/adapters/codexInputCompaction';
 import { getCompletionAdapter } from '@/backend/services/model/adapters';
 import { mapOpenAiUsage, OpenAiUsageLike } from '@/backend/services/model/adapters/openaiUsage';
 import { prepareOpenAiPromptCacheWire } from '@/backend/services/model/adapters/openaiPromptCaching';
@@ -520,7 +538,7 @@ export class ModelHandler {
     durableContext: FlowDurableMutationContext = {},
   ): Promise<CompactHistoryResult | null> {
     try {
-      if (!conversationId || source.length < 4 || isSelfOrchestratingAdapter(model.adapter)) return null;
+      if (!conversationId || source.length < 4) return null;
 
       const global = await ModelHandler.getCompactionGlobalSettings();
       const eff = resolveEffectiveCompaction(nodeCompaction, model, global);
@@ -535,9 +553,12 @@ export class ModelHandler {
         }
       }
       const estimate = lastPromptTokens ?? estimateTokens(source);
+      // Some CLI/provider catalogues do not publish a context window. The
+      // opt-in summarizer must still be useful for them, so use a conservative
+      // provider-neutral trigger instead of silently disabling compaction.
       const threshold = eff.threshold ?? (model.contextWindow
         ? model.contextWindow - Math.max(effectiveMaxTokens ?? 0, eff.bufferTokens)
-        : undefined);
+        : 96_000);
       if (threshold === undefined || threshold <= 0 || estimate < threshold) return null;
 
       const projection: CompactionProjectionIdentity = {
@@ -848,7 +869,7 @@ export class ModelHandler {
   /** Estimate the complete provider payload using the same conservative
    * character-based convention as summarizing compaction. */
   private static estimateOutgoingInputTokens(
-    messages: OpenAI.ChatCompletionMessageParam[],
+    messages: readonly OpenAI.ChatCompletionMessageParam[],
     tools?: OpenAI.ChatCompletionFunctionTool[]
   ): number {
     return Math.ceil(JSON.stringify({ messages, tools: tools ?? [] }).length / 4);
@@ -881,7 +902,9 @@ export class ModelHandler {
       haystack.includes('maximum context') ||
       haystack.includes('reduce the length') ||
       haystack.includes('too many tokens') ||
-      haystack.includes('exceeds the context')
+      haystack.includes('exceeds the context') ||
+      haystack.includes('input_too_large') ||
+      haystack.includes('input exceeds the maximum length')
     );
   }
 
@@ -1488,6 +1511,24 @@ export class ModelHandler {
       durableContext,
     );
     const effectiveMessages = compaction?.wireMessages ?? projectedMessages;
+    const effectiveModelInput = cloneModelInputSnapshot(input.modelInputForArchive);
+    if (compaction) {
+      markModelInputMessages(
+        effectiveModelInput,
+        compaction.summarizedMessageIds,
+        'summarized',
+        'Replaced on the provider wire by the injected FLUJO conversation summary.',
+      );
+      recordContextCompaction(effectiveModelInput, {
+        kind: 'summary',
+        reason: 'Opt-in AI summarization ran before provider dispatch.',
+        before: compaction.artifact.sourceMessageCount,
+        after: 1,
+        unit: 'messages',
+        omittedMessages: compaction.artifact.sourceMessageCount,
+        injectedMarker: COMPACTION_SUMMARY_MARKER,
+      });
+    }
 
     // Call generateCompletion once with the materialized provider projection.
     const response = await this.generateCompletion(modelId, prompt, effectiveMessages, tools, {
@@ -1511,7 +1552,8 @@ export class ModelHandler {
       onFinalWire,
       archiveModelTurns: input.archiveModelTurns,
       canonicalMessages: messages,
-      modelInputForArchive: input.modelInputForArchive,
+      modelInputForArchive: effectiveModelInput,
+      wireMessageIds: effectiveMessages.map(message => message.id),
       nodeName,
       beforeToolDispatch: input.beforeToolDispatch,
       authorizePersonaCoreMcp: input.executionAuthority?.authorizePersonaCoreMcp,
@@ -1783,6 +1825,8 @@ export class ModelHandler {
       archiveModelTurns?: boolean;
       canonicalMessages?: FlujoChatMessage[];
       modelInputForArchive?: import('../types').ModelInputSnapshot;
+      /** Message identities aligned with `messages` before provider shaping. */
+      wireMessageIds?: Array<string | undefined>;
       nodeName?: string;
       /** Issue #400: called when a bounded session/rate limit is about to be
        *  waited out and retried. callModel projects this onto the existing
@@ -1900,6 +1944,10 @@ export class ModelHandler {
         model.inputModalities,
       );
       let effectiveTools: OpenAI.ChatCompletionFunctionTool[] | undefined = tools;
+      const modelInputForArchive = cloneModelInputSnapshot(opts?.modelInputForArchive);
+      let apiSourceIds: Array<string | undefined> = (opts?.wireMessageIds?.length === apiMessages.length
+        ? opts.wireMessageIds
+        : messagesWithMaterializedMedia.map(message => message.id)).slice();
 
       // Strip trailing assistant message(s) for providers that require the last
       // message to be user/tool role. This is a wire-only mutation — sharedState is
@@ -1910,6 +1958,7 @@ export class ModelHandler {
       if (requiresUserLastMessage(model)) {
         while (apiMessages.length > 0 && apiMessages[apiMessages.length - 1].role === 'assistant') {
           apiMessages = apiMessages.slice(0, -1);
+          apiSourceIds = apiSourceIds.slice(0, -1);
           log.debug('Stripped trailing assistant message for provider that requires user-last wire', {
             provider: model.provider,
             adapter: model.adapter,
@@ -1935,6 +1984,28 @@ export class ModelHandler {
       apiMessages = visual.messages;
       const visualDiagnostic = visual.diagnostic;
       if (visualDiagnostic.route === 'image') {
+        const candidate = visualDiagnostic.candidate!;
+        const archivedIds = apiSourceIds.slice(candidate.startIndex, candidate.endIndex);
+        markModelInputMessages(
+          modelInputForArchive,
+          archivedIds,
+          'visually-archived',
+          'Replaced on the provider wire by a visual archive manifest and PNG page(s).',
+        );
+        recordContextCompaction(modelInputForArchive, {
+          kind: 'visual-archive',
+          reason: 'Old bulky context was replaced by a resource-backed visual archive.',
+          before: candidate.messageCount,
+          after: 1,
+          unit: 'messages',
+          omittedMessages: candidate.messageCount,
+          injectedMarker: '[Visual context archive]',
+        });
+        apiSourceIds = [
+          ...apiSourceIds.slice(0, candidate.startIndex),
+          undefined,
+          ...apiSourceIds.slice(candidate.endIndex),
+        ];
         effectiveTools = ModelHandler.ensureReadResourceArmed(apiMessages, effectiveTools);
       }
 
@@ -1943,23 +2014,92 @@ export class ModelHandler {
       // then rides along on every subsequent request and dominates fresh (non-
       // cached) prompt tokens. compactForWire shrinks oversized OLD tool results
       // and old assistant prose while keeping the recent tail verbatim and never
-      // dropping a message (tool-pair integrity + prefix-cache stability). The
-      // self-orchestrating Claude path ('claude-cli') is skipped: it flattens the
-      // wire itself and has its own resource-aware truncation markers (issue #168).
+      // dropping a message (tool-pair integrity + prefix-cache stability). It
+      // runs for every adapter; self-orchestrating adapters flatten this safer
+      // generic wire afterward and still benefit from the bounded content.
       const keepRecentMessages = await ModelHandler.historyKeepRecentMessages();
-      if (!isSelfOrchestratingAdapter(model.adapter) && couldCompact(apiMessages, { keepRecentMessages })) {
-        apiMessages = compactForWire(apiMessages, {
+      if (couldCompact(apiMessages, { keepRecentMessages })) {
+        const beforeLosslessRefit = apiMessages;
+        const compactedMessages = compactForWire(apiMessages, {
           keepRecentMessages,
           resourceMarkers: opts?.runResourceMarkers,
           // Without an offered tool there is no usable read_resource path.
           canUseTools: (effectiveTools?.length ?? 0) > 0,
         });
+        const changedIndexes = compactedMessages
+          .map((message, index) => JSON.stringify(message) === JSON.stringify(beforeLosslessRefit[index]) ? -1 : index)
+          .filter(index => index >= 0);
+        if (changedIndexes.length > 0) {
+          markModelInputMessages(
+            modelInputForArchive,
+            changedIndexes.map(index => apiSourceIds[index]),
+            'content-truncated',
+            'Old bulky content was shortened on the provider wire; any resource URI in the marker points to the exact source.',
+          );
+          recordContextCompaction(modelInputForArchive, {
+            kind: 'content-truncation',
+            reason: 'Old bulky wire content was shortened before dispatch.',
+            before: beforeLosslessRefit.length,
+            after: compactedMessages.length,
+            unit: 'messages',
+            truncatedMessages: changedIndexes.length,
+            injectedMarker: '[truncated',
+          });
+        }
+        apiMessages = compactedMessages;
         // Truncation embeds a `flujo://run/...` URI when the full result was
         // captured (issue #168). ProcessNode.prep arms `read_resource` by
         // scanning the PRE-compaction wire, so a URI first surfaced HERE would be
         // undereferenceable. Arm it now if compaction introduced a run-resource
         // reference the offered tools don't yet cover.
         effectiveTools = ModelHandler.ensureReadResourceArmed(apiMessages, effectiveTools);
+      }
+
+      // Codex Exec has a hard aggregate stdin ceiling independent of a model's
+      // advertised token window. Enforce it on the final generic wire so the
+      // CLI never receives an oversized turn. This is an adapter-specific cap
+      // layered on the provider-neutral context policy below.
+      if (model.adapter === 'codex-cli') {
+        const codexRefit = refitCodexMessagesForInputLimit(apiMessages, {
+          resourceMarkers: opts?.runResourceMarkers,
+          keepRecentMessages,
+        });
+        if (codexRefit.compacted) {
+          const priorSourceIds = apiSourceIds;
+          markModelInputMessages(
+            modelInputForArchive,
+            codexRefit.omittedMessageIndexes.map(index => priorSourceIds[index]),
+            'emergency-stripped',
+            'Omitted from the Codex wire to stay below Codex Exec\'s hard input-character limit.',
+          );
+          markModelInputMessages(
+            modelInputForArchive,
+            codexRefit.truncatedMessageIndexes.map(index => priorSourceIds[index]),
+            'content-truncated',
+            'Content was explicitly truncated to stay below Codex Exec\'s hard input-character limit.',
+          );
+          recordContextCompaction(modelInputForArchive, {
+            kind: 'emergency-refit',
+            reason: 'Codex Exec hard character-limit preflight.',
+            before: codexRefit.originalCharacters,
+            after: codexRefit.finalCharacters,
+            unit: 'characters',
+            omittedMessages: codexRefit.omittedMessageIndexes.length,
+            truncatedMessages: codexRefit.truncatedMessageIndexes.length,
+            injectedMarker: CODEX_EMERGENCY_COMPACTION_MARKER,
+          });
+          apiMessages = codexRefit.messages;
+          apiSourceIds = codexRefit.sourceMessageIndexes.map(index => (
+            index === undefined ? undefined : priorSourceIds[index]
+          ));
+          effectiveTools = ModelHandler.ensureReadResourceArmed(apiMessages, effectiveTools);
+          log.warn('Refitted Codex input before the CLI hard character limit', {
+            modelId,
+            beforeCharacters: codexRefit.originalCharacters,
+            afterCharacters: codexRefit.finalCharacters,
+            omitted: codexRefit.omitted,
+          });
+        }
       }
 
       // Sanitize tool schemas for broad provider compatibility (handles string
@@ -2014,7 +2154,7 @@ export class ModelHandler {
       );
       if (inputBudget !== undefined) {
         let estimatedInputTokens = ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools);
-        if (estimatedInputTokens > inputBudget && !isSelfOrchestratingAdapter(model.adapter)) {
+        if (estimatedInputTokens > inputBudget) {
           let budgetMarkers = opts?.runResourceMarkers;
           if (opts?.conversationId) {
             budgetMarkers = await ModelHandler.captureOversizedToolResultsForRefit(
@@ -2035,6 +2175,25 @@ export class ModelHandler {
             compactRecentToolResults: true,
             toolResultHeadChars: ModelHandler.OVERFLOW_TOOL_RESULT_HEAD_CHARS,
           });
+          const refitChangedIndexes = refittedMessages
+            .map((message, index) => JSON.stringify(message) === JSON.stringify(apiMessages[index]) ? -1 : index)
+            .filter(index => index >= 0);
+          if (refitChangedIndexes.length > 0) {
+            markModelInputMessages(
+              modelInputForArchive,
+              refitChangedIndexes.map(index => apiSourceIds[index]),
+              'content-truncated',
+              'Oversized content was shortened to a resource-backed marker during context-budget preflight.',
+            );
+            recordContextCompaction(modelInputForArchive, {
+              kind: 'content-truncation',
+              reason: 'Resource-backed context-budget preflight.',
+              before: estimatedInputTokens,
+              unit: 'tokens',
+              truncatedMessages: refitChangedIndexes.length,
+              injectedMarker: '[truncated',
+            });
+          }
           const refittedTools = ModelHandler.ensureReadResourceArmed(refittedMessages, sanitizedTools);
           estimatedInputTokens = ModelHandler.estimateOutgoingInputTokens(refittedMessages, refittedTools);
 
@@ -2047,16 +2206,76 @@ export class ModelHandler {
             apiMessages = refittedMessages;
             sanitizedTools = refittedTools;
           } else {
-            return {
-              success: false,
-              error: createModelError(
-                'context_budget_exceeded',
-                `Estimated input (${estimatedInputTokens} tokens) exceeds the safe budget (${inputBudget} tokens). Reduce the active context, tool schemas, or configure summarizing compaction.`,
+            const priorSourceIds = apiSourceIds;
+            let emergency = emergencyRefitMessages(refittedMessages, {
+              target: inputBudget,
+              measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, refittedTools),
+              keepRecentMessages,
+            });
+            let emergencyTools = refittedTools;
+
+            // A pathological tool-definition block can exceed the budget even
+            // after the message history is minimized. A text-only turn is still
+            // useful and recoverable; a terminal client error is not.
+            if (emergency.after > inputBudget && (emergencyTools?.length ?? 0) > 0) {
+              emergencyTools = undefined;
+              emergency = emergencyRefitMessages(refittedMessages, {
+                target: inputBudget,
+                measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, undefined),
+                keepRecentMessages,
+              });
+            }
+
+            if (emergency.after <= inputBudget) {
+              markModelInputMessages(
+                modelInputForArchive,
+                emergency.omittedMessageIndexes.map(index => priorSourceIds[index]),
+                'emergency-stripped',
+                'Omitted from the provider wire by FLUJO\'s deterministic context-budget safety refit.',
+              );
+              markModelInputMessages(
+                modelInputForArchive,
+                emergency.truncatedMessageIndexes.map(index => priorSourceIds[index]),
+                'content-truncated',
+                'Content was explicitly truncated by FLUJO\'s deterministic context-budget safety refit.',
+              );
+              recordContextCompaction(modelInputForArchive, {
+                kind: 'emergency-refit',
+                reason: emergencyTools
+                  ? 'Advertised model context-window preflight.'
+                  : 'Advertised model context-window preflight; oversized tool definitions were also withheld for this turn.',
+                before: estimatedInputTokens,
+                after: emergency.after,
+                unit: 'tokens',
+                omittedMessages: emergency.omittedMessageIndexes.length,
+                truncatedMessages: emergency.truncatedMessageIndexes.length,
+                injectedMarker: EMERGENCY_CONTEXT_REFIT_MARKER,
+              });
+              apiMessages = emergency.messages;
+              apiSourceIds = emergency.sourceMessageIndexes.map(index => (
+                index === undefined ? undefined : priorSourceIds[index]
+              ));
+              sanitizedTools = emergencyTools;
+              log.warn('Emergency-refitted outgoing request to its advertised input budget', {
                 modelId,
-                undefined,
-                { estimatedInputTokens, inputBudget, contextWindow: model.contextWindow }
-              )
-            };
+                beforeTokens: estimatedInputTokens,
+                afterTokens: emergency.after,
+                inputBudget,
+                omitted: emergency.omitted,
+                toolsWithheld: !emergencyTools && Boolean(refittedTools?.length),
+              });
+            } else {
+              return {
+                success: false,
+                error: createModelError(
+                  'context_budget_exceeded',
+                  `FLUJO could not produce a valid request inside the model's advertised ${inputBudget}-token input budget.`,
+                  modelId,
+                  undefined,
+                  { estimatedInputTokens: emergency.after, inputBudget, contextWindow: model.contextWindow }
+                )
+              };
+            }
           }
         }
       }
@@ -2067,10 +2286,18 @@ export class ModelHandler {
       // history boundaries.
       // This happens after every other wire rewrite so the fingerprint,
       // debugger snapshot, and provider all observe the exact same ordering.
+      const preCacheMessages = apiMessages;
+      const preCacheSourceIds = apiSourceIds;
       const preparedPromptCache = prepareOpenAiPromptCacheWire(apiMessages, model, {
         lateNodeInstruction: Boolean(opts?.nodeId),
       });
       apiMessages = preparedPromptCache.messages;
+      if (preparedPromptCache.lateSystem) {
+        apiSourceIds = [
+          ...preCacheSourceIds.filter((_id, index) => preCacheMessages[index].role !== 'system'),
+          ...preCacheSourceIds.filter((_id, index) => preCacheMessages[index].role === 'system'),
+        ];
+      }
       const promptCacheMode = preparedPromptCache.explicit ? 'explicit' as const : undefined;
       if (preparedPromptCache.lateSystem) {
         log.debug('Prepared history-first OpenAI prompt-cache wire', {
@@ -2088,7 +2315,7 @@ export class ModelHandler {
       // cache ordering. Image data URLs are bounded by the ProcessNode observer
       // before debugger storage.
       try {
-        opts?.onFinalWire?.(apiMessages, visualDiagnostic);
+        opts?.onFinalWire?.(apiMessages, visualDiagnostic, modelInputForArchive);
       } catch (error) {
         log.warn('Final-wire observer failed; continuing request', { error });
       }
@@ -2342,7 +2569,7 @@ export class ModelHandler {
                         canonicalMessages: opts.canonicalMessages ?? messages,
                         genericWire: hydratedMessages,
                         sdkRequest: snapshot.request,
-                        modelInput: opts.modelInputForArchive,
+                        modelInput: modelInputForArchive,
                         visualCompaction: visualDiagnostic,
                       });
                       executionEventBus.emit(opts.conversationId!, {
@@ -2711,11 +2938,11 @@ export class ModelHandler {
       // URI naming the full size, capturing any not-yet-captured result on the
       // fly so the model can still read the whole thing back via read_resource.
       // The cache is already moot (the request was rejected), so touching the
-      // recent tail costs nothing here. Skipped for the self-orchestrating
-      // claude-cli path (it manages its own wire + truncation markers).
+      // recent tail costs nothing here. If resource-backed shrinking is still
+      // insufficient, apply the same structurally-safe emergency refit used by
+      // proactive budgeting. This path is adapter-neutral.
       if (
         !result.success &&
-        !isSelfOrchestratingAdapter(model.adapter) &&
         ModelHandler.isContextOverflowError(result.error)
       ) {
         const beforeChars = JSON.stringify(apiMessages).length;
@@ -2740,20 +2967,96 @@ export class ModelHandler {
           allowLossyTruncation: true,
           toolResultHeadChars: ModelHandler.OVERFLOW_TOOL_RESULT_HEAD_CHARS,
         });
-        const afterChars = JSON.stringify(refitMessages).length;
-        if (afterChars < beforeChars) {
-          const refitTools = ModelHandler.ensureReadResourceArmed(refitMessages, sanitizedTools);
-          log.warn('Context-length overflow; retrying once with oversized tool results shrunk to run-resource URIs', {
+        const reactiveChangedIndexes = refitMessages
+          .map((message, index) => JSON.stringify(message) === JSON.stringify(apiMessages[index]) ? -1 : index)
+          .filter(index => index >= 0);
+        if (reactiveChangedIndexes.length > 0) {
+          markModelInputMessages(
+            modelInputForArchive,
+            reactiveChangedIndexes.map(index => apiSourceIds[index]),
+            'content-truncated',
+            'Oversized content was shortened to a resource-backed marker after a provider context-length rejection.',
+          );
+          recordContextCompaction(modelInputForArchive, {
+            kind: 'content-truncation',
+            reason: 'One automatic retry after provider context rejection.',
+            before: ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools),
+            unit: 'tokens',
+            truncatedMessages: reactiveChangedIndexes.length,
+            injectedMarker: '[truncated',
+          });
+        }
+        let retryMessages = refitMessages;
+        let retryTools = ModelHandler.ensureReadResourceArmed(refitMessages, sanitizedTools);
+        const retryTarget = inputBudget ?? Math.max(
+          1_024,
+          Math.floor(ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools) * 0.7),
+        );
+        let retryEstimate = ModelHandler.estimateOutgoingInputTokens(retryMessages, retryTools);
+        const priorSourceIds = apiSourceIds;
+        let retrySourceIds = apiSourceIds;
+        if (retryEstimate > retryTarget) {
+          let emergency = emergencyRefitMessages(retryMessages, {
+            target: retryTarget,
+            measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, retryTools),
+            keepRecentMessages,
+          });
+          if (emergency.after > retryTarget && (retryTools?.length ?? 0) > 0) {
+            retryTools = undefined;
+            emergency = emergencyRefitMessages(retryMessages, {
+              target: retryTarget,
+              measure: candidate => ModelHandler.estimateOutgoingInputTokens(candidate, undefined),
+              keepRecentMessages,
+            });
+          }
+          if (emergency.after <= retryTarget) {
+            markModelInputMessages(
+              modelInputForArchive,
+              emergency.omittedMessageIndexes.map(index => priorSourceIds[index]),
+              'emergency-stripped',
+              'Omitted from the retry wire after the provider rejected the original request for context length.',
+            );
+            markModelInputMessages(
+              modelInputForArchive,
+              emergency.truncatedMessageIndexes.map(index => priorSourceIds[index]),
+              'content-truncated',
+              'Content was explicitly truncated on the retry after a provider context-length rejection.',
+            );
+            recordContextCompaction(modelInputForArchive, {
+              kind: 'emergency-refit',
+              reason: 'One automatic retry after a provider context-length rejection.',
+              before: ModelHandler.estimateOutgoingInputTokens(apiMessages, sanitizedTools),
+              after: emergency.after,
+              unit: 'tokens',
+              omittedMessages: emergency.omittedMessageIndexes.length,
+              truncatedMessages: emergency.truncatedMessageIndexes.length,
+              injectedMarker: EMERGENCY_CONTEXT_REFIT_MARKER,
+            });
+            retryMessages = emergency.messages;
+            retrySourceIds = emergency.sourceMessageIndexes.map(index => (
+              index === undefined ? undefined : priorSourceIds[index]
+            ));
+            retryEstimate = emergency.after;
+          }
+        }
+        const afterChars = JSON.stringify(retryMessages).length;
+        if (afterChars < beforeChars && retryEstimate <= retryTarget) {
+          apiMessages = retryMessages;
+          apiSourceIds = retrySourceIds;
+          sanitizedTools = retryTools;
+          log.warn('Context-length overflow; retrying once with a compacted provider wire', {
             modelId,
             beforeChars,
             afterChars,
+            retryEstimate,
+            retryTarget,
           });
           try {
-            opts?.onFinalWire?.(refitMessages, visualDiagnostic);
+            opts?.onFinalWire?.(retryMessages, visualDiagnostic, modelInputForArchive);
           } catch (error) {
             log.warn('Final-wire observer failed during overflow refit; continuing retry', { error });
           }
-          result = await attemptWithLimitRetry(refitMessages, refitTools);
+          result = await attemptWithLimitRetry(retryMessages, retryTools);
         } else {
           log.warn('Context-length overflow but nothing on the wire left to compact; returning the original error', { modelId });
         }

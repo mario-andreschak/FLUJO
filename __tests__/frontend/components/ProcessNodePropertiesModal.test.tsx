@@ -272,6 +272,15 @@ describe('ProcessNodePropertiesModal issue #320 interactions', () => {
 });
 
 describe('ProcessNodePropertiesModal Persona abilities', () => {
+  it('places Persona abilities in their own section instead of Task', async () => {
+    renderModal();
+
+    const ability = await screen.findByRole('checkbox', { name: 'Use existing memories' });
+    expect(ability.closest('[data-section]')).toHaveAttribute('data-section', 'persona');
+    expect(screen.getByTestId('process-task-split-container').closest('[data-section]')).toHaveAttribute('data-section', 'task');
+    expect(screen.getByRole('tab', { name: 'Persona' })).toBeInTheDocument();
+  });
+
   it('shows every native ability in plain language and saves the full preset', async () => {
     const onSave = jest.fn();
     renderModal({
@@ -335,6 +344,7 @@ describe('ProcessNodePropertiesModal Persona abilities', () => {
     });
 
     expect(await screen.findByText('Persona abilities')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Persona' })).toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: 'Advanced' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Off' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));

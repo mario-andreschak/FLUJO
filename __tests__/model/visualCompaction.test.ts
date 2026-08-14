@@ -58,6 +58,7 @@ describe('visualCompaction (issue #356)', () => {
   it('uses explicit tri-state capability and keeps unknown safe', () => {
     expect(resolveVisionInputCapability({ adapter: 'openai', visionInputCapability: 'supported' })).toBe('supported');
     expect(resolveVisionInputCapability({ adapter: 'openai' })).toBe('unknown');
-    expect(resolveVisionInputCapability({ adapter: 'codex-cli', visionInputCapability: 'supported' })).toBe('unsupported');
+    expect(resolveVisionInputCapability({ adapter: 'codex-cli', visionInputCapability: 'supported' })).toBe('supported');
+    expect(resolveVisionInputCapability({ adapter: 'claude-cli', inputModalities: ['image'] })).toBe('supported');
   });
 });
