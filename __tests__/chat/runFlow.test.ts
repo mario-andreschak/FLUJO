@@ -57,6 +57,9 @@ function personaInstructionContext(
 // Records every state handed to persistConversationState, so we can assert that
 // an ephemeral run persists nothing while a conversation run does.
 const persistedStates: SharedState[] = [];
+const mockLoadItem = jest.fn(async (..._args: unknown[]) => (
+  undefined as SharedState | undefined
+));
 
 jest.mock('@/backend/execution/flow/FlowExecutor', () => {
   const S = '077cfac0-start';
@@ -100,7 +103,7 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => {
 // guarantee is exercised through the REAL chokepoint (which refuses states
 // with `ephemeral: true`) rather than through a mock of it.
 jest.mock('@/utils/storage/backend', () => ({
-  loadItem: jest.fn(async () => undefined),
+  loadItem: (...args: unknown[]) => mockLoadItem(...args),
   saveItem: jest.fn(async (_key: string, value: any) => {
     persistedStates.push(JSON.parse(JSON.stringify(value)));
   }),
@@ -147,6 +150,8 @@ const conversationStates = FlowExecutor.conversationStates as Map<string, Shared
 
 beforeEach(() => {
   persistedStates.length = 0;
+  mockLoadItem.mockReset();
+  mockLoadItem.mockResolvedValue(undefined);
   conversationStates.clear();
   (FlowExecutor.executeStep as jest.Mock).mockClear();
   (recordStatisticsEvent as jest.Mock).mockClear();
@@ -628,6 +633,7 @@ describe('persistConversationState chokepoint (ephemeral policy)', () => {
       title: 't',
       createdAt: 1,
       updatedAt: 1,
+      personaCoreAppRefs: ['must-not-persist'],
     } as unknown as SharedState;
 
     await persistConversationState('conversations/child-1', { ...base, ephemeral: true });
@@ -635,6 +641,7 @@ describe('persistConversationState chokepoint (ephemeral policy)', () => {
 
     await persistConversationState('conversations/parent-1', base);
     expect(persistedStates.length).toBe(1);
+    expect(persistedStates[0].personaCoreAppRefs).toBeUndefined();
   });
 
   it('does not write a Persona snapshot when its commit fence is no longer current', async () => {
@@ -757,6 +764,71 @@ describe('Persona execution authority', () => {
         behaviorRevisionId: 'behavior-revision-1',
       },
     })).rejects.toThrow('require execution authority');
+  });
+
+  it('keeps Persona Core App bindings runtime-only and requires full dispatcher context', async () => {
+    const behavior = behaviorFlow(FLOW_ID, 'apps-v1');
+    const attribution = {
+      personaId: 'persona-1',
+      activityId: 'activity-apps',
+      behaviorRevisionId: 'behavior-revision-1',
+    };
+    const instructionContext = personaInstructionContext('activity-apps', {
+      behaviorContentHash: hashBehaviorFlow(behavior),
+    });
+    const authority = {
+      assertCurrent: jest.fn(async () => undefined),
+      signal: new AbortController().signal,
+      authorizePersonaCoreMcp: jest.fn(async () => undefined),
+    };
+
+    const result = await runFlow({
+      flowDefinition: behavior,
+      prompt: 'use the assigned app',
+      mode: 'conversation',
+      conversationId: 'persona-core-app-runtime-only',
+      personaAttribution: attribution,
+      personaInstructionContext: instructionContext,
+      personaCoreAppRefs: ['personal-computer', 'personal-computer'],
+      executionAuthority: authority,
+    });
+
+    expect(result.sharedState.personaCoreAppRefs).toEqual(['personal-computer']);
+    expect(Object.prototype.propertyIsEnumerable.call(
+      result.sharedState,
+      'personaCoreAppRefs',
+    )).toBe(false);
+    expect(persistedStates[persistedStates.length - 1].personaCoreAppRefs).toBeUndefined();
+
+    await expect(runFlow({
+      flowDefinition: behavior,
+      prompt: 'missing trusted context',
+      mode: 'conversation',
+      conversationId: 'persona-core-app-untrusted',
+      personaAttribution: attribution,
+      personaCoreAppRefs: ['personal-computer'],
+      executionAuthority: authority,
+    })).rejects.toThrow('require top-level dispatcher authority, App authorization, and instruction context');
+
+    const coldSnapshot = structuredClone(persistedStates[persistedStates.length - 1]);
+    conversationStates.clear();
+    mockLoadItem.mockResolvedValueOnce(coldSnapshot);
+    const resumed = await runFlow({
+      flowDefinition: behavior,
+      prompt: 'continue after restart',
+      mode: 'conversation',
+      conversationId: 'persona-core-app-runtime-only',
+      personaAttribution: attribution,
+      personaInstructionContext: instructionContext,
+      personaCoreAppRefs: ['personal-computer'],
+      executionAuthority: authority,
+    });
+    expect(mockLoadItem).toHaveBeenCalled();
+    expect(resumed.sharedState.personaCoreAppRefs).toEqual(['personal-computer']);
+    expect(Object.prototype.propertyIsEnumerable.call(
+      resumed.sharedState,
+      'personaCoreAppRefs',
+    )).toBe(false);
   });
 
   it('persists safe attribution but never the execution capability', async () => {

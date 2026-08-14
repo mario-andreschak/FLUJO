@@ -23,11 +23,20 @@ import {
 // Create a logger instance for this file
 const log = createLogger('backend/flow/execution/FlowConverter');
 
+export interface FlowConverterOptions {
+  /**
+   * Exact runtime-authorized Persona App bindings. Inline MCP references are
+   * otherwise treated as stale derived data and discarded. The key is the
+   * synthetic node id and the value is its exact MCP server config name.
+   */
+  trustedInlineMcpBindings?: ReadonlyMap<string, string>;
+}
+
 export class FlowConverter {
   /**
    * Convert a React Flow to a Pocket Flow
    */
-  static convert(reactFlow: ReactFlow): Flow {
+  static convert(reactFlow: ReactFlow, options: FlowConverterOptions = {}): Flow {
     log.info('Converting React Flow to Pocket Flow', {
       flowName: reactFlow.name,
       nodeCount: reactFlow.nodes.length,
@@ -60,7 +69,7 @@ export class FlowConverter {
     // First pass: Create all nodes
     for (const node of executableNodes) {
       log.debug(`Creating node: ${node.id} (${node.type})`);
-      const pocketNode = this.createNode(node);
+      const pocketNode = this.createNode(node, options);
       nodesMap.set(node.id, pocketNode);
     }
     
@@ -99,6 +108,25 @@ export class FlowConverter {
             // Store the full MCP node properties once. Duplicate attachment edges
             // must not produce duplicate runtime references.
             const mcpNodes = consumerNode.node_params.properties.mcpNodes as MCPNodeReference[];
+            const authoredId = mcpNode.node_params.id;
+            const authoredServer = mcpNode.node_params.properties?.boundServer;
+            if (typeof authoredServer === 'string' && authoredServer) {
+              // An authored graph attachment is the narrower, visible policy and
+              // always wins over a projected Persona App for the same server.
+              for (let index = mcpNodes.length - 1; index >= 0; index -= 1) {
+                const candidate = mcpNodes[index];
+                if (
+                  (
+                    candidate.id === authoredId
+                    || candidate.properties.boundServer === authoredServer
+                  )
+                  && options.trustedInlineMcpBindings?.get(candidate.id)
+                    === candidate.properties.boundServer
+                ) {
+                  mcpNodes.splice(index, 1);
+                }
+              }
+            }
             if (!mcpNodes.some(({ id }) => id === mcpNode.node_params.id)) {
               mcpNodes.push({
                 id: mcpNode.node_params.id,
@@ -262,7 +290,7 @@ export class FlowConverter {
   /**
    * Create a Pocket Flow node from a React Flow node
    */
-  private static createNode(node: FlowNode): BaseNode {
+  private static createNode(node: FlowNode, options: FlowConverterOptions): BaseNode {
     log.debug(`Creating node of type: ${node.type}`, {
       nodeId: node.id,
       label: node.data.label
@@ -293,16 +321,60 @@ export class FlowConverter {
       case 'process': {
         pocketNode = new ProcessNode();
         const sourceProperties = node.data.properties as ProcessNodeProperties | undefined;
+        const trustedMcpNodes: MCPNodeReference[] = [];
+        const seenTrustedIds = new Set<string>();
+        const seenTrustedServers = new Set<string>();
+        if (Array.isArray(sourceProperties?.mcpNodes) && options.trustedInlineMcpBindings) {
+          for (const candidate of sourceProperties.mcpNodes) {
+            const boundServer = candidate?.properties?.boundServer;
+            if (
+              typeof candidate?.id !== 'string'
+              || typeof boundServer !== 'string'
+              || options.trustedInlineMcpBindings.get(candidate.id) !== boundServer
+              || seenTrustedIds.has(candidate.id)
+              || seenTrustedServers.has(boundServer)
+            ) continue;
+            seenTrustedIds.add(candidate.id);
+            seenTrustedServers.add(boundServer);
+            // Inline references live outside immutable Behavior hashing. Never
+            // copy operational fields such as roots, presets, timeouts, or env
+            // from that untrusted representation. Persona projection grants a
+            // server plus its discovered tool/resource allowlists only.
+            const enabledTools = Array.isArray(candidate.properties.enabledTools)
+              ? Array.from(new Set(candidate.properties.enabledTools.filter(
+                  (tool): tool is string => typeof tool === 'string' && tool.length > 0,
+                )))
+              : [];
+            const enabledResources = candidate.properties.enabledResources;
+            trustedMcpNodes.push({
+              id: candidate.id,
+              properties: {
+                boundServer,
+                enabledTools,
+                ...(enabledResources === 'all'
+                  ? { enabledResources: 'all' as const }
+                  : Array.isArray(enabledResources)
+                    ? {
+                        enabledResources: Array.from(new Set(enabledResources.filter(
+                          (uri): uri is string => typeof uri === 'string' && uri.length > 0,
+                        ))),
+                      }
+                    : {}),
+              },
+            });
+          }
+        }
         nodeParams = {
           id: node.id,
           label: node.data.label,
           type: 'process',
           // Attachment lists are runtime-derived from edges. Always build them on a
           // fresh properties object so conversion cannot mutate the persisted flow or
-          // retain stale/duplicated entries from an older conversion.
+          // retain stale/duplicated entries from an older conversion. The one narrow
+          // exception is the exact out-of-band Persona App allowlist above.
           properties: {
             ...(sourceProperties ?? { name: node.data.label }),
-            mcpNodes: [],
+            mcpNodes: trustedMcpNodes,
             resourceNodes: [],
           }
         };

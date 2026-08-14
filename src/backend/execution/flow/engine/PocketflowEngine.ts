@@ -8,6 +8,7 @@ import { EmitFn } from '@/shared/types/execution/events';
 import { FlowEngine, ResolvedNode, RunNodeResult, HandoffResolution } from './FlowEngine';
 import { getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
 import cloneDeep from 'lodash/cloneDeep';
+import { personaCoreAppNodeId } from '@/backend/services/enduringAgents/personaCoreAppIdentity';
 
 const log = createLogger('backend/execution/flow/engine/PocketflowEngine');
 
@@ -33,12 +34,40 @@ export class PocketflowEngine implements FlowEngine {
     return digest;
   }
 
+  private trustedPersonaAppBindings(sharedState: SharedState): Map<string, string> {
+    if (
+      typeof sharedState.executionAuthority?.authorizePersonaCoreMcp !== 'function'
+      || !sharedState.personaAttribution
+      || !sharedState.personaInstructionContext
+      || !sharedState.flowSnapshot
+      || !Array.isArray(sharedState.personaCoreAppRefs)
+    ) return new Map();
+
+    const bindings = new Map<string, string>();
+    for (const serverName of Array.from(new Set(sharedState.personaCoreAppRefs)).sort()) {
+      if (typeof serverName !== 'string' || !serverName) continue;
+      bindings.set(personaCoreAppNodeId(serverName), serverName);
+    }
+    return bindings;
+  }
+
+  private personaAppBindingsDigest(sharedState: SharedState): string | undefined {
+    const entries = [...this.trustedPersonaAppBindings(sharedState).entries()];
+    if (entries.length === 0) return undefined;
+    return createHash('sha256').update(JSON.stringify(entries)).digest('base64url');
+  }
+
   private cacheKey(sharedState: SharedState): string {
     if (!sharedState.flowSnapshot) return workspaceCacheKey(sharedState.flowId);
-    return workspaceCacheKey(
+    const parts = [
       sharedState.flowId,
       'snapshot',
       this.snapshotDigest(sharedState.flowSnapshot),
+    ];
+    const personaAppBindingsDigest = this.personaAppBindingsDigest(sharedState);
+    if (personaAppBindingsDigest) parts.push('persona-apps', personaAppBindingsDigest);
+    return workspaceCacheKey(
+      ...parts,
     );
   }
 
@@ -94,7 +123,10 @@ export class PocketflowEngine implements FlowEngine {
       edgeCount: reactFlow.edges.length
     });
 
-    const pocketFlow = FlowConverter.convert(reactFlow);
+    const trustedInlineMcpBindings = this.trustedPersonaAppBindings(sharedState);
+    const pocketFlow = FlowConverter.convert(reactFlow, {
+      ...(trustedInlineMcpBindings.size > 0 ? { trustedInlineMcpBindings } : {}),
+    });
     this.pocketFlowCache.set(cacheKey, pocketFlow);
     log.verbose(`Flow ${flowId} converted and cached.`);
     return pocketFlow.clone() as PocketFlow;
@@ -273,6 +305,22 @@ export class PocketflowEngine implements FlowEngine {
 
   async previewModelInput(sharedState: SharedState) {
     const previewState = cloneDeep(sharedState);
+    if (sharedState.executionAuthority) {
+      Object.defineProperty(previewState, 'executionAuthority', {
+        value: sharedState.executionAuthority,
+        enumerable: false,
+        configurable: true,
+        writable: true,
+      });
+    }
+    if (Array.isArray(sharedState.personaCoreAppRefs)) {
+      Object.defineProperty(previewState, 'personaCoreAppRefs', {
+        value: [...sharedState.personaCoreAppRefs],
+        enumerable: false,
+        configurable: true,
+        writable: true,
+      });
+    }
     delete previewState.emit;
     // The preview is debugger-only even if a recovered legacy state omitted the
     // flag. ProcessNode.prep gates its model-input derivation on debugMode.

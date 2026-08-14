@@ -633,6 +633,8 @@ describe('Persona Flow dispatcher', () => {
 
   it('runs the Activity-pinned immutable snapshot and stamps only safe attribution', async () => {
     const harness = makeHarness(workspace('snapshot'));
+    (harness.dependencies.snapshotPersonaCoreAppRefs as jest.Mock)
+      .mockResolvedValueOnce(['personal-computer']);
     const submission = await harness.dispatcher.submit(
       dispatchInput('persona_test', 'immutable-snapshot'),
       { waitForCompletion: true, timeoutMs: 2_000 },
@@ -645,6 +647,7 @@ describe('Persona Flow dispatcher', () => {
     expect(runInput.flowDefinition).toEqual(harness.snapshot);
     expect(runInput.flowDefinition).not.toBe(harness.snapshot);
     expect(runInput).not.toHaveProperty('flowId');
+    expect(runInput.personaCoreAppRefs).toEqual(['personal-computer']);
     expect(runInput.personaAttribution).toEqual({
       personaId: 'persona_test',
       activityId: submission.dispatch.activityId,

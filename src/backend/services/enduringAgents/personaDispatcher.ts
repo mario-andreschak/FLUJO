@@ -2685,6 +2685,9 @@ export class PersonaFlowDispatcher {
         flowDefinition: coreFlowDefinition,
         abortSignal: abortController.signal,
         executionAuthority: authority,
+        ...(claim.activity.kind !== 'maintenance' && coreAppRefs.length > 0
+          ? { personaCoreAppRefs: [...coreAppRefs] }
+          : {}),
         behaviorToolRegistry,
         personaAttribution: {
           personaId: record.personaId,

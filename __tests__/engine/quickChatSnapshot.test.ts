@@ -9,7 +9,9 @@ jest.mock('@/backend/services/flow', () => ({
 }));
 
 import { PocketflowEngine } from '@/backend/execution/flow/engine/PocketflowEngine';
+import { BaseNode } from '@/backend/execution/flow/pocketflow';
 import { flowService } from '@/backend/services/flow';
+import { personaCoreAppNodeId } from '@/backend/services/enduringAgents/personaCoreAppIdentity';
 
 const getFlow = flowService.getFlow as jest.Mock;
 
@@ -45,6 +47,50 @@ function snapshotState(
     currentNodeId,
     messages: [],
   } as any;
+}
+
+function snapshotWithPersonaApp(): ReactFlow {
+  const flow = snapshotFlow();
+  const process = flow.nodes.find(({ id }) => id === PROCESS)!;
+  process.data.properties = {
+    ...process.data.properties,
+    mcpNodes: [{
+      id: personaCoreAppNodeId('personal-computer'),
+      properties: {
+        boundServer: 'personal-computer',
+        enabledTools: ['sandbox_exec'],
+        enabledResources: 'all',
+      },
+    }],
+  };
+  return flow;
+}
+
+function trustedPersonaState(flowSnapshot: ReactFlow, conversationId: string) {
+  const state = snapshotState(PROCESS, flowSnapshot, conversationId);
+  state.personaAttribution = {
+    personaId: 'jim',
+    activityId: 'activity-1',
+    behaviorRevisionId: 'revision-1',
+  };
+  state.personaInstructionContext = { kind: 'persona-core' };
+  Object.defineProperty(state, 'executionAuthority', {
+    value: {
+      assertCurrent: jest.fn(),
+      signal: new AbortController().signal,
+      authorizePersonaCoreMcp: jest.fn(),
+    },
+    enumerable: false,
+  });
+  Object.defineProperty(state, 'personaCoreAppRefs', {
+    value: ['personal-computer'],
+    enumerable: false,
+  });
+  return state;
+}
+
+function resolvedMcpNodes(resolved: Awaited<ReturnType<PocketflowEngine['resolveNode']>>) {
+  return (resolved.handle as BaseNode).node_params.properties.mcpNodes;
 }
 
 describe('PocketflowEngine — quick-chat snapshot resolution (issue #61)', () => {
@@ -102,6 +148,46 @@ describe('PocketflowEngine — quick-chat snapshot resolution (issue #61)', () =
       .resolves.toMatchObject({ id: processV2, type: 'process' });
     await expect(engine.resolveNode(snapshotState(PROCESS, v1, 'persona-v1')))
       .resolves.toMatchObject({ id: PROCESS, type: 'process' });
+    expect(getFlow).not.toHaveBeenCalled();
+  });
+
+  it('isolates Persona App authority in both compiled-cache orderings', async () => {
+    const flowSnapshot = snapshotWithPersonaApp();
+
+    const trustedFirst = await engine.resolveNode(
+      trustedPersonaState(flowSnapshot, 'trusted-first'),
+    );
+    const untrustedSecond = await engine.resolveNode(
+      snapshotState(PROCESS, flowSnapshot, 'untrusted-second'),
+    );
+
+    expect(resolvedMcpNodes(trustedFirst)).toEqual([{
+      id: personaCoreAppNodeId('personal-computer'),
+      properties: {
+        boundServer: 'personal-computer',
+        enabledTools: ['sandbox_exec'],
+        enabledResources: 'all',
+      },
+    }]);
+    expect(resolvedMcpNodes(untrustedSecond)).toEqual([]);
+
+    const inverseEngine = new PocketflowEngine();
+    const untrustedFirst = await inverseEngine.resolveNode(
+      snapshotState(PROCESS, flowSnapshot, 'untrusted-first'),
+    );
+    const trustedSecond = await inverseEngine.resolveNode(
+      trustedPersonaState(flowSnapshot, 'trusted-second'),
+    );
+
+    expect(resolvedMcpNodes(untrustedFirst)).toEqual([]);
+    expect(resolvedMcpNodes(trustedSecond)).toEqual([{
+      id: personaCoreAppNodeId('personal-computer'),
+      properties: {
+        boundServer: 'personal-computer',
+        enabledTools: ['sandbox_exec'],
+        enabledResources: 'all',
+      },
+    }]);
     expect(getFlow).not.toHaveBeenCalled();
   });
 

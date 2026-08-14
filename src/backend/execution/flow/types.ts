@@ -933,6 +933,12 @@ export interface SharedState {
      */
     executionAuthority?: FlowExecutionAuthority;
     /**
+     * Exact MCP server config names projected from the owning Persona Activity.
+     * Runtime-only and installed non-enumerably beside executionAuthority; the
+     * compiled-flow cache and FlowConverter use it as an out-of-band allowlist.
+     */
+    personaCoreAppRefs?: string[];
+    /**
      * Present only for a top-level participant conversation driven by the
      * MeetingEngine. The process-node prompt and synthetic meeting controls use
      * this identity; nested subflows deliberately do not receive it.

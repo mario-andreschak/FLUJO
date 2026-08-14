@@ -58,6 +58,9 @@ export async function persistConversationState(key: StorageKey, state: SharedSta
       executionTrace: undefined,
       emit: undefined,
       executionAuthority: undefined,
+      // Persona App bindings are an out-of-band runtime capability input. Keep
+      // this explicit even though runFlow installs them non-enumerably.
+      personaCoreAppRefs: undefined,
     });
   if (state.executionAuthority?.commitWhileCurrent) {
     await state.executionAuthority.commitWhileCurrent(writeSnapshot);
