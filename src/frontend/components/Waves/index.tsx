@@ -4,118 +4,43 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Box,
+  Button,
+  Checkbox,
   Chip,
   CircularProgress,
-  Divider,
+  ListItemText,
+  Menu,
+  MenuItem,
   Paper,
   Stack,
+  ToggleButton,
+  ToggleButtonGroup,
+  Tooltip,
   Typography,
 } from '@mui/material';
-import WavesIcon from '@mui/icons-material/Waves';
-import ScheduleIcon from '@mui/icons-material/Schedule';
-import type { Wave, WavesResponse } from '@/shared/types/waves/waves';
-import { wavesService } from '@/frontend/services/waves';
-import { createLogger } from '@/utils/logger';
-import { useListScrollNav } from '@/frontend/hooks/useListScrollNav';
+import CalendarViewDayRoundedIcon from '@mui/icons-material/CalendarViewDayRounded';
+import FilterAltOutlinedIcon from '@mui/icons-material/FilterAltOutlined';
+import HubRoundedIcon from '@mui/icons-material/HubRounded';
+import ViewInArRoundedIcon from '@mui/icons-material/ViewInArRounded';
+import WavesRoundedIcon from '@mui/icons-material/WavesRounded';
+import type { AutomationMapResponse } from '@/shared/types/waves/automationMap';
+import { automationMapService } from '@/frontend/services/automationMap';
 import { useWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
-import ScrollNavCluster from '@/frontend/components/shared/ScrollNavCluster';
-import WaveCanvas from './WaveCanvas';
-import { formatIn } from './waveTimeline';
+import PageHeader from '@/frontend/components/shared/PageHeader';
+import { createLogger } from '@/utils/logger';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import PlaygroundCanvas from './PlaygroundCanvas';
+import DayView from './DayView';
+import type { PlaygroundMode } from './playgroundGraph';
 
 const log = createLogger('frontend/components/Waves');
-
-/** How often to refresh the wave graph (picks up live nextRun / config edits). */
 const POLL_INTERVAL_MS = 30_000;
+const VIEW_PREF_KEY = 'flujo-ui:waves:view';
+const MODE_PREF_KEY = 'flujo-ui:waves:playground-mode';
+const ACTIVE_WAVE_PREF_KEY = 'flujo-ui:waves:active-wave';
 
-/** Persisted selection so a reload / poll keeps the same wave open (#209). */
-const SELECTED_PREF_KEY = 'flujo-ui:waves:selected';
+type WavesView = 'playground' | 'day';
 
-/** Root name(s) for a wave, used as its dashboard/detail title. */
-function rootNamesOf(wave: Wave): string[] {
-  return wave.nodes
-    .filter((n) => wave.rootExecutionIds.includes(n.executionId))
-    .map((n) => n.name);
-}
-
-function titleOf(wave: Wave, fallback = 'Wave'): string {
-  const names = rootNamesOf(wave);
-  return names.length > 0 ? names.join(', ') : fallback;
-}
-
-/** Whether any root drifts on the time axis (has a cron/poll schedule). */
-function isTimeBased(wave: Wave): boolean {
-  return wave.nodes.some((n) => n.timing.mode === 'timeline');
-}
-
-/** Earliest known upcoming run (ms) among the wave's scheduled roots, if any. */
-function nextRunOf(wave: Wave): number | null {
-  let earliest: number | null = null;
-  for (const n of wave.nodes) {
-    if (n.timing.mode === 'timeline' && n.timing.nextRun) {
-      const t = Date.parse(n.timing.nextRun);
-      if (Number.isFinite(t) && (earliest === null || t < earliest)) earliest = t;
-    }
-  }
-  return earliest;
-}
-
-interface WaveSummaryCardProps {
-  wave: Wave;
-  selected: boolean;
-  now: number;
-  onSelect: () => void;
-}
-
-/** Compact overview card for a single wave in the dashboard list (#209). */
-function WaveSummaryCard({ wave, selected, now, onSelect }: WaveSummaryCardProps) {
-  const { t, tp } = useI18n();
-  const timeBased = isTimeBased(wave);
-  const nextRun = timeBased ? nextRunOf(wave) : null;
-  const title = titleOf(wave, t('waves.fallbackName'));
-  return (
-    <Paper
-      variant="outlined"
-      onClick={onSelect}
-      sx={{
-        p: 1.25,
-        cursor: 'pointer',
-        borderColor: selected ? 'primary.main' : undefined,
-        borderWidth: selected ? 2 : 1,
-        bgcolor: selected ? 'action.selected' : 'background.paper',
-        transition: 'border-color 120ms ease, background-color 120ms ease',
-        '&:hover': { borderColor: 'primary.light' },
-      }}
-    >
-      <Typography variant="subtitle2" sx={{ fontWeight: 600, lineHeight: 1.25 }} noWrap title={title}>
-        {title}
-      </Typography>
-      <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mt: 0.75 }}>
-        <Chip label={tp('waves.triggerCount', wave.nodes.length)} size="small" variant="outlined" />
-        {timeBased && <Chip label={t('waves.timeBased')} size="small" color="info" variant="outlined" />}
-        {wave.hasCycle && <Chip label={t('waves.recursive')} color="warning" size="small" />}
-      </Stack>
-      {timeBased && (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.75, opacity: 0.75 }}>
-          <ScheduleIcon sx={{ fontSize: 14 }} />
-          <Typography variant="caption">
-            {t('waves.nextRun', { time: nextRun ? formatIn(nextRun, now, t) : t('waves.notScheduled') })}
-          </Typography>
-        </Box>
-      )}
-    </Paper>
-  );
-}
-
-/**
- * Waves section (#128): a read-only visualization of how Planned Executions
- * chain together via signals and completion events.
- *
- * The surface is a dashboard + detail split (#209): a scrollable list of compact
- * wave summaries on the left, and the selected wave rendered on a large canvas on
- * the right (stacked mini-canvases were too small). Selection persists across
- * reloads and the 30s poll.
- */
 export type WavesManagerHeight = number | string | {
   xs: number | string;
   sm?: number | string;
@@ -125,157 +50,277 @@ export type WavesManagerHeight = number | string | {
 };
 
 interface WavesManagerProps {
-  /** Definite height supplied by a full-page route; embedded views keep using their parent height. */
+  /** Definite height supplied by the full-page route; embedded views inherit their parent. */
   height?: WavesManagerHeight;
+}
+
+function packageNamesOf(data: AutomationMapResponse | null): string[] {
+  if (!data) return [];
+  return [...new Set([
+    ...data.packages.map((item) => item.name),
+    ...data.flows.flatMap((item) => item.packageNames),
+  ])].sort((left, right) => left.localeCompare(right));
 }
 
 export default function WavesManager({ height = '100%' }: WavesManagerProps) {
   const { t, tp } = useI18n();
-  const [data, setData] = useState<WavesResponse | null>(null);
+  const [data, setData] = useState<AutomationMapResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [now, setNow] = useState(() => Date.now());
-  const [selectedId, setSelectedId] = useWorkspaceUiPreference<string | null>(SELECTED_PREF_KEY, null);
-
-  // Persist the LIST scroll position + back-to-top (#185); re-restore on new data.
-  const { ref: scrollRef, clusterProps: scrollNavProps } = useListScrollNav<HTMLDivElement>(
-    'flujo-ui:scroll:waves',
-    { deps: [data], groupsEnabled: false },
-  );
+  const [loadError, setLoadError] = useState(false);
+  const [view, setView] = useWorkspaceUiPreference<WavesView>(VIEW_PREF_KEY, 'playground');
+  const [mode, setMode] = useWorkspaceUiPreference<PlaygroundMode>(MODE_PREF_KEY, 'simple');
+  const [activeWaveId, setActiveWaveId] = useWorkspaceUiPreference<string | null>(ACTIVE_WAVE_PREF_KEY, null);
+  const [visiblePackageNames, setVisiblePackageNames] = useState<string[]>([]);
+  const [packageMenuAnchor, setPackageMenuAnchor] = useState<HTMLElement | null>(null);
 
   const refresh = useCallback(async () => {
-    const response = await wavesService.list();
+    const response = await automationMapService.load();
     setData(response);
+    setLoadError(false);
     setLoading(false);
   }, []);
 
-  useEffect(() => {
+  const retryLoad = useCallback(() => {
+    setLoading(true);
     refresh().catch((error) => {
-      log.warn('Initial waves load failed', error);
+      log.warn('Automation map retry failed', error);
+      setLoadError(true);
       setLoading(false);
     });
-    const t = setInterval(() => {
-      refresh().catch((error) => log.warn('Waves refresh failed', error));
-    }, POLL_INTERVAL_MS);
-    return () => clearInterval(t);
   }, [refresh]);
 
-  // Keep summary "next run in Xh" labels fresh without thrashing.
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(t);
+    refresh().catch((error) => {
+      log.warn('Initial automation map load failed', error);
+      setLoadError(true);
+      setLoading(false);
+    });
+    const timer = window.setInterval(() => {
+      refresh().catch((error) => {
+        log.warn('Automation map refresh failed', error);
+        setLoadError(true);
+      });
+    }, POLL_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [refresh]);
+
+  useEffect(() => {
+    if (!data || !activeWaveId) return;
+    if (!data.waves.some((wave) => wave.id === activeWaveId)) setActiveWaveId(null);
+  }, [activeWaveId, data, setActiveWaveId]);
+
+  const packageNames = useMemo(() => packageNamesOf(data), [data]);
+  const packageFilter = useMemo(
+    () => visiblePackageNames.length === 0 ? undefined : new Set(visiblePackageNames),
+    [visiblePackageNames],
+  );
+
+  const selectWaveFromDay = useCallback((waveId: string) => {
+    setActiveWaveId(waveId);
+    setView('playground');
+  }, [setActiveWaveId, setView]);
+
+  const selectExecutionFromDay = useCallback((executionId: string) => {
+    const waveId = data?.executions.find((execution) => execution.executionId === executionId)?.waveIds[0] ?? null;
+    setActiveWaveId(waveId);
+    setView('playground');
+  }, [data?.executions, setActiveWaveId, setView]);
+
+  const togglePackage = useCallback((packageName: string) => {
+    setVisiblePackageNames((current) => {
+      if (current.length === 0) return [packageName];
+      if (current.includes(packageName)) {
+        const next = current.filter((name) => name !== packageName);
+        return next;
+      }
+      return [...current, packageName];
+    });
   }, []);
 
-  const waves = useMemo(() => data?.waves ?? [], [data]);
-  const orphans = data?.orphans ?? [];
-
-  // Resolve the selected wave, falling back to the first when the stored id is
-  // gone (deleted execution, config change) or nothing is selected yet.
-  const selectedWave = useMemo(() => {
-    if (waves.length === 0) return null;
-    return waves.find((w) => w.id === selectedId) ?? waves[0];
-  }, [waves, selectedId]);
-
-  if (loading) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height, minHeight: 0 }}>
-        <CircularProgress />
-      </Box>
-    );
-  }
+  const headerActions = (
+    <ToggleButtonGroup
+      exclusive
+      size="small"
+      value={view}
+      onChange={(_, next: WavesView | null) => next && setView(next)}
+      aria-label="Waves view"
+      sx={{
+        bgcolor: 'background.paper',
+        '& .MuiToggleButton-root': { px: { xs: 1.15, sm: 1.75 }, gap: 0.7, textTransform: 'none', fontWeight: 700 },
+      }}
+    >
+      <ToggleButton value="playground" aria-label={t('waves.playground')}>
+        <HubRoundedIcon sx={{ fontSize: 18 }} />
+        {t('waves.playground')}
+      </ToggleButton>
+      <ToggleButton value="day" aria-label={t('waves.day')}>
+        <CalendarViewDayRoundedIcon sx={{ fontSize: 18 }} />
+        {t('waves.day')}
+      </ToggleButton>
+    </ToggleButtonGroup>
+  );
 
   return (
-    <Box sx={{ p: 3, height, boxSizing: 'border-box', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-        <WavesIcon color="primary" />
-        <Typography variant="h5" sx={{ fontWeight: 600 }}>
-          {t('waves.title')}
-        </Typography>
-        <Chip label={t('waves.experimental')} size="small" color="warning" variant="outlined" />
-        {data?.paused && <Chip label={t('waves.schedulerPaused')} color="warning" size="small" />}
-      </Box>
-      <Typography variant="body2" sx={{ opacity: 0.75, mb: 2 }}>
-        {t('waves.description')}
-      </Typography>
+    <Box sx={{ height, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <PageHeader
+        compact
+        icon={WavesRoundedIcon}
+        eyebrowKey="waves.mapEyebrow"
+        titleKey="waves.title"
+        descriptionKey="waves.playgroundDescription"
+        badge={data?.paused ? <Chip size="small" color="warning" label={t('waves.schedulerPaused')} /> : undefined}
+        actions={headerActions}
+      />
 
-      {waves.length === 0 && orphans.length === 0 && (
-        <Alert severity="info">
-          {t('waves.empty')}
-        </Alert>
-      )}
-
-      {(waves.length > 0 || orphans.length > 0) && (
-        <Box sx={{ flex: 1, minHeight: 0, display: 'flex', gap: 2 }}>
-          {/* Dashboard: scrollable list of wave summaries + unlinked triggers. */}
-          <Box
-            ref={scrollRef}
-            sx={{ width: 320, flexShrink: 0, overflow: 'auto', pr: 0.5 }}
-          >
-            <Stack spacing={1}>
-              {waves.map((wave) => (
-                <WaveSummaryCard
-                  key={wave.id}
-                  wave={wave}
-                  now={now}
-                  selected={selectedWave?.id === wave.id}
-                  onSelect={() => setSelectedId(wave.id)}
-                />
-              ))}
+      <Box
+        sx={{
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 1.15,
+          px: { xs: 1, sm: 1.5, lg: 2 },
+          pt: 1.15,
+          pb: { xs: 1, sm: 1.5 },
+        }}
+      >
+        {loading && (
+          <Box sx={{ flex: 1, display: 'grid', placeItems: 'center' }}>
+            <Stack spacing={1.25} alignItems="center">
+              <CircularProgress size={34} />
+              <Typography variant="body2" color="text.secondary">{t('waves.buildingMap')}</Typography>
             </Stack>
-
-            {orphans.length > 0 && (
-              <>
-                <Divider sx={{ my: 2 }} />
-                <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5 }}>
-                  {t('waves.unlinkedTitle')}
-                </Typography>
-                <Typography variant="caption" sx={{ display: 'block', opacity: 0.75, mb: 1 }}>
-                  {t('waves.unlinkedDescription')}
-                </Typography>
-                <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-                  {orphans.map((o) => (
-                    <Chip key={o.executionId} label={`${o.name} → ${o.flowName ?? o.flowId}`} size="small" />
-                  ))}
-                </Stack>
-              </>
-            )}
-
-            <ScrollNavCluster {...scrollNavProps} actions={['top', 'bottom']} />
           </Box>
+        )}
 
-          {/* Detail: the selected wave on a large canvas. */}
-          <Box sx={{ flex: 1, minHeight: 0 }}>
-            {selectedWave ? (
-              <Paper
-                variant="outlined"
-                sx={{ p: 1.5, height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}
-              >
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                  <Typography variant="subtitle1" sx={{ fontWeight: 600 }} noWrap title={titleOf(selectedWave, t('waves.fallbackName'))}>
-                    {titleOf(selectedWave, t('waves.fallbackName'))}
-                  </Typography>
-                  <Chip label={tp('waves.triggerCount', selectedWave.nodes.length)} size="small" variant="outlined" />
-                  {selectedWave.hasCycle && <Chip label={t('waves.recursive')} color="warning" size="small" />}
-                </Box>
-                <Box sx={{ flex: 1, minHeight: 0 }}>
-                  <WaveCanvas key={selectedWave.id} wave={selectedWave} height="100%" />
-                </Box>
-              </Paper>
-            ) : (
-              <Box
-                sx={{
-                  height: '100%',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  opacity: 0.6,
-                }}
-              >
-                <Typography variant="body2">{t('waves.selectPrompt')}</Typography>
-              </Box>
-            )}
+        {!loading && !data && loadError && (
+          <Box sx={{ flex: 1, display: 'grid', placeItems: 'center', p: 2 }}>
+            <Alert
+              severity="error"
+              action={<Button color="inherit" size="small" onClick={retryLoad}>{t('common.tryAgain')}</Button>}
+            >
+              {t('waves.loadError')}
+            </Alert>
           </Box>
-        </Box>
-      )}
+        )}
+
+        {!loading && data && view === 'playground' && (
+          <>
+            <Paper
+              variant="outlined"
+              sx={{
+                minHeight: 42,
+                px: 0.75,
+                py: 0.55,
+                borderRadius: 3,
+                display: 'flex',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: 0.75,
+              }}
+            >
+              <ToggleButtonGroup
+                exclusive
+                size="small"
+                value={mode}
+                onChange={(_, next: PlaygroundMode | null) => next && setMode(next)}
+                aria-label="Playground detail"
+                sx={{ '& .MuiToggleButton-root': { py: 0.35, px: 1.25, gap: 0.6, textTransform: 'none', fontWeight: 700 } }}
+              >
+                <ToggleButton value="simple" aria-label={t('waves.simple')}>
+                  <ViewInArRoundedIcon sx={{ fontSize: 17 }} />
+                  {t('waves.simple')}
+                </ToggleButton>
+                <ToggleButton value="expert" aria-label={t('waves.expert')}>
+                  <HubRoundedIcon sx={{ fontSize: 17 }} />
+                  {t('waves.expert')}
+                </ToggleButton>
+              </ToggleButtonGroup>
+
+              <Tooltip title={t('waves.packageFilter')}>
+                <Chip
+                  component="button"
+                  clickable
+                  size="small"
+                  icon={<FilterAltOutlinedIcon />}
+                  variant={visiblePackageNames.length > 0 ? 'filled' : 'outlined'}
+                  color={visiblePackageNames.length > 0 ? 'primary' : 'default'}
+                  label={visiblePackageNames.length === 0
+                    ? t('waves.allPackages')
+                    : t('waves.packageSelection', { selected: visiblePackageNames.length, total: packageNames.length })}
+                  onClick={(event) => setPackageMenuAnchor(event.currentTarget)}
+                />
+              </Tooltip>
+              <Menu
+                anchorEl={packageMenuAnchor}
+                open={Boolean(packageMenuAnchor)}
+                onClose={() => setPackageMenuAnchor(null)}
+                slotProps={{ paper: { sx: { minWidth: 230, maxHeight: 360 } } }}
+              >
+                <MenuItem selected={visiblePackageNames.length === 0} onClick={() => setVisiblePackageNames([])}>
+                  <Checkbox size="small" checked={visiblePackageNames.length === 0} />
+                  <ListItemText primary={t('waves.allPackages')} />
+                </MenuItem>
+                {packageNames.map((packageName) => (
+                  <MenuItem key={packageName} onClick={() => togglePackage(packageName)}>
+                    <Checkbox
+                      size="small"
+                      checked={visiblePackageNames.length === 0 || visiblePackageNames.includes(packageName)}
+                    />
+                    <ListItemText primary={packageName} />
+                  </MenuItem>
+                ))}
+              </Menu>
+
+              <Box sx={{ flex: 1 }} />
+              {loadError && <Chip size="small" color="warning" variant="outlined" label={t('waves.staleMap')} />}
+              <Chip size="small" variant="outlined" label={tp('waves.flowCount', data.flows.length)} />
+              <Chip size="small" variant="outlined" label={tp('waves.connectionCount', data.relations.length)} />
+              {data.orphanExecutionIds.length > 0 && (
+                <Tooltip title={t('waves.unlinkedDescription')}>
+                  <Chip
+                    size="small"
+                    color="warning"
+                    variant="outlined"
+                    label={tp('waves.unlinkedCount', data.orphanExecutionIds.length)}
+                  />
+                </Tooltip>
+              )}
+            </Paper>
+
+            <Paper
+              variant="outlined"
+              data-testid="waves-playground"
+              sx={{
+                flex: 1,
+                minHeight: 0,
+                overflow: 'hidden',
+                borderRadius: 4,
+                bgcolor: 'background.default',
+              }}
+            >
+              <PlaygroundCanvas
+                data={data}
+                mode={mode}
+                activeWaveId={activeWaveId}
+                onActiveWaveChange={setActiveWaveId}
+                visiblePackageNames={packageFilter}
+              />
+            </Paper>
+          </>
+        )}
+
+        {!loading && data && view === 'day' && (
+          <Box data-testid="waves-day-view" sx={{ flex: 1, minHeight: 0 }}>
+            <DayView
+              data={data}
+              height="100%"
+              onSelectWave={selectWaveFromDay}
+              onSelectExecution={selectExecutionFromDay}
+            />
+          </Box>
+        )}
+      </Box>
     </Box>
   );
 }
