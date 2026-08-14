@@ -19,6 +19,7 @@ import {
   type PersonaLeaseFence,
 } from '@/backend/services/enduringAgents';
 import { createPersonaFromRole } from './fixtures/personaFactory';
+import { flowService } from '@/backend/services/flow';
 import { ENDURING_AGENT_COLLECTIONS } from '@/backend/services/enduringAgents/collections';
 import {
   withIssuedPersonaRuntimeLockOperation,
@@ -957,38 +958,34 @@ describe('enduring-agent Activity runtime', () => {
         (candidate) => candidate.slotKey === 'primary',
       )!;
       const original = (await getBehaviorRevision(binding.activeRevisionId))!;
-      const flowSnapshot = snapshotBehaviorFlow({
-        ...original.flowSnapshot,
-        name: `${original.flowSnapshot.name} v2`,
-      });
-      const contentHash = hashBehaviorFlow(flowSnapshot);
-      const replacement = BehaviorRevisionSchema.parse({
-        ...original,
-        id: behaviorRevisionId({
-          personaId: persona.id,
-          behaviorId: binding.id,
-          revision: original.revision + 1,
-          contentHash,
-        }),
-        revision: original.revision + 1,
-        contentHash,
-        flowSnapshot,
-        source: { kind: 'persona_override', parentRevisionId: original.id },
-        createdAt: Date.now(),
-      });
-      await createBehaviorRevision(replacement);
-      await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.behaviorBindings, binding.id, {
-        ...binding,
-        activeRevisionId: replacement.id,
-        updatedAt: Date.now(),
-      });
+      const authoredBehavior = persona.composition?.behaviors
+        ?.find((candidate) => candidate.ref === binding.id);
+      if (authoredBehavior?.binding?.mode !== 'persona_copy') {
+        throw new Error('Expected a Persona-owned authored Behavior Flow.');
+      }
+      const authoredFlow = await flowService.getFlow(
+        authoredBehavior.binding.personaFlowRef,
+      );
+      expect(authoredFlow).not.toBeNull();
+      await expect(flowService.saveFlow({
+        ...authoredFlow!,
+        name: `${authoredFlow!.name} v2`,
+      })).resolves.toMatchObject({ success: true });
+
+      // Admission snapshots the updated authored Flow and rebinds the slot for
+      // new work. The already-created Activity must retain its immutable pin.
+      await enqueuePersonaMailboxItem(assignment(persona.id, 'new-after-change'));
+      const rebound = (await listBehaviorBindings(persona.id)).find(
+        (candidate) => candidate.slotKey === 'primary',
+      )!;
+      const replacement = (await getBehaviorRevision(rebound.activeRevisionId))!;
+      expect(replacement.id).not.toBe(original.id);
 
       const resumed = await claim(persona.id);
       expect(resumed.activity.id).toBe(active.activity.id);
       expect(resumed.activity.behaviorRevisionId).toBe(original.id);
       await completePersonaActivity(fence(resumed));
 
-      await enqueuePersonaMailboxItem(assignment(persona.id, 'new-after-change'));
       const next = await claim(persona.id);
       expect(next.activity.behaviorRevisionId).toBe(replacement.id);
     });
