@@ -2,10 +2,10 @@ import { randomUUID } from 'crypto';
 
 import type { FlowRunInput } from '@/backend/execution/flow/runFlow';
 import type { FlujoChatMessage } from '@/shared/types/chat';
+import type { Flow } from '@/shared/types/flow';
 
 const runFlowMock = jest.fn();
 const loadConversationStateMock = jest.fn();
-const getFlowMock = jest.fn();
 const conversationStates = new Map<string, any>();
 
 jest.mock('@/backend/execution/flow/runFlow', () => ({
@@ -20,10 +20,6 @@ jest.mock('@/backend/execution/flow/FlowExecutor', () => ({
   FlowExecutor: { conversationStates: new Map() },
 }));
 
-jest.mock('@/backend/services/flow', () => ({
-  flowService: { getFlow: (...args: unknown[]) => getFlowMock(...args) },
-}));
-
 jest.mock('@/backend/services/runResources', () => ({
   copyRunResourceToConversation: jest.fn(),
   getRunResourceLocalPath: jest.fn(),
@@ -34,11 +30,12 @@ import {
   MeetingEngine,
 } from '@/backend/execution/meeting/MeetingEngine';
 import {
-  createPersonaFromRole,
   getPersonaActivity,
   getPersonaLease,
   listPersonaMailboxItems,
 } from '@/backend/services/enduringAgents';
+import { createPersonaFromRole } from '../enduringAgents/fixtures/personaFactory';
+import { flowService } from '@/backend/services/flow';
 import { meetingEventBus } from '@/backend/services/meetings/MeetingEventBus';
 import { deleteMeeting, getMeeting } from '@/backend/services/meetings/store';
 import { runWithWorkspace } from '@/utils/workspace';
@@ -53,11 +50,16 @@ function inFreshWorkspace<T>(task: () => Promise<T>): Promise<T> {
   );
 }
 
-function flow(id: string) {
+function flow(id: string): Flow {
   return {
     id,
     name: id,
-    nodes: [{ id: `${id}_start`, type: 'start', data: { type: 'start' } }],
+    nodes: [{
+      id: `${id}_start`,
+      type: 'start',
+      position: { x: 0, y: 0 },
+      data: { label: 'Start', type: 'start' },
+    }],
     edges: [],
   };
 }
@@ -69,7 +71,6 @@ describe('durable Persona meeting start intent', () => {
     loadConversationStateMock.mockReset().mockImplementation(
       async (conversationId: string) => conversationStates.get(conversationId),
     );
-    getFlowMock.mockReset().mockImplementation(async (id: string) => flow(id));
     runFlowMock.mockImplementation(async (input: FlowRunInput) => {
       const assistant: FlujoChatMessage = {
         role: 'assistant',
@@ -100,6 +101,8 @@ describe('durable Persona meeting start intent', () => {
 
   it('advances generation after a crash between Persona claims and the running snapshot', async () => {
     await inFreshWorkspace(async () => {
+      await expect(flowService.saveFlow(flow('flow_legacy')))
+        .resolves.toMatchObject({ success: true });
       const { persona } = await createPersonaFromRole({
         name: 'Crash-safe meeting participant',
         idempotencyKey: 'meeting-start-intent-persona',

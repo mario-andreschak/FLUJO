@@ -43,6 +43,10 @@ import {
   type PersonaDetail,
 } from '@/frontend/services/personas';
 import type { Flow } from '@/frontend/types/flow/flow';
+import {
+  personaFlowBuilderUrl,
+  personaReturnPath,
+} from '@/frontend/utils/personaFlowNavigation';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import type {
   PersonaBehaviorComposition,
@@ -420,7 +424,12 @@ function FlowSection({
     <Paper variant="outlined" sx={{ p: { xs: 2, md: 3 }, borderRadius: 4 }}>
       <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" gap={1}>
         <Box><Typography variant="h5" fontWeight={760}>{title}</Typography><Typography color="text.secondary">{description}</Typography></Box>
-        {card && <ReadinessChip card={card} />}
+        {card && (
+          <Stack direction="row" spacing={1}>
+            <OwnershipChip card={card} />
+            <ReadinessChip card={card} />
+          </Stack>
+        )}
       </Stack>
       <Box sx={{ mt: 2 }}>
         {card?.flow
@@ -440,6 +449,19 @@ function FlowSection({
   );
 }
 
+function OwnershipChip({ card }: { card: PersonaFlowCard }) {
+  const { t } = useI18n();
+  const kind = (card.flow as Flow | undefined)?.personaOwnership?.kind;
+  if (!kind) return null;
+  const label = {
+    core: t('personas.behaviors.kind.core'),
+    role_behavior: t('personas.behaviors.kind.role_behavior'),
+    supplemental: t('personas.behaviors.kind.supplemental'),
+    custom: t('personas.behaviors.kind.custom'),
+  }[kind];
+  return <Chip variant="outlined" label={label} />;
+}
+
 function ReadinessChip({ card }: { card: PersonaFlowCard }) {
   const { t } = useI18n();
   const color = card.readiness.state === 'ready' ? 'success' : card.readiness.state === 'missing' ? 'error' : 'warning';
@@ -449,11 +471,13 @@ function ReadinessChip({ card }: { card: PersonaFlowCard }) {
 function FlowLinks({ card, personaId }: { card: PersonaFlowCard; personaId: string }) {
   const { t } = useI18n();
   if (!card.flow || card.readiness.state === 'missing') return null;
-  const returnTo = `/personas/${encodeURIComponent(personaId)}?area=setup&section=behaviors`;
-  const builder = `/flows?flow=${encodeURIComponent(card.effectiveFlowRef)}&mode=edit&returnTo=${encodeURIComponent(returnTo)}`;
+  const builder = personaFlowBuilderUrl(
+    card.effectiveFlowRef,
+    personaReturnPath(personaId),
+  );
   return (
     <>
-      <Button component={Link} href={withWorkspaceUrl(builder)} startIcon={<OpenInNewRounded />}>{t('personas.behaviors.openBuilder')}</Button>
+      <Button component={Link} href={builder} startIcon={<OpenInNewRounded />}>{t('personas.behaviors.openBuilder')}</Button>
       <Button component={Link} href={withWorkspaceUrl(`/chat?flow=${encodeURIComponent(card.effectiveFlowRef)}`)} disabled={card.readiness.state !== 'ready'} startIcon={<PlayArrowRounded />}>{t('personas.behaviors.runTest')}</Button>
     </>
   );

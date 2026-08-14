@@ -46,11 +46,24 @@ import { runWithWorkspace } from '@/utils/workspace';
 
 let workspaceSequence = 0;
 
-function inFreshWorkspace<T>(task: () => T): T {
+async function inFreshWorkspace<T>(
+  task: () => T | Promise<T>,
+): Promise<T> {
   workspaceSequence += 1;
   return runWithWorkspace(
     `enduring-store-${process.pid}-${workspaceSequence}`,
-    task,
+    async () => {
+      // Role templates remain model-neutral. Persona materialization resolves
+      // the one unambiguous workspace model and validates the generated Core
+      // and Behavior Flows as runnable.
+      await saveItem(StorageKey.MODELS, [{
+        id: 'model-test',
+        name: 'test-model',
+        displayName: 'Test model',
+        provider: 'openai',
+      }]);
+      return task();
+    },
   );
 }
 

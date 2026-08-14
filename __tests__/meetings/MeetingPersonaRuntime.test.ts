@@ -1,13 +1,13 @@
 import {
   claimNextPersonaActivity,
   completePersonaActivity,
-  createPersonaFromRole,
   enqueuePersonaMailboxItem,
   getPersonaActivity,
   listPersonaMailboxItems,
   type PersonaActivityClaim,
   type PersonaLeaseFence,
 } from '@/backend/services/enduringAgents';
+import { createPersonaFromRole } from '../enduringAgents/fixtures/personaFactory';
 import {
   completeMeetingPersonaReservations,
   MEETING_PERSONA_LEASE_TTL_MS,

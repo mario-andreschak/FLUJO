@@ -9,7 +9,9 @@ import { GET as searchMemory, POST as rememberMemory } from '@/app/v1/personas/[
 import { GET as listWorkItems, POST as createWorkItem } from '@/app/v1/personas/[personaId]/work-items/route';
 import { POST as createPersona } from '@/app/v1/personas/route';
 import { GET as listRoles } from '@/app/v1/roles/route';
-import { ensureWorkspaceDirs } from '@/utils/workspace';
+import { StorageKey } from '@/shared/types/storage';
+import { saveItem } from '@/utils/storage/backend';
+import { ensureWorkspaceDirs, runWithWorkspace } from '@/utils/workspace';
 
 const workspaceA = `enduring-route-a-${process.pid}`;
 const workspaceB = `enduring-route-b-${process.pid}`;
@@ -35,6 +37,14 @@ describe('enduring-agent production routes', () => {
       ensureWorkspaceDirs(workspaceA),
       ensureWorkspaceDirs(workspaceB),
     ]);
+    await Promise.all([workspaceA, workspaceB].map((workspace) => (
+      runWithWorkspace(workspace, () => saveItem(StorageKey.MODELS, [{
+        id: 'model-test',
+        name: 'test-model',
+        displayName: 'Test model',
+        provider: 'openai',
+      }]))
+    )));
   });
 
   it('creates Jim through the real factory and keeps him workspace-scoped', async () => {
@@ -101,7 +111,7 @@ describe('enduring-agent production routes', () => {
       expect.objectContaining({ id: 'role_builtin_developer', name: 'Developer' }),
     ]));
     expect(result.roleVersions).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'rolever_builtin_developer_v1', version: 1 }),
+      expect.objectContaining({ id: 'rolever_builtin_developer_v2', version: 2 }),
     ]));
   });
 

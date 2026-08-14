@@ -127,8 +127,37 @@ function makeHarness(
   const snapshot = {
     id: 'pinned_flow',
     name: 'Pinned immutable Flow',
-    nodes: [],
-    edges: [],
+    nodes: [
+      {
+        id: 'start',
+        type: 'start',
+        position: { x: 0, y: 0 },
+        data: { label: 'Start', type: 'start', properties: {} },
+      },
+      {
+        id: 'primary',
+        type: 'process',
+        position: { x: 240, y: 0 },
+        data: {
+          label: 'Primary',
+          type: 'process',
+          properties: {
+            promptTemplate: 'Handle the Activity.',
+            boundModel: 'model-test',
+          },
+        },
+      },
+      {
+        id: 'finish',
+        type: 'finish',
+        position: { x: 480, y: 0 },
+        data: { label: 'Finish', type: 'finish', properties: {} },
+      },
+    ],
+    edges: [
+      { id: 'start-primary', source: 'start', target: 'primary' },
+      { id: 'primary-finish', source: 'primary', target: 'finish' },
+    ],
   } as unknown as BehaviorRevision['flowSnapshot'];
   const persona = {
     schemaVersion: 1,

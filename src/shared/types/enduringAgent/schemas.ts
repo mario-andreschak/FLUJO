@@ -12,6 +12,7 @@ import {
   MEMORY_TRUST_LEVELS,
   PERSONA_ACTIVITY_KINDS,
   PERSONA_SCHEMA_VERSION,
+  PERSONA_CREATION_DRAFT_SCHEMA_VERSION,
   PERSONA_ACTIVITY_SOURCE_KINDS,
   PERSONA_ACTIVITY_STATUSES,
   PERSONA_AUTONOMY_LEVELS,
@@ -347,6 +348,10 @@ export const RoleVersionSchema = z.object({
   name: NonEmptyText(160),
   mission: NonEmptyText(20_000),
   suggestedApps: RoleSuggestedAppsSchema.optional(),
+  /** Optional immutable template used to create the Persona-owned Core Flow. */
+  coreFlowTemplate: FlowSnapshotSchema.optional(),
+  /** Permitted role-level fallback for unbound generated Process nodes. */
+  defaultModelId: z.string().trim().min(1).max(256).optional(),
   behaviorSlots: z.array(RoleBehaviorSlotSchema).min(1).max(64),
   capabilityRequirements: RoleCapabilityRequirementsSchema.optional(),
   defaults: RoleDefaultsSchema.optional(),
@@ -364,6 +369,8 @@ export const CreateRoleVersionInputSchema = z.object({
   name: NonEmptyText(160),
   mission: NonEmptyText(20_000),
   suggestedApps: RoleSuggestedAppsSchema.optional(),
+  coreFlowTemplate: FlowSnapshotSchema.optional(),
+  defaultModelId: z.string().trim().min(1).max(256).optional(),
   behaviorSlots: z.array(RoleBehaviorSlotSchema).min(1).max(64),
   capabilityRequirements: RoleCapabilityRequirementsSchema.optional(),
   defaults: RoleDefaultsSchema.optional(),
@@ -437,6 +444,69 @@ export const CreatePersonaInputSchema = z.object({
     });
   }
 });
+
+const EmptyOrEnduringAgentIdSchema = z.union([z.literal(''), EnduringAgentIdSchema]);
+const EmptyOrWorkspaceFlowRefSchema = z.union([z.literal(''), WorkspaceFlowRefSchema]);
+
+export const PersonaCreationDraftPayloadSchema = z.object({
+  step: z.number().int().min(0).max(6),
+  name: z.string().max(160),
+  mission: z.string().max(20_000),
+  avatarUrl: z.string().max(2_048).refine((value) => {
+    if (!value.trim()) return true;
+    try {
+      const url = new URL(value);
+      return url.protocol === 'http:' || url.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  }, 'Avatar URL must use http or https.'),
+  roleVersionId: EmptyOrEnduringAgentIdSchema,
+  coreFlowRef: EmptyOrWorkspaceFlowRefSchema,
+  behaviorFlowRefs: z.array(WorkspaceFlowRefSchema).max(64)
+    .refine((refs) => new Set(refs).size === refs.length, 'Behavior Flow references must be unique.'),
+  appRefs: z.array(PersonaAppRefSchema).max(128)
+    .refine((refs) => new Set(refs).size === refs.length, 'App references must be unique.'),
+  appsEdited: z.boolean(),
+  memories: z.array(z.string().max(100_000)).max(100),
+  idempotencyKey: z.string().min(1).max(512),
+}).strict().superRefine((payload, ctx) => {
+  if (payload.coreFlowRef && payload.behaviorFlowRefs.includes(payload.coreFlowRef)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['behaviorFlowRefs'],
+      message: 'The Core Flow cannot also be selected as a Behavior.',
+    });
+  }
+});
+
+export const PersonaCreationDraftSchema = z.object({
+  schemaVersion: z.literal(PERSONA_CREATION_DRAFT_SCHEMA_VERSION),
+  id: EnduringAgentIdSchema,
+  workspaceId: z.string().min(1).max(256),
+  status: z.literal('draft'),
+  payload: PersonaCreationDraftPayloadSchema,
+  revision: z.number().int().positive(),
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+}).strict().refine(
+  (record) => record.updatedAt >= record.createdAt,
+  { message: 'updatedAt cannot precede createdAt.', path: ['updatedAt'] },
+);
+
+export const CreatePersonaCreationDraftInputSchema = z.object({
+  id: EnduringAgentIdSchema.optional(),
+  payload: PersonaCreationDraftPayloadSchema,
+}).strict();
+
+export const UpdatePersonaCreationDraftInputSchema = z.object({
+  expectedRevision: z.number().int().positive(),
+  payload: PersonaCreationDraftPayloadSchema,
+}).strict();
+
+export const DeletePersonaCreationDraftInputSchema = z.object({
+  expectedRevision: z.number().int().positive(),
+}).strict();
 
 export const UpdatePersonaInputSchema = z.object({
   name: NonEmptyText(160).optional(),

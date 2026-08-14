@@ -9,11 +9,12 @@ import {
 } from '@/shared/types/enduringAgent';
 
 export const BUILT_IN_DEVELOPER_ROLE_ID = 'role_builtin_developer';
-export const BUILT_IN_DEVELOPER_ROLE_VERSION_ID = 'rolever_builtin_developer_v1';
-export const BUILT_IN_DEVELOPER_ROLE_VERSION = 1;
+export const BUILT_IN_DEVELOPER_ROLE_VERSION_ID = 'rolever_builtin_developer_v2';
+export const BUILT_IN_DEVELOPER_ROLE_VERSION = 2;
 
 const BUILT_IN_DEVELOPER_CREATED_AT = 1_786_233_600_000;
 
+const CORE_FLOW_ID = 'builtin_developer_core_v1';
 const PRIMARY_FLOW_ID = 'builtin_developer_primary_v1';
 const MAINTAIN_MEMORY_FLOW_ID = 'builtin_developer_maintain_memory_v1';
 
@@ -143,6 +144,63 @@ function buildMaintainMemoryFlowTemplate(): Flow {
   };
 }
 
+function buildCoreFlowTemplate(): Flow {
+  return {
+    id: CORE_FLOW_ID,
+    name: 'Developer core',
+    description: 'Core orchestration flow for an enduring Developer persona.',
+    permissionRules: [],
+    nodes: [
+      {
+        id: 'developer_core_start',
+        type: 'start',
+        position: { x: 0, y: 0 },
+        data: {
+          label: 'Start',
+          type: 'start',
+          properties: {
+            promptTemplate: 'Coordinate the selected enduring Persona behavior for this Activity.',
+          },
+        },
+      },
+      {
+        id: 'developer_core_process',
+        type: 'process',
+        position: { x: 280, y: 0 },
+        data: {
+          label: 'Coordinate behavior',
+          type: 'process',
+          properties: {
+            promptTemplate: 'Run the selected required behavior and produce the requested result.',
+          },
+        },
+      },
+      {
+        id: 'developer_core_finish',
+        type: 'finish',
+        position: { x: 560, y: 0 },
+        data: { label: 'Finish', type: 'finish' },
+      },
+    ],
+    edges: [
+      {
+        id: 'developer_core_start_process',
+        source: 'developer_core_start',
+        target: 'developer_core_process',
+        sourceHandle: 'start-bottom',
+        targetHandle: 'process-top',
+      },
+      {
+        id: 'developer_core_process_finish',
+        source: 'developer_core_process',
+        target: 'developer_core_finish',
+        sourceHandle: 'process-bottom',
+        targetHandle: 'finish-top',
+      },
+    ],
+  };
+}
+
 /** Build the stable workspace-owned Developer Role family record. */
 export function buildBuiltInDeveloperRoleDefinition(): RoleDefinition {
   return RoleDefinitionSchema.parse({
@@ -156,15 +214,16 @@ export function buildBuiltInDeveloperRoleDefinition(): RoleDefinition {
   });
 }
 
-/** Build immutable Developer v1 without reading or writing ambient state. */
+/** Build the immutable current Developer version without reading or writing ambient state. */
 export function buildBuiltInDeveloperRoleVersion(): RoleVersion {
   return RoleVersionSchema.parse({
     schemaVersion: ROLE_VERSION_SCHEMA_VERSION,
     id: BUILT_IN_DEVELOPER_ROLE_VERSION_ID,
     roleDefinitionId: BUILT_IN_DEVELOPER_ROLE_ID,
     version: BUILT_IN_DEVELOPER_ROLE_VERSION,
-    name: 'Developer v1',
+    name: 'Developer v2',
     mission: 'Deliver reliable software changes while preserving user intent, existing work, and system safety.',
+    coreFlowTemplate: buildCoreFlowTemplate(),
     behaviorSlots: [
       {
         key: 'primary',
@@ -202,7 +261,7 @@ export function buildBuiltInDeveloperRoleVersion(): RoleVersion {
         coreMemoryMaxItems: 32,
       },
     },
-    migrationNotes: 'Initial built-in Developer role version.',
+    migrationNotes: 'Adds a Persona-owned Core template and explicit runnable-model resolution.',
     createdAt: BUILT_IN_DEVELOPER_CREATED_AT,
   });
 }

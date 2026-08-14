@@ -16,6 +16,10 @@ import {
 import { StorageKey } from '@/shared/types/storage';
 import { Edge } from '@xyflow/react';
 import { createLogger } from '@/utils/logger';
+import {
+  generatedFlowName,
+  validateFlowDisplayName,
+} from '@/utils/shared/flowNamePolicy';
 import { DEFAULT_WORKSPACE, getCurrentWorkspace } from '@/utils/workspace';
 import {
   archiveFlowVersion,
@@ -268,6 +272,11 @@ export class FlowService { // Add export keyword here
   async saveFlow(flow: Flow): Promise<FlowServiceResponse> {
     try {
       log.debug(`Saving flow: ${flow.id}`, { name: flow.name });
+      const nameError = validateFlowDisplayName(flow.name);
+      if (nameError) {
+        throw new Error(`Invalid Flow display name (${nameError}).`);
+      }
+      flow.name = flow.name.normalize('NFC').trim();
       // Validate the id before it is used as a file name (path-traversal guard).
       assertSafeCollectionId(flow.id);
       await ensureFlowsMigrated();
@@ -342,6 +351,11 @@ export class FlowService { // Add export keyword here
     sourceFlowId: string,
     personaId: string,
     name?: string,
+    options: {
+      id?: string;
+      groupId?: string;
+      kind?: 'core' | 'role_behavior' | 'supplemental' | 'custom';
+    } = {},
   ): Promise<{ success: boolean; flow?: Flow; error?: string }> {
     const source = await this.getFlow(sourceFlowId);
     if (!source) {
@@ -352,15 +366,21 @@ export class FlowService { // Add export keyword here
     }
 
     const clone = JSON.parse(JSON.stringify(source)) as Flow;
-    clone.id = uuidv4();
-    clone.name = name?.trim() || `${source.name} · Persona copy`;
+    clone.id = options.id ?? uuidv4();
+    clone.name = generatedFlowName(
+      name?.trim() || `${source.name} Persona copy`,
+      [],
+      clone.id,
+    );
     clone.favorite = undefined;
-    clone.folder = undefined;
+    clone.folder = options.groupId ? `Persona ${personaId}` : undefined;
     clone.createdAt = undefined;
     clone.updatedAt = undefined;
     clone.personaOwnership = {
       personaId,
       sourceFlowId: source.personaOwnership?.sourceFlowId ?? source.id,
+      ...(options.groupId ? { groupId: options.groupId } : {}),
+      kind: options.kind ?? 'custom',
     };
     const saved = await this.saveFlow(clone);
     return saved.success

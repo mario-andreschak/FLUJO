@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 
 import { validateFlowObjectForRun } from '@/backend/execution/flow/validateFlowForRun';
 import { flowService } from '@/backend/services/flow';
+import { modelService } from '@/backend/services/model';
 import type { Flow } from '@/shared/types/flow';
 import {
   BEHAVIOR_BINDING_SCHEMA_VERSION,
@@ -21,10 +22,13 @@ import {
   type Persona,
   type RoleVersion,
 } from '@/shared/types/enduringAgent';
+import { createLogger } from '@/utils/logger';
+import { generatedFlowName } from '@/utils/shared/flowNamePolicy';
 import { assertSafeCollectionId } from '@/utils/storage/backend';
 
 import {
   behaviorRevisionId,
+  bindDefaultModelToFlow,
   canonicalJson,
   hashBehaviorFlow,
   snapshotBehaviorFlow,
@@ -53,6 +57,8 @@ import {
   updatePersonaWithinRuntimeLock,
   type PersonaBundle,
 } from './store';
+
+const log = createLogger('backend/services/enduringAgents/factory');
 
 export class PersonaFactoryConflictError extends Error {
   readonly code = 'PERSONA_FACTORY_CONFLICT';
@@ -140,15 +146,16 @@ async function materializeBehavior(
   persona: Persona,
   roleVersion: RoleVersion,
   slot: RoleVersion['behaviorSlots'][number],
-): Promise<void> {
+  preparedTemplate: Flow,
+): Promise<BehaviorBinding> {
   const behaviorId = stableEnduringAgentId('behavior', {
     personaId: persona.id,
     slotKey: slot.key,
   });
   const flow = snapshotBehaviorFlow({
-    ...slot.flowTemplate,
+    ...preparedTemplate,
     id: stableEnduringAgentId('flow', { behaviorId, revision: 1 }),
-    name: `${persona.name} · ${slot.name}`,
+    name: generatedFlowName(`${persona.name} ${slot.name}`, [], behaviorId),
   });
   const contentHash = hashBehaviorFlow(flow);
   const revision: BehaviorRevision = BehaviorRevisionSchema.parse({
@@ -186,7 +193,86 @@ async function materializeBehavior(
   });
   // One binding-key critical section both repairs a missing default and
   // preserves any reviewed override that won the initialization race.
-  await createBehaviorBindingIfAbsent(binding);
+  return createBehaviorBindingIfAbsent(binding);
+}
+
+function personaFlowGroupId(personaId: string): string {
+  return stableEnduringAgentId('personaflowgroup', { personaId });
+}
+
+function firstBoundModel(flow?: Flow): string | undefined {
+  return flow?.nodes.find((node) => (
+    node.data.type === 'process'
+    && typeof node.data.properties?.boundModel === 'string'
+    && node.data.properties.boundModel
+  ))?.data.properties?.boundModel as string | undefined;
+}
+
+async function resolveDefaultModelId(
+  roleVersion: RoleVersion,
+  coreTemplate: Flow,
+): Promise<string | undefined> {
+  const authoredDefault = roleVersion.defaultModelId ?? firstBoundModel(coreTemplate);
+  if (authoredDefault) return authoredDefault;
+
+  // A sole configured model is the only unambiguous workspace fallback. With
+  // zero or multiple models, provisioning must stay blocked rather than pick an
+  // arbitrary provider/model.
+  const models = await modelService.loadModels();
+  return models.length === 1 ? models[0].id : undefined;
+}
+
+async function requireRunnableGeneratedFlow(flow: Flow, label: string): Promise<Flow> {
+  const readiness = await validateFlowObjectForRun(flow);
+  if (!readiness.isRunnable) {
+    const issues = readiness.issues
+      .filter((issue) => issue.severity === 'error')
+      .map((issue) => issue.message);
+    throw new PersonaFactoryConflictError(
+      `${label} is not runnable.${issues.length ? ` ${issues.join(' ')}` : ''}`,
+    );
+  }
+  return flow;
+}
+
+async function savePersonaOwnedFlow(input: {
+  persona: Persona;
+  source: Flow;
+  id: string;
+  name: string;
+  sourceFlowId?: string;
+  kind: 'core' | 'role_behavior' | 'supplemental';
+}): Promise<Flow> {
+  const existing = await flowService.getFlow(input.id);
+  if (existing) {
+    if (existing.personaOwnership?.personaId !== input.persona.id) {
+      throw new PersonaFactoryConflictError('A generated Persona Flow has conflicting ownership.');
+    }
+    return existing;
+  }
+
+  const flow: Flow = {
+    ...JSON.parse(JSON.stringify(input.source)),
+    id: input.id,
+    name: generatedFlowName(input.name, [], input.id),
+    folder: `Persona ${input.persona.name}`,
+    favorite: undefined,
+    createdAt: undefined,
+    updatedAt: undefined,
+    personaOwnership: {
+      personaId: input.persona.id,
+      ...(input.sourceFlowId ? { sourceFlowId: input.sourceFlowId } : {}),
+      groupId: personaFlowGroupId(input.persona.id),
+      kind: input.kind,
+    },
+  };
+  const saved = await flowService.saveFlow(flow);
+  if (!saved.success) {
+    throw new PersonaFactoryConflictError(
+      saved.error || 'A generated Persona Flow could not be saved.',
+    );
+  }
+  return flow;
 }
 
 async function requireReadySharedFlow(flowRef: string, label: string): Promise<Flow> {
@@ -306,9 +392,9 @@ async function materializeInitialMemories(
  */
 export async function createPersonaFromRole(value: unknown): Promise<PersonaBundle> {
   const input = CreatePersonaInputSchema.parse(value) as CreatePersonaInput;
-  if (input.coreFlowRef) {
-    await requireReadySharedFlow(input.coreFlowRef, 'Core Flow');
-  }
+  const selectedCoreFlow = input.coreFlowRef
+    ? await requireReadySharedFlow(input.coreFlowRef, 'Core Flow')
+    : undefined;
   const behaviorFlows = await Promise.all(
     (input.behaviorFlowRefs ?? []).map(
       (flowRef) => requireReadySharedFlow(flowRef, 'Behavior Flow'),
@@ -324,6 +410,40 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
       );
     }
     const roleVersion = await resolveRoleVersion(input.roleVersionId);
+    const coreTemplate = selectedCoreFlow ?? roleVersion.coreFlowTemplate;
+    if (!coreTemplate) {
+      log.warn('Persona provisioning rejected: no Core template', {
+        roleVersionId: roleVersion.id,
+        expectedSlotCount: roleVersion.behaviorSlots.length,
+        failureCategory: 'missing_core_template',
+      });
+      throw new PersonaFactoryConflictError(
+        'The selected Role has no Core template. Choose a ready Core Flow and try again.',
+      );
+    }
+    if (roleVersion.behaviorSlots.length === 0) {
+      throw new PersonaFactoryConflictError(
+        'The selected Role version has no usable required Behaviors.',
+      );
+    }
+
+    const defaultModelId = await resolveDefaultModelId(roleVersion, coreTemplate as Flow);
+    const preparedCore = await requireRunnableGeneratedFlow(
+      bindDefaultModelToFlow(coreTemplate as Flow, defaultModelId),
+      'Core Flow',
+    );
+    const preparedRoleFlows = await Promise.all(roleVersion.behaviorSlots.map(
+      (slot) => requireRunnableGeneratedFlow(
+        bindDefaultModelToFlow(slot.flowTemplate as Flow, defaultModelId),
+        `Required Behavior ${JSON.stringify(slot.key)}`,
+      ),
+    ));
+    log.info('Persona Role version validated for provisioning', {
+      roleVersionId: roleVersion.id,
+      expectedSlotCount: roleVersion.behaviorSlots.length,
+      failureCategory: null,
+    });
+
     const effectiveRequest = effectiveFactoryRequest(input, roleVersion);
     const requestHash = sha256({
       idempotencyKey: input.idempotencyKey ?? null,
@@ -359,13 +479,61 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
       await createPersona(persona);
     }
 
-    await Promise.all(
-      roleVersion.behaviorSlots.map((slot) => materializeBehavior(persona!, roleVersion, slot)),
+    const roleBehaviorBindings = await Promise.all(
+      roleVersion.behaviorSlots.map((slot, index) => (
+        materializeBehavior(persona!, roleVersion, slot, preparedRoleFlows[index])
+      )),
     );
+    const roleBehaviorFlows = await Promise.all(roleVersion.behaviorSlots.map((slot, index) => (
+      savePersonaOwnedFlow({
+        persona: persona!,
+        source: preparedRoleFlows[index],
+        id: stableEnduringAgentId('personaflow', {
+          personaId: persona!.id,
+          behaviorId: roleBehaviorBindings[index].id,
+        }),
+        name: `${persona!.name} ${slot.name}`,
+        sourceFlowId: slot.flowTemplate.id,
+        kind: 'role_behavior',
+      })
+    )));
     const selectedBehaviorBindings = await Promise.all(
       behaviorFlows.map((flow) => materializeSelectedBehavior(persona!, flow)),
     );
+    const supplementalFlows = await Promise.all(behaviorFlows.map((flow) => (
+      savePersonaOwnedFlow({
+        persona: persona!,
+        source: flow,
+        id: stableEnduringAgentId('personaflow', {
+          personaId: persona!.id,
+          sourceFlowId: flow.id,
+          kind: 'supplemental',
+        }),
+        name: `${persona!.name} ${flow.name}`,
+        sourceFlowId: flow.id,
+        kind: 'supplemental',
+      })
+    )));
+    const coreFlow = await savePersonaOwnedFlow({
+      persona: persona!,
+      source: preparedCore,
+      id: stableEnduringAgentId('personaflow', {
+        personaId: persona!.id,
+        kind: 'core',
+      }),
+      name: `${persona!.name} Core`,
+      sourceFlowId: coreTemplate.id,
+      kind: 'core',
+    });
     const initialMemoryIds = await materializeInitialMemories(persona, input);
+
+    log.info('Persona Flows materialized', {
+      roleVersionId: roleVersion.id,
+      expectedSlotCount: roleVersion.behaviorSlots.length,
+      materializedBindingCount: roleBehaviorBindings.length,
+      supplementalCount: supplementalFlows.length,
+      failureCategory: null,
+    });
 
     if (persona.provisioningState !== 'ready') {
       const initialAppRefs = await resolveAvailablePersonaAppRefs(
@@ -388,7 +556,12 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
         coreMemoryItemIds: initialMemoryIds,
         composition: {
           description: '',
-          ...(input.coreFlowRef ? { coreFlowRef: input.coreFlowRef } : {}),
+          coreFlowRef: coreFlow.id,
+          coreBinding: {
+            mode: 'persona_copy',
+            ...(selectedCoreFlow ? { sharedFlowRef: selectedCoreFlow.id } : {}),
+            personaFlowRef: coreFlow.id,
+          },
           appRefs: initialAppRefs,
           memoryRefs: initialMemoryIds,
           behaviors: [
@@ -401,6 +574,10 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
               name: slot.name,
               ...(slot.description ? { description: slot.description } : {}),
               order: index,
+              binding: {
+                mode: 'persona_copy' as const,
+                personaFlowRef: roleBehaviorFlows[index].id,
+              },
             })),
             ...behaviorFlows.map((flow, index) => ({
               ref: selectedBehaviorBindings[index].id,
@@ -408,7 +585,11 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
               name: flow.name,
               ...(flow.description ? { description: flow.description } : {}),
               order: roleVersion.behaviorSlots.length + index,
-              binding: { mode: 'shared' as const, sharedFlowRef: flow.id },
+              binding: {
+                mode: 'persona_copy' as const,
+                sharedFlowRef: flow.id,
+                personaFlowRef: supplementalFlows[index].id,
+              },
             })),
           ],
         },

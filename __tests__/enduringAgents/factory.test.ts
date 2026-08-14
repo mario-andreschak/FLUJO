@@ -4,8 +4,10 @@ import {
   BUILT_IN_DEVELOPER_ROLE_VERSION_ID,
   createPersonaFromRole,
   ensureBuiltInDeveloperRole,
+  hashBehaviorFlow,
   PersonaFactoryConflictError,
 } from '@/backend/services/enduringAgents';
+import { flowService } from '@/backend/services/flow';
 import {
   createRoleVersion,
   getBehaviorRevision,
@@ -22,15 +24,25 @@ import {
   type RoleVersion,
 } from '@/shared/types/enduringAgent';
 import type { Flow, FlowNode } from '@/shared/types/flow';
+import { StorageKey } from '@/shared/types/storage';
+import { saveItem } from '@/utils/storage/backend';
 import { runWithWorkspace } from '@/utils/workspace';
 
 let workspaceSequence = 0;
 
-function inFreshWorkspace<T>(task: () => T): T {
+async function inFreshWorkspace<T>(task: () => T | Promise<T>): Promise<T> {
   workspaceSequence += 1;
   return runWithWorkspace(
     `enduring-factory-${process.pid}-${workspaceSequence}`,
-    task,
+    async () => {
+      await saveItem(StorageKey.MODELS, [{
+        id: 'model-test',
+        name: 'test-model',
+        displayName: 'Test model',
+        provider: 'openai',
+      }]);
+      return task();
+    },
   );
 }
 
@@ -48,9 +60,9 @@ function exactToolsRoleVersion(): RoleVersion {
   const builtIn = buildBuiltInDeveloperRoleVersion();
   return RoleVersionSchema.parse({
     ...builtIn,
-    id: 'rolever_developer_exact_tools_v2',
-    version: 2,
-    name: 'Developer exact tools v2',
+    id: 'rolever_developer_exact_tools_v3',
+    version: 3,
+    name: 'Developer exact tools v3',
     mission: 'Develop carefully with only the exact account and tools authored in the Behavior.',
     behaviorSlots: [
       {
@@ -83,6 +95,7 @@ function exactToolsRoleVersion(): RoleVersion {
                 type: 'process',
                 properties: {
                   promptTemplate: 'Inspect, implement, and validate.',
+                  boundModel: 'model-test',
                   // These are runtime attachment caches, not authored tool
                   // authority, and must not enter the immutable revision.
                   mcpNodes: [
@@ -183,16 +196,46 @@ describe('createPersonaFromRole', () => {
         lifecycleState: 'idle',
         provisioningState: 'ready',
       });
+      const coreFlowRef = bundle.persona.composition?.coreFlowRef;
+      if (!coreFlowRef) {
+        throw new Error('Expected Persona composition to contain a coreFlowRef.');
+      }
+      const coreFlow = await flowService.getFlow(coreFlowRef);
+      expect(coreFlow).toMatchObject({
+        personaOwnership: {
+          personaId: bundle.persona.id,
+          kind: 'core',
+        },
+      });
+      expect(coreFlow!.nodes
+        .filter((candidate: FlowNode) => candidate.data.type === 'process')
+        .map((candidate: FlowNode) => candidate.data.properties?.boundModel))
+        .toEqual(expect.arrayContaining(['model-test']));
       expect(bundle.behaviorBindings.map((binding) => binding.slotKey).sort()).toEqual([
         'maintain_memory',
         'primary',
       ]);
       expect(bundle.behaviorBindings).toHaveLength(2);
       expect(bundle.behaviorRevisions).toHaveLength(2);
+      const roleVersion = await getRoleVersion(BUILT_IN_DEVELOPER_ROLE_VERSION_ID);
+      expect(roleVersion).not.toBeNull();
+      expect(roleVersion!.coreFlowTemplate!.nodes
+        .filter((candidate: FlowNode) => candidate.data.type === 'process')
+        .every((candidate: FlowNode) => (
+          candidate.data.properties?.boundModel === undefined
+        )))
+        .toBe(true);
       for (const binding of bundle.behaviorBindings) {
         const revision = bundle.behaviorRevisions.find(
-          (candidate) => candidate.id === binding.activeRevisionId,
-        );
+          (candidate: typeof bundle.behaviorRevisions[number]) => (
+            candidate.id === binding.activeRevisionId
+          ),
+        )!;
+        const slot = roleVersion!.behaviorSlots.find(
+          (candidate: RoleVersion['behaviorSlots'][number]) => (
+            candidate.key === binding.slotKey
+          ),
+        )!;
         expect(revision).toMatchObject({
           behaviorId: binding.id,
           personaId: bundle.persona.id,
@@ -204,6 +247,15 @@ describe('createPersonaFromRole', () => {
             slotKey: binding.slotKey,
           },
         });
+        expect(revision.contentHash).toBe(hashBehaviorFlow(revision.flowSnapshot));
+        expect(slot.flowTemplate.nodes
+          .filter((candidate) => candidate.data.type === 'process')
+          .every((candidate) => candidate.data.properties?.boundModel === undefined))
+          .toBe(true);
+        expect(revision.flowSnapshot.nodes
+          .filter((candidate) => candidate.data.type === 'process')
+          .map((candidate) => candidate.data.properties?.boundModel))
+          .toEqual(expect.arrayContaining(['model-test']));
       }
 
       // The deterministic factory must not invent biography or pre-populate
@@ -304,6 +356,8 @@ describe('createPersonaFromRole', () => {
       const revision = bundle.behaviorRevisions[0];
       const snapshotBeforeSourceMutation = clone(revision.flowSnapshot);
 
+      expect(await getRoleVersion(sourceVersion.id)).toEqual(sourceVersion);
+      expect(revision.contentHash).toBe(hashBehaviorFlow(revision.flowSnapshot));
       expect(revision.source).toEqual({
         kind: 'role_template',
         roleVersionId: sourceVersion.id,
@@ -320,6 +374,7 @@ describe('createPersonaFromRole', () => {
       });
       expect(node(revision.flowSnapshot, 'develop').data.properties).toEqual({
         promptTemplate: 'Inspect, implement, and validate.',
+        boundModel: 'model-test',
       });
       expect(JSON.stringify(revision.flowSnapshot)).not.toContain('ambient-admin');
       expect(JSON.stringify(revision.flowSnapshot)).not.toContain('delete_repository');
@@ -338,26 +393,26 @@ describe('createPersonaFromRole', () => {
     });
   });
 
-  it('keeps Jim pinned to Developer v1 when Developer v2 is created', async () => {
+  it('keeps Jim pinned to Developer v2 when Developer v3 is created', async () => {
     await inFreshWorkspace(async () => {
       const jim = await createPersonaFromRole({
         name: 'Jim',
         idempotencyKey: 'jim-pinned-role',
       });
-      const v1 = buildBuiltInDeveloperRoleVersion();
-      const v2 = RoleVersionSchema.parse({
-        ...v1,
-        id: 'rolever_builtin_developer_v2',
-        version: 2,
-        name: 'Developer v2',
-        mission: 'Deliver reliable software changes under the deliberately upgraded v2 policy.',
-        migrationNotes: 'Opt-in upgrade; existing Personas stay on v1.',
-        createdAt: v1.createdAt + 1,
+      const v2 = buildBuiltInDeveloperRoleVersion();
+      const v3 = RoleVersionSchema.parse({
+        ...v2,
+        id: 'rolever_builtin_developer_v3',
+        version: 3,
+        name: 'Developer v3',
+        mission: 'Deliver reliable software changes under the deliberately upgraded v3 policy.',
+        migrationNotes: 'Opt-in upgrade; existing Personas stay on v2.',
+        createdAt: v2.createdAt + 1,
       });
 
-      await createRoleVersion(v2);
+      await createRoleVersion(v3);
 
-      expect(await getRoleVersion(v2.id)).toEqual(v2);
+      expect(await getRoleVersion(v3.id)).toEqual(v3);
       expect((await getPersona(jim.persona.id))?.roleVersionId)
         .toBe(BUILT_IN_DEVELOPER_ROLE_VERSION_ID);
       expect((await createPersonaFromRole({
@@ -382,14 +437,30 @@ describe('createPersonaFromRole', () => {
     const personaId = 'persona_same_workspace_local_id';
 
     const [personaA, personaB] = await Promise.all([
-      runWithWorkspace(workspaceA, () => createPersonaFromRole({
-        id: personaId,
-        name: 'Jim from workspace A',
-      })),
-      runWithWorkspace(workspaceB, () => createPersonaFromRole({
-        id: personaId,
-        name: 'Jim from workspace B',
-      })),
+      runWithWorkspace(workspaceA, async () => {
+        await saveItem(StorageKey.MODELS, [{
+          id: 'model-test',
+          name: 'test-model',
+          displayName: 'Test model',
+          provider: 'openai',
+        }]);
+        return createPersonaFromRole({
+          id: personaId,
+          name: 'Jim from workspace A',
+        });
+      }),
+      runWithWorkspace(workspaceB, async () => {
+        await saveItem(StorageKey.MODELS, [{
+          id: 'model-test',
+          name: 'test-model',
+          displayName: 'Test model',
+          provider: 'openai',
+        }]);
+        return createPersonaFromRole({
+          id: personaId,
+          name: 'Jim from workspace B',
+        });
+      }),
     ]);
 
     expect(personaA.persona.id).toBe(personaId);

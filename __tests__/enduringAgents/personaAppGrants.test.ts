@@ -9,7 +9,6 @@ import {
   PersonaDomainNotFoundError,
   authorizePersonaAppLaunch,
   claimNextPersonaActivity,
-  createPersonaFromRole,
   deletePersona,
   grantPersonaAppAccess,
   listPersonaDirectAppGrants,
@@ -18,6 +17,7 @@ import {
   routePersonaMailboxItem,
   previewPersonaDeletion,
 } from '@/backend/services/enduringAgents';
+import { createPersonaFromRole } from './fixtures/personaFactory';
 import {
   getPersonaAppGrant,
   listPersonaBundle,

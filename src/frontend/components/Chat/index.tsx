@@ -440,6 +440,7 @@ const Chat: React.FC = () => {
     null
   );
   const currentConversationIdRef = useRef<string | null>(currentConversationId);
+  const personaCreationPendingRef = useRef(false);
   const [capturedResourcesByToolCall, setCapturedResourcesByToolCall] = useState<
     Record<string, CapturedToolResource>
   >({});
@@ -1623,6 +1624,10 @@ const Chat: React.FC = () => {
   // A Persona draft has no Flow authority. The separate target marker is
   // replaced by the dispatcher with the full attribution triple on first run.
   const createPersonaConversation = async (personaId: string) => {
+    // The ref closes the same-render gap that state-based loading flags leave
+    // open when a selection is double-clicked before React re-renders.
+    if (personaCreationPendingRef.current) return;
+    personaCreationPendingRef.current = true;
     setError(null);
     setErrorInfo(null);
     const now = Date.now();
@@ -1636,11 +1641,15 @@ const Chat: React.FC = () => {
     };
     try {
       const created = await chatService.createConversation(payload);
+      // ChatInput is intentionally unkeyed and remains mounted here, so its
+      // local unsent text and attachments survive adoption of the new target.
       adoptCreatedConversation(created);
     } catch (err) {
       log.error('Error creating Persona conversation on backend:', err);
       const detail = err instanceof ChatApiError ? err.body?.error || err.message : err instanceof Error ? err.message : '';
       setError(`${t('chat.page.createFailed')}${detail ? ` (${detail})` : ''}`);
+    } finally {
+      personaCreationPendingRef.current = false;
     }
   };
 
@@ -2714,47 +2723,6 @@ const Chat: React.FC = () => {
     }
   };
 
-  const applyPersonaSelect = async (personaId: string) => {
-    if (detailedConversation?.personaArchived || currentConversationSummary?.personaArchived) {
-      setError(t('chat.target.locked'));
-      return;
-    }
-    if (!currentConversationId) {
-      await createPersonaConversation(personaId);
-      return;
-    }
-    const previousDetailedConversation = detailedConversation;
-    const previousConversationList = conversationList;
-    setError(null);
-    setErrorInfo(null);
-    setDetailedConversation(prev => prev?.id === currentConversationId
-      ? { ...prev, flowId: null, personaId, activityId: undefined, behaviorRevisionId: undefined }
-      : prev);
-    setConversationList(prev => prev.map(item => item.id === currentConversationId
-      ? { ...item, flowId: null, personaId, activityId: undefined, behaviorRevisionId: undefined }
-      : item));
-    try {
-      const updated = await chatService.updateConversationPersonaTarget(currentConversationId, personaId);
-      setDetailedConversation(prev => prev?.id === currentConversationId
-        ? {
-            ...prev,
-            flowId: updated.flowId,
-            personaId: updated.personaId,
-            activityId: updated.activityId,
-            behaviorRevisionId: updated.behaviorRevisionId,
-            updatedAt: updated.updatedAt,
-          }
-        : prev);
-      setConversationList(prev => prev.map(item => item.id === currentConversationId ? updated : item));
-    } catch (err) {
-      log.error('Error targeting conversation to Persona:', { currentConversationId, personaId, err });
-      setDetailedConversation(previousDetailedConversation);
-      setConversationList(previousConversationList);
-      const detail = err instanceof ChatApiError ? err.body?.error || err.message : err instanceof Error ? err.message : '';
-      setError(`${t('chat.page.updateAgentFailed')}${detail ? ` (${detail})` : ''}`);
-    }
-  };
-
   const handlePersonaSelect = (personaId: string) => {
     if (detailedConversation?.personaArchived || currentConversationSummary?.personaArchived) {
       setError(t('chat.target.locked'));
@@ -2765,19 +2733,10 @@ const Chat: React.FC = () => {
       if (selectedPersonaId !== personaId) setError(t('chat.target.locked'));
       return;
     }
-    if (!currentConversationId || !detailedConversation) {
-      void createPersonaConversation(personaId);
-      return;
-    }
-    const alreadyExecuted = detailedConversation.messages.length > 0
-      || currentConversationSummary?.status !== undefined;
-    // Never retarget authored/executed history. Start a clean Persona-owned
-    // conversation instead; fresh Flow drafts can be converted in place.
-    if (alreadyExecuted || isQuickChatFlowId(detailedConversation.flowId)) {
-      void createPersonaConversation(personaId);
-      return;
-    }
-    void applyPersonaSelect(personaId);
+    // Starting a Persona chat always creates a distinct Persona-owned draft.
+    // The previous Flow draft remains available, and adoption only happens once
+    // the server confirms the Persona-aware POST.
+    void createPersonaConversation(personaId);
   };
 
   // --- Conversation rename (issue #134, item 2) ---

@@ -44,6 +44,7 @@ import {
 } from '@/utils/shared/flowModelReplacement';
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
+import { validateFlowDisplayName } from '@/utils/shared/flowNamePolicy';
 import { writeWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
 import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
 import { useI18n } from '@/frontend/contexts/I18nContext';
@@ -293,7 +294,7 @@ const FlowsPage = () => {
     }
     
     // Names are for people; the flow ID remains the stable machine identifier.
-    if (!/^[\p{L}\p{N}_ -]+$/u.test(name.trim())) {
+    if (validateFlowDisplayName(name) !== null) {
       log.debug('Flow name validation failed: invalid characters');
       return t('flows.page.nameCharacters');
     }

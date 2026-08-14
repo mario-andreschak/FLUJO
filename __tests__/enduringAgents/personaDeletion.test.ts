@@ -6,12 +6,12 @@ import {
   appendPersonaRuntimeEvent,
   assertPersonaActivityLease,
   claimNextPersonaActivity,
-  createPersonaFromRole,
   deletePersona,
   enqueuePersonaMailboxItem,
   previewPersonaDeletion,
   readPersonaRuntimeEvents,
 } from '@/backend/services/enduringAgents';
+import { createPersonaFromRole } from './fixtures/personaFactory';
 import {
   getPersona,
   getPersonaDeletionTombstone,
@@ -462,7 +462,7 @@ describe('Persona deletion policy', () => {
         idempotencyKey: 'must-not-admit',
         kind: 'assignment',
         source: { kind: 'assignment' },
-      })).rejects.toThrow(/pending deletion/i);
+      })).rejects.toThrow(/deletion is pending/i);
       await expect(claimNextPersonaActivity({ personaId: persona.id, ttlMs: 60_000 }))
         .rejects.toThrow(/pending deletion/i);
       expect(await listPersonaMailboxItems(persona.id)).toEqual([]);
