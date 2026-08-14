@@ -11,6 +11,7 @@ import {
   promoteBehaviorProposalToRoleVersion,
   previewPersonaDeletion,
   rollbackBehaviorProposal,
+  suggestBehaviorInstructionImprovement,
   type BehaviorProposalCompileResult,
   type CreateBehaviorProposalInput,
 } from '@/backend/services/enduringAgents';
@@ -125,6 +126,57 @@ async function approvedProposal(
 }
 
 describe('behavioral learning policy and evidence', () => {
+  it('creates a bounded instruction-only improvement from normal Persona work', async () => {
+    await inFreshWorkspace(async () => {
+      const setup = await setupPersona('propose_overrides');
+      const proposal = await suggestBehaviorInstructionImprovement({
+        personaId: setup.bundle.persona.id,
+        slotKey: 'primary',
+        rationale: 'Focused validation was repeatedly missed during completed work.',
+        instruction: 'Run the focused regression test before reporting completion.',
+        evidenceRefs: [{ kind: 'activity', id: 'activity_completed_work' }],
+      });
+
+      expect(proposal).toMatchObject({
+        status: 'awaiting_approval',
+        behaviorId: setup.binding.id,
+        baseBehaviorRevisionId: setup.baseRevision.id,
+        changeSummary: 'Run the focused regression test before reporting completion.',
+        validation: { compileSucceeded: true, errorCount: 0 },
+      });
+      expect(proposal.evalResults).toEqual([
+        expect.objectContaining({ id: 'bounded-instruction-only', passed: true }),
+      ]);
+      expect(proposal.candidateFlow?.nodes.map((candidate) => candidate.id))
+        .toEqual(setup.baseRevision.flowSnapshot.nodes.map((candidate) => candidate.id));
+      expect(proposal.candidateFlow?.edges.map((candidate) => candidate.id))
+        .toEqual(setup.baseRevision.flowSnapshot.edges.map((candidate) => candidate.id));
+      expect(processNode(proposal.candidateFlow!).data.properties?.promptTemplate)
+        .toContain('Run the focused regression test before reporting completion.');
+    });
+  });
+
+  it('automatically applies only the bounded checked improvement when selected', async () => {
+    await inFreshWorkspace(async () => {
+      const setup = await setupPersona('auto_apply_validated');
+      const proposal = await suggestBehaviorInstructionImprovement({
+        personaId: setup.bundle.persona.id,
+        slotKey: 'primary',
+        rationale: 'The same safe verification lesson is useful for future work.',
+        instruction: 'Verify the requested outcome with one focused check.',
+        evidenceRefs: [{ kind: 'activity', id: 'activity_checked_work' }],
+      });
+
+      expect(proposal).toMatchObject({
+        status: 'activated',
+        approval: { kind: 'policy', actor: 'persona-safe-improvement-policy' },
+        activatedRevisionId: expect.any(String),
+      });
+      expect((await getBehaviorBinding(setup.binding.id))?.activeRevisionId)
+        .toBe(proposal.activatedRevisionId);
+    });
+  });
+
   it('records evidence-backed procedural hints as candidates and blocks locked Personas', async () => {
     await inFreshWorkspace(async () => {
       const locked = await setupPersona('locked');

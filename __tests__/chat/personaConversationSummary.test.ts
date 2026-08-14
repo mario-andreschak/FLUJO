@@ -14,6 +14,7 @@ describe('Persona conversation summary attribution', () => {
   it('projects the complete trusted attribution triple', () => {
     expect(summarizeConversation({
       ...baseState,
+      personaBehaviorSlotKey: 'research',
       personaAttribution: {
         personaId: 'persona-1',
         activityId: 'activity-1',
@@ -22,6 +23,7 @@ describe('Persona conversation summary attribution', () => {
     } as any, 'fallback')).toMatchObject({
       personaOwned: true,
       personaId: 'persona-1',
+      personaBehaviorSlotKey: 'research',
       activityId: 'activity-1',
       behaviorRevisionId: 'revision-1',
     });
@@ -31,8 +33,13 @@ describe('Persona conversation summary attribution', () => {
     const summary = summarizeConversation({
       ...baseState,
       personaTargetId: 'persona-1',
+      personaBehaviorSlotKey: 'research',
     } as any, 'fallback');
-    expect(summary).toMatchObject({ personaOwned: true, personaId: 'persona-1' });
+    expect(summary).toMatchObject({
+      personaOwned: true,
+      personaId: 'persona-1',
+      personaBehaviorSlotKey: 'research',
+    });
     expect(summary).not.toHaveProperty('activityId');
     expect(summary).not.toHaveProperty('behaviorRevisionId');
   });
@@ -41,9 +48,11 @@ describe('Persona conversation summary attribution', () => {
     const summary = summarizeConversation({
       ...baseState,
       personaArchived: true,
+      personaBehaviorSlotKey: 'research',
     } as any, 'fallback');
     expect(summary).toMatchObject({ personaOwned: true, personaArchived: true });
     expect(summary).not.toHaveProperty('personaId');
+    expect(summary).not.toHaveProperty('personaBehaviorSlotKey');
     expect(summary).not.toHaveProperty('activityId');
     expect(summary).not.toHaveProperty('behaviorRevisionId');
   });

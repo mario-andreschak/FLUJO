@@ -25,6 +25,10 @@ import MeetingList from './MeetingList';
 import MeetingView from './MeetingView';
 import MeetingWizard from './MeetingWizard';
 import { meetingLogMarkdown } from './meetingTranscriptProjection';
+import {
+  clearMeetingLaunchIntent,
+  parseMeetingLaunchIntent,
+} from './meetingLaunchIntent';
 
 const log = createLogger('frontend/components/Meetings');
 
@@ -41,19 +45,35 @@ function mergeEvents(current: MeetingEvent[], incoming: MeetingEvent[]): Meeting
 
 export default function MeetingsManager() {
   const { t } = useI18n();
+  const [launchIntent] = useState<CreateMeetingInput | null>(() => (
+    typeof window === 'undefined'
+      ? null
+      : parseMeetingLaunchIntent(new URL(window.location.href).search)
+  ));
   const [meetings, setMeetings] = useState<MeetingSummary[]>([]);
   const [listLoading, setListLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(initialMeetingId);
   const [detail, setDetail] = useState<MeetingDetailResponse | null>(null);
   const [detailLoading, setDetailLoading] = useState(Boolean(initialMeetingId()));
-  const [wizardOpen, setWizardOpen] = useState(false);
-  const [wizardSeed, setWizardSeed] = useState<CreateMeetingInput | null>(null);
+  const [wizardOpen, setWizardOpen] = useState(Boolean(launchIntent));
+  const [wizardSeed, setWizardSeed] = useState<CreateMeetingInput | null>(launchIntent);
   const [submitting, setSubmitting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [streamConnected, setStreamConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [wizardError, setWizardError] = useState<string | null>(null);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!launchIntent || typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    clearMeetingLaunchIntent(url);
+    window.history.replaceState(
+      window.history.state,
+      '',
+      `${url.pathname}${url.search}${url.hash}`,
+    );
+  }, [launchIntent]);
 
   const loadList = useCallback(async () => {
     setListLoading(true);
@@ -187,8 +207,9 @@ export default function MeetingsManager() {
         flowId,
         personaId,
         behaviorSlotKey,
+        behaviorName,
         role,
-      }) => ({ id, name, flowId, personaId, behaviorSlotKey, role })),
+      }) => ({ id, name, flowId, personaId, behaviorSlotKey, behaviorName, role })),
       moderatorParticipantId: selectedMeeting.moderatorParticipantId,
       policy: { ...selectedMeeting.policy },
     };
@@ -227,8 +248,9 @@ export default function MeetingsManager() {
         flowId,
         personaId,
         behaviorSlotKey,
+        behaviorName,
         role,
-      }) => ({ id, name, flowId, personaId, behaviorSlotKey, role })),
+      }) => ({ id, name, flowId, personaId, behaviorSlotKey, behaviorName, role })),
       moderatorParticipantId: selectedMeeting.moderatorParticipantId,
       policy: { ...selectedMeeting.policy },
     });

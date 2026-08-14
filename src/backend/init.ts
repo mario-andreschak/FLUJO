@@ -12,6 +12,7 @@ import {
   ensureBuiltInDeveloperRole,
   inspectAndReconcilePersonaRuntime,
   listPersonas,
+  reconcilePersonaRoleBehaviors,
   startPersonaFlowDispatcher,
 } from '@/backend/services/enduringAgents';
 import { migrateShippedMcpServers } from '@/backend/services/mcp/shippedServerMigration';
@@ -385,6 +386,7 @@ function startSecretDependentServices(): Promise<void> {
       // unavailable secrets or tool clients. Per-Persona failures stay visible
       // through the runtime observation returned by GET /v1/personas/:id.
       try {
+        await reconcilePersonaRoleBehaviors();
         const personas = await listPersonas();
         await Promise.all(personas.map((persona) =>
           inspectAndReconcilePersonaRuntime(persona.id).catch(error => {

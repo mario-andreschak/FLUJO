@@ -1,8 +1,8 @@
 /**
- * Pure-unit tests for the chain-chat building blocks (issue #405):
+ * Pure-unit tests for the Chain Chat building blocks:
  *  - the active-status allowlist,
- *  - the latest-displayable-message extraction,
- *  - the React-Flow graph adapter built on top of `buildChainIndex()`.
+ *  - latest user/assistant/tool preview extraction,
+ *  - the semantic top-down hierarchy adapter.
  */
 import {
   ACTIVE_CONVERSATION_STATUSES,
@@ -12,7 +12,11 @@ import {
   extractLatestDisplayableMessage,
   extractMessageText,
 } from '@/utils/shared/conversationPreview';
-import { buildChainGraphModel } from '@/utils/shared/conversationChainGraph';
+import {
+  buildConversationChainTree,
+  chainBranchIsActive,
+  type ConversationChainTreeNode,
+} from '@/utils/shared/conversationChainTree';
 import type { ConversationChainNode } from '@/shared/types/conversationChain';
 
 const node = (
@@ -21,7 +25,7 @@ const node = (
 ): ConversationChainNode => ({
   id,
   title: id,
-  active: true,
+  active: false,
   createdAt: 1,
   updatedAt: 1,
   parentConversationId: null,
@@ -29,6 +33,10 @@ const node = (
   lastMessage: null,
   ...overrides,
 });
+
+function flatten(roots: ConversationChainTreeNode[]): ConversationChainTreeNode[] {
+  return roots.flatMap((root) => [root, ...flatten(root.children)]);
+}
 
 describe('active conversation status allowlist', () => {
   it('only treats in-flight statuses as active', () => {
@@ -48,7 +56,7 @@ describe('active conversation status allowlist', () => {
   });
 });
 
-describe('latest displayable message extraction', () => {
+describe('latest displayable activity extraction', () => {
   it('flattens string and multimodal text content', () => {
     expect(extractMessageText('  hello  ')).toBe('hello');
     expect(
@@ -62,81 +70,139 @@ describe('latest displayable message extraction', () => {
     expect(extractMessageText({ nope: true })).toBe('');
   });
 
-  it('picks the newest visible user/assistant message and skips the rest', () => {
+  it('picks the newest visible user or assistant message and skips system plumbing', () => {
     const preview = extractLatestDisplayableMessage([
       { role: 'user', content: 'older', timestamp: 1 },
-      { role: 'assistant', content: '', tool_calls: [{ id: 'call_1' }], timestamp: 2 },
-      { role: 'tool', content: 'tool output', timestamp: 3 },
+      { role: 'assistant', content: '', timestamp: 2 },
       { role: 'assistant', content: 'the\n\nanswer', timestamp: 4 },
       { role: 'system', content: 'system prompt', timestamp: 5 },
     ]);
     expect(preview).toEqual({ role: 'assistant', text: 'the answer', timestamp: 4, truncated: false });
   });
 
-  it('skips disabled (reverted) messages', () => {
+  it('projects the latest tool result with its matching function name', () => {
     const preview = extractLatestDisplayableMessage([
-      { role: 'user', content: 'kept', timestamp: 1 },
-      { role: 'assistant', content: 'reverted', timestamp: 2, disabled: true },
+      {
+        role: 'assistant',
+        content: 'I will inspect it.',
+        timestamp: 1,
+        tool_calls: [{ id: 'call-1', function: { name: 'read_file' } }],
+      },
+      { role: 'tool', tool_call_id: 'call-1', content: 'file contents', timestamp: 2 },
     ]);
-    expect(preview?.text).toBe('kept');
+
+    expect(preview).toEqual({
+      role: 'tool',
+      text: 'read_file',
+      toolName: 'read_file',
+      toolKind: 'result',
+      timestamp: 2,
+      truncated: false,
+    });
   });
 
-  it('bounds the preview and returns null for empty or malformed input', () => {
-    const preview = extractLatestDisplayableMessage([{ role: 'user', content: 'x'.repeat(50) }], 10);
-    expect(preview).toMatchObject({ truncated: true });
-    expect(preview?.text).toHaveLength(11);
+  it('turns an assistant tool-call-only turn into compact tool activity', () => {
+    const preview = extractLatestDisplayableMessage([
+      {
+        role: 'assistant',
+        content: '',
+        timestamp: 7,
+        tool_calls: [
+          { id: 'call-1', function: { name: 'search_files' } },
+          { id: 'call-2', function: { name: 'read_file' } },
+        ],
+      },
+    ]);
 
+    expect(preview).toEqual({
+      role: 'tool',
+      text: 'search_files · read_file',
+      toolKind: 'call',
+      timestamp: 7,
+      truncated: false,
+    });
+  });
+
+  it('skips disabled messages and bounds the selected preview', () => {
+    const preview = extractLatestDisplayableMessage([
+      { role: 'assistant', content: 'kept', timestamp: 1 },
+      { role: 'tool', content: 'reverted', timestamp: 2, disabled: true },
+      { role: 'user', content: 'x'.repeat(50), timestamp: 3 },
+    ], 10);
+
+    expect(preview).toMatchObject({ role: 'user', truncated: true });
+    expect(preview?.text).toHaveLength(10);
     expect(extractLatestDisplayableMessage([])).toBeNull();
     expect(extractLatestDisplayableMessage(undefined)).toBeNull();
     expect(extractLatestDisplayableMessage([null, 42, { role: 'system', content: 'x' }])).toBeNull();
   });
 });
 
-describe('chain graph adapter', () => {
-  it('returns an empty model for empty input', () => {
-    expect(buildChainGraphModel([])).toEqual({ nodes: [], edges: [], detachedIds: [] });
+describe('semantic conversation-chain tree adapter', () => {
+  it('returns an empty forest for empty input', () => {
+    expect(buildConversationChainTree([])).toEqual({ roots: [], detachedIds: [] });
   });
 
-  it('places a branch deterministically and emits parent -> child edges', () => {
-    const model = buildChainGraphModel([
+  it('builds a deterministic parent-to-child hierarchy with semantic depths', () => {
+    const input = [
       node('root'),
       node('a', { parentConversationId: 'root', rootConversationId: 'root' }),
       node('b', { parentConversationId: 'root', rootConversationId: 'root' }),
       node('a1', { parentConversationId: 'a', rootConversationId: 'root' }),
+    ];
+    const model = buildConversationChainTree(input);
+    const all = flatten(model.roots);
+
+    expect(model.roots.map((root) => root.id)).toEqual(['root']);
+    expect(model.roots[0].children.map((child) => child.id)).toEqual(['a', 'b']);
+    expect(model.roots[0].children[0].children.map((child) => child.id)).toEqual(['a1']);
+    expect(all.map((entry) => [entry.id, entry.depth])).toEqual([
+      ['root', 0],
+      ['a', 1],
+      ['a1', 2],
+      ['b', 1],
     ]);
-
-    expect(model.nodes.map((n) => n.id)).toEqual(['root', 'a', 'a1', 'b']);
-    expect(model.nodes.map((n) => n.depth)).toEqual([0, 1, 2, 1]);
-    expect(model.edges.map((e) => e.id)).toEqual(['root->a', 'a->a1', 'root->b']);
-    // Same input, same layout: stable snapshots, no visual jumping.
-    expect(buildChainGraphModel([
-      node('root'),
-      node('a', { parentConversationId: 'root', rootConversationId: 'root' }),
-      node('b', { parentConversationId: 'root', rootConversationId: 'root' }),
-      node('a1', { parentConversationId: 'a', rootConversationId: 'root' }),
-    ])).toEqual(model);
+    expect(buildConversationChainTree(input)).toEqual(model);
   });
 
-  it('flags nodes whose parent is missing and still renders them', () => {
-    const model = buildChainGraphModel([
+  it('reattaches a missing-parent node to its loaded root and marks it detached', () => {
+    const model = buildConversationChainTree([
       node('root'),
       node('orphan', { parentConversationId: 'gone', rootConversationId: 'root' }),
     ]);
 
-    expect(model.nodes.map((n) => n.id).sort()).toEqual(['orphan', 'root']);
+    expect(model.roots.map((root) => root.id)).toEqual(['root']);
+    expect(model.roots[0].children.map((child) => child.id)).toEqual(['orphan']);
+    expect(model.roots[0].children[0]).toMatchObject({ depth: 1, detached: true });
     expect(model.detachedIds).toEqual(['orphan']);
-    expect(model.nodes.find((n) => n.id === 'orphan')?.detached).toBe(true);
-    expect(model.edges.map((e) => e.id)).toEqual(['root->orphan']);
   });
 
-  it('terminates on self-links and cycles without dropping nodes', () => {
-    const model = buildChainGraphModel([
+  it('terminates on self-links and cycles without dropping or duplicating nodes', () => {
+    const model = buildConversationChainTree([
       node('selfie', { parentConversationId: 'selfie' }),
       node('x', { parentConversationId: 'y' }),
       node('y', { parentConversationId: 'x' }),
     ]);
+    const ids = flatten(model.roots).map((entry) => entry.id);
 
-    expect(model.nodes.map((n) => n.id).sort()).toEqual(['selfie', 'x', 'y']);
-    expect(new Set(model.nodes.map((n) => n.position.y)).size).toBe(3);
+    expect([...ids].sort()).toEqual(['selfie', 'x', 'y']);
+    expect(new Set(ids).size).toBe(3);
+  });
+
+  it('reports live work through every ancestor of an active descendant', () => {
+    const model = buildConversationChainTree([
+      node('root'),
+      node('idle', { parentConversationId: 'root', rootConversationId: 'root' }),
+      node('live', {
+        active: true,
+        status: 'running',
+        parentConversationId: 'idle',
+        rootConversationId: 'root',
+      }),
+    ]);
+
+    expect(chainBranchIsActive(model.roots[0])).toBe(true);
+    expect(chainBranchIsActive(model.roots[0].children[0])).toBe(true);
+    expect(chainBranchIsActive(model.roots[0].children[0].children[0])).toBe(true);
   });
 });

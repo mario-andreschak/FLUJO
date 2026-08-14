@@ -59,6 +59,25 @@ export default function RoleDetail({ roleId }: { roleId: string }) {
         </Stack>
       </Stack>
       <Divider sx={{ my: 3 }} />
+      <Typography variant="h6">{t('roles.behaviors')}</Typography>
+      <Typography color="text.secondary" sx={{ mt: 0.5 }}>
+        {t('roles.behaviorsHelp')}
+      </Typography>
+      <Stack gap={1.5} sx={{ my: 1.5 }}>
+        {role.behaviors.map((behavior) => (
+          <Box
+            key={behavior.key}
+            sx={{ border: 1, borderColor: 'divider', borderRadius: 2, p: 2 }}
+          >
+            <Typography fontWeight={700}>{behavior.name}</Typography>
+            {behavior.description && (
+              <Typography color="text.secondary" sx={{ mt: 0.5 }}>
+                {behavior.description}
+              </Typography>
+            )}
+          </Box>
+        ))}
+      </Stack>
       <Typography variant="h6">{t('roles.suggestedApps')}</Typography>
       <Stack direction="row" gap={1} flexWrap="wrap" sx={{ my: 1.5 }}>
         {role.suggestedApps.length === 0

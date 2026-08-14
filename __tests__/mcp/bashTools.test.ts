@@ -122,7 +122,7 @@ describe('bash tool definitions', () => {
     const names = tools.map((t) => t.name);
     expect(names).toEqual(
       expect.arrayContaining([
-        'run', 'start', 'status', 'wait', 'write_stdin', 'kill', 'list_sessions',
+        'run', 'start', 'status', 'wait', 'sleep', 'write_stdin', 'kill', 'list_sessions',
         'open_terminal', 'terminal_read', 'terminal_write', 'terminal_resize', 'terminal_close', 'terminal_list',
       ])
     );
@@ -142,6 +142,9 @@ describe('bash tool definitions', () => {
     }));
     expect(run?.inputSchema.properties?.timeout).toEqual(expect.objectContaining({
       description: expect.stringContaining('-1 disables it'),
+    }));
+    expect(tools.find((tool) => tool.name === 'sleep')?.inputSchema).toEqual(expect.objectContaining({
+      required: ['seconds'],
     }));
   });
 
@@ -606,6 +609,46 @@ describe('bash shell selection (issues #225, #327)', () => {
 
 });
 
+describe('bash sleep (fixed duration)', () => {
+  it('waits for the requested fixed duration and reports elapsed time', async () => {
+    const startedAt = Date.now();
+    const result = parse(await bashCallTool('sleep', { seconds: 0.05 }));
+    const wallElapsed = Date.now() - startedAt;
+
+    expect(result).toEqual(expect.objectContaining({
+      slept: true,
+      requestedSeconds: 0.05,
+    }));
+    expect(result.elapsedMs as number).toBeGreaterThanOrEqual(35);
+    expect(wallElapsed).toBeGreaterThanOrEqual(35);
+  });
+
+  it('rejects invalid durations instead of silently substituting a default', async () => {
+    expect((await bashCallTool('sleep', { seconds: 0 })).isError).toBe(true);
+    expect((await bashCallTool('sleep', { seconds: Number.NaN })).isError).toBe(true);
+    expect((await bashCallTool('sleep', {})).isError).toBe(true);
+  });
+
+  it('is cancellation-aware', async () => {
+    const controller = new AbortController();
+    const sleeping = bashCallTool(
+      'sleep',
+      { seconds: 60 },
+      undefined,
+      undefined,
+      { signal: controller.signal },
+    );
+    controller.abort();
+    const result = await sleeping;
+    expect(result.isError).toBe(true);
+    expect(parse(result)).toEqual(expect.objectContaining({
+      slept: false,
+      cancelled: true,
+      requestedSeconds: 60,
+    }));
+  });
+});
+
 describe('bash background sessions', () => {
   it('starts multiple independent sessions in parallel', async () => {
     mockCompletedChild('parallel-one');
@@ -627,6 +670,14 @@ describe('bash background sessions', () => {
     const waited = parse(await bashCallTool('wait', { sessionId: start.sessionId as string, timeout: 10 }));
     expect(waited.running).toBe(false);
     expect(waited.output as string).toContain('bg-done');
+    expect(waited).toEqual(expect.objectContaining({
+      timedOut: false,
+      requestedTimeoutMs: 10_000,
+      returnedEarly: true,
+    }));
+    expect(waited.waitedMs as number).toBeLessThan(10_000);
+    expect(waited.remainingSeconds as number).toBeGreaterThan(0);
+    expect(waited.hint as string).toContain('call sleep');
 
     const list = parse(await bashCallTool('list_sessions', {}));
     const ids = (list.sessions as Array<{ sessionId: string }>).map((s) => s.sessionId);
@@ -648,6 +699,23 @@ describe('bash background sessions', () => {
     expect(progress).toHaveBeenCalledWith(expect.objectContaining({
       message: 'background-progress-marker',
     }));
+  });
+
+  it('reports when a finite wait uses its full timeout', async () => {
+    mockNeverClosingChild();
+    const started = parse(await bashCallTool('start', { command: 'background-keeps-running' }));
+    const waited = parse(await bashCallTool('wait', {
+      sessionId: started.sessionId as string,
+      timeout: 0.02,
+    }));
+    expect(waited).toEqual(expect.objectContaining({
+      running: true,
+      timedOut: true,
+      requestedTimeoutMs: 20,
+      returnedEarly: false,
+    }));
+    expect(waited.waitedMs as number).toBeGreaterThanOrEqual(10);
+    expect(waited.hint).toBeUndefined();
   });
 
   it('kills a long-running background session', async () => {

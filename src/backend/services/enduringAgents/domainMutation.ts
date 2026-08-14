@@ -7,6 +7,7 @@ import {
   getPersona,
   getPersonaDeletionTombstone,
   getPersonaLease,
+  updatePersonaRoleVersionWithinRuntimeLock,
   updatePersonaWithinRuntimeLock,
 } from './store';
 import { withPersonaRuntimeLock } from './runtimeLock';
@@ -43,6 +44,8 @@ export class PersonaDomainBusyError extends Error {
 export interface PersonaDomainMutationOptions {
   /** Present only inside a trusted Persona Flow/meeting execution. */
   executionAuthority?: FlowExecutionAuthority;
+  /** Administrative capability for one exact future-Activity Role selection. */
+  nextRoleVersionId?: string;
 }
 
 /**
@@ -55,6 +58,11 @@ export async function withPersonaDomainMutation<T>(
   task: (context: PersonaActivityMutationContext) => Promise<T>,
 ): Promise<T> {
   if (options.executionAuthority) {
+    if (options.nextRoleVersionId !== undefined) {
+      throw new PersonaDomainConflictError(
+        'A Persona Role can only change from idle settings.',
+      );
+    }
     const commit = options.executionAuthority.commitPersonaMutation;
     if (!commit) {
       throw new PersonaDomainConflictError(
@@ -80,7 +88,12 @@ export async function withPersonaDomainMutation<T>(
     }
     return task({
       persona,
-      updatePersona: (next) => updatePersonaWithinRuntimeLock(next, lock),
+      updatePersona: (next) => options.nextRoleVersionId === undefined
+        ? updatePersonaWithinRuntimeLock(next, lock)
+        : updatePersonaRoleVersionWithinRuntimeLock(next, {
+            expectedCurrentRoleVersionId: persona.roleVersionId,
+            nextRoleVersionId: options.nextRoleVersionId,
+          }, lock),
     });
   });
 }

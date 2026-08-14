@@ -29,12 +29,14 @@ import {
   type PersonaDetail,
 } from '@/frontend/services/personas';
 import { personaSettingsService } from '@/frontend/services/personas/settings';
-import type {
-  Persona,
-  PersonaDeletionArchivePolicy,
-  PersonaDeletionPreview,
-  PersonaExportPreview,
-  PersonaSettingsOptions,
+import {
+  PERSONA_AUTONOMY_LEVELS,
+  PERSONA_INTERRUPTION_POLICIES,
+  type Persona,
+  type PersonaDeletionArchivePolicy,
+  type PersonaDeletionPreview,
+  type PersonaExportPreview,
+  type PersonaSettingsOptions,
 } from '@/shared/types/enduringAgent';
 
 interface PersonaSettingsProps {
@@ -45,9 +47,9 @@ interface PersonaSettingsProps {
 
 interface SettingsDraft {
   name: string;
+  roleVersionId: string;
   mission: string;
   avatarUrl: string;
-  voice: string;
   language: string;
   lifecycleState: 'idle' | 'sleeping' | 'disabled';
   autonomyLevel: Persona['autonomyLevel'];
@@ -57,9 +59,9 @@ interface SettingsDraft {
 function draftFromPersona(persona: Persona): SettingsDraft {
   return {
     name: persona.name,
+    roleVersionId: persona.roleVersionId,
     mission: persona.mission ?? '',
     avatarUrl: persona.presentation?.avatarUrl ?? '',
-    voice: persona.presentation?.voice ?? '',
     language: persona.presentation?.language ?? '',
     lifecycleState: persona.lifecycleState === 'sleeping'
       || persona.lifecycleState === 'disabled'
@@ -76,7 +78,6 @@ function normalized(draft: SettingsDraft): string {
     name: draft.name.trim(),
     mission: draft.mission.trim(),
     avatarUrl: draft.avatarUrl.trim(),
-    voice: draft.voice.trim(),
     language: draft.language.trim(),
   });
 }
@@ -218,10 +219,10 @@ export default function PersonaSettings({
     try {
       const saved = await personaSettingsService.update(detail.persona.id, {
         name: form.name.trim(),
+        roleVersionId: form.roleVersionId,
         mission: form.mission.trim() || null,
         presentation: {
           avatarUrl: form.avatarUrl.trim() || null,
-          voice: form.voice.trim() || null,
           language: form.language.trim() || null,
         },
         lifecycleState: form.lifecycleState,
@@ -366,6 +367,10 @@ export default function PersonaSettings({
 
   const legacyLanguage = form.language
     && !options?.languages.some((language) => language.code === form.language);
+  const selectedRole = options?.roles.find(
+    (role) => role.roleVersionId === form.roleVersionId,
+  );
+  const selectedRoleUnavailable = Boolean(options && !selectedRole);
 
   return (
     <Stack spacing={2} maxWidth={900}>
@@ -407,6 +412,13 @@ export default function PersonaSettings({
           minRows={3}
           inputProps={{ maxLength: 20_000 }}
         />
+        <TextField
+          label={t('personas.settings.picture')}
+          value={form.avatarUrl}
+          onChange={(event) => set('avatarUrl', event.target.value)}
+          helperText={t('personas.settings.pictureHelp')}
+          inputProps={{ maxLength: 2_000 }}
+        />
         {form.avatarUrl && (
           <Stack direction="row" spacing={2} alignItems="center">
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -418,8 +430,11 @@ export default function PersonaSettings({
               style={{ borderRadius: '50%', objectFit: 'cover' }}
             />
             <Typography variant="body2" color="text.secondary">
-              {t('personas.settings.avatarUnavailable')}
+              {t('personas.settings.picturePreview')}
             </Typography>
+            <Button onClick={() => set('avatarUrl', '')}>
+              {t('personas.settings.removePicture')}
+            </Button>
           </Stack>
         )}
       </SectionCard>
@@ -428,20 +443,52 @@ export default function PersonaSettings({
         title={t('personas.settings.role')}
         description={t('personas.settings.roleHelp')}
       >
-        <Typography>
-          {t('personas.role', {
-            role: detail.roleVersion.name,
-            version: detail.roleVersion.version,
-          })}
-        </Typography>
-        <Alert severity="info">{t('personas.settings.futureWork')}</Alert>
+        {options ? (
+          <FormControl fullWidth>
+            <InputLabel id="persona-role-label">
+              {t('personas.settings.role')}
+            </InputLabel>
+            <Select
+              labelId="persona-role-label"
+              label={t('personas.settings.role')}
+              value={form.roleVersionId}
+              onChange={(event) => set('roleVersionId', event.target.value)}
+            >
+              {selectedRoleUnavailable && (
+                <MenuItem value={form.roleVersionId}>
+                  {t('personas.settings.roleUnavailableChoice', {
+                    role: detail.roleVersion.name,
+                  })}
+                </MenuItem>
+              )}
+              {options.roles.map((role) => (
+                <MenuItem key={role.roleVersionId} value={role.roleVersionId}>
+                  {role.name}
+                </MenuItem>
+              ))}
+            </Select>
+            <FormHelperText>{t('personas.settings.roleFutureHelp')}</FormHelperText>
+          </FormControl>
+        ) : (
+          <Alert severity="info">{t('personas.settings.roleOptionsUnavailable')}</Alert>
+        )}
+        {selectedRole?.description && (
+          <Typography variant="body2" color="text.secondary">
+            {selectedRole.description}
+          </Typography>
+        )}
+        {selectedRoleUnavailable && (
+          <Alert severity="warning">
+            {t('personas.settings.roleUnavailable', { role: detail.roleVersion.name })}
+          </Alert>
+        )}
       </SectionCard>
 
       <SectionCard
-        title={t('personas.settings.voiceLanguage')}
-        description={t('personas.settings.voiceLanguageHelp')}
+        title={t('personas.settings.language')}
+        description={t('personas.settings.languageHelp')}
       >
-        {options?.capabilities.languagePicker ? (
+        {options ? (
           <FormControl fullWidth>
             <InputLabel id="persona-language-label">
               {t('personas.settings.language')}
@@ -468,11 +515,6 @@ export default function PersonaSettings({
           </FormControl>
         ) : (
           <Alert severity="info">{t('personas.settings.languageUnavailable')}</Alert>
-        )}
-        {form.voice && (
-          <Alert severity="info">
-            {t('personas.settings.savedVoiceUnavailable', { voice: form.voice })}
-          </Alert>
         )}
       </SectionCard>
 
@@ -528,12 +570,13 @@ export default function PersonaSettings({
               event.target.value as SettingsDraft['autonomyLevel'],
             )}
           >
-            {(options?.autonomyLevels ?? []).map((value) => (
+            {(options?.autonomyLevels ?? PERSONA_AUTONOMY_LEVELS).map((value) => (
               <MenuItem key={value} value={value}>
                 {t(`personas.settings.autonomy.${value}`)}
               </MenuItem>
             ))}
           </Select>
+          <FormHelperText>{t('personas.settings.autonomyHelp')}</FormHelperText>
         </FormControl>
         <FormControl fullWidth>
           <InputLabel id="persona-interruption-label">
@@ -548,7 +591,7 @@ export default function PersonaSettings({
               event.target.value as SettingsDraft['interruptionPolicy'],
             )}
           >
-            {(options?.interruptionPolicies ?? []).map((value) => (
+            {(options?.interruptionPolicies ?? PERSONA_INTERRUPTION_POLICIES).map((value) => (
               <MenuItem key={value} value={value}>
                 {t(`personas.settings.interruption.${value}`)}
               </MenuItem>

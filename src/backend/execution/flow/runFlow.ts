@@ -456,6 +456,13 @@ export interface FlowRunInput {
   personaAttribution?: PersonaAttribution;
 
   /**
+   * Dispatcher-only exact MCP config names projected into this top-level
+   * Persona Activity. Runtime-only; never serialized into a dispatch envelope
+   * or inherited by structural/Behavior subflows.
+   */
+  personaCoreAppRefs?: string[];
+
+  /**
    * Dispatcher-only, capability-free Persona identity/mission instructions.
    * This field is intentionally absent from serializable public input and from
    * SubflowNode child inputs; runFlow persists it only after validating the
@@ -541,6 +548,7 @@ function installPersonaActivitySnapshot(
   // Model/tool authority derived from the prior graph.
   sharedState.mcpContext = undefined;
   sharedState.currentMCPNodes = undefined;
+  delete sharedState.personaCoreAppRefs;
   sharedState.armedSyntheticTools = undefined;
   sharedState.toolNameMap = undefined;
   // The successor Activity starts from the immutable Behavior policy, never
@@ -626,6 +634,27 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   const personaInstructionContext = input.personaInstructionContext
     ? PersonaInstructionContextSchema.parse(input.personaInstructionContext)
     : undefined;
+  const rawPersonaCoreAppRefs = (input as { personaCoreAppRefs?: unknown }).personaCoreAppRefs;
+  let personaCoreAppRefs: string[] | undefined;
+  if (rawPersonaCoreAppRefs !== undefined) {
+    if (
+      !Array.isArray(rawPersonaCoreAppRefs)
+      || rawPersonaCoreAppRefs.length > 128
+      || rawPersonaCoreAppRefs.some((value) => typeof value !== 'string' || !value.trim())
+    ) {
+      throw new TypeError('Persona Core App refs must be an array of non-empty MCP config names.');
+    }
+    if (
+      typeof input.executionAuthority?.authorizePersonaCoreMcp !== 'function'
+      || !input.personaAttribution
+      || !personaInstructionContext
+    ) {
+      throw new TypeError(
+        'Persona Core App refs require top-level dispatcher authority, App authorization, and instruction context.',
+      );
+    }
+    personaCoreAppRefs = Array.from(new Set(rawPersonaCoreAppRefs));
+  }
   if (personaInstructionContext) {
     if (!input.executionAuthority) {
       throw new TypeError('Persona instruction context requires execution authority.');
@@ -988,6 +1017,16 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   if (input.personaAttribution) {
     sharedState.personaAttribution = { ...input.personaAttribution };
     delete sharedState.personaTargetId;
+  }
+  if (personaCoreAppRefs !== undefined) {
+    Object.defineProperty(sharedState, 'personaCoreAppRefs', {
+      value: [...personaCoreAppRefs],
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+  } else {
+    delete sharedState.personaCoreAppRefs;
   }
   if (personaInstructionContext) {
     sharedState.personaInstructionContext = structuredClone(personaInstructionContext);

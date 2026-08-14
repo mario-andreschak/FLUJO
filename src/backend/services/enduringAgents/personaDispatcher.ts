@@ -61,7 +61,9 @@ import {
   completePersonaActivity,
   completePersonaActivityWithinRuntimeLock,
   listPendingPersonaActivityDeliveries,
+  movePersonaMailboxItemWithinRuntimeLock,
   persistPersonaActivitySnapshot,
+  reprioritizePersonaMailboxItemWithinRuntimeLock,
   observeYieldedPersonaActivity,
   releasePersonaActivityLease,
   rejectPersonaActivityDelivery,
@@ -320,6 +322,29 @@ export interface CancelPersonaFlowDispatchInput extends PersonaFlowDispatchIdent
   reason?: string;
 }
 
+export interface CancelPersonaFlowDispatchByIdInput {
+  personaId: string;
+  dispatchId: string;
+  reason?: string;
+}
+
+export interface ReprioritizePersonaWorkItemDispatchInput {
+  personaId: string;
+  workItemId: string;
+  priority: PersonaPriority;
+}
+
+export interface MovePersonaWorkItemDispatchInput {
+  personaId: string;
+  workItemId: string;
+  direction: 'earlier' | 'later';
+}
+
+export interface MovePersonaWorkItemDispatchResult {
+  found: boolean;
+  moved: boolean;
+}
+
 export interface CancelPersonaFlowDispatchOptions extends WaitForPersonaFlowDispatchOptions {
   waitForCompletion?: boolean;
 }
@@ -366,6 +391,18 @@ export class PersonaFlowDispatchNotFoundError extends Error {
   constructor(readonly identity: PersonaFlowDispatchIdentity) {
     super('No owning Persona Flow dispatch matches the persisted conversation attribution.');
     this.name = 'PersonaFlowDispatchNotFoundError';
+  }
+}
+
+export class PersonaFlowDispatchIdNotFoundError extends Error {
+  readonly code = 'PERSONA_FLOW_DISPATCH_NOT_FOUND' as const;
+
+  constructor(
+    readonly personaId: string,
+    readonly dispatchId: string,
+  ) {
+    super('No matching Persona work run was found.');
+    this.name = 'PersonaFlowDispatchIdNotFoundError';
   }
 }
 
@@ -769,18 +806,27 @@ export interface PersonaFlowDispatcherDependencies {
   commitWithPersonaActivityLease: <T>(value: unknown, task: () => Promise<T>) => Promise<T>;
   renewPersonaActivityLease: (value: unknown) => Promise<PersonaLease>;
   releasePersonaActivityLease: (value: unknown) => Promise<PersonaLease>;
-  completePersonaActivity: (value: unknown) => Promise<unknown>;
+  completePersonaActivity: (value: unknown) => Promise<CompletedPersonaActivity>;
   completePersonaActivityWithinRuntimeLock: (
     value: unknown,
     lock: PersonaRuntimeLock,
   ) => Promise<CompletedPersonaActivity>;
   observeCompletedPersonaActivity: (result: CompletedPersonaActivity) => Promise<void>;
+  synchronizeAssignedWorkItemFromActivity: (activity: PersonaActivity) => Promise<unknown>;
+  synchronizeAssignedWorkItemFromActivityWithinRuntimeLock: (
+    activity: PersonaActivity,
+    lock: PersonaRuntimeLock,
+  ) => Promise<unknown>;
   updatePersonaActivityReferences: (value: unknown) => Promise<PersonaActivity>;
   persistPersonaActivitySnapshot: (value: unknown) => Promise<PersonaActivity>;
   listPendingPersonaActivityDeliveries: (value: unknown) => Promise<PersonaMailboxItem[]>;
   acknowledgePersonaActivityDelivery: (value: unknown) => Promise<PersonaMailboxItem>;
   rejectPersonaActivityDelivery: (value: unknown) => Promise<PersonaMailboxItem>;
   cancelPersonaMailboxItem: (value: unknown) => Promise<PersonaMailboxItem>;
+  reprioritizePersonaMailboxItemWithinRuntimeLock:
+    typeof reprioritizePersonaMailboxItemWithinRuntimeLock;
+  movePersonaMailboxItemWithinRuntimeLock:
+    typeof movePersonaMailboxItemWithinRuntimeLock;
   yieldPersonaActivityForInterruption: (value: unknown) => Promise<PersonaLease>;
   yieldPersonaActivityForInterruptionWithinRuntimeLock: (
     value: unknown,
@@ -809,12 +855,22 @@ const DEFAULT_DEPENDENCIES: PersonaFlowDispatcherDependencies = {
   completePersonaActivity,
   completePersonaActivityWithinRuntimeLock,
   observeCompletedPersonaActivity,
+  synchronizeAssignedWorkItemFromActivity: async (activity) => {
+    const { synchronizeAssignedWorkItemFromActivity } = await import('./workItems');
+    return synchronizeAssignedWorkItemFromActivity(activity);
+  },
+  synchronizeAssignedWorkItemFromActivityWithinRuntimeLock: async (activity, lock) => {
+    const { synchronizeAssignedWorkItemFromActivityWithinRuntimeLock } = await import('./workItems');
+    return synchronizeAssignedWorkItemFromActivityWithinRuntimeLock(activity, lock);
+  },
   updatePersonaActivityReferences,
   persistPersonaActivitySnapshot,
   listPendingPersonaActivityDeliveries,
   acknowledgePersonaActivityDelivery,
   rejectPersonaActivityDelivery,
   cancelPersonaMailboxItem,
+  reprioritizePersonaMailboxItemWithinRuntimeLock,
+  movePersonaMailboxItemWithinRuntimeLock,
   yieldPersonaActivityForInterruption,
   yieldPersonaActivityForInterruptionWithinRuntimeLock,
   observeYieldedPersonaActivity,
@@ -1107,17 +1163,19 @@ export class PersonaFlowDispatcher {
     }
   }
 
-  async cancel(
-    input: CancelPersonaFlowDispatchInput,
+  private async cancelExisting(
+    existing: PersonaFlowDispatchRecord,
+    reason: string | undefined,
     options: CancelPersonaFlowDispatchOptions = {},
   ): Promise<PersonaFlowDispatchRecord> {
-    const existing = await this.findOwningDispatch(input);
     if (isTerminalDispatch(existing.state)) return existing;
     const requested = await this.inWorkspace(() => withPersonaRuntimeLock(
-      input.personaId,
+      existing.personaId,
       async () => {
         const current = await this.get(existing.id);
-        if (!current) throw new PersonaFlowDispatchNotFoundError(input);
+        if (!current) {
+          throw new PersonaFlowDispatchIdNotFoundError(existing.personaId, existing.id);
+        }
         if (isTerminalDispatch(current.state)) return current;
         const requestedAt = current.cancellationRequestedAt
           ?? Math.max(Date.now(), current.updatedAt + 1);
@@ -1128,7 +1186,7 @@ export class PersonaFlowDispatcher {
             : {}),
           cancellationRequestedAt: requestedAt,
           cancellationReason: sanitizeText(
-            input.reason,
+            reason,
             512,
             'Execution was cancelled by the user.',
           ),
@@ -1151,6 +1209,104 @@ export class PersonaFlowDispatcher {
     }
     await pump;
     return (await this.get(requested.id)) ?? requested;
+  }
+
+  async cancel(
+    input: CancelPersonaFlowDispatchInput,
+    options: CancelPersonaFlowDispatchOptions = {},
+  ): Promise<PersonaFlowDispatchRecord> {
+    const existing = await this.findOwningDispatch(input);
+    return this.cancelExisting(existing, input.reason, options);
+  }
+
+  /**
+   * Cancel a durable dispatch before it necessarily owns an Activity. Task
+   * controls need this path because queued work has no Activity attribution
+   * yet, while the dispatch id is already durable and Persona-scoped.
+   */
+  async cancelById(
+    input: CancelPersonaFlowDispatchByIdInput,
+    options: CancelPersonaFlowDispatchOptions = {},
+  ): Promise<PersonaFlowDispatchRecord> {
+    EnduringAgentIdSchema.parse(input.personaId);
+    EnduringAgentIdSchema.parse(input.dispatchId);
+    const existing = await this.get(input.dispatchId);
+    if (!existing || existing.personaId !== input.personaId) {
+      throw new PersonaFlowDispatchIdNotFoundError(input.personaId, input.dispatchId);
+    }
+    return this.cancelExisting(existing, input.reason, options);
+  }
+
+  /** Keep the durable dispatch and mailbox ordering bucket aligned with its Task. */
+  async reprioritizeWorkItem(
+    input: ReprioritizePersonaWorkItemDispatchInput,
+  ): Promise<PersonaFlowDispatchRecord[]> {
+    EnduringAgentIdSchema.parse(input.personaId);
+    EnduringAgentIdSchema.parse(input.workItemId);
+    z.enum(PERSONA_PRIORITIES).parse(input.priority);
+    return this.inWorkspace(() => withPersonaRuntimeLock(input.personaId, async (lock) => {
+      const matching = (await this.list(input.personaId)).filter((record) => (
+        !isTerminalDispatch(record.state)
+        && record.admission.kind === 'assignment'
+        && record.admission.source.kind === 'assignment'
+        && record.admission.source.sourceId === input.workItemId
+        && Boolean(record.mailboxItemId)
+      ));
+      const updated: PersonaFlowDispatchRecord[] = [];
+      for (const record of matching) {
+        const current = (await this.get(record.id)) ?? record;
+        if (isTerminalDispatch(current.state) || !current.mailboxItemId) continue;
+        const mailbox = await this.dependencies.reprioritizePersonaMailboxItemWithinRuntimeLock({
+          personaId: input.personaId,
+          mailboxItemId: current.mailboxItemId,
+          priority: input.priority,
+        }, lock);
+        if (
+          mailbox.item.status !== 'queued'
+          || (!mailbox.changed && current.admission.priority === input.priority)
+        ) continue;
+        await lock.assertOwned();
+        updated.push(await this.save({
+          ...current,
+          admission: { ...current.admission, priority: input.priority },
+          updatedAt: Math.max(Date.now(), current.updatedAt + 1, mailbox.item.updatedAt),
+        }));
+      }
+      return updated;
+    }));
+  }
+
+  /** Move queued Task work within its current priority bucket. */
+  async moveWorkItem(
+    input: MovePersonaWorkItemDispatchInput,
+  ): Promise<MovePersonaWorkItemDispatchResult> {
+    EnduringAgentIdSchema.parse(input.personaId);
+    EnduringAgentIdSchema.parse(input.workItemId);
+    z.enum(['earlier', 'later']).parse(input.direction);
+    return this.inWorkspace(() => withPersonaRuntimeLock(input.personaId, async (lock) => {
+      const matching = (await this.list(input.personaId))
+        .filter((record) => (
+          record.state === 'queued'
+          && record.admission.kind === 'assignment'
+          && record.admission.source.kind === 'assignment'
+          && record.admission.source.sourceId === input.workItemId
+          && Boolean(record.mailboxItemId)
+        ))
+        .sort((left, right) => right.createdAt - left.createdAt || right.id.localeCompare(left.id));
+      for (const record of matching) {
+        const current = (await this.get(record.id)) ?? record;
+        if (current.state !== 'queued' || !current.mailboxItemId) continue;
+        const mailbox = await this.dependencies.getPersonaMailboxItem(current.mailboxItemId);
+        if (!mailbox || mailbox.personaId !== input.personaId || mailbox.status !== 'queued') continue;
+        const result = await this.dependencies.movePersonaMailboxItemWithinRuntimeLock({
+          personaId: input.personaId,
+          mailboxItemId: current.mailboxItemId,
+          direction: input.direction,
+        }, lock);
+        return { found: true, moved: result.moved };
+      }
+      return { found: false, moved: false };
+    }));
   }
 
   private routeInput(record: PersonaFlowDispatchRecord): Record<string, unknown> {
@@ -1679,6 +1835,37 @@ export class PersonaFlowDispatcher {
     ));
   }
 
+  /**
+   * Task projection is retryable and must never roll back an authoritative
+   * Activity/dispatch terminal transition. Reconciliation revisits terminal
+   * dispatches after restart if this best-effort projection is interrupted.
+   */
+  private async synchronizeAssignedWorkItem(activity: PersonaActivity): Promise<void> {
+    try {
+      await this.inWorkspace(() => (
+        this.dependencies.synchronizeAssignedWorkItemFromActivity(activity)
+      ));
+    } catch (error) {
+      log.warn(`Deferred Task lifecycle synchronization for Activity ${activity.id}:`, error);
+    }
+  }
+
+  private async synchronizeAssignedWorkItemWithinRuntimeLock(
+    activity: PersonaActivity,
+    lock: PersonaRuntimeLock,
+  ): Promise<boolean> {
+    try {
+      await this.dependencies.synchronizeAssignedWorkItemFromActivityWithinRuntimeLock(
+        activity,
+        lock,
+      );
+      return true;
+    } catch (error) {
+      log.warn(`Deferred atomic Task synchronization for Activity ${activity.id}:`, error);
+      return false;
+    }
+  }
+
   private async saveTerminalErrorWithinRuntimeLock(
     record: PersonaFlowDispatchRecord,
     error: PersonaFlowDispatchError,
@@ -1712,11 +1899,12 @@ export class PersonaFlowDispatcher {
       'The claimed mailbox item has no valid Flow dispatch payload.',
     );
     try {
-      await this.inWorkspace(() => this.dependencies.completePersonaActivity({
+      const completion = await this.inWorkspace(() => this.dependencies.completePersonaActivity({
         ...fence,
         status: 'error',
         error: error.message,
       }));
+      await this.synchronizeAssignedWorkItem(completion.activity);
     } catch {
       // The runtime remains authoritative. If this fence was lost it will close
       // uncertain work on expiry; never attempt a second execution here.
@@ -1800,6 +1988,7 @@ export class PersonaFlowDispatcher {
     requested: TerminalDispatchRequest,
   ): Promise<PersonaFlowDispatchRecord> {
     let completion: CompletedPersonaActivity | undefined;
+    let assignmentSynchronized = false;
     const terminal = await this.inWorkspace(() => withPersonaRuntimeLock(
       record.personaId,
       async (lock) => {
@@ -1825,6 +2014,10 @@ export class PersonaFlowDispatcher {
             ? { outcomeRef: latest.id }
             : { error: requested.error!.message }),
         }, lock);
+        assignmentSynchronized = await this.synchronizeAssignedWorkItemWithinRuntimeLock(
+          completion.activity,
+          lock,
+        );
         const now = Math.max(
           Date.now(),
           latest.updatedAt,
@@ -1876,6 +2069,9 @@ export class PersonaFlowDispatcher {
         // Observability is projection-only. The Activity and dispatch terminal
         // states above are already authoritative and must never be rewritten.
         log.warn(`Failed to observe terminal Persona Activity ${fence.activityId}:`, error);
+      }
+      if (!assignmentSynchronized) {
+        await this.synchronizeAssignedWorkItem(completion.activity);
       }
     }
     return terminal;
@@ -1973,6 +2169,8 @@ export class PersonaFlowDispatcher {
       || !source.activityId
       || !source.completedAt
     ) return null;
+    const persona = await this.inWorkspace(() => this.dependencies.getPersona(source.personaId));
+    if (!persona || persona.autonomyLevel === 'locked') return null;
     const candidateLimit = source.memoryCandidateLimit ?? 0;
     if (candidateLimit === 0) return null;
     const plan = await this.inWorkspace(() => buildMemoryMaintenancePlan({
@@ -2049,7 +2247,7 @@ export class PersonaFlowDispatcher {
 
     if (isTerminalDispatch(record.state)) {
       try {
-        await this.inWorkspace(() => this.dependencies.completePersonaActivity({
+        const completion = await this.inWorkspace(() => this.dependencies.completePersonaActivity({
           ...fenceForClaim(claim),
           status: record.state === 'completed'
             ? 'completed'
@@ -2061,6 +2259,7 @@ export class PersonaFlowDispatcher {
             ? { error: record.error?.message ?? 'Dispatch already failed.' }
             : {}),
         }));
+        await this.synchronizeAssignedWorkItem(completion.activity);
       } catch {
         // Never replay a terminal dispatch merely to repair a stale mailbox
         // projection. The runtime will reconcile the authoritative lease.
@@ -2486,6 +2685,9 @@ export class PersonaFlowDispatcher {
         flowDefinition: coreFlowDefinition,
         abortSignal: abortController.signal,
         executionAuthority: authority,
+        ...(claim.activity.kind !== 'maintenance' && coreAppRefs.length > 0
+          ? { personaCoreAppRefs: [...coreAppRefs] }
+          : {}),
         behaviorToolRegistry,
         personaAttribution: {
           personaId: record.personaId,
@@ -2750,7 +2952,15 @@ export class PersonaFlowDispatcher {
   }
 
   private async reconcileRecord(record: PersonaFlowDispatchRecord): Promise<PersonaFlowDispatchRecord> {
-    if (isTerminalDispatch(record.state)) return record;
+    if (isTerminalDispatch(record.state)) {
+      if (record.activityId) {
+        const activity = await this.inWorkspace(() => (
+          this.dependencies.getPersonaActivity(record.activityId!)
+        ));
+        if (activity) await this.synchronizeAssignedWorkItem(activity);
+      }
+      return record;
+    }
     if (record.state === 'waiting' && record.waitingReason === 'delivery') {
       const repaired = await this.reconcileRelatedDelivery(record);
       if (isTerminalDispatch(repaired.state) || repaired.waitingReason === 'delivery') {
@@ -2758,7 +2968,9 @@ export class PersonaFlowDispatcher {
       }
       record = repaired;
     }
-    return this.inWorkspace(() => withPersonaRuntimeLock(record.personaId, async (lock) => {
+    const reconciled = await this.inWorkspace(() => withPersonaRuntimeLock(
+      record.personaId,
+      async (lock) => {
       const current = (await this.get(record.id)) ?? record;
       if (isTerminalDispatch(current.state)) return current;
       // Delivery repair owns this lifecycle until it has an authoritative
@@ -2864,7 +3076,15 @@ export class PersonaFlowDispatcher {
         });
       }
       return current;
-    }));
+      },
+    ));
+    if (reconciled.activityId) {
+      const activity = await this.inWorkspace(() => (
+        this.dependencies.getPersonaActivity(reconciled.activityId!)
+      ));
+      if (activity) await this.synchronizeAssignedWorkItem(activity);
+    }
+    return reconciled;
   }
 
   private async drain(personaId: string, control: PumpControl): Promise<void> {
@@ -3088,6 +3308,25 @@ export function cancelPersonaFlowDispatch(
   options?: CancelPersonaFlowDispatchOptions,
 ): Promise<PersonaFlowDispatchRecord> {
   return currentDispatcher().cancel(input, options);
+}
+
+export function cancelPersonaFlowDispatchById(
+  input: CancelPersonaFlowDispatchByIdInput,
+  options?: CancelPersonaFlowDispatchOptions,
+): Promise<PersonaFlowDispatchRecord> {
+  return currentDispatcher().cancelById(input, options);
+}
+
+export function reprioritizePersonaWorkItemDispatches(
+  input: ReprioritizePersonaWorkItemDispatchInput,
+): Promise<PersonaFlowDispatchRecord[]> {
+  return currentDispatcher().reprioritizeWorkItem(input);
+}
+
+export function movePersonaWorkItemDispatch(
+  input: MovePersonaWorkItemDispatchInput,
+): Promise<MovePersonaWorkItemDispatchResult> {
+  return currentDispatcher().moveWorkItem(input);
 }
 
 export function pumpPersonaFlowDispatches(personaId: string): Promise<void> {

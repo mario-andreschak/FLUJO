@@ -1,5 +1,3 @@
-import { createHash } from 'crypto';
-
 import type { Flow } from '@/shared/types/flow';
 import type { MCPNodeReference } from '@/backend/execution/flow/types';
 import { mcpService } from '@/backend/services/mcp';
@@ -16,8 +14,17 @@ import {
   getPersonaDeletionTombstone,
   listPersonaAppGrants,
 } from './store';
+import {
+  isPersonaCoreAppNodeId,
+  personaCoreAppNodeId,
+  PERSONA_CORE_APP_NODE_PREFIX,
+} from './personaCoreAppIdentity';
 
-export const PERSONA_CORE_APP_NODE_PREFIX = 'persona_core_app_';
+export {
+  isPersonaCoreAppNodeId,
+  personaCoreAppNodeId,
+  PERSONA_CORE_APP_NODE_PREFIX,
+} from './personaCoreAppIdentity';
 
 function unique(values: readonly string[]): string[] {
   return Array.from(new Set(values));
@@ -121,13 +128,31 @@ export async function authorizePersonaCoreAppAccess(
   requireEnabledPersonaAppConfig(await loadConfigs(), mcpServerName);
 }
 
-function coreNodeId(mcpServerName: string): string {
-  const digest = createHash('sha256').update(mcpServerName).digest('hex').slice(0, 16);
-  return `${PERSONA_CORE_APP_NODE_PREFIX}${digest}`;
-}
+function authoredMcpServersByProcess(source: Flow): Map<string, Set<string>> {
+  const byNodeId = new Map(source.nodes.map((node) => [node.id, node]));
+  const result = new Map<string, Set<string>>();
 
-export function isPersonaCoreAppNodeId(nodeId: string | undefined): boolean {
-  return typeof nodeId === 'string' && nodeId.startsWith(PERSONA_CORE_APP_NODE_PREFIX);
+  for (const edge of source.edges) {
+    if ((edge.data as { edgeType?: unknown } | undefined)?.edgeType !== 'mcp') continue;
+    const left = byNodeId.get(edge.source);
+    const right = byNodeId.get(edge.target);
+    if (!left || !right) continue;
+
+    const process = left.type === 'process'
+      ? left
+      : right.type === 'process' ? right : undefined;
+    const mcp = left.type === 'mcp'
+      ? left
+      : right.type === 'mcp' ? right : undefined;
+    const boundServer = mcp?.data?.properties?.boundServer;
+    if (!process || typeof boundServer !== 'string' || !boundServer) continue;
+
+    const servers = result.get(process.id) ?? new Set<string>();
+    servers.add(boundServer);
+    result.set(process.id, servers);
+  }
+
+  return result;
 }
 
 /**
@@ -160,7 +185,7 @@ export async function projectPersonaCoreAppsIntoFlow(
     }
 
     projectedNodes.push({
-      id: coreNodeId(mcpServerName),
+      id: personaCoreAppNodeId(mcpServerName),
       properties: {
         boundServer: mcpServerName,
         enabledTools: unique((listed.tools ?? []).map((tool) => tool.name)),
@@ -170,20 +195,31 @@ export async function projectPersonaCoreAppsIntoFlow(
   }
 
   const flow = structuredClone(source);
+  const authoredServersByProcess = authoredMcpServersByProcess(source);
   for (const node of flow.nodes) {
     if (node.type !== 'process') continue;
     const data = node.data as typeof node.data & {
       properties?: Record<string, unknown> & { mcpNodes?: MCPNodeReference[] };
     };
     const properties = data.properties ?? {};
-    const authoredNodes = Array.isArray(properties.mcpNodes) ? properties.mcpNodes : [];
-    const authoredServers = new Set(
-      authoredNodes.map((candidate) => candidate.properties.boundServer).filter(Boolean),
-    );
+    // Behavior snapshots strip derived inline references, so graph-native MCP
+    // attachment edges are the authoritative authored policy. Non-Persona
+    // inline references remain intact here for compatibility, but the converter
+    // still rejects them unless graph edges re-derive them.
+    const authoredNodes = Array.isArray(properties.mcpNodes)
+      ? properties.mcpNodes.filter((candidate) => !isPersonaCoreAppNodeId(candidate.id))
+      : [];
+    // Only visible graph wiring is authored policy. Legacy inline references
+    // are derived/stale data: preserve them for source compatibility, but never
+    // let one suppress the runtime projection that the converter can authorize.
+    const authoredServers = authoredServersByProcess.get(node.id) ?? new Set<string>();
     properties.mcpNodes = [
       ...authoredNodes,
       ...projectedNodes.filter(
-        (candidate) => !authoredServers.has(candidate.properties.boundServer),
+        (candidate) => {
+          const boundServer = candidate.properties.boundServer;
+          return typeof boundServer === 'string' && !authoredServers.has(boundServer);
+        },
       ),
     ];
     data.properties = properties;

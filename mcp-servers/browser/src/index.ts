@@ -44,6 +44,11 @@ async function shutdown(): Promise<void> {
   await shutdownBrowserRuntime();
   await server.close().catch(() => undefined);
 }
+// A host can disconnect without delivering a POSIX signal (for example when a
+// workspace removes/restarts this stdio server). Protocol.connect preserves and
+// invokes a preinstalled transport onclose callback, so bind cleanup before the
+// transport is handed over to the SDK.
+transport.onclose = () => { void shutdown(); };
 process.once('SIGINT', () => void shutdown());
 process.once('SIGTERM', () => void shutdown());
 process.once('SIGHUP', () => void shutdown());

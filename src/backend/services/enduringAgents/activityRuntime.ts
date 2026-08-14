@@ -10,6 +10,7 @@ import {
   ENDURING_AGENT_SCHEMA_VERSION,
   EnduringAgentIdSchema,
   PERSONA_LIFECYCLE_STATES,
+  PERSONA_PRIORITIES,
   PersonaActivitySchema,
   PersonaInstructionContextSchema,
   PersonaLeaseSchema,
@@ -165,6 +166,18 @@ const CancelPersonaMailboxItemInputSchema = z.object({
   mailboxItemId: EnduringAgentIdSchema,
 }).strict();
 
+const ReprioritizePersonaMailboxItemInputSchema = z.object({
+  personaId: EnduringAgentIdSchema,
+  mailboxItemId: EnduringAgentIdSchema,
+  priority: z.enum(PERSONA_PRIORITIES),
+}).strict();
+
+const MovePersonaMailboxItemInputSchema = z.object({
+  personaId: EnduringAgentIdSchema,
+  mailboxItemId: EnduringAgentIdSchema,
+  direction: z.enum(['earlier', 'later']),
+}).strict();
+
 const RecoverPersonaRuntimeInputSchema = z.object({
   personaId: EnduringAgentIdSchema,
   confirmation: z.literal('RECOVER'),
@@ -272,6 +285,28 @@ export interface PersistPersonaActivitySnapshotInput
 export interface CancelPersonaMailboxItemInput {
   personaId: string;
   mailboxItemId: string;
+}
+
+export interface ReprioritizePersonaMailboxItemInput {
+  personaId: string;
+  mailboxItemId: string;
+  priority: PersonaPriority;
+}
+
+export interface ReprioritizePersonaMailboxItemResult {
+  item: PersonaMailboxItem;
+  changed: boolean;
+}
+
+export interface MovePersonaMailboxItemInput {
+  personaId: string;
+  mailboxItemId: string;
+  direction: 'earlier' | 'later';
+}
+
+export interface MovePersonaMailboxItemResult {
+  item: PersonaMailboxItem;
+  moved: boolean;
 }
 
 export interface RecoverPersonaRuntimeInput {
@@ -767,10 +802,10 @@ function sortEligibleMailboxItems(
     .sort((left, right) => {
       const priority = PRIORITY_WEIGHT[right.priority] - PRIORITY_WEIGHT[left.priority];
       if (priority !== 0) return priority;
-      const readyAt = (left.notBefore ?? left.createdAt) - (right.notBefore ?? right.createdAt);
-      if (readyAt !== 0) return readyAt;
       const sequence = left.sequence - right.sequence;
-      return sequence !== 0 ? sequence : left.id.localeCompare(right.id);
+      if (sequence !== 0) return sequence;
+      const readyAt = (left.notBefore ?? left.createdAt) - (right.notBefore ?? right.createdAt);
+      return readyAt !== 0 ? readyAt : left.id.localeCompare(right.id);
     });
 }
 
@@ -1653,6 +1688,104 @@ export async function routePersonaMailboxItem(
       : {}),
   });
   return result;
+}
+
+/** Update ordering for work that is still waiting in the mailbox. */
+export async function reprioritizePersonaMailboxItemWithinRuntimeLock(
+  value: ReprioritizePersonaMailboxItemInput,
+  lock: PersonaRuntimeLock,
+): Promise<ReprioritizePersonaMailboxItemResult> {
+  const input = ReprioritizePersonaMailboxItemInputSchema.parse(
+    value,
+  ) as ReprioritizePersonaMailboxItemInput;
+  await lock.assertOwned();
+  const item = await getPersonaMailboxItem(input.mailboxItemId);
+  if (!item || item.personaId !== input.personaId) {
+    throw new PersonaRuntimeNotFoundError('PersonaMailboxItem', input.mailboxItemId);
+  }
+  if (item.status !== 'queued' || item.priority === input.priority) {
+    return { item, changed: false };
+  }
+  const updated = await saveMailboxItem(lock, {
+    ...item,
+    priority: input.priority,
+    updatedAt: Math.max(Date.now(), item.updatedAt + 1),
+  });
+  return { item: updated, changed: true };
+}
+
+/**
+ * Swap one queued Task with its same-priority Task neighbor. A temporary
+ * sequence keeps every intermediate durable state unique, even if persistence
+ * is interrupted between writes.
+ */
+export async function movePersonaMailboxItemWithinRuntimeLock(
+  value: MovePersonaMailboxItemInput,
+  lock: PersonaRuntimeLock,
+): Promise<MovePersonaMailboxItemResult> {
+  const input = MovePersonaMailboxItemInputSchema.parse(value) as MovePersonaMailboxItemInput;
+  await lock.assertOwned();
+  const items = await listPersonaMailboxItems(input.personaId);
+  if (new Set(items.map((item) => item.sequence)).size !== items.length) {
+    throw new PersonaRuntimeCorruptionError(
+      input.personaId,
+      'Persona mailbox contains duplicate admission sequence values.',
+    );
+  }
+  const target = items.find((item) => item.id === input.mailboxItemId);
+  if (!target || target.personaId !== input.personaId) {
+    throw new PersonaRuntimeNotFoundError('PersonaMailboxItem', input.mailboxItemId);
+  }
+  if (
+    target.status !== 'queued'
+    || target.source.kind !== 'assignment'
+    || !target.source.sourceId
+  ) {
+    throw new PersonaMailboxConflictError(
+      target.id,
+      'Only a queued Task can be moved.',
+    );
+  }
+
+  const neighbors = items
+    .filter((item) => (
+      item.id !== target.id
+      && item.status === 'queued'
+      && item.kind === 'assignment'
+      && item.source.kind === 'assignment'
+      && Boolean(item.source.sourceId)
+      && item.priority === target.priority
+    ))
+    .sort((left, right) => left.sequence - right.sequence || left.id.localeCompare(right.id));
+  const neighbor = input.direction === 'earlier'
+    ? [...neighbors].reverse().find((item) => item.sequence < target.sequence)
+    : neighbors.find((item) => item.sequence > target.sequence);
+  if (!neighbor) return { item: target, moved: false };
+
+  const temporarySequence = Math.max(...items.map((item) => item.sequence)) + 1;
+  if (!Number.isSafeInteger(temporarySequence)) {
+    throw new PersonaRuntimeCorruptionError(
+      input.personaId,
+      'Persona mailbox sequence space is exhausted.',
+    );
+  }
+  const now = Math.max(Date.now(), target.updatedAt + 1, neighbor.updatedAt + 1);
+  const parked = await saveMailboxItem(lock, {
+    ...target,
+    sequence: temporarySequence,
+    updatedAt: now,
+  });
+  await saveMailboxItem(lock, {
+    ...neighbor,
+    sequence: target.sequence,
+    updatedAt: now,
+  });
+  const moved = await saveMailboxItem(lock, {
+    ...parked,
+    sequence: neighbor.sequence,
+    updatedAt: now + 1,
+  });
+  return { item: moved, moved: true };
 }
 
 /**

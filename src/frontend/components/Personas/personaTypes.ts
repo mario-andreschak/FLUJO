@@ -4,6 +4,7 @@ export const PERSONA_AREAS = [
   'memory',
   'conversations',
   'tasks',
+  'improvements',
   'settings',
 ] as const;
 

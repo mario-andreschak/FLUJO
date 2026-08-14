@@ -6,6 +6,7 @@ import {
   ensureBuiltInDeveloperRole,
   hashBehaviorFlow,
   PersonaFactoryConflictError,
+  reconcilePersonaRoleBehaviors,
 } from '@/backend/services/enduringAgents';
 import { flowService } from '@/backend/services/flow';
 import {
@@ -20,12 +21,13 @@ import {
   listRoleVersions,
 } from '@/backend/services/enduringAgents/store';
 import {
+  DEFAULT_PERSONA_NATIVE_ABILITY_IDS,
   RoleVersionSchema,
   type RoleVersion,
 } from '@/shared/types/enduringAgent';
 import type { Flow, FlowNode } from '@/shared/types/flow';
 import { StorageKey } from '@/shared/types/storage';
-import { saveItem } from '@/utils/storage/backend';
+import { saveCollectionItem, saveItem } from '@/utils/storage/backend';
 import { runWithWorkspace } from '@/utils/workspace';
 
 let workspaceSequence = 0;
@@ -211,6 +213,10 @@ describe('createPersonaFromRole', () => {
         .filter((candidate: FlowNode) => candidate.data.type === 'process')
         .map((candidate: FlowNode) => candidate.data.properties?.boundModel))
         .toEqual(expect.arrayContaining(['model-test']));
+      expect(coreFlow!.nodes
+        .filter((candidate: FlowNode) => candidate.data.type === 'process')
+        .map((candidate: FlowNode) => candidate.data.properties?.personaTools))
+        .toEqual(expect.arrayContaining([[...DEFAULT_PERSONA_NATIVE_ABILITY_IDS]]));
       expect(bundle.behaviorBindings.map((binding) => binding.slotKey).sort()).toEqual([
         'maintain_memory',
         'primary',
@@ -280,6 +286,44 @@ describe('createPersonaFromRole', () => {
       expect(await listBehaviorBindings(first.persona.id)).toHaveLength(2);
       expect(await listBehaviorRevisions(first.persona.id)).toHaveLength(2);
       expect(await listMemoryItems(first.persona.id)).toEqual([]);
+    });
+  });
+
+  it('repairs memory maintenance for a Persona pinned to a legacy Role version', async () => {
+    await inFreshWorkspace(async () => {
+      await ensureBuiltInDeveloperRole();
+      const builtIn = buildBuiltInDeveloperRoleVersion();
+      const legacyVersion = RoleVersionSchema.parse({
+        ...builtIn,
+        id: 'rolever_legacy_without_memory',
+        version: 99,
+        name: 'Legacy Product Owner',
+        behaviorSlots: [builtIn.behaviorSlots.find((slot) => slot.key === 'primary')!],
+        createdAt: builtIn.createdAt + 99,
+      });
+      await createRoleVersion(legacyVersion);
+      const created = await createPersonaFromRole({
+        name: 'Jim',
+        roleVersionId: legacyVersion.id,
+        idempotencyKey: 'legacy-jim-without-memory',
+      });
+      expect(created.behaviorBindings.map((binding) => binding.slotKey)).toEqual(['primary']);
+
+      // Simulate the exact persisted v2 shape upgraded by the v2 -> v3
+      // RoleVersion record migration in a later application release.
+      await saveCollectionItem('role-versions', legacyVersion.id, {
+        ...legacyVersion,
+        schemaVersion: 2,
+      });
+      await reconcilePersonaRoleBehaviors(created.persona.id);
+
+      expect((await getPersona(created.persona.id))?.roleVersionId).toBe(legacyVersion.id);
+      expect((await listBehaviorBindings(created.persona.id))
+        .map((binding) => binding.slotKey).sort())
+        .toEqual(['maintain_memory', 'primary']);
+      expect(((await getPersona(created.persona.id))?.composition?.behaviors ?? [])
+        .map((behavior) => behavior.slotKey))
+        .toEqual(['primary', 'maintain_memory']);
     });
   });
 

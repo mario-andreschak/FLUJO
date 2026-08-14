@@ -46,6 +46,15 @@ data in the remaining roots. Shipped MCP package code remains with the read-only
 application installation, but every shipped server receives the selected
 workspace as its `FLUJO_DATA_DIR`.
 
+Managed MCP children also receive an internal `FLUJO_PARENT_DATA_DIR` marker
+containing the installation data root. MCP packages continue to use their
+workspace-scoped `FLUJO_DATA_DIR`; the marker matters only if a child command
+launches FLUJO again. Command-spawning packages pass that marker together with
+`FLUJO_WORKSPACE`; in that case FLUJO prefers the marker, preventing the
+workspace path from being misread as a new parent and expanded into recursive
+`workspaces/<workspace>/workspaces/<workspace>` trees. Operators should
+continue setting only `FLUJO_DATA_DIR`.
+
 There is no application-owned top-level `outputs/` directory. Run outputs are
 stored by the run-resource services inside the workspace database; the legacy
 top-level `artifacts/` root is nevertheless migrated so older installations do

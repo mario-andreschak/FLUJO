@@ -71,9 +71,14 @@ export function shippedServerEnv(
   env: Environment = process.env,
 ): Record<string, string> {
   const workspace = getCurrentWorkspace();
-  const parentDataDir = path.resolve(env.FLUJO_DATA_DIR?.trim() || process.cwd());
+  const parentDataDir = path.resolve(
+    env.FLUJO_PARENT_DATA_DIR?.trim()
+      || env.FLUJO_DATA_DIR?.trim()
+      || process.cwd(),
+  );
   const workspaceDataDir = path.join(parentDataDir, 'workspaces', workspace);
   const result: Record<string, string> = {
+    FLUJO_PARENT_DATA_DIR: parentDataDir,
     FLUJO_DATA_DIR: workspaceDataDir,
     FLUJO_WORKSPACE: workspace,
   };
@@ -159,6 +164,7 @@ export function shippedServerEnv(
   }
   // Inherit-all (bash) and explicit forwarded values must never overwrite the
   // workspace process boundary established above.
+  result.FLUJO_PARENT_DATA_DIR = parentDataDir;
   result.FLUJO_DATA_DIR = workspaceDataDir;
   result.FLUJO_WORKSPACE = workspace;
   if (descriptor.defaultName === 'browser') {

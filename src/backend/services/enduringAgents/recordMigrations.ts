@@ -7,7 +7,9 @@ import {
   PERSONA_SCHEMA_VERSION,
   ROLE_DEFINITION_SCHEMA_VERSION,
   ROLE_VERSION_SCHEMA_VERSION,
+  type RoleBehaviorSlot,
 } from '@/shared/types/enduringAgent';
+import { withDefaultRoleBehaviorSlots } from './roleBehaviorDefaults';
 
 export interface RecordMigration {
   from: number;
@@ -26,8 +28,28 @@ function migrationTo(to: number): readonly RecordMigration[] {
 /** Explicit per-record migrations keep compatibility changes reviewable. */
 export const ROLE_DEFINITION_RECORD_MIGRATIONS =
   migrationTo(ROLE_DEFINITION_SCHEMA_VERSION);
-export const ROLE_VERSION_RECORD_MIGRATIONS =
-  migrationTo(ROLE_VERSION_SCHEMA_VERSION);
+export const ROLE_VERSION_RECORD_MIGRATIONS: readonly RecordMigration[] = [
+  {
+    from: 1,
+    to: 2,
+    migrate: (record) => ({ ...record, schemaVersion: 2 }),
+  },
+  {
+    from: 2,
+    to: ROLE_VERSION_SCHEMA_VERSION,
+    migrate: (record) => ({
+      ...record,
+      schemaVersion: ROLE_VERSION_SCHEMA_VERSION,
+      behaviorSlots: withDefaultRoleBehaviorSlots(
+        String(record.roleDefinitionId ?? ''),
+        String(record.name ?? 'Role'),
+        Array.isArray(record.behaviorSlots)
+          ? record.behaviorSlots as RoleBehaviorSlot[]
+          : [],
+      ),
+    }),
+  },
+];
 export const PERSONA_RECORD_MIGRATIONS = migrationTo(PERSONA_SCHEMA_VERSION);
 export const BEHAVIOR_REVISION_RECORD_MIGRATIONS =
   migrationTo(BEHAVIOR_REVISION_SCHEMA_VERSION);

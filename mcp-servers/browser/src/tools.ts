@@ -76,11 +76,11 @@ export function browserToolDefinitions(): Tool[] {
   return [
     {
       name: 'browser_open',
-      description: 'Open or reuse a browser session. url may be remote, localhost, a bare hostname, or a local file path.',
+      description: 'Open a new browser session, or open/reuse the exact sessionId supplied. url may be remote, localhost, a bare hostname, or a local file path.',
       inputSchema: {
         type: 'object',
         properties: {
-          sessionId: { ...SESSION_PROPERTY, description: 'Optional stable id. Omit it to reuse the most recently used live session, or create one when none exists.' },
+          sessionId: { ...SESSION_PROPERTY, description: 'Optional stable id. Omit it to create a fresh isolated session; supply it to open or reuse that exact session.' },
           url: { type: 'string', description: 'Optional URL, bare hostname, localhost address, or local file path.' },
           timeoutMs: TIMEOUT_PROPERTY,
         },

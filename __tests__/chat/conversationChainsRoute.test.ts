@@ -2,9 +2,9 @@
  * Tests for the read-only chain projection (issue #405).
  *
  * GET /v1/chat/conversation-chains returns recent persisted conversation-chain
- * topology plus ONE bounded plain-text preview of the latest displayable
- * message. It must never return histories, tool payloads or model context, and
- * it must terminate on corrupt (self-linked / cyclic) parent data.
+ * topology plus ONE bounded plain-text preview of the latest user, assistant,
+ * or tool activity. It must never return histories, unbounded payloads or model
+ * context, and it must terminate on corrupt parent data.
  *
  * Drives the real route handler against a throwaway temp data dir (via
  * FLUJO_DATA_DIR + jest.resetModules()), mirroring conversationContentSearch.
@@ -151,25 +151,59 @@ describe('GET /v1/chat/conversation-chains (issue #405)', () => {
     });
   });
 
-  it('previews only the latest user/assistant message and never the history', async () => {
+  it('previews the latest tool activity with its name and never returns the history', async () => {
     await writeConv('active', {
       status: 'paused_debug',
       messages: [
         { role: 'system', content: 'you are a secret system prompt' },
         { role: 'user', content: 'first user question' },
-        { role: 'assistant', content: [{ type: 'text', text: 'the   visible answer' }] },
-        { role: 'tool', content: 'raw tool payload' },
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'the   older answer' }],
+          tool_calls: [{
+            id: 'call-1',
+            type: 'function',
+            function: { name: 'read_file', arguments: '{"private":"tool arguments"}' },
+          }],
+        },
+        { role: 'tool', tool_call_id: 'call-1', content: 'bounded tool result' },
       ],
     });
 
     const { body } = await getJson();
     const node = body.chains[0].nodes[0];
-    expect(node.lastMessage).toMatchObject({ role: 'assistant', text: 'the visible answer', truncated: false });
+    expect(node.lastMessage).toMatchObject({
+      role: 'tool',
+      text: 'read_file',
+      toolName: 'read_file',
+      toolKind: 'result',
+      truncated: false,
+    });
     expect('messages' in node).toBe(false);
     const serialized = JSON.stringify(body);
     expect(serialized).not.toContain('secret system prompt');
-    expect(serialized).not.toContain('raw tool payload');
     expect(serialized).not.toContain('first user question');
+    expect(serialized).not.toContain('the older answer');
+    expect(serialized).not.toContain('tool arguments');
+    expect(serialized).not.toContain('bounded tool result');
+  });
+
+  it('projects the persisted execution identity without loading every saved flow', async () => {
+    await writeConv('archived', {
+      flowId: 'deleted-flow',
+      flowSnapshot: { id: 'deleted-flow', name: 'Archived research flow' },
+      statisticsFlowName: 'Older statistics name',
+      messages: [{ role: 'assistant', content: 'Done' }],
+    });
+    await writeConv('quick', {
+      flowId: 'quickchat-quick',
+      messages: [{ role: 'assistant', content: 'Ready' }],
+    });
+
+    const { body } = await getJson();
+    const nodes = body.chains.flatMap((chain: any) => chain.nodes);
+    expect(nodes.find((node: any) => node.id === 'archived')?.flowName).toBe('Archived research flow');
+    expect(nodes.find((node: any) => node.id === 'quick')?.flowName).toBe('Quick Chat');
   });
 
   it('bounds the preview and falls back when there is nothing displayable', async () => {
@@ -223,6 +257,39 @@ describe('GET /v1/chat/conversation-chains (issue #405)', () => {
     expect(body.chains.map((c: any) => c.rootId)).toEqual(['newer']);
     expect(body.totalChains).toBe(2);
     expect(body.truncated).toBe(true);
+  });
+
+  it('keeps the true root and loaded ancestor path when a large chain is capped', async () => {
+    await writeConv('root', {
+      title: 'Old root',
+      status: 'completed',
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    await Promise.all(Array.from({ length: 60 }, (_, index) => {
+      const id = `child-${String(index).padStart(2, '0')}`;
+      return writeConv(id, {
+        status: 'completed',
+        createdAt: index + 2,
+        updatedAt: 100 + index,
+        parentConversationId: 'root',
+        rootConversationId: 'root',
+      });
+    }));
+
+    const { status, body } = await getJson('?root=root');
+    const chain = body.chains[0];
+
+    expect(status).toBe(200);
+    expect(chain).toMatchObject({ rootId: 'root', totalNodeCount: 61, truncated: true });
+    expect(chain.nodes).toHaveLength(60);
+    expect(chain.nodes[0].id).toBe('root');
+    expect(chain.nodes.some((candidate: any) => candidate.id === 'root')).toBe(true);
+    expect(
+      chain.nodes
+        .filter((candidate: any) => candidate.id !== 'root')
+        .every((candidate: any) => candidate.parentConversationId === 'root'),
+    ).toBe(true);
   });
 
   it('rejects an invalid root id or limit with 400', async () => {

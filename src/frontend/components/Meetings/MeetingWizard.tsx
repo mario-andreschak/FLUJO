@@ -19,6 +19,7 @@ import {
   FormControlLabel,
   FormLabel,
   IconButton,
+  InputLabel,
   MenuItem,
   Paper,
   Radio,
@@ -48,16 +49,19 @@ import {
 } from '@mui/icons-material';
 import type { Flow } from '@/shared/types/flow';
 import type { ModelMediaPart } from '@/shared/types/model/media';
+import type { Persona, PersonaComposition } from '@/shared/types/enduringAgent';
 import type {
   CreateMeetingInput,
   MeetingModeratorMode,
   MeetingPolicy,
 } from '@/shared/types/meeting';
 import { flowService } from '@/frontend/services/flow';
+import { personasService } from '@/frontend/services/personas';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import CardPickerGrid from '@/frontend/components/shared/CardPickerGrid';
 import FlowCard from '@/frontend/components/Flow/FlowDashboard/FlowCard';
 import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
+import { meetingParticipantSourceLabel } from './meetingParticipantPresentation';
 
 interface MeetingWizardProps {
   open: boolean;
@@ -73,8 +77,17 @@ interface DraftParticipant {
   flowId?: string;
   personaId?: string;
   behaviorSlotKey?: string;
-  flowName: string;
+  behaviorName?: string;
+  sourceName: string;
   name: string;
+}
+
+type ParticipantSource = 'persona' | 'flow';
+
+interface PersonaSkillsState {
+  loading: boolean;
+  composition?: PersonaComposition;
+  error?: string;
 }
 
 const makeId = () => {
@@ -102,6 +115,11 @@ export default function MeetingWizard({
   const theme = useTheme();
   const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
   const [step, setStep] = useState(0);
+  const [participantSource, setParticipantSource] = useState<ParticipantSource>('persona');
+  const [personas, setPersonas] = useState<Persona[]>([]);
+  const [personasLoading, setPersonasLoading] = useState(false);
+  const [personasLoadError, setPersonasLoadError] = useState<string | null>(null);
+  const [personaSkills, setPersonaSkills] = useState<Record<string, PersonaSkillsState>>({});
   const [flows, setFlows] = useState<Flow[]>([]);
   const [flowsLoading, setFlowsLoading] = useState(false);
   const [flowLoadError, setFlowLoadError] = useState<string | null>(null);
@@ -118,13 +136,34 @@ export default function MeetingWizard({
 
   useEffect(() => {
     if (!open) return;
+    setPersonasLoading(true);
+    setPersonasLoadError(null);
+    personasService.list()
+      .then(setPersonas)
+      .catch((loadError) => {
+        setPersonas([]);
+        setPersonasLoadError(
+          loadError instanceof Error
+            ? loadError.message
+            : t('meetings.participants.personasLoadError'),
+        );
+      })
+      .finally(() => setPersonasLoading(false));
+  }, [open, t]);
+
+  useEffect(() => {
+    if (!open) return;
     setFlowsLoading(true);
     setFlowLoadError(null);
     flowService.loadFlows()
       .then(setFlows)
       .catch((loadError) => {
         setFlows([]);
-        setFlowLoadError(loadError instanceof Error ? loadError.message : t('meetings.participants.loadError'));
+        setFlowLoadError(
+          loadError instanceof Error
+            ? loadError.message
+            : t('meetings.participants.flowsLoadError'),
+        );
       })
       .finally(() => setFlowsLoading(false));
   }, [open, t]);
@@ -139,10 +178,21 @@ export default function MeetingWizard({
       id: participant.id ?? makeId(),
       flowId: participant.flowId,
       personaId: participant.personaId,
-      behaviorSlotKey: participant.behaviorSlotKey,
-      flowName: participant.name,
+      behaviorSlotKey: participant.behaviorSlotKey === 'primary'
+        ? undefined
+        : participant.behaviorSlotKey,
+      behaviorName: participant.behaviorName,
+      sourceName: participant.name,
       name: participant.name,
     })) ?? []);
+    setParticipantSource(
+      initialInput?.participants.some((participant) => participant.personaId)
+        ? 'persona'
+        : initialInput?.participants.length
+          ? 'flow'
+          : 'persona',
+    );
+    setPersonaSkills({});
     setModeratorMode(initialInput?.policy?.moderatorMode ?? 'none');
     setModeratorParticipantId(initialInput?.moderatorParticipantId ?? '');
     setMaxRounds(initialInput?.policy?.maxRounds ?? 6);
@@ -155,9 +205,69 @@ export default function MeetingWizard({
     if (!flows.length) return;
     setParticipants((current) => current.map((participant) => ({
       ...participant,
-      flowName: flows.find((flow) => flow.id === participant.flowId)?.name ?? participant.flowName,
+      ...(() => {
+        const sourceName = flows.find((flow) => flow.id === participant.flowId)?.name;
+        if (!sourceName) return {};
+        return { sourceName };
+      })(),
     })));
   }, [flows]);
+
+  useEffect(() => {
+    if (!personas.length) return;
+    setParticipants((current) => current.map((participant) => ({
+      ...participant,
+      ...(() => {
+        const sourceName = personas.find((persona) => persona.id === participant.personaId)?.name;
+        if (!sourceName) return {};
+        return { sourceName };
+      })(),
+    })));
+  }, [personas]);
+
+  useEffect(() => {
+    if (!open) return;
+    const missingPersonaIds = [...new Set(participants
+      .map((participant) => participant.personaId)
+      .filter((personaId): personaId is string => Boolean(personaId)))]
+      .filter((personaId) => !personaSkills[personaId]);
+    if (missingPersonaIds.length === 0) return;
+
+    setPersonaSkills((current) => {
+      const next = { ...current };
+      for (const personaId of missingPersonaIds) next[personaId] = { loading: true };
+      return next;
+    });
+    for (const personaId of missingPersonaIds) {
+      personasService.getComposition(personaId)
+        .then((composition) => {
+          setPersonaSkills((current) => ({
+            ...current,
+            [personaId]: { loading: false, composition },
+          }));
+          setParticipants((current) => current.map((participant) => {
+            if (
+              participant.personaId !== personaId
+              || !participant.behaviorSlotKey
+              || participant.behaviorName
+            ) return participant;
+            const behaviorName = composition.behaviorCards.find(
+              (behavior) => behavior.slotKey === participant.behaviorSlotKey,
+            )?.name;
+            return behaviorName ? { ...participant, behaviorName } : participant;
+          }));
+        })
+        .catch((loadError) => setPersonaSkills((current) => ({
+          ...current,
+          [personaId]: {
+            loading: false,
+            error: loadError instanceof Error
+              ? loadError.message
+              : t('meetings.participants.behaviorLoadError'),
+          },
+        })));
+    }
+  }, [open, participants, personaSkills, t]);
 
   useEffect(() => {
     // Participant selection happens before facilitation, so arrive on that
@@ -182,11 +292,23 @@ export default function MeetingWizard({
     return new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name));
   }, [participants]);
 
+  const personaParticipantsReady = participants.every((participant) => {
+    if (!participant.personaId) return true;
+    const composition = personaSkills[participant.personaId]?.composition;
+    if (!composition) return false;
+    if (!participant.behaviorSlotKey) return composition.core?.readiness.state === 'ready';
+    return composition.behaviorCards.some((behavior) => (
+      behavior.slotKey === participant.behaviorSlotKey
+      && behavior.readiness.state === 'ready'
+    ));
+  });
+
   const stepValid = [
     title.trim().length >= 3 && openingPrompt.trim().length >= 10,
     participants.length >= 2
       && participants.every((person) => person.name.trim().length > 0)
-      && duplicateAliases.size === 0,
+      && duplicateAliases.size === 0
+      && personaParticipantsReady,
     moderatorMode === 'none' || Boolean(moderatorParticipantId),
     true,
   ][step];
@@ -197,6 +319,8 @@ export default function MeetingWizard({
     setOpeningPrompt('');
     setOpeningMedia([]);
     setParticipants([]);
+    setParticipantSource('persona');
+    setPersonaSkills({});
     setModeratorMode('none');
     setModeratorParticipantId('');
     setMaxRounds(6);
@@ -218,8 +342,21 @@ export default function MeetingWizard({
       return [...current, {
         id: makeId(),
         flowId: flow.id,
-        flowName: flow.name,
+        sourceName: flow.name,
         name: flow.name,
+      }];
+    });
+  };
+
+  const togglePersona = (persona: Persona) => {
+    setParticipants((current) => {
+      const existing = current.find((person) => person.personaId === persona.id);
+      if (existing) return current.filter((person) => person.id !== existing.id);
+      return [...current, {
+        id: makeId(),
+        personaId: persona.id,
+        sourceName: persona.name,
+        name: persona.name,
       }];
     });
   };
@@ -234,6 +371,7 @@ export default function MeetingWizard({
         flowId: participant.flowId,
         personaId: participant.personaId,
         behaviorSlotKey: participant.behaviorSlotKey,
+        behaviorName: participant.behaviorSlotKey ? participant.behaviorName : undefined,
         name: participant.name.trim(),
         role: moderatorMode !== 'none' && participant.id === moderatorParticipantId
           ? 'moderator'
@@ -404,16 +542,123 @@ export default function MeetingWizard({
               </Typography>
             </Box>
 
-            {flowsLoading ? (
+            <Paper variant="outlined" sx={{ p: 1.5 }}>
+              <FormControl>
+                <FormLabel>{t('meetings.participants.source.label')}</FormLabel>
+                <RadioGroup
+                  row
+                  value={participantSource}
+                  onChange={(event) => setParticipantSource(event.target.value as ParticipantSource)}
+                >
+                  <FormControlLabel
+                    value="persona"
+                    control={<Radio />}
+                    label={(
+                      <Box sx={{ py: 0.5 }}>
+                        <Stack direction="row" spacing={0.75} alignItems="center">
+                          <Typography fontWeight={700}>{t('meetings.participants.source.persona')}</Typography>
+                          <Chip size="small" color="primary" label={t('meetings.participants.source.recommended')} />
+                        </Stack>
+                        <Typography variant="caption" color="text.secondary">
+                          {t('meetings.participants.source.personaHelp')}
+                        </Typography>
+                      </Box>
+                    )}
+                  />
+                  <FormControlLabel
+                    value="flow"
+                    control={<Radio />}
+                    label={(
+                      <Box sx={{ py: 0.5 }}>
+                        <Typography fontWeight={700}>{t('meetings.participants.source.flow')}</Typography>
+                        <Typography variant="caption" color="text.secondary" display="block">
+                          {t('meetings.participants.source.flowHelp')}
+                        </Typography>
+                      </Box>
+                    )}
+                  />
+                </RadioGroup>
+              </FormControl>
+            </Paper>
+
+            {participantSource === 'persona' ? (
+              personasLoading ? (
+                <Stack alignItems="center" spacing={1.5} sx={{ py: 8 }}>
+                  <CircularProgress size={30} />
+                  <Typography color="text.secondary">{t('meetings.participants.personasLoading')}</Typography>
+                </Stack>
+              ) : personasLoadError ? (
+                <Alert severity="error">{personasLoadError}</Alert>
+              ) : personas.length === 0 ? (
+                <Alert severity="info" action={<Button href="/personas">{t('meetings.participants.createPersona')}</Button>}>
+                  {t('meetings.participants.personasEmpty')}
+                </Alert>
+              ) : (
+                <Box sx={{ maxHeight: 520, overflowY: 'auto', pr: 0.5 }}>
+                  <CardPickerGrid
+                    searchable
+                    stickySearch
+                    selectionMode="multiple"
+                    ariaLabel={t('meetings.participants.personas')}
+                    columns={{ xs: 12, sm: 12, md: 6 }}
+                    searchPlaceholder={t('meetings.participants.searchPersonas')}
+                    items={personas.map((persona) => {
+                      const selected = participants.some((person) => person.personaId === persona.id);
+                      const unavailable = persona.provisioningState !== 'ready'
+                        || persona.lifecycleState === 'disabled';
+                      return {
+                        key: persona.id,
+                        label: persona.name,
+                        selected,
+                        disabled: unavailable && !selected,
+                        searchText: `${persona.name} ${persona.mission ?? ''}`,
+                        onSelect: () => togglePersona(persona),
+                        content: (
+                          <Card
+                            variant="outlined"
+                            sx={{
+                              height: '100%',
+                              p: 2,
+                              borderColor: selected ? 'primary.main' : 'divider',
+                              bgcolor: selected ? alpha(theme.palette.primary.main, 0.07) : undefined,
+                            }}
+                          >
+                            <Stack direction="row" spacing={1.5} alignItems="flex-start">
+                              <Avatar src={persona.presentation?.avatarUrl} alt={persona.name}>
+                                {persona.name.slice(0, 2).toUpperCase()}
+                              </Avatar>
+                              <Box sx={{ flex: 1, minWidth: 0 }}>
+                                <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
+                                  <Typography fontWeight={750}>{persona.name}</Typography>
+                                  <Chip size="small" label={t('meetings.participants.persona')} />
+                                  {unavailable && (
+                                    <Chip size="small" color="warning" label={t('meetings.participants.personaUnavailable')} />
+                                  )}
+                                </Stack>
+                                {persona.mission && (
+                                  <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                                    {persona.mission}
+                                  </Typography>
+                                )}
+                              </Box>
+                            </Stack>
+                          </Card>
+                        ),
+                      };
+                    })}
+                  />
+                </Box>
+              )
+            ) : flowsLoading ? (
               <Stack alignItems="center" spacing={1.5} sx={{ py: 8 }}>
                 <CircularProgress size={30} />
-                <Typography color="text.secondary">{t('meetings.participants.loading')}</Typography>
+                <Typography color="text.secondary">{t('meetings.participants.flowsLoading')}</Typography>
               </Stack>
             ) : flowLoadError ? (
               <Alert severity="error">{flowLoadError}</Alert>
             ) : flows.length === 0 ? (
-              <Alert severity="info" action={<Button href="/flows">{t('meetings.participants.createAgent')}</Button>}>
-                {t('meetings.participants.empty')}
+              <Alert severity="info" action={<Button href="/flows">{t('meetings.participants.createFlow')}</Button>}>
+                {t('meetings.participants.flowsEmpty')}
               </Alert>
             ) : (
               <Box sx={{ maxHeight: 520, overflowY: 'auto', pr: 0.5 }}>
@@ -421,9 +666,9 @@ export default function MeetingWizard({
                   searchable
                   stickySearch
                   selectionMode="multiple"
-                  ariaLabel={t('meetings.participants.title')}
+                  ariaLabel={t('meetings.participants.flows')}
                   columns={{ xs: 12, sm: 12, md: 6 }}
-                  searchPlaceholder={t('meetings.participants.search')}
+                  searchPlaceholder={t('meetings.participants.searchFlows')}
                   items={flows.map((flow) => {
                     const selected = participants.some((person) => person.flowId === flow.id);
                     return {
@@ -453,23 +698,98 @@ export default function MeetingWizard({
                 <Stack spacing={1}>
                   {participants.map((participant, index) => {
                     const duplicate = duplicateAliases.has(participant.name.trim().toLocaleLowerCase());
+                    const skills = participant.personaId
+                      ? personaSkills[participant.personaId]
+                      : undefined;
+                    const selectedBehavior = participant.behaviorSlotKey
+                      ? skills?.composition?.behaviorCards.find(
+                        (behavior) => behavior.slotKey === participant.behaviorSlotKey,
+                      )
+                      : undefined;
                     return (
                       <Paper key={participant.id} variant="outlined" sx={{ p: 1.25 }}>
-                        <Stack direction="row" spacing={1.2} alignItems="center">
+                        <Stack direction="row" spacing={1.2} alignItems="flex-start">
                           <Avatar sx={{ width: 34, height: 34, fontSize: '0.85rem', bgcolor: 'primary.dark' }}>
                             {index + 1}
                           </Avatar>
-                          <TextField
-                            size="small"
-                            fullWidth
-                            label={t('meetings.participants.alias')}
-                            value={participant.name}
-                            error={duplicate || !participant.name.trim()}
-                            helperText={duplicate ? t('meetings.participants.aliasDuplicate') : participant.flowName}
-                            onChange={(event) => setParticipants((current) => current.map((person) => (
-                              person.id === participant.id ? { ...person, name: event.target.value } : person
-                            )))}
-                          />
+                          <Stack spacing={1.1} sx={{ flex: 1, minWidth: 0 }}>
+                            <TextField
+                              size="small"
+                              fullWidth
+                              label={t('meetings.participants.alias')}
+                              value={participant.name}
+                              error={duplicate || !participant.name.trim()}
+                              helperText={duplicate
+                                ? t('meetings.participants.aliasDuplicate')
+                                : `${participant.sourceName} · ${meetingParticipantSourceLabel(participant, t)}`}
+                              onChange={(event) => setParticipants((current) => current.map((person) => (
+                                person.id === participant.id ? { ...person, name: event.target.value } : person
+                              )))}
+                            />
+                            {participant.personaId && skills?.loading && (
+                              <Stack direction="row" spacing={1} alignItems="center">
+                                <CircularProgress size={16} />
+                                <Typography variant="body2" color="text.secondary">
+                                  {t('meetings.participants.behaviorLoading')}
+                                </Typography>
+                              </Stack>
+                            )}
+                            {participant.personaId && skills?.error && (
+                              <Alert severity="error">{skills.error}</Alert>
+                            )}
+                            {participant.personaId && skills?.composition && (
+                              <FormControl fullWidth size="small">
+                                <InputLabel id={`meeting-persona-behavior-${participant.id}`}>
+                                  {t('meetings.participants.behavior', { name: participant.name })}
+                                </InputLabel>
+                                <Select
+                                  labelId={`meeting-persona-behavior-${participant.id}`}
+                                  label={t('meetings.participants.behavior', { name: participant.name })}
+                                  value={participant.behaviorSlotKey ?? ''}
+                                  onChange={(event) => {
+                                    const behaviorSlotKey = event.target.value || undefined;
+                                    const behaviorName = behaviorSlotKey
+                                      ? skills.composition?.behaviorCards.find(
+                                        (behavior) => behavior.slotKey === behaviorSlotKey,
+                                      )?.name
+                                      : undefined;
+                                    setParticipants((current) => current.map((person) => (
+                                      person.id === participant.id
+                                        ? { ...person, behaviorSlotKey, behaviorName }
+                                        : person
+                                    )));
+                                  }}
+                                >
+                                  <MenuItem
+                                    value=""
+                                    disabled={skills.composition.core?.readiness.state !== 'ready'}
+                                  >
+                                    {t('meetings.participants.mainRole')}
+                                  </MenuItem>
+                                  {skills.composition.behaviorCards.map((behavior) => (
+                                    <MenuItem
+                                      key={behavior.ref}
+                                      value={behavior.slotKey}
+                                      disabled={behavior.readiness.state !== 'ready'}
+                                    >
+                                      {behavior.name}
+                                    </MenuItem>
+                                  ))}
+                                  {participant.behaviorSlotKey
+                                    && !skills.composition.behaviorCards.some(
+                                      (behavior) => behavior.slotKey === participant.behaviorSlotKey,
+                                    ) && (
+                                      <MenuItem value={participant.behaviorSlotKey} disabled>
+                                        {t('meetings.participants.behaviorUnavailable')}
+                                      </MenuItem>
+                                    )}
+                                </Select>
+                                <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
+                                  {selectedBehavior?.description ?? t('meetings.participants.behaviorHelp')}
+                                </Typography>
+                              </FormControl>
+                            )}
+                          </Stack>
                           <Tooltip title={t('meetings.participants.remove')}>
                             <IconButton onClick={() => setParticipants((current) => current.filter((person) => person.id !== participant.id))}>
                               <CloseRounded />
@@ -620,7 +940,9 @@ export default function MeetingWizard({
                       <Avatar sx={{ width: 30, height: 30, fontSize: '0.75rem' }}>{participant.name.slice(0, 2).toUpperCase()}</Avatar>
                       <Box sx={{ minWidth: 0 }}>
                         <Typography variant="body2" fontWeight={700} noWrap>{participant.name}</Typography>
-                        <Typography variant="caption" color="text.secondary" noWrap>{participant.flowName}</Typography>
+                        <Typography variant="caption" color="text.secondary" noWrap>
+                          {participant.sourceName} · {meetingParticipantSourceLabel(participant, t)}
+                        </Typography>
                       </Box>
                       {participant.id === moderatorParticipantId && <Chip size="small" label={t('meetings.moderator')} color="secondary" />}
                     </Stack>

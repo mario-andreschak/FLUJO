@@ -100,11 +100,16 @@ describe('Role administration', () => {
         { mcpServerName: 'search', status: 'available' },
         { mcpServerName: 'not-installed', status: 'missing' },
       ],
+      behaviors: [
+        expect.objectContaining({ key: 'primary', name: 'Primary' }),
+        expect.objectContaining({ key: 'maintain_memory', name: 'Maintain memory' }),
+      ],
       archived: false,
       currentVersionId: 'rolever_researcher_v1',
     });
     expect(Object.keys(role).sort()).toEqual([
       'archived',
+      'behaviors',
       'createdAt',
       'currentVersionId',
       'id',
@@ -118,6 +123,8 @@ describe('Role administration', () => {
       version: 1,
       mission: 'Investigate the question and cite evidence.',
     });
+    expect(versions.get('rolever_researcher_v1')?.behaviorSlots.map((slot) => slot.key))
+      .toEqual(['primary', 'maintain_memory']);
   });
 
   it('rejects internal or credential-adjacent public input fields', async () => {

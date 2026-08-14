@@ -16,6 +16,7 @@ import type {
   PersonaActivity,
   PersonaAttribution,
   PersonaInstructionContext,
+  PersonaNativeAbilityId,
 } from '@/shared/types/enduringAgent';
 
 // --- Custom Chat Message Type is now imported from shared/types/chat.ts ---
@@ -297,17 +298,7 @@ export interface ProcessNodeProperties {
      *  live in the UI. Off by default (undefined/false = off). */
     enableTodoTool?: boolean;
     /** Issue #415: explicit native Persona tools authored for this Process. */
-    personaTools?: Array<
-      | 'remember'
-      | 'recall'
-      | 'correct'
-      | 'forget'
-      | 'pin'
-      | 'work_item_create'
-      | 'work_item_update'
-      | 'work_item_complete'
-      | 'work_item_promote_todo'
-    >;
+    personaTools?: PersonaNativeAbilityId[];
     boundModel?: string;
     allowedTools?: string[];
     mcpNodes?: MCPNodeReference[];
@@ -942,6 +933,12 @@ export interface SharedState {
      */
     executionAuthority?: FlowExecutionAuthority;
     /**
+     * Exact MCP server config names projected from the owning Persona Activity.
+     * Runtime-only and installed non-enumerably beside executionAuthority; the
+     * compiled-flow cache and FlowConverter use it as an out-of-band allowlist.
+     */
+    personaCoreAppRefs?: string[];
+    /**
      * Present only for a top-level participant conversation driven by the
      * MeetingEngine. The process-node prompt and synthetic meeting controls use
      * this identity; nested subflows deliberately do not receive it.
@@ -1390,6 +1387,13 @@ export interface SharedState {
     personaTargetId?: string;
 
     /**
+     * Plain Chat target choice captured before the first Persona turn. `primary`
+     * means the Persona's Main role; any other value names one of its specialist
+     * Behaviors. This is routing preference only, never execution authority.
+     */
+    personaBehaviorSlotKey?: string;
+
+    /**
      * Non-identifying tombstone for a retained conversation whose Persona was
      * deleted under the anonymize policy. Archived Persona conversations remain
      * trusted-local evidence and can be renamed or deleted, but never executed,
@@ -1564,6 +1568,11 @@ export interface ProcessNodePrepResult extends BasePrepResult {
      *  node produced during the visit, in call order (see DebugStep.modelInputs).
      *  `modelInput` above is the first/representative entry. Same debug gate. */
     modelInputs?: ModelInputSnapshot[];
+    /** Always-available structural snapshot used by the durable Chat model-turn
+     * archive. Kept separate from debugger state so normal runs stay trace-free. */
+    modelInputForArchive?: ModelInputSnapshot;
+    /** False for ephemeral child runs, whose state must never reach Chat storage. */
+    archiveModelTurns?: boolean;
     /** Durable Codex session for this node and a state-owned replacement hook. */
     codexSession?: CodexSessionMetadata;
     onCodexSessionChange?: (session: CodexSessionMetadata | undefined) => void;

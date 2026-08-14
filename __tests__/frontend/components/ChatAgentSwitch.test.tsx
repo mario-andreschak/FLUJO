@@ -52,6 +52,7 @@ jest.mock('@/frontend/services/chat', () => {
     chatService: {
       listConversations: (...args: unknown[]) => mockListConversations(...args),
       getConversation: (...args: unknown[]) => mockGetConversation(...args),
+      getModelTurns: jest.fn(async () => ({ turns: [] })),
       subscribeToSidebarEvents: jest.fn(() => ({ close: jest.fn() })),
       subscribeToEvents: jest.fn(() => ({ close: jest.fn() })),
       updateConversationFlow: jest.fn(),
@@ -92,16 +93,22 @@ jest.mock('@/frontend/components/Chat/ChatTargetSelector', () => ({
   __esModule: true,
   default: ({
     selectedPersonaId,
+    selectedPersonaBehaviorSlotKey,
     onSelectFlow,
     onSelectPersona,
   }: {
     selectedPersonaId?: string | null;
+    selectedPersonaBehaviorSlotKey?: string | null;
     onSelectFlow: (id: string) => void;
-    onSelectPersona: (id: string) => void;
+    onSelectPersona: (id: string, behaviorSlotKey: string) => void;
   }) => (
-    <div data-testid="target-selector" data-persona={selectedPersonaId ?? ''}>
+    <div
+      data-testid="target-selector"
+      data-persona={selectedPersonaId ?? ''}
+      data-behavior={selectedPersonaBehaviorSlotKey ?? ''}
+    >
       <button type="button" onClick={() => onSelectFlow('flow-writing')}>Choose Writing Agent</button>
-      <button type="button" onClick={() => onSelectPersona('persona-ada')}>Choose Ada Persona</button>
+      <button type="button" onClick={() => onSelectPersona('persona-ada', 'research')}>Choose Ada Persona</button>
     </div>
   ),
 }));
@@ -228,6 +235,7 @@ describe('Talk conversation Agent switch terminology', () => {
       title: 'New conversation',
       flowId: null,
       personaId: 'persona-ada',
+      personaBehaviorSlotKey: 'research',
       createdAt: 3,
       updatedAt: 3,
     };
@@ -247,9 +255,11 @@ describe('Talk conversation Agent switch terminology', () => {
     expect(mockCreateConversation).toHaveBeenCalledWith(expect.objectContaining({
       flowId: null,
       personaTargetId: 'persona-ada',
+      personaBehaviorSlotKey: 'research',
     }));
     expect(mockUpdateConversationPersonaTarget).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.getByTestId('target-selector')).toHaveAttribute('data-persona', 'persona-ada'));
+    expect(screen.getByTestId('target-selector')).toHaveAttribute('data-behavior', 'research');
     expect(screen.getByLabelText('Composer draft')).toHaveValue('Keep this thought');
   });
 
@@ -292,6 +302,7 @@ describe('Talk conversation Agent switch terminology', () => {
       title: 'New conversation',
       flowId: null,
       personaId: 'persona-ada',
+      personaBehaviorSlotKey: 'research',
       createdAt: 3,
       updatedAt: 3,
     };

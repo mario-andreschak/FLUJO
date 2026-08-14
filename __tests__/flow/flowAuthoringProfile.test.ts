@@ -37,6 +37,13 @@ describe('flowUsesAdvancedFeatures', () => {
     } as never)).toBe(false);
   });
 
+  it('keeps visible Persona abilities available in Guided mode', () => {
+    expect(flowUsesAdvancedFeatures({
+      nodes: [node('process', { personaTools: ['recall', 'work_item_create'] })],
+      edges: [],
+    } as never)).toBe(false);
+  });
+
   it('keeps canonical Process/Subflow subagent connections in Guided mode', () => {
     expect(flowUsesAdvancedFeatures({
       nodes: [

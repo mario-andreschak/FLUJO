@@ -21,6 +21,7 @@ import {
   rememberMemory,
   routePersonaMailboxItem,
   searchPersonaMemory,
+  synchronizeAssignedWorkItemFromActivity,
   unpinMemoryFromCore,
   updatePersonaActivityReferences,
   updatePersonaWorkItem,
@@ -29,7 +30,13 @@ import {
   type PersonaLeaseFence,
 } from '@/backend/services/enduringAgents';
 import { createPersonaFromRole } from './fixtures/personaFactory';
-import { getMemoryItem, getPersona, listMemoryItems } from '@/backend/services/enduringAgents/store';
+import {
+  getMemoryItem,
+  getPersona,
+  getPersonaWorkItem,
+  listMemoryItems,
+} from '@/backend/services/enduringAgents/store';
+import type { PersonaActivity } from '@/shared/types/enduringAgent';
 import { runWithWorkspace } from '@/utils/workspace';
 
 let workspaceSequence = 0;
@@ -156,6 +163,79 @@ describe('issue #415 phase 4 WorkItems', () => {
       }
     });
   });
+
+  it('projects every assigned Activity terminal outcome without regressing explicit Task decisions', async () => {
+    await inFreshWorkspace(async () => {
+      const { persona } = await createPersonaFromRole({ name: 'Jim', idempotencyKey: 'sync-jim' });
+      const successful = await createPersonaWorkItem({
+        personaId: persona.id,
+        title: 'Finish successfully',
+      });
+      const failed = await createPersonaWorkItem({
+        personaId: persona.id,
+        title: 'Needs review after failure',
+      });
+      const cancelled = await createPersonaWorkItem({
+        personaId: persona.id,
+        title: 'Stop this work',
+      });
+      const explicitlyCompleted = await createPersonaWorkItem({
+        personaId: persona.id,
+        title: 'Model already completed this',
+      });
+      const explicitlyBlocked = await createPersonaWorkItem({
+        personaId: persona.id,
+        title: 'Model explicitly blocked this',
+      });
+      const completedByModel = await updatePersonaWorkItem(persona.id, explicitlyCompleted.id, {
+        status: 'completed',
+      });
+      const blockedByModel = await updatePersonaWorkItem(persona.id, explicitlyBlocked.id, {
+        status: 'blocked',
+      });
+
+      const terminalActivity = (
+        workItemId: string,
+        status: 'completed' | 'error' | 'cancelled',
+      ): PersonaActivity => {
+        const now = Date.now();
+        return {
+          schemaVersion: 1,
+          id: `activity_sync_${status}_${workItemId}`,
+          personaId: persona.id,
+          kind: 'assignment',
+          status,
+          source: { kind: 'assignment', sourceId: workItemId },
+          behaviorId: 'behavior_primary',
+          behaviorRevisionId: 'revision_primary',
+          createdAt: now,
+          startedAt: now,
+          updatedAt: now,
+          completedAt: now,
+          ...(status === 'error' ? { error: 'The Flow could not finish the Task.' } : {}),
+        };
+      };
+
+      await expect(synchronizeAssignedWorkItemFromActivity(
+        terminalActivity(successful.id, 'completed'),
+      )).resolves.toMatchObject({ status: 'completed', completedAt: expect.any(Number) });
+      await expect(synchronizeAssignedWorkItemFromActivity(
+        terminalActivity(failed.id, 'error'),
+      )).resolves.toMatchObject({ status: 'blocked', completedAt: undefined });
+      await expect(synchronizeAssignedWorkItemFromActivity(
+        terminalActivity(cancelled.id, 'cancelled'),
+      )).resolves.toMatchObject({ status: 'cancelled', completedAt: undefined });
+
+      await expect(synchronizeAssignedWorkItemFromActivity(
+        terminalActivity(explicitlyCompleted.id, 'error'),
+      )).resolves.toEqual(completedByModel);
+      await expect(synchronizeAssignedWorkItemFromActivity(
+        terminalActivity(explicitlyBlocked.id, 'completed'),
+      )).resolves.toEqual(blockedByModel);
+      expect(await getPersonaWorkItem(explicitlyCompleted.id)).toEqual(completedByModel);
+      expect(await getPersonaWorkItem(explicitlyBlocked.id)).toEqual(blockedByModel);
+    });
+  });
 });
 describe('issue #415 phase 4 MemoryKernel', () => {
   it('remembers, searches, corrects, pins, unpins, supersedes, and forgets with provenance', async () => {
@@ -238,6 +318,44 @@ describe('issue #415 phase 4 MemoryKernel', () => {
       await expect(forgetMemory(persona.id, candidate.id, {
         executionAuthority: authorityFor(fence),
       })).rejects.toThrow();
+    });
+  });
+
+  it('keeps manual memory available while automatic memory changes are turned off', async () => {
+    await inFreshWorkspace(async () => {
+      const { persona } = await createPersonaFromRole({
+        name: 'Jim',
+        idempotencyKey: 'locked-memory-jim',
+        autonomyLevel: 'locked',
+      });
+      const manual = await rememberMemory({
+        personaId: persona.id,
+        kind: 'semantic',
+        scope: 'persona',
+        status: 'active',
+        content: 'This was added directly by the user.',
+        confidence: 1,
+        importance: 0.5,
+        trust: 'explicit_user',
+        sourceRefs: [{ kind: 'user_statement', id: 'locked-manual-memory' }],
+      });
+      expect(manual.status).toBe('active');
+
+      const claim = await claimAssignment(persona.id, 'locked-memory-tool-activity');
+      const fence = fenceForClaim(claim);
+      await expect(rememberMemory({
+        personaId: persona.id,
+        kind: 'semantic',
+        scope: 'persona',
+        content: 'A model tried to retain this automatically.',
+        confidence: 0.7,
+        importance: 0.5,
+        trust: 'model_inference',
+        sourceRefs: [{ kind: 'activity', id: claim.activity.id }],
+      }, { executionAuthority: authorityFor(fence) })).rejects.toMatchObject({
+        code: 'PERSONA_LEARNING_DISABLED',
+      });
+      await completePersonaActivity({ ...fence, status: 'completed' });
     });
   });
 

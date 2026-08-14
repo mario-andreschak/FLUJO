@@ -323,6 +323,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     nodeId,
     runResourceMarkers,
     sessionResume,
+    onSdkRequest,
+    onSdkRequestResult,
     // Note: `maxTokens` is intentionally NOT destructured/applied here — and
     // neither is `temperature`. This is an agentic adapter: unlike the
     // request/response adapters (OpenAI/Anthropic/Gemini) that issue a single
@@ -776,17 +778,16 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // Drive the SDK via its streaming-input channel with a single user message.
     // The generator yields once then completes, signaling end-of-input so the
     // SDK processes the turn (and runs the agentic tool loop) to completion.
+    const sdkPromptMessage: SDKUserMessage = {
+      type: 'user',
+      parent_tool_use_id: null,
+      message: { role: 'user', content: userContent },
+    };
     async function* promptStream(): AsyncGenerator<SDKUserMessage> {
-      yield {
-        type: 'user',
-        parent_tool_use_id: null,
-        message: { role: 'user', content: userContent },
-      };
+      yield sdkPromptMessage;
     }
 
-    const response = query({
-      prompt: promptStream(),
-      options: {
+    const queryOptions: Parameters<typeof query>[0]['options'] = {
         model: model.name,
         env: childEnv,
         cwd: runtime.workingDirectory,
@@ -889,8 +890,32 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           }
           return { behavior: 'allow', updatedInput: input };
         },
-      },
-    });
+    };
+
+    let dispatchId: string | undefined;
+    try {
+      dispatchId = await onSdkRequest?.({
+        adapter: 'claude-cli',
+        operation: 'query',
+        request: { prompt: sdkPromptMessage, options: queryOptions },
+      });
+    } catch (archiveError) {
+      log.warn('Could not archive Claude Agent SDK request', archiveError);
+    }
+
+    let response: ReturnType<typeof query>;
+    try {
+      response = query({ prompt: promptStream(), options: queryOptions });
+    } catch (error) {
+      if (dispatchId && onSdkRequestResult) {
+        try {
+          await onSdkRequestResult({ dispatchId, outcome: signal?.aborted ? 'cancelled' : 'error' });
+        } catch (archiveError) {
+          log.warn('Could not update Claude Agent SDK request archive', archiveError);
+        }
+      }
+      throw error;
+    }
 
     // Streaming input is the Agent SDK's native mid-session steering seam. The
     // original implementation completed promptStream after its first yield and
@@ -1167,6 +1192,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       }
     };
 
+    let dispatchOutcome: 'completed' | 'error' | 'cancelled' = 'completed';
     try {
       if (signal) {
         // Race the loop against cancellation. If the signal fires first we throw
@@ -1198,6 +1224,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       // A handoff aborts the run on purpose; only genuine errors (including an
       // external cancellation, mapped to 'cancelled' by ModelHandler) propagate.
       if (handoffCalls.length === 0) {
+        dispatchOutcome = signal?.aborted ? 'cancelled' : 'error';
         // Drop any tracked session on a genuine error/cancellation so a later
         // turn never resumes a corrupted or half-torn-down session (#154 — the
         // "drop the cached session on error" contract coordinated with #151).
@@ -1206,6 +1233,13 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       }
     } finally {
       signal?.removeEventListener('abort', onExternalAbort);
+      if (dispatchId && onSdkRequestResult) {
+        try {
+          await onSdkRequestResult({ dispatchId, outcome: dispatchOutcome });
+        } catch (archiveError) {
+          log.warn('Could not update Claude Agent SDK request archive', archiveError);
+        }
+      }
     }
 
     const finalText = resultText || accumulatedText;

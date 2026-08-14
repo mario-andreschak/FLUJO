@@ -10,6 +10,7 @@ const SUMMARY_PATH = '/v1/personas/summary';
 export type PersonaHumanStatus =
   | 'working'
   | 'waiting-for-you'
+  | 'paused'
   | 'up-next'
   | 'needs-attention';
 
@@ -36,7 +37,6 @@ export interface PersonaSummary {
     talk: boolean;
     open: boolean;
     assign: boolean;
-    call: boolean;
   };
   updatedAt: number;
 }

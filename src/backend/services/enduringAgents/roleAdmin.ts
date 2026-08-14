@@ -18,7 +18,6 @@ import {
   type PublicRole,
   type PublicRoleSuggestedApp,
   type PublicRoleVersion,
-  type RoleBehaviorSlot,
   type RoleDefinition,
   type RoleImpactPreview,
   type RoleLifecycleInput,
@@ -31,6 +30,7 @@ import {
 
 import { BUILT_IN_DEVELOPER_ROLE_ID } from './builtInDeveloperRole';
 import { randomEnduringAgentId } from './ids';
+import { buildDefaultRoleBehaviorSlots } from './roleBehaviorDefaults';
 import { withRoleDefinitionRuntimeLock } from './runtimeLock';
 import {
   createRoleVersion,
@@ -98,69 +98,6 @@ function staleVersionConflict(): RoleAdminConflictError {
 
 function roleDescription(prompt: string): string {
   return prompt.slice(0, 10_000);
-}
-
-function buildSimpleRoleBehaviorSlots(roleId: string, roleName: string): RoleBehaviorSlot[] {
-  const flowId = `${roleId}_primary`;
-  return [{
-    key: 'primary',
-    name: 'Primary',
-    description: 'Default behavior for this Role. The immutable Role prompt is supplied separately.',
-    flowTemplate: {
-      id: flowId,
-      name: `${roleName.slice(0, 140)} primary`,
-      description: 'Internal default Flow for a simple Role.',
-      permissionRules: [],
-      nodes: [
-        {
-          id: `${roleId}_start`,
-          type: 'start',
-          position: { x: 0, y: 0 },
-          data: {
-            label: 'Start',
-            type: 'start',
-            properties: {
-              promptTemplate: 'Follow the immutable Role instructions supplied for this Activity.',
-            },
-          },
-        },
-        {
-          id: `${roleId}_process`,
-          type: 'process',
-          position: { x: 280, y: 0 },
-          data: {
-            label: 'Act',
-            type: 'process',
-            properties: {
-              promptTemplate: 'Complete the assigned task carefully within the supplied Role and Activity context.',
-            },
-          },
-        },
-        {
-          id: `${roleId}_finish`,
-          type: 'finish',
-          position: { x: 560, y: 0 },
-          data: { label: 'Finish', type: 'finish' },
-        },
-      ],
-      edges: [
-        {
-          id: `${roleId}_start_process`,
-          source: `${roleId}_start`,
-          target: `${roleId}_process`,
-          sourceHandle: 'start-bottom',
-          targetHandle: 'process-top',
-        },
-        {
-          id: `${roleId}_process_finish`,
-          source: `${roleId}_process`,
-          target: `${roleId}_finish`,
-          sourceHandle: 'process-bottom',
-          targetHandle: 'finish-top',
-        },
-      ],
-    },
-  }];
 }
 
 function selectCurrentVersion(
@@ -240,6 +177,11 @@ function projectRole(
     name: state.definition.name,
     prompt: state.current.mission,
     suggestedApps: resolveSuggestedApps(state.current.suggestedApps, statuses),
+    behaviors: state.current.behaviorSlots.map(({ key, name, description }) => ({
+      key,
+      name,
+      ...(description ? { description } : {}),
+    })),
     archived: state.definition.archivedAt !== undefined,
     currentVersionId: state.current.id,
     createdAt: state.definition.createdAt,
@@ -301,7 +243,7 @@ export async function createPublicRole(value: unknown): Promise<PublicRole> {
       name: input.name,
       mission: input.prompt,
       suggestedApps: input.suggestedApps,
-      behaviorSlots: buildSimpleRoleBehaviorSlots(roleId, input.name),
+      behaviorSlots: buildDefaultRoleBehaviorSlots(roleId, input.name),
       createdAt: now,
     });
 
@@ -390,7 +332,7 @@ export async function duplicatePublicRole(
       roleDefinitionId: roleId,
       version: 1,
       name,
-      behaviorSlots: buildSimpleRoleBehaviorSlots(roleId, name),
+      behaviorSlots: buildDefaultRoleBehaviorSlots(roleId, name),
       migrationNotes: `Duplicated from Role ${sourceRoleId}.`,
       createdAt: now,
     });
@@ -473,6 +415,11 @@ export async function listPublicRoleVersions(roleId: string): Promise<PublicRole
       name: version.name,
       prompt: version.mission,
       suggestedApps: resolveSuggestedApps(version.suggestedApps, statuses),
+      behaviors: version.behaviorSlots.map(({ key, name, description }) => ({
+        key,
+        name,
+        ...(description ? { description } : {}),
+      })),
       createdAt: version.createdAt,
       current: version.id === state.current.id,
     }));

@@ -4,13 +4,9 @@ export interface PersonaActionCapabilities {
   talk: boolean;
   open: boolean;
   assign: boolean;
-  call: boolean;
 }
 
-/**
- * The API projection is authoritative. In particular, voice presentation
- * metadata never promotes Call into a working action.
- */
+/** The summary projection is authoritative for actions the UI can actually run. */
 export function personaCapabilities(
   summary: PersonaSummary,
 ): PersonaActionCapabilities {
@@ -18,6 +14,5 @@ export function personaCapabilities(
     talk: summary.capabilities.talk,
     open: summary.capabilities.open,
     assign: summary.capabilities.assign,
-    call: summary.capabilities.call,
   };
 }

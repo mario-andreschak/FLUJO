@@ -6,6 +6,7 @@ import {
   ArrowUpwardRounded,
   ContentCopyRounded,
   EditRounded,
+  HistoryRounded,
   OpenInNewRounded,
   PlayArrowRounded,
   RestartAltRounded,
@@ -49,6 +50,8 @@ import {
 } from '@/frontend/utils/personaFlowNavigation';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import type {
+  BehaviorBinding,
+  BehaviorRevision,
   PersonaBehaviorComposition,
   PersonaBehaviorFlowCard,
   PersonaComposition,
@@ -268,6 +271,27 @@ export default function PersonaFlowsArea({
     void complete(() => persistBehaviors(next));
   };
 
+  const activateVersion = async (
+    binding: BehaviorBinding,
+    revision: BehaviorRevision,
+  ) => {
+    if (busy || binding.activeRevisionId === revision.id) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await personasService.activateBehavior(detail.persona.id, binding.id, {
+        revisionId: revision.id,
+        expectedActiveRevisionId: binding.activeRevisionId,
+      });
+      await onChanged();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : t('personas.action.failed'));
+      await onChanged().catch(() => undefined);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const configured = new Set(composition?.behaviors.map((behavior) => behavior.ref) ?? []);
   const availableBindings = detail.behaviorBindings.filter((binding) => !configured.has(binding.id));
   const pickerItems = pickerModel.items.map((flow) => ({
@@ -341,35 +365,49 @@ export default function PersonaFlowsArea({
           <Typography color="text.secondary">{t('personas.behaviors.empty')}</Typography>
         ) : (
           <Stack spacing={2}>
-            {composition.behaviorCards.map((card, index) => (
-              <Card key={card.ref} variant="outlined" sx={{ borderRadius: 3 }}>
-                <CardContent>
-                  <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" gap={1}>
-                    <Box>
-                      <Typography variant="h6" fontWeight={750}>{card.name}</Typography>
-                      {card.description && <Typography color="text.secondary">{card.description}</Typography>}
+            {composition.behaviorCards.map((card, index) => {
+              const binding = detail.behaviorBindings.find((candidate) => candidate.id === card.ref);
+              const revisions = detail.behaviorRevisions
+                .filter((revision) => revision.behaviorId === card.ref)
+                .sort((left, right) => right.revision - left.revision);
+              return (
+                <Card key={card.ref} variant="outlined" sx={{ borderRadius: 3 }}>
+                  <CardContent>
+                    <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" gap={1}>
+                      <Box>
+                        <Typography variant="h6" fontWeight={750}>{card.name}</Typography>
+                        {card.description && <Typography color="text.secondary">{card.description}</Typography>}
+                      </Box>
+                      <ReadinessChip card={card} />
+                    </Stack>
+                    <Box sx={{ mt: 2 }}>
+                      {card.flow
+                        ? <FlowCard flow={card.flow as Flow} selected pickerMode selectionManaged onSelect={() => {}} />
+                        : <Alert severity="warning">{t('personas.behaviors.missing')}</Alert>}
                     </Box>
-                    <ReadinessChip card={card} />
-                  </Stack>
-                  <Box sx={{ mt: 2 }}>
-                    {card.flow
-                      ? <FlowCard flow={card.flow as Flow} selected pickerMode selectionManaged onSelect={() => {}} />
-                      : <Alert severity="warning">{t('personas.behaviors.missing')}</Alert>}
-                  </Box>
-                </CardContent>
-                <CardActions sx={{ flexWrap: 'wrap', gap: 0.5, px: 2, pb: 2 }}>
-                  <Button disabled={busy} onClick={() => setPicker({ kind: 'behavior', ref: card.ref })}>{card.flow ? t('personas.behaviors.change') : t('personas.behaviors.replace')}</Button>
-                  <FlowLinks card={card} personaId={detail.persona.id} />
-                  <Button disabled={busy} startIcon={<EditRounded />} onClick={() => { setRename(card); setRenameValue(card.name); }}>{t('personas.behaviors.rename')}</Button>
-                  <Button disabled={busy || index === 0} aria-label={t('personas.behaviors.moveUp')} onClick={() => move(card.ref, -1)}><ArrowUpwardRounded /></Button>
-                  <Button disabled={busy || index === composition.behaviorCards.length - 1} aria-label={t('personas.behaviors.moveDown')} onClick={() => move(card.ref, 1)}><ArrowDownwardRounded /></Button>
-                  {card.binding.mode === 'persona_copy' && card.binding.sharedFlowRef && (
-                    <Button disabled={busy} startIcon={<RestartAltRounded />} onClick={() => reset(card)}>{t('personas.behaviors.resetShared')}</Button>
-                  )}
-                  <Button color="error" disabled={busy} onClick={() => remove(card.ref)}>{t('personas.behaviors.remove')}</Button>
-                </CardActions>
-              </Card>
-            ))}
+                    {binding && revisions.length > 0 && (
+                      <BehaviorVersionHistory
+                        binding={binding}
+                        revisions={revisions}
+                        busy={busy}
+                        onActivate={(revision) => void activateVersion(binding, revision)}
+                      />
+                    )}
+                  </CardContent>
+                  <CardActions sx={{ flexWrap: 'wrap', gap: 0.5, px: 2, pb: 2 }}>
+                    <Button disabled={busy} onClick={() => setPicker({ kind: 'behavior', ref: card.ref })}>{card.flow ? t('personas.behaviors.change') : t('personas.behaviors.replace')}</Button>
+                    <FlowLinks card={card} personaId={detail.persona.id} />
+                    <Button disabled={busy} startIcon={<EditRounded />} onClick={() => { setRename(card); setRenameValue(card.name); }}>{t('personas.behaviors.rename')}</Button>
+                    <Button disabled={busy || index === 0} aria-label={t('personas.behaviors.moveUp')} onClick={() => move(card.ref, -1)}><ArrowUpwardRounded /></Button>
+                    <Button disabled={busy || index === composition.behaviorCards.length - 1} aria-label={t('personas.behaviors.moveDown')} onClick={() => move(card.ref, 1)}><ArrowDownwardRounded /></Button>
+                    {card.binding.mode === 'persona_copy' && card.binding.sharedFlowRef && (
+                      <Button disabled={busy} startIcon={<RestartAltRounded />} onClick={() => reset(card)}>{t('personas.behaviors.resetShared')}</Button>
+                    )}
+                    <Button color="error" disabled={busy} onClick={() => remove(card.ref)}>{t('personas.behaviors.remove')}</Button>
+                  </CardActions>
+                </Card>
+              );
+            })}
           </Stack>
         )}
       </Paper>
@@ -399,6 +437,87 @@ export default function PersonaFlowsArea({
         </DialogActions>
       </Dialog>
     </Stack>
+  );
+}
+
+function BehaviorVersionHistory({
+  binding,
+  revisions,
+  busy,
+  onActivate,
+}: {
+  binding: BehaviorBinding;
+  revisions: BehaviorRevision[];
+  busy: boolean;
+  onActivate: (revision: BehaviorRevision) => void;
+}) {
+  const { t, formatDate } = useI18n();
+  return (
+    <Box
+      component="details"
+      sx={{ mt: 2, borderTop: 1, borderColor: 'divider', pt: 1.5 }}
+    >
+      <Box
+        component="summary"
+        sx={{ cursor: 'pointer', fontWeight: 700, color: 'text.secondary' }}
+      >
+        {t('personas.behaviors.earlierVersions')}
+      </Box>
+      <Stack spacing={1} sx={{ mt: 1.5 }}>
+        {revisions.map((revision) => {
+          const current = revision.id === binding.activeRevisionId;
+          return (
+            <Paper key={revision.id} variant="outlined" sx={{ p: 1.5, borderRadius: 2 }}>
+              <Stack
+                direction={{ xs: 'column', sm: 'row' }}
+                justifyContent="space-between"
+                alignItems={{ xs: 'stretch', sm: 'center' }}
+                gap={1}
+              >
+                <Box>
+                  <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
+                    <Typography fontWeight={700}>
+                      {t('personas.behaviors.version', { version: revision.revision })}
+                    </Typography>
+                    {current && <Chip size="small" color="success" label={t('personas.behaviors.currentVersion')} />}
+                  </Stack>
+                  <Typography variant="body2">{revision.flowSnapshot.name}</Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {t('personas.behaviors.versionCreated', {
+                      date: formatDate(revision.createdAt, { dateStyle: 'medium', timeStyle: 'short' }),
+                    })}
+                  </Typography>
+                </Box>
+                {!current && (
+                  <Button
+                    size="small"
+                    startIcon={<HistoryRounded />}
+                    disabled={busy}
+                    onClick={() => onActivate(revision)}
+                  >
+                    {t('personas.behaviors.useVersion')}
+                  </Button>
+                )}
+              </Stack>
+              {revision.contentHash && (
+                <Box component="details" sx={{ mt: 1 }}>
+                  <Box component="summary" sx={{ cursor: 'pointer', color: 'text.secondary', fontSize: 13 }}>
+                    {t('personas.behaviors.versionAdvanced')}
+                  </Box>
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ overflowWrap: 'anywhere' }}
+                  >
+                    {t('personas.behaviors.versionFingerprint', { hash: revision.contentHash })}
+                  </Typography>
+                </Box>
+              )}
+            </Paper>
+          );
+        })}
+      </Stack>
+    </Box>
   );
 }
 

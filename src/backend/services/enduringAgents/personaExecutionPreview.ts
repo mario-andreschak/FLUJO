@@ -1,6 +1,10 @@
+import { flowService } from '@/backend/services/flow';
 import {
+  PERSONA_NATIVE_ABILITY_IDS,
+  type PersonaNativeAbilityId,
   type PersonaInstructionContext,
 } from '@/shared/types/enduringAgent';
+import type { Flow } from '@/shared/types/flow';
 
 import { stableEnduringAgentId } from './ids';
 import { getCoreMemory } from './memoryKernel';
@@ -8,6 +12,7 @@ import {
   createPersonaActivitySnapshot,
 } from './personaActivitySnapshot';
 import { buildPersonaInstructionContext } from './personaInstructionContext';
+import { snapshotPersonaCoreAppRefs } from './personaCoreApps';
 import {
   getBehaviorRevision,
   getPersona,
@@ -33,8 +38,39 @@ export interface PersonaExecutionPreview {
   roleVersionId: string;
   instructionContext: PersonaInstructionContext;
   instructionContextDigest: string;
+  /** Friendly effective capability inputs for the product UI. */
+  apps: string[];
+  behaviors: Array<{
+    slotKey: string;
+    name: string;
+    description?: string;
+  }>;
+  nativeAbilities: PersonaNativeAbilityId[];
   precedence: readonly string[];
   readOnly: true;
+}
+
+function nativeAbilitiesForFlow(flow: Flow): PersonaNativeAbilityId[] {
+  const requested = new Set<string>();
+  for (const node of flow.nodes) {
+    if (node.type !== 'process') continue;
+    const data = node.data as typeof node.data & {
+      properties?: { personaTools?: unknown };
+    };
+    const configured = data.properties?.personaTools;
+    if (!Array.isArray(configured)) continue;
+    for (const value of configured) {
+      if (typeof value === 'string') requested.add(value);
+    }
+  }
+  return PERSONA_NATIVE_ABILITY_IDS.filter((ability) => requested.has(ability));
+}
+
+function friendlySlotName(slotKey: string): string {
+  return slotKey
+    .replaceAll('_', ' ')
+    .replaceAll('-', ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 /**
@@ -46,7 +82,8 @@ export async function previewPersonaExecution(
 ): Promise<PersonaExecutionPreview | null> {
   const persona = await getPersona(personaId);
   if (!persona) return null;
-  const primaryBindings = (await listBehaviorBindings(persona.id)).filter(
+  const bindings = await listBehaviorBindings(persona.id);
+  const primaryBindings = bindings.filter(
     (binding) => binding.slotKey === 'primary',
   );
   if (primaryBindings.length !== 1) {
@@ -71,6 +108,26 @@ export async function previewPersonaExecution(
     activityId,
     coreMemoryItems: await getCoreMemory(persona.id),
   });
+  const coreAppRefs = await snapshotPersonaCoreAppRefs(persona.id, persona);
+  const coreBinding = persona.composition?.coreBinding;
+  const coreFlowRef = coreBinding
+    ? (coreBinding.mode === 'shared'
+      ? coreBinding.sharedFlowRef
+      : coreBinding.personaFlowRef)
+    : persona.composition?.coreFlowRef;
+  const authoredCoreFlow = coreFlowRef ? await flowService.getFlow(coreFlowRef) : null;
+  const effectiveCoreFlow = authoredCoreFlow ?? revision.flowSnapshot;
+  const nativeAbilities = nativeAbilitiesForFlow(effectiveCoreFlow).filter((ability) => {
+    if (ability === 'suggest_improvement') {
+      return persona.autonomyLevel === 'propose_overrides'
+        || persona.autonomyLevel === 'auto_apply_validated';
+    }
+    if (
+      persona.autonomyLevel === 'locked'
+      && ['remember', 'correct', 'forget', 'pin', 'unpin'].includes(ability)
+    ) return false;
+    return true;
+  });
   const snapshot = createPersonaActivitySnapshot({
     activity: {
       id: activityId,
@@ -80,14 +137,33 @@ export async function previewPersonaExecution(
     },
     revision,
     context: instructionContext,
-    coreAppRefs: [],
+    coreAppRefs,
   });
+
+  const behaviors = bindings
+    .filter((candidate) => candidate.slotKey !== 'primary')
+    .map((candidate) => {
+      const composed = persona.composition?.behaviors?.find((behavior) => (
+        behavior.ref === candidate.id || behavior.slotKey === candidate.slotKey
+      ));
+      const roleSlot = roleVersion.behaviorSlots.find(
+        (slot) => slot.key === candidate.slotKey,
+      );
+      return {
+        slotKey: candidate.slotKey,
+        name: composed?.name ?? roleSlot?.name ?? friendlySlotName(candidate.slotKey),
+        ...(composed?.description || roleSlot?.description
+          ? { description: composed?.description ?? roleSlot?.description }
+          : {}),
+      };
+    })
+    .sort((left, right) => left.name.localeCompare(right.name));
 
   return {
     personaId: persona.id,
     activityId,
-    ...(persona.composition?.coreFlowRef
-      ? { coreFlowRef: persona.composition.coreFlowRef }
+    ...(coreFlowRef
+      ? { coreFlowRef }
       : {}),
     coreFlowId: snapshot.coreFlowId,
     coreFlowRevisionId: snapshot.coreFlowRevisionId,
@@ -95,6 +171,9 @@ export async function previewPersonaExecution(
     roleVersionId: roleVersion.id,
     instructionContext: snapshot.instructionContext,
     instructionContextDigest: snapshot.instructionContextDigest,
+    apps: [...snapshot.coreAppRefs],
+    behaviors,
+    nativeAbilities,
     precedence: PERSONA_CONTEXT_PRECEDENCE,
     readOnly: true,
   };

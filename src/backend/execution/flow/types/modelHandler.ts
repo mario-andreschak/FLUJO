@@ -13,6 +13,7 @@ import { EmitFn, NodeRef } from '@/shared/types/execution/events';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import type { VisualCompactionDiagnostic } from '@/shared/types/visualArchive';
 import type { PersonaAttribution } from '@/shared/types/enduringAgent';
+import type { ModelInputSnapshot } from '../types';
 
 // Input for model call
 export interface ModelCallInput {
@@ -50,6 +51,10 @@ export interface ModelCallInput {
     messages: OpenAI.ChatCompletionMessageParam[],
     diagnostic?: VisualCompactionDiagnostic,
   ) => void;
+  /** Persist actual provider dispatches for ordinary, durable Chat conversations. */
+  archiveModelTurns?: boolean;
+  /** Structural fold/scope/handoff provenance paired with the final dispatch. */
+  modelInputForArchive?: ModelInputSnapshot;
   nodeName: string; // Name of the process node for display purposes
   nodeId: string; // ID of the process node
   /**

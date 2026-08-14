@@ -415,8 +415,8 @@ export class SchedulerService {
         }
         this.armed.set(
           execution.id,
-          armSchedule(trigger, this.bindToWorkspace((occurrence) => {
-            void (async () => {
+          armSchedule(trigger, this.bindToWorkspace(async (occurrence) => {
+            try {
               const current = await loadExecutionState(execution.id);
               const payload: TriggerFirePayload = {
                 kind: 'schedule',
@@ -442,9 +442,9 @@ export class SchedulerService {
                 lastScheduledFireAt: new Date().toISOString(),
               });
               await this.fire(execution, payload);
-            })().catch(error =>
-              log.error(`Scheduled fire failed for ${execution.id}:`, error)
-            );
+            } catch (error) {
+              log.error(`Scheduled fire failed for ${execution.id}:`, error);
+            }
           }))
         );
         break;

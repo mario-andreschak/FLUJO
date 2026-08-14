@@ -99,6 +99,7 @@ function buildMemoryContext(
   coreMemoryItemIds: string[],
   coreMemoryItems: MemoryItem[],
   coreMemoryMaxItems = 32,
+  language?: string,
 ): PersonaInstructionContext {
   return buildPersonaInstructionContext({
     persona: {
@@ -107,6 +108,7 @@ function buildMemoryContext(
       name: 'Ada',
       roleVersionId: 'role-version-1',
       coreMemoryItemIds,
+      ...(language ? { presentation: { language } } : {}),
     } as unknown as Persona,
     roleVersion: {
       schemaVersion: 1,
@@ -221,6 +223,13 @@ describe('trusted Persona instruction context', () => {
     expect(context.coreMemoryItemIds).toEqual(['first']);
     expect(context.instruction).toContain('selected 1 of 2 eligible items; item limit 1');
     expect(context.instruction).toContain('truncated: yes.');
+  });
+
+  it('makes the saved language effective for every Persona entry point', () => {
+    const context = buildMemoryContext([], [], 32, 'es');
+
+    expect(context.instruction).toContain('Preferred response language: "es"');
+    expect(context.instruction).toContain('unless the user asks for another language');
   });
 
   it('truncates whole records deterministically and digests only the selected subset', () => {

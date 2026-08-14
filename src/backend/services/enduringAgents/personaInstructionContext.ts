@@ -68,6 +68,7 @@ export function buildPersonaInstructionContext(input: {
 
   const personaName = persona.name.trim();
   const personaMission = persona.mission?.trim() || undefined;
+  const preferredLanguage = persona.presentation?.language?.trim() || undefined;
   const roleName = roleVersion.name.trim();
   const roleMission = roleVersion.mission.trim();
 
@@ -138,6 +139,12 @@ export function buildPersonaInstructionContext(input: {
     ...(personaMission
       ? ['Persona mission:', personaMission]
       : ['Persona mission: not separately specified; use the Role mission.']),
+    ...(preferredLanguage
+      ? [
+          `Preferred response language: ${JSON.stringify(preferredLanguage)}. `
+          + 'Use it for user-facing output unless the user asks for another language.',
+        ]
+      : []),
     `Role: ${JSON.stringify(roleName)}`,
     'Role mission:',
     roleMission,

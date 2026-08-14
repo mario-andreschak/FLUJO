@@ -1,5 +1,6 @@
 import { FlowConverter } from '@/backend/execution/flow/FlowConverter';
 import { BaseNode } from '@/backend/execution/flow/pocketflow';
+import { personaCoreAppNodeId } from '@/backend/services/enduringAgents/personaCoreAppIdentity';
 import type { Flow as ReactFlow } from '@/frontend/types/flow/flow';
 
 function buildFlow(): ReactFlow {
@@ -94,5 +95,70 @@ describe('FlowConverter MCP attachment derivation', () => {
     }]);
     expect((source.nodes.find(({ id }) => id === 'static')!.data.properties as any).mcpNodes)
       .toEqual([{ id: 'stale', properties: { boundServer: 'old' } }]);
+  });
+
+  it('preserves only exact runtime-authorized Persona App bindings', () => {
+    const source = buildFlow();
+    const personalComputerId = personaCoreAppNodeId('personal-computer');
+    const currentAppId = personaCoreAppNodeId('current');
+    const browserId = personaCoreAppNodeId('browser');
+    const sourceMcpNodes = [
+      {
+        id: personalComputerId,
+        properties: {
+          boundServer: 'personal-computer',
+          enabledTools: ['sandbox_exec', 'sandbox_exec', '', 42],
+          enabledResources: ['ui://computer/dashboard', 'ui://computer/dashboard', 42],
+          roots: ['C:\\should-not-survive'],
+          toolParameterPresets: { sandbox_exec: { cwd: 'C:\\should-not-survive' } },
+          toolTimeout: -1,
+          env: { SECRET: 'should-not-survive' },
+        },
+      },
+      // The graph-authored `current` attachment below must replace this broader
+      // projected policy for the same server.
+      {
+        id: currentAppId,
+        properties: { boundServer: 'current', enabledTools: ['too_broad'] },
+      },
+      // A deterministic-looking id is insufficient: both id and server must
+      // match the out-of-band binding manifest.
+      {
+        id: browserId,
+        properties: { boundServer: 'wrong-server', enabledTools: ['forged'] },
+      },
+      { id: 'stale', properties: { boundServer: 'old', enabledTools: ['old_tool'] } },
+    ];
+    (source.nodes.find(({ id }) => id === 'proc')!.data.properties as any).mcpNodes = sourceMcpNodes;
+
+    const defaultConverted = processNode(FlowConverter.convert(source));
+    expect(defaultConverted.node_params.properties.mcpNodes).toEqual([{
+      id: 'mcp',
+      properties: expect.objectContaining({ boundServer: 'current', enabledTools: ['get_me'] }),
+    }]);
+
+    const trustedInlineMcpBindings = new Map([
+      [personalComputerId, 'personal-computer'],
+      [currentAppId, 'current'],
+      [browserId, 'browser'],
+    ]);
+    const converted = processNode(FlowConverter.convert(source, { trustedInlineMcpBindings }));
+
+    expect(converted.node_params.properties.mcpNodes).toEqual([
+      {
+        id: personalComputerId,
+        properties: {
+          boundServer: 'personal-computer',
+          enabledTools: ['sandbox_exec'],
+          enabledResources: ['ui://computer/dashboard'],
+        },
+      },
+      {
+        id: 'mcp',
+        properties: expect.objectContaining({ boundServer: 'current', enabledTools: ['get_me'] }),
+      },
+    ]);
+    expect((source.nodes.find(({ id }) => id === 'proc')!.data.properties as any).mcpNodes)
+      .toEqual(sourceMcpNodes);
   });
 });

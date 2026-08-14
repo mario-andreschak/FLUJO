@@ -1,62 +1,64 @@
 import { render, screen } from '@testing-library/react';
 
-const mockList = jest.fn();
-const mockWaveCanvas = jest.fn((_props: unknown) => <div data-testid="wave-canvas" />);
+const mockLoad = jest.fn();
+const mockPlaygroundCanvas = jest.fn((_props: unknown) => <div data-testid="playground-canvas" />);
 
-jest.mock('@/frontend/services/waves', () => ({
-  wavesService: { list: () => mockList() },
+jest.mock('@/frontend/services/automationMap', () => ({
+  automationMapService: { load: () => mockLoad() },
 }));
 
 jest.mock('@/frontend/hooks/useUiPreference', () => ({
-  useUiPreference: () => [null, jest.fn()],
-  useWorkspaceUiPreference: () => [null, jest.fn()],
+  useWorkspaceUiPreference: (_key: string, initial: unknown) => [initial, jest.fn()],
 }));
 
-jest.mock('@/frontend/hooks/useScrollRestoration', () => ({
-  useScrollRestoration: () => ({
-    ref: { current: null },
-    showBackToTop: false,
-    scrollToTop: jest.fn(),
-  }),
-}));
-
-jest.mock('@/frontend/components/shared/ScrollNavCluster', () => ({
+jest.mock('@/frontend/components/Waves/PlaygroundCanvas', () => ({
   __esModule: true,
-  default: () => null,
+  default: (props: unknown) => mockPlaygroundCanvas(props),
 }));
 
-jest.mock('@/frontend/components/Waves/WaveCanvas', () => ({
+jest.mock('@/frontend/components/Waves/DayView', () => ({
   __esModule: true,
-  default: (props: unknown) => mockWaveCanvas(props),
+  default: () => <div data-testid="day-view" />,
 }));
 
 import WavesManager from '@/frontend/components/Waves';
 
 describe('Waves full-page layout (#325)', () => {
   beforeEach(() => {
-    mockList.mockReset();
-    mockWaveCanvas.mockClear();
+    mockLoad.mockReset();
+    mockPlaygroundCanvas.mockClear();
   });
 
-  it('lets the selected WaveCanvas fill the constrained manager height', async () => {
-    mockList.mockResolvedValue({
+  it('lets the unified Playground canvas fill the constrained manager height', async () => {
+    const response = {
       paused: false,
-      orphans: [],
+      generatedAt: '2026-08-14T12:00:00.000Z',
+      packages: [],
+      flows: [
+        {
+          flow: { id: 'flow-1', name: 'Morning digest', nodes: [], edges: [] },
+          packageNames: [],
+          executionIds: ['trigger-1'],
+          waveIds: ['wave-1'],
+          componentIds: ['component-1'],
+        },
+      ],
+      executions: [],
+      relations: [],
       waves: [
         {
           id: 'wave-1',
           rootExecutionIds: ['trigger-1'],
+          executionIds: ['trigger-1'],
+          flowIds: ['flow-1'],
+          relationIds: [],
           hasCycle: false,
-          nodes: [
-            {
-              executionId: 'trigger-1',
-              name: 'Morning digest',
-              timing: { mode: 'event' },
-            },
-          ],
         },
       ],
-    });
+      components: [],
+      orphanExecutionIds: [],
+    };
+    mockLoad.mockResolvedValue(response);
 
     render(
       <WavesManager
@@ -64,8 +66,13 @@ describe('Waves full-page layout (#325)', () => {
       />,
     );
 
-    expect(await screen.findByTestId('wave-canvas')).toBeInTheDocument();
-    const lastCanvasCall = mockWaveCanvas.mock.calls[mockWaveCanvas.mock.calls.length - 1];
-    expect(lastCanvasCall?.[0]).toEqual(expect.objectContaining({ height: '100%' }));
+    expect(await screen.findByTestId('playground-canvas')).toBeInTheDocument();
+    expect(screen.getByTestId('waves-playground')).toBeInTheDocument();
+    const lastCanvasCall = mockPlaygroundCanvas.mock.calls[mockPlaygroundCanvas.mock.calls.length - 1];
+    expect(lastCanvasCall?.[0]).toEqual(expect.objectContaining({
+      data: response,
+      mode: 'simple',
+      activeWaveId: null,
+    }));
   });
 });

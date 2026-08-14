@@ -10,6 +10,7 @@ import {
   BehaviorBindingSchema,
   BehaviorRevisionSchema,
   CreatePersonaInputSchema,
+  DEFAULT_PERSONA_NATIVE_ABILITY_IDS,
   ENDURING_AGENT_SCHEMA_VERSION,
   MemoryItemSchema,
   PERSONA_SCHEMA_VERSION,
@@ -20,6 +21,7 @@ import {
   type CreatePersonaInput,
   type MemoryItem,
   type Persona,
+  type PersonaPresentation,
   type RoleVersion,
 } from '@/shared/types/enduringAgent';
 import { createLogger } from '@/utils/logger';
@@ -49,11 +51,14 @@ import {
   createMemoryItem,
   createPersona,
   createPersonaAppGrant,
+  getBehaviorRevision,
   getMemoryItem,
   getPersona,
   getPersonaDeletionTombstone,
   getRoleVersion,
+  listBehaviorBindings,
   listPersonaBundle,
+  listPersonasStrict,
   updatePersonaWithinRuntimeLock,
   type PersonaBundle,
 } from './store';
@@ -82,6 +87,22 @@ function sha256(value: unknown): string {
   return createHash('sha256').update(canonicalJson(value)).digest('hex');
 }
 
+function withDefaultPersonaAbilities(source: Flow): Flow {
+  const flow = structuredClone(source);
+  for (const node of flow.nodes) {
+    if (node.type !== 'process') continue;
+    const data = node.data as typeof node.data & {
+      properties?: Record<string, unknown> & { personaTools?: unknown };
+    };
+    const properties = data.properties ?? {};
+    if (properties.personaTools === undefined) {
+      properties.personaTools = [...DEFAULT_PERSONA_NATIVE_ABILITY_IDS];
+    }
+    data.properties = properties;
+  }
+  return flow;
+}
+
 function resolvePersonaId(input: CreatePersonaInput): string {
   if (input.id) return input.id;
   if (input.idempotencyKey) {
@@ -103,10 +124,24 @@ async function resolveRoleVersion(roleVersionId?: string): Promise<RoleVersion> 
   return selected;
 }
 
+function editablePersonaPresentation(
+  presentation: PersonaPresentation | undefined,
+): Pick<PersonaPresentation, 'avatarUrl' | 'language'> | undefined {
+  if (!presentation) return undefined;
+  const editable = {
+    ...(presentation.avatarUrl ? { avatarUrl: presentation.avatarUrl } : {}),
+    ...(presentation.language ? { language: presentation.language } : {}),
+  };
+  return Object.keys(editable).length > 0 ? editable : undefined;
+}
+
 function effectiveFactoryRequest(
   input: CreatePersonaInput,
   roleVersion: RoleVersion,
 ): Record<string, unknown> {
+  const presentation = editablePersonaPresentation(
+    input.presentation ?? roleVersion.defaults?.presentation,
+  );
   return {
     name: input.name,
     coreFlowRef: input.coreFlowRef ?? null,
@@ -116,8 +151,11 @@ function effectiveFactoryRequest(
       ? { behaviorFlowRefs: input.behaviorFlowRefs }
       : {}),
     mission: input.mission ?? roleVersion.mission,
-    presentation: input.presentation ?? roleVersion.defaults?.presentation ?? null,
-    autonomyLevel: input.autonomyLevel ?? roleVersion.defaults?.autonomyLevel ?? 'locked',
+    presentation: presentation ?? null,
+    // New Personas safely learn by default: memory remains reviewable and
+    // Behavior changes still require the owner unless the Role says otherwise.
+    autonomyLevel:
+      input.autonomyLevel ?? roleVersion.defaults?.autonomyLevel ?? 'propose_overrides',
     interruptionPolicy:
       input.interruptionPolicy ?? roleVersion.defaults?.interruptionPolicy ?? 'queue',
     initialMemories: input.initialMemories ?? [],
@@ -429,7 +467,7 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
 
     const defaultModelId = await resolveDefaultModelId(roleVersion, coreTemplate as Flow);
     const preparedCore = await requireRunnableGeneratedFlow(
-      bindDefaultModelToFlow(coreTemplate as Flow, defaultModelId),
+      bindDefaultModelToFlow(withDefaultPersonaAbilities(coreTemplate as Flow), defaultModelId),
       'Core Flow',
     );
     const preparedRoleFlows = await Promise.all(roleVersion.behaviorSlots.map(
@@ -456,6 +494,9 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
       assertRetryMatches(persona, personaId, requestHash, effectiveRequest);
     } else {
       const now = Date.now();
+      const presentation = editablePersonaPresentation(
+        input.presentation ?? roleVersion.defaults?.presentation,
+      );
       persona = PersonaSchema.parse({
         schemaVersion: PERSONA_SCHEMA_VERSION,
         id: personaId,
@@ -463,11 +504,11 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
         roleVersionId: roleVersion.id,
         lifecycleState: 'disabled',
         mission: input.mission ?? roleVersion.mission,
-        ...(input.presentation ?? roleVersion.defaults?.presentation
-          ? { presentation: input.presentation ?? roleVersion.defaults?.presentation }
-          : {}),
+        ...(presentation ? { presentation } : {}),
         autonomyLevel:
-          input.autonomyLevel ?? roleVersion.defaults?.autonomyLevel ?? 'locked',
+          input.autonomyLevel
+          ?? roleVersion.defaults?.autonomyLevel
+          ?? 'propose_overrides',
         interruptionPolicy:
           input.interruptionPolicy ?? roleVersion.defaults?.interruptionPolicy ?? 'queue',
         coreMemoryItemIds: [],
@@ -601,4 +642,151 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
     if (!bundle) throw new Error(`Persona ${JSON.stringify(persona.id)} vanished after creation.`);
     return bundle;
   });
+}
+
+/**
+ * Materialize Role slots introduced by a record migration for already-existing
+ * Personas without changing their immutable RoleVersion pin.
+ */
+export async function reconcilePersonaRoleBehaviors(personaId?: string): Promise<void> {
+  const personas = personaId
+    ? [await getPersona(personaId)].filter((persona): persona is Persona => persona !== null)
+    : await listPersonasStrict();
+
+  for (const candidate of personas) {
+    if (candidate.provisioningState !== 'ready') continue;
+    try {
+      await withPersonaRuntimeLock(candidate.id, async (lock) => {
+        if (await getPersonaDeletionTombstone(candidate.id)) return;
+        const bundle = await listPersonaBundle(candidate.id);
+        if (!bundle) return;
+
+        const roleVersion = bundle.roleVersion;
+        const inheritedRoleVersionIds = new Set(bundle.behaviorRevisions.flatMap((revision) => (
+          revision.source.kind === 'role_template'
+            ? [revision.source.roleVersionId]
+            : []
+        )));
+        if (
+          inheritedRoleVersionIds.size > 0
+          && !inheritedRoleVersionIds.has(roleVersion.id)
+        ) {
+          // A post-create Role choice intentionally changes only the frame for
+          // future Activities. Existing Behavior choices are user-owned; adding
+          // the new Role's defaults here would silently change that selection.
+          return;
+        }
+        const existingBindings = new Map(
+          bundle.behaviorBindings.map((binding) => [binding.slotKey, binding]),
+        );
+        const missingSlots = roleVersion.behaviorSlots.filter(
+          (slot) => !existingBindings.has(slot.key),
+        );
+        const configuredRefs = new Set(
+          bundle.persona.composition?.behaviors?.map((behavior) => behavior.ref) ?? [],
+        );
+        const missingConfiguredSlots = bundle.persona.composition?.behaviors
+          ? roleVersion.behaviorSlots.filter((slot) => {
+              const binding = existingBindings.get(slot.key);
+              return binding && !configuredRefs.has(binding.id);
+            })
+          : [];
+        if (missingSlots.length === 0 && missingConfiguredSlots.length === 0) return;
+
+        const inheritedModelId = roleVersion.defaultModelId
+          ?? bundle.behaviorRevisions.map((revision) => firstBoundModel(revision.flowSnapshot))
+            .find((modelId): modelId is string => Boolean(modelId));
+        const configuredModels = inheritedModelId ? [] : await modelService.loadModels();
+        const defaultModelId = inheritedModelId
+          ?? (configuredModels.length === 1 ? configuredModels[0].id : undefined);
+        const preparedMissingFlows = await Promise.all(missingSlots.map((slot) => (
+          requireRunnableGeneratedFlow(
+            bindDefaultModelToFlow(slot.flowTemplate as Flow, defaultModelId),
+            `Required Behavior ${JSON.stringify(slot.key)}`,
+          )
+        )));
+
+        for (const [index, slot] of missingSlots.entries()) {
+          await materializeBehavior(
+            bundle.persona,
+            roleVersion,
+            slot,
+            preparedMissingFlows[index],
+          );
+        }
+
+        const refreshedBindings = new Map(
+          (await listBehaviorBindings(candidate.id)).map((binding) => [binding.slotKey, binding]),
+        );
+        const personaFlows = new Map<string, Flow>();
+        for (const slot of roleVersion.behaviorSlots) {
+          const binding = refreshedBindings.get(slot.key);
+          if (!binding) continue;
+          const revision = await getBehaviorRevision(binding.activeRevisionId);
+          if (!revision) {
+            throw new PersonaFactoryConflictError(
+              `Required Behavior ${JSON.stringify(slot.key)} has no active revision.`,
+            );
+          }
+          personaFlows.set(slot.key, await savePersonaOwnedFlow({
+            persona: bundle.persona,
+            source: revision.flowSnapshot,
+            id: stableEnduringAgentId('personaflow', {
+              personaId: candidate.id,
+              behaviorId: binding.id,
+            }),
+            name: `${candidate.name} ${slot.name}`,
+            sourceFlowId: slot.flowTemplate.id,
+            kind: 'role_behavior',
+          }));
+        }
+
+        const current = await getPersona(candidate.id);
+        const configured = current?.composition?.behaviors;
+        if (!current || !configured) return;
+        const currentConfiguredRefs = new Set(configured.map((behavior) => behavior.ref));
+        const missingComposition = roleVersion.behaviorSlots.flatMap((slot) => {
+          const binding = refreshedBindings.get(slot.key);
+          const flow = personaFlows.get(slot.key);
+          if (!binding || !flow || currentConfiguredRefs.has(binding.id)) return [];
+          return [{
+            ref: binding.id,
+            slotKey: slot.key,
+            name: slot.name,
+            ...(slot.description ? { description: slot.description } : {}),
+            order: 0,
+            binding: {
+              mode: 'persona_copy' as const,
+              personaFlowRef: flow.id,
+            },
+          }];
+        });
+        if (missingComposition.length === 0) return;
+
+        const nextOrder = configured.reduce(
+          (maximum, behavior) => Math.max(maximum, behavior.order ?? -1),
+          -1,
+        ) + 1;
+        await updatePersonaWithinRuntimeLock(PersonaSchema.parse({
+          ...current,
+          composition: {
+            ...current.composition,
+            behaviors: [
+              ...configured,
+              ...missingComposition.map((behavior, index) => ({
+                ...behavior,
+                order: nextOrder + index,
+              })),
+            ],
+          },
+          updatedAt: Math.max(Date.now(), current.updatedAt + 1),
+        }), lock);
+      });
+    } catch (error) {
+      log.warn('Persona required-Behavior reconciliation failed', {
+        personaId: candidate.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 }

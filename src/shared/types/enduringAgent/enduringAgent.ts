@@ -3,7 +3,7 @@ import type { Flow } from '@/shared/types/flow';
 export const ENDURING_AGENT_SCHEMA_VERSION = 1 as const;
 /** Affected product records advance independently from durable runtime records. */
 export const ROLE_DEFINITION_SCHEMA_VERSION = 2 as const;
-export const ROLE_VERSION_SCHEMA_VERSION = 2 as const;
+export const ROLE_VERSION_SCHEMA_VERSION = 3 as const;
 export const PERSONA_SCHEMA_VERSION = 2 as const;
 export const PERSONA_CREATION_DRAFT_SCHEMA_VERSION = 1 as const;
 export const BEHAVIOR_REVISION_SCHEMA_VERSION = 2 as const;
@@ -101,6 +101,12 @@ export interface PublicRoleSuggestedApp extends RoleSuggestedAppReference {
   status: RoleSuggestedAppStatus;
 }
 
+export interface PublicRoleBehavior {
+  key: string;
+  name: string;
+  description?: string;
+}
+
 export interface CreatePublicRoleInput {
   id?: string;
   name: string;
@@ -138,6 +144,7 @@ export interface PublicRole {
   name: string;
   prompt: string;
   suggestedApps: PublicRoleSuggestedApp[];
+  behaviors: PublicRoleBehavior[];
   archived: boolean;
   currentVersionId: string;
   createdAt: number;
@@ -151,6 +158,7 @@ export interface PublicRoleVersion {
   name: string;
   prompt: string;
   suggestedApps: PublicRoleSuggestedApp[];
+  behaviors: PublicRoleBehavior[];
   createdAt: number;
   current: boolean;
 }
@@ -274,7 +282,7 @@ export interface CreatePersonaInput {
   /** Existing workspace Flows selected as optional callable Behaviors, in display order. */
   behaviorFlowRefs?: string[];
   mission?: string;
-  presentation?: PersonaPresentation;
+  presentation?: Pick<PersonaPresentation, 'avatarUrl' | 'language'>;
   autonomyLevel?: PersonaAutonomyLevel;
   interruptionPolicy?: PersonaInterruptionPolicy;
   /** Makes retries deterministic; it is hashed before persistence. */
@@ -328,10 +336,11 @@ export interface DeletePersonaCreationDraftInput {
 /** User-editable Persona settings. Runtime-owned identity and timestamps stay immutable. */
 export interface UpdatePersonaInput {
   name?: string;
+  /** Selects the immutable Role version used to frame future Activities. */
+  roleVersionId?: string;
   mission?: string | null;
   presentation?: {
     avatarUrl?: string | null;
-    voice?: string | null;
     language?: string | null;
   };
   autonomyLevel?: PersonaAutonomyLevel;
@@ -465,10 +474,7 @@ export interface UpdatePersonaBehaviorComposition {
 export interface UpdatePersonaCompositionInput {
   expectedUpdatedAt: number;
   name?: string;
-  description?: string | null;
-  role?: PersonaRoleComposition;
   coreFlowRef?: string | null;
-  appRefs?: string[];
   memoryRefs?: string[];
   behaviors?: UpdatePersonaBehaviorComposition[];
 }
@@ -789,6 +795,9 @@ export interface PersonaTaskSummary {
   deadline?: number;
   blockerTitles: string[];
   completedAt?: number;
+  /** Bounded, user-facing result from the Task's latest Activity. */
+  resultSummary?: string;
+  recordLinks?: PersonaPresentationRecordLink[];
   expectedUpdatedAt: number;
 }
 
@@ -800,6 +809,8 @@ export interface PersonaHistoryEntry {
   outcome: PersonaPresentationOutcome;
   occurredAt: number;
   summary: string;
+  /** Bounded, user-facing result; raw execution envelopes remain private. */
+  resultSummary?: string;
   recordLinks: PersonaPresentationRecordLink[];
   /** Safe diagnostics only. Control-plane ids, tokens, payloads, and errors are excluded. */
   advanced: {

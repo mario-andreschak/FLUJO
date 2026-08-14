@@ -1,46 +1,269 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
-jest.mock('@xyflow/react', () => ({
-  ReactFlowProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  ReactFlow: ({ children }: { children: React.ReactNode }) => (
-    <div data-testid="rf__wrapper">{children}</div>
-  ),
-  Background: () => <div data-testid="rf__background" />,
-  BackgroundVariant: { Dots: 'dots' },
-  Controls: () => <div data-testid="rf__controls" />,
-  Handle: () => null,
-  Position: { Left: 'left', Right: 'right' },
-  useNodesState: (nodes: unknown[]) => [nodes, jest.fn(), jest.fn()],
-  useEdgesState: (edges: unknown[]) => [edges, jest.fn(), jest.fn()],
+const mockGetConversation = jest.fn();
+
+jest.mock('@/frontend/services/chat', () => ({
+  chatService: {
+    getConversation: (...args: unknown[]) => mockGetConversation(...args),
+  },
+}));
+
+jest.mock('@/frontend/components/Chat/ChatMarkdown', () => ({
+  ChatMarkdownContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
 jest.mock('@/frontend/contexts/I18nContext', () => ({
   useI18n: () => ({
-    t: (key: string) =>
-      key === 'chainChat.canvasLabel' ? 'Conversation chain graph' : key,
+    t: (key: string, values?: Record<string, unknown>) => {
+      const title = String(values?.title ?? '');
+      const labels: Record<string, string> = {
+        'chainChat.treeLabel': 'Conversation family',
+        'chainChat.rootNode': 'Root',
+        'chainChat.rootConversation': 'Main conversation',
+        'chainChat.subflowNode': 'Subflow',
+        'chainChat.latestMessage': 'Latest message',
+        'chainChat.roleUser': 'You',
+        'chainChat.roleAssistant': 'Assistant',
+        'chainChat.roleTool': 'Tool',
+        'chainChat.expandHint': 'Expand',
+        'chainChat.statusRunning': 'Running',
+        'chainChat.statusCompleted': 'Completed',
+        'chainChat.statusUnknown': 'Unknown',
+        'chainChat.openConversation': `Open conversation: ${title}`,
+        'chainChat.expandConversation': `Expand conversation: ${title}`,
+        'chainChat.transcriptLabel': `Conversation transcript: ${title}`,
+        'chainChat.inlineConversation': 'Inline conversation',
+        'chainChat.loadingConversation': 'Loading conversation',
+        'chainChat.closeTranscript': 'Close transcript',
+        'chainChat.openFullChat': 'Open full chat',
+        'chainChat.toolCall': 'Tool call',
+        'chainChat.toolResult': 'Tool result',
+        'chainChat.toolActivity': 'Tool result ready',
+        'chainChat.detachedNotice': 'Some conversations are detached',
+      };
+      if (key === 'chainChat.messageCount') return `${values?.count ?? 0} messages`;
+      return labels[key] ?? key;
+    },
+    formatDate: () => '10:00',
   }),
 }));
 
-import ChainGraphCanvas, {
-  DEFAULT_CHAIN_GRAPH_HEIGHT,
-} from '@/frontend/components/ConversationChainGraph/ChainGraphCanvas';
+import ChainFlowTree from '@/frontend/components/ConversationChainGraph/ChainFlowTree';
+import { buildInlineTranscript } from '@/frontend/components/ConversationChainGraph/ChainTranscriptPopover';
+import type { ConversationChainNode } from '@/shared/types/conversationChain';
 
-describe('ChainGraphCanvas', () => {
-  it('gives React Flow a definite default height', () => {
-    render(<ChainGraphCanvas nodes={[]} onOpenConversation={jest.fn()} />);
+const chainNode = (
+  id: string,
+  overrides: Partial<ConversationChainNode> = {},
+): ConversationChainNode => ({
+  id,
+  title: id,
+  status: 'completed',
+  active: false,
+  createdAt: 1,
+  updatedAt: 1,
+  parentConversationId: null,
+  rootConversationId: null,
+  lastMessage: { role: 'assistant', text: `Latest from ${id}`, timestamp: 1, truncated: false },
+  ...overrides,
+});
 
-    const canvas = screen.getByRole('application', { name: 'Conversation chain graph' });
-    expect(canvas).toHaveStyle({ height: DEFAULT_CHAIN_GRAPH_HEIGHT });
-    expect(canvas).not.toHaveStyle({ height: '100%' });
-    expect(screen.getByTestId('rf__wrapper')).toBeInTheDocument();
+const nodes = [
+  chainNode('root', { title: 'Root chat' }),
+  chainNode('child-a', {
+    title: 'Child A',
+    parentConversationId: 'root',
+    rootConversationId: 'root',
+  }),
+  chainNode('grandchild', {
+    title: 'Grandchild',
+    status: 'running',
+    active: true,
+    parentConversationId: 'child-a',
+    rootConversationId: 'root',
+  }),
+  chainNode('child-b', {
+    title: 'Child B',
+    parentConversationId: 'root',
+    rootConversationId: 'root',
+    lastMessage: {
+      role: 'tool',
+      text: 'read_file',
+      toolName: 'read_file',
+      toolKind: 'result',
+      timestamp: 2,
+      truncated: false,
+    },
+  }),
+];
+
+describe('semantic Chain Flow tree', () => {
+  const originalRequestAnimationFrame = window.requestAnimationFrame;
+  const originalCancelAnimationFrame = window.cancelAnimationFrame;
+  const originalRect = HTMLElement.prototype.getBoundingClientRect;
+
+  beforeAll(() => {
+    window.requestAnimationFrame = (callback: FrameRequestCallback) => (
+      window.setTimeout(() => callback(0), 0)
+    );
+    window.cancelAnimationFrame = (id: number) => window.clearTimeout(id);
+    HTMLElement.prototype.getBoundingClientRect = () => ({
+      x: 10,
+      y: 10,
+      top: 10,
+      left: 10,
+      right: 210,
+      bottom: 50,
+      width: 200,
+      height: 40,
+      toJSON: () => ({}),
+    });
   });
 
-  it('honors an explicit height supplied by an embedding view', () => {
-    render(<ChainGraphCanvas nodes={[]} onOpenConversation={jest.fn()} height={512} />);
+  afterAll(() => {
+    window.requestAnimationFrame = originalRequestAnimationFrame;
+    window.cancelAnimationFrame = originalCancelAnimationFrame;
+    HTMLElement.prototype.getBoundingClientRect = originalRect;
+  });
 
-    expect(screen.getByRole('application', { name: 'Conversation chain graph' })).toHaveStyle({
-      height: '512px',
+  beforeEach(() => {
+    mockGetConversation.mockReset();
+  });
+
+  it('renders a centered top-down semantic hierarchy instead of a canvas', () => {
+    const onOpenConversation = jest.fn();
+    const { container } = render(
+      <ChainFlowTree
+        rootId="root"
+        nodes={nodes}
+        onOpenConversation={onOpenConversation}
+        reducedMotion
+      />,
+    );
+
+    expect(screen.getByTestId('chain-flow-tree')).toHaveAttribute('data-layout', 'top-down');
+    expect(screen.getByRole('region', { name: 'Conversation family' })).toBeInTheDocument();
+    expect(container.querySelectorAll('[data-chain-id]')).toHaveLength(4);
+    const root = container.querySelector('[data-chain-id="root"]');
+    const childA = container.querySelector('[data-chain-id="child-a"]');
+    const grandchild = container.querySelector('[data-chain-id="grandchild"]');
+    expect(childA?.parentElement?.parentElement).toBe(root);
+    expect(grandchild?.parentElement?.parentElement).toBe(childA);
+    expect(root).toHaveAttribute('data-branch-active', 'true');
+    expect(container.querySelector('[data-chain-id="child-b"]')).toHaveAttribute('data-branch-active', 'false');
+    expect(screen.queryByRole('application')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open conversation: Child A' }));
+    expect(onOpenConversation).toHaveBeenCalledWith('child-a');
+  });
+
+  it('shows the latest message beside each node, including tool activity', () => {
+    render(
+      <ChainFlowTree rootId="root" nodes={nodes} onOpenConversation={jest.fn()} reducedMotion />,
+    );
+
+    expect(screen.getByTestId('chain-message-root')).toHaveTextContent('Latest from root');
+    expect(screen.getByTestId('chain-message-child-b')).toHaveTextContent('Tool');
+    expect(screen.getByTestId('chain-message-child-b')).toHaveTextContent('Tool result ready');
+  });
+
+  it('lazily loads, renders, closes, and caches an expanded inline transcript', async () => {
+    let resolveConversation!: (value: unknown) => void;
+    mockGetConversation.mockReturnValueOnce(new Promise((resolve) => {
+      resolveConversation = resolve;
+    }));
+    const onOpenConversation = jest.fn();
+    render(
+      <ChainFlowTree
+        rootId="root"
+        nodes={nodes}
+        onOpenConversation={onOpenConversation}
+        reducedMotion
+      />,
+    );
+
+    const preview = screen.getByRole('button', { name: 'Expand conversation: Root chat' });
+    expect(preview).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(preview);
+
+    expect(preview).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('dialog', { name: 'Conversation transcript: Root chat' })).toBeInTheDocument();
+    expect(screen.getByText('Loading conversation')).toBeInTheDocument();
+    expect(mockGetConversation).toHaveBeenCalledWith('root');
+
+    await act(async () => {
+      resolveConversation({
+        id: 'root',
+        title: 'Root chat',
+        flowId: null,
+        createdAt: 1,
+        updatedAt: 4,
+        messages: [
+          { id: 'u1', role: 'user', content: 'Please inspect this', timestamp: 1 },
+          {
+            id: 'a1',
+            role: 'assistant',
+            content: 'Checking now',
+            timestamp: 2,
+            tool_calls: [{ id: 'call-1', function: { name: 'read_file' } }],
+          },
+          { id: 't1', role: 'tool', tool_call_id: 'call-1', content: 'file contents', timestamp: 3 },
+          { id: 'a2', role: 'assistant', content: 'All done', timestamp: 4 },
+        ],
+      });
     });
+
+    expect(await screen.findByText('Please inspect this')).toBeInTheDocument();
+    expect(screen.getByText('Tool call · read file')).toBeInTheDocument();
+    expect(screen.getByText(/read file · Tool result/)).toBeInTheDocument();
+    expect(screen.getByText('All done')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close transcript' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(preview).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(preview);
+    expect(await screen.findByText('All done')).toBeInTheDocument();
+    expect(mockGetConversation).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open full chat' }));
+    expect(onOpenConversation).toHaveBeenCalledWith('root');
+  });
+
+  it('builds a compact transcript with user, assistant, tool-call, and tool-result steps', () => {
+    const steps = buildInlineTranscript([
+      { id: 'u', role: 'user', content: 'Question', timestamp: 1 },
+      {
+        id: 'a',
+        role: 'assistant',
+        content: 'Working',
+        timestamp: 2,
+        tool_calls: [{ id: 'call', function: { name: 'search_files' } }],
+      },
+      { id: 't', role: 'tool', tool_call_id: 'call', content: 'Result', timestamp: 3 },
+      { id: 'disabled', role: 'assistant', content: 'Hidden', timestamp: 4, disabled: true },
+    ] as any);
+
+    expect(steps).toEqual([
+      { id: 'u', role: 'user', text: 'Question', timestamp: 1 },
+      { id: 'a', role: 'assistant', text: 'Working', timestamp: 2 },
+      {
+        id: 'a-tool-call',
+        role: 'tool',
+        text: 'search_files',
+        timestamp: 2,
+        toolName: 'search_files',
+        toolKind: 'call',
+      },
+      {
+        id: 't',
+        role: 'tool',
+        text: 'Result',
+        timestamp: 3,
+        toolName: 'search_files',
+        toolKind: 'result',
+      },
+    ]);
   });
 });

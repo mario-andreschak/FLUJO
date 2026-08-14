@@ -38,8 +38,17 @@ export function getAppDir(): string {
  * relocate the complete workspace namespace (this is how the `npx flujo` and
  * Docker distributions keep writable data out of the read-only application
  * install, e.g. ~/.flujo or a mounted /app/data volume).
+ *
+ * FLUJO_PARENT_DATA_DIR is an internal process-boundary marker. Managed MCP
+ * children deliberately receive their selected workspace as FLUJO_DATA_DIR so
+ * standalone packages keep their existing contract. If one of those children
+ * launches FLUJO again, the marker lets this resolver recover the installation
+ * root instead of appending `workspaces/<workspace>` a second time. Operators
+ * should continue configuring FLUJO_DATA_DIR; a nonblank internal marker wins.
  */
 export function getDataDir(): string {
+  const parent = process.env.FLUJO_PARENT_DATA_DIR;
+  if (parent && parent.trim().length > 0) return path.resolve(parent);
   const custom = process.env.FLUJO_DATA_DIR;
   return custom && custom.trim().length > 0 ? path.resolve(custom) : getAppDir();
 }

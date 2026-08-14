@@ -121,6 +121,7 @@ function makeHarness(
     autoClaims?: boolean;
     heartbeatIntervalMs?: number;
     enableMemoryMaintenance?: boolean;
+    autonomyLevel?: Persona['autonomyLevel'];
   } = {},
 ): Harness {
   const personaId = 'persona_test';
@@ -166,7 +167,7 @@ function makeHarness(
     roleVersionId: 'role_version',
     mission: 'Represent the user with concise, evidence-backed updates.',
     lifecycleState: 'idle',
-    autonomyLevel: 'manual',
+    autonomyLevel: options.autonomyLevel ?? 'learn_hints',
     interruptionPolicy: 'queue',
     createdAt: 1,
     updatedAt: 1,
@@ -309,19 +310,24 @@ function makeHarness(
     const input = value as Record<string, unknown>;
     const now = Date.now();
     const status = (input.status ?? 'completed') as PersonaActivity['status'];
+    const claimedActivity = routedClaims.find(
+      (candidate) => candidate.activity.id === input.activityId,
+    )?.activity;
     return {
       activity: {
-        schemaVersion: 1,
-        id: String(input.activityId),
-        personaId,
-        kind: 'assignment',
+        ...(claimedActivity ?? {
+          schemaVersion: 1,
+          id: String(input.activityId),
+          personaId,
+          kind: 'assignment',
+          source: { kind: 'assignment' },
+          behaviorId: 'behavior_primary',
+          behaviorRevisionId: 'revision_pinned',
+          createdAt: now,
+        }),
         status,
-        source: { kind: 'assignment' },
-        behaviorId: 'behavior_primary',
-        behaviorRevisionId: 'revision_pinned',
         ...(input.outcomeRef ? { outcomeRef: input.outcomeRef } : {}),
         ...(input.error ? { error: input.error } : {}),
-        createdAt: now,
         updatedAt: now,
         completedAt: now,
       },
@@ -359,6 +365,8 @@ function makeHarness(
     async (value: unknown) => completePersonaActivity(value),
   );
   const observeCompletedPersonaActivity = jest.fn(async () => {});
+  const synchronizeAssignedWorkItemFromActivity = jest.fn(async () => null);
+  const synchronizeAssignedWorkItemFromActivityWithinRuntimeLock = jest.fn(async () => null);
   const updatePersonaActivityReferences = jest.fn(async (value: unknown) => {
     const input = value as Record<string, unknown>;
     const activity = routedClaims.find((candidate) => candidate.activity.id === input.activityId)?.activity;
@@ -446,6 +454,41 @@ function makeHarness(
     mailboxItems.set(rejected.id, rejected);
     return rejected;
   });
+  const reprioritizePersonaMailboxItemWithinRuntimeLock = jest.fn(async (value: unknown) => {
+    const input = value as Record<string, unknown>;
+    const item = mailboxItems.get(String(input.mailboxItemId));
+    if (!item) throw new Error('Mailbox item was not found.');
+    if (item.status !== 'queued' || item.priority === input.priority) {
+      return { item, changed: false };
+    }
+    const updated = {
+      ...item,
+      priority: input.priority as PersonaMailboxItem['priority'],
+      updatedAt: Math.max(Date.now(), item.updatedAt + 1),
+    };
+    mailboxItems.set(updated.id, updated);
+    return { item: updated, changed: true };
+  });
+  const movePersonaMailboxItemWithinRuntimeLock = jest.fn(async (value: unknown) => {
+    const input = value as Record<string, unknown>;
+    const target = mailboxItems.get(String(input.mailboxItemId));
+    if (!target) throw new Error('Mailbox item was not found.');
+    const neighbors = [...mailboxItems.values()]
+      .filter((item) => (
+        item.id !== target.id
+        && item.status === 'queued'
+        && item.kind === 'assignment'
+        && item.priority === target.priority
+      ))
+      .sort((left, right) => left.sequence - right.sequence);
+    const neighbor = input.direction === 'earlier'
+      ? [...neighbors].reverse().find((item) => item.sequence < target.sequence)
+      : neighbors.find((item) => item.sequence > target.sequence);
+    if (!neighbor) return { item: target, moved: false };
+    mailboxItems.set(target.id, { ...target, sequence: neighbor.sequence });
+    mailboxItems.set(neighbor.id, { ...neighbor, sequence: target.sequence });
+    return { item: mailboxItems.get(target.id)!, moved: true };
+  });
   const yieldPersonaActivityForInterruption = jest.fn(async (value: unknown) => {
     const fence = value as Record<string, unknown>;
     return routedClaims.find((candidate) => candidate.activity.id === fence.activityId)?.lease
@@ -488,12 +531,16 @@ function makeHarness(
     completePersonaActivity,
     completePersonaActivityWithinRuntimeLock,
     observeCompletedPersonaActivity,
+    synchronizeAssignedWorkItemFromActivity,
+    synchronizeAssignedWorkItemFromActivityWithinRuntimeLock,
     updatePersonaActivityReferences,
     persistPersonaActivitySnapshot,
     listPendingPersonaActivityDeliveries,
     acknowledgePersonaActivityDelivery,
     rejectPersonaActivityDelivery,
     cancelPersonaMailboxItem,
+    reprioritizePersonaMailboxItemWithinRuntimeLock,
+    movePersonaMailboxItemWithinRuntimeLock,
     yieldPersonaActivityForInterruption,
     yieldPersonaActivityForInterruptionWithinRuntimeLock,
     observeYieldedPersonaActivity,
@@ -586,6 +633,8 @@ describe('Persona Flow dispatcher', () => {
 
   it('runs the Activity-pinned immutable snapshot and stamps only safe attribution', async () => {
     const harness = makeHarness(workspace('snapshot'));
+    (harness.dependencies.snapshotPersonaCoreAppRefs as jest.Mock)
+      .mockResolvedValueOnce(['personal-computer']);
     const submission = await harness.dispatcher.submit(
       dispatchInput('persona_test', 'immutable-snapshot'),
       { waitForCompletion: true, timeoutMs: 2_000 },
@@ -598,6 +647,7 @@ describe('Persona Flow dispatcher', () => {
     expect(runInput.flowDefinition).toEqual(harness.snapshot);
     expect(runInput.flowDefinition).not.toBe(harness.snapshot);
     expect(runInput).not.toHaveProperty('flowId');
+    expect(runInput.personaCoreAppRefs).toEqual(['personal-computer']);
     expect(runInput.personaAttribution).toEqual({
       personaId: 'persona_test',
       activityId: submission.dispatch.activityId,
@@ -632,6 +682,12 @@ describe('Persona Flow dispatcher', () => {
       status: 'completed',
       outcomeRef: submission.dispatch.id,
     }));
+    expect(
+      harness.dependencies.synchronizeAssignedWorkItemFromActivityWithinRuntimeLock,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'completed' }),
+      expect.anything(),
+    );
 
     const persisted = JSON.stringify(submission.dispatch);
     expect(persisted).not.toContain('holder_secret');
@@ -649,6 +705,28 @@ describe('Persona Flow dispatcher', () => {
 
     expect(submission.dispatch.state).toBe('completed');
     expect(harness.dependencies.runFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it('synchronizes a failed assignment before exposing the terminal dispatch', async () => {
+    const harness = makeHarness(workspace('task-failure-sync'));
+    (harness.dependencies.runFlow as jest.Mock).mockImplementation(async (input: FlowRunInput) => ({
+      ...successfulResult(input),
+      status: 'error',
+      error: { message: 'The assigned work failed.', statusCode: 500 },
+    }));
+
+    const submission = await harness.dispatcher.submit(
+      dispatchInput('persona_test', 'task-failure-sync'),
+      { waitForCompletion: true, timeoutMs: 2_000 },
+    );
+
+    expect(submission.dispatch.state).toBe('error');
+    expect(
+      harness.dependencies.synchronizeAssignedWorkItemFromActivityWithinRuntimeLock,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'error' }),
+      expect.anything(),
+    );
   });
 
   it('runs one restricted memory-maintenance Activity after an authored Activity completes', async () => {
@@ -685,6 +763,23 @@ describe('Persona Flow dispatcher', () => {
     expect(records.filter((record) => record.admission.kind === 'maintenance')).toHaveLength(1);
   });
 
+  it('does not learn automatically when the Persona learning control is off', async () => {
+    const harness = makeHarness(workspace('memory-maintenance-off'), {
+      enableMemoryMaintenance: true,
+      autonomyLevel: 'locked',
+    });
+    const submission = await harness.dispatcher.submit(
+      dispatchInput('persona_test', 'memory-maintenance-off'),
+      { waitForCompletion: true, timeoutMs: 2_000 },
+    );
+
+    expect(submission.dispatch).toMatchObject({ state: 'completed', memoryCandidateLimit: 3 });
+    expect(harness.dependencies.runFlow).toHaveBeenCalledTimes(1);
+    expect((await harness.dispatcher.list('persona_test')).filter(
+      (record) => record.admission.kind === 'maintenance',
+    )).toHaveLength(0);
+  });
+
   it('can persist and route without starting the pump', async () => {
     const harness = makeHarness(workspace('deferred-pump'));
     const submission = await harness.dispatcher.submit(
@@ -699,6 +794,87 @@ describe('Persona Flow dispatcher', () => {
     await harness.dispatcher.pump('persona_test');
     expect((await harness.dispatcher.get(submission.dispatch.id))?.state).toBe('completed');
     expect(harness.dependencies.runFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels queued work by its Persona-scoped dispatch id before Activity attribution', async () => {
+    const harness = makeHarness(workspace('queued-cancel-by-id'));
+    const submission = await harness.dispatcher.submit(
+      dispatchInput('persona_test', 'queued-cancel-by-id'),
+      { startPump: false },
+    );
+
+    expect(submission.dispatch).toMatchObject({ state: 'queued' });
+    expect(submission.dispatch.activityId).toBeUndefined();
+
+    const cancelled = await harness.dispatcher.cancelById({
+      personaId: 'persona_test',
+      dispatchId: submission.dispatch.id,
+      reason: 'Task stopped before it started.',
+    }, { waitForCompletion: true, timeoutMs: 2_000 });
+
+    expect(cancelled).toMatchObject({
+      state: 'cancelled',
+      cancellationReason: 'Task stopped before it started.',
+    });
+    expect(harness.dependencies.runFlow).not.toHaveBeenCalled();
+    expect(harness.dependencies.completePersonaActivityWithinRuntimeLock)
+      .toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'cancelled' }),
+        expect.anything(),
+      );
+  });
+
+  it('updates both durable dispatch and mailbox priority while Task work is queued', async () => {
+    const harness = makeHarness(workspace('queued-reprioritize'));
+    const submission = await harness.dispatcher.submit(
+      dispatchInput('persona_test', 'queued-reprioritize'),
+      { startPump: false },
+    );
+
+    const updated = await harness.dispatcher.reprioritizeWorkItem({
+      personaId: 'persona_test',
+      workItemId: 'source-queued-reprioritize',
+      priority: 'urgent',
+    });
+
+    expect(updated).toHaveLength(1);
+    expect(updated[0].admission.priority).toBe('urgent');
+    expect(harness.mailboxItems.get(submission.dispatch.mailboxItemId!)?.priority).toBe('urgent');
+    expect(harness.dependencies.reprioritizePersonaMailboxItemWithinRuntimeLock)
+      .toHaveBeenCalledWith({
+        personaId: 'persona_test',
+        mailboxItemId: submission.dispatch.mailboxItemId,
+        priority: 'urgent',
+      }, expect.anything());
+  });
+
+  it('moves queued Task dispatches within a same-priority mailbox bucket', async () => {
+    const harness = makeHarness(workspace('queued-move'));
+    const first = await harness.dispatcher.submit(
+      dispatchInput('persona_test', 'queued-move-first'),
+      { startPump: false },
+    );
+    const second = await harness.dispatcher.submit(
+      dispatchInput('persona_test', 'queued-move-second'),
+      { startPump: false },
+    );
+    const third = await harness.dispatcher.submit(
+      dispatchInput('persona_test', 'queued-move-third'),
+      { startPump: false },
+    );
+
+    const result = await harness.dispatcher.moveWorkItem({
+      personaId: 'persona_test',
+      workItemId: 'source-queued-move-third',
+      direction: 'earlier',
+    });
+
+    expect(result).toEqual({ found: true, moved: true });
+    expect(harness.mailboxItems.get(first.dispatch.mailboxItemId!)?.sequence).toBe(1);
+    expect(harness.mailboxItems.get(third.dispatch.mailboxItemId!)?.sequence).toBe(2);
+    expect(harness.mailboxItems.get(second.dispatch.mailboxItemId!)?.sequence).toBe(3);
+    expect(new Set([...harness.mailboxItems.values()].map((item) => item.sequence)).size)
+      .toBe(harness.mailboxItems.size);
   });
 
   it('renews while running, aborts on lease loss, and never completes with a stale fence', async () => {
@@ -955,6 +1131,12 @@ describe('Persona Flow dispatcher', () => {
       activityId: waiting.activityId,
       status: 'cancelled',
     }));
+    expect(
+      harness.dependencies.synchronizeAssignedWorkItemFromActivityWithinRuntimeLock,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({ id: waiting.activityId, status: 'cancelled' }),
+      expect.anything(),
+    );
 
     const later = await harness.dispatcher.submit(
       dispatchInput('persona_test', 'after-scoped-cancel'),
@@ -1689,6 +1871,9 @@ describe('Persona Flow dispatcher', () => {
     expect(harness.dependencies.completePersonaActivity).toHaveBeenCalledWith(expect.objectContaining({
       status: 'error',
     }));
+    expect(harness.dependencies.synchronizeAssignedWorkItemFromActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ id: expect.any(String), status: 'error' }),
+    );
     expect(harness.dependencies.runFlow).not.toHaveBeenCalled();
   });
 });

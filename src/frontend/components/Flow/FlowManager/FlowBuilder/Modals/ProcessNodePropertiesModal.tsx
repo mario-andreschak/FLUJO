@@ -39,6 +39,10 @@ import AgentTools from './ProcessNodePropertiesModal/ServerTools/AgentTools'; //
 import PromptTemplateEditor from './ProcessNodePropertiesModal/PromptTemplateEditor'; // Adjusted path
 import PromptIOControls from './ProcessNodePropertiesModal/PromptIOControls';
 import NodeProperties from './ProcessNodePropertiesModal/NodeProperties'; // Adjusted path
+import PersonaAbilities, {
+  normalizePersonaAbilities,
+  type PersonaAbilityId,
+} from './ProcessNodePropertiesModal/PersonaAbilities';
 import CaptureFields from './shared/CaptureFields';
 import { parseKvRef, buildKvRef, KvRefScope } from '@/utils/shared/resolveKvRefs';
 import { getNodeProperties } from './ProcessNodePropertiesModal/utils'; // Adjusted path
@@ -130,6 +134,7 @@ export const ProcessNodePropertiesModal = ({
   const [outputMode, setOutputMode] = useState<'full-conversation' | 'latest-message'>('full-conversation');
   // Issue #259: opt in to the synthetic `todo` tool for this node.
   const [enableTodoTool, setEnableTodoTool] = useState(false);
+  const [personaAbilities, setPersonaAbilities] = useState<PersonaAbilityId[]>([]);
   // Data-flow capture editors (issue #203, Phase 3 of #186). captureKv is split
   // into scope + key for editing and recombined via buildKvRef on save.
   const [captureVariable, setCaptureVariable] = useState('');
@@ -380,6 +385,7 @@ export const ProcessNodePropertiesModal = ({
       setAllowCallerPrompt(node.data.properties?.allowCallerPrompt !== false);
       setOutputMode(node.data.properties?.outputMode || 'full-conversation');
       setEnableTodoTool(node.data.properties?.enableTodoTool || false);
+      setPersonaAbilities(normalizePersonaAbilities(node.data.properties?.personaTools));
 
       // Data-flow capture (issue #203). parseKvRef('') → { scope:'folder', key:'' }.
       setCaptureVariable(node.data.properties?.captureVariable || '');
@@ -581,6 +587,11 @@ export const ProcessNodePropertiesModal = ({
         const ckv = buildKvRef(captureKvScope, captureKvKey);
         if (ckv) properties.captureKv = ckv; else delete properties.captureKv;
       }
+
+      // Persona abilities are available in both Guided and Advanced authoring.
+      // An explicit empty list means “Off”; missing is reserved for legacy
+      // Flows so Persona creation can apply safe defaults exactly once.
+      properties.personaTools = [...personaAbilities];
 
       onSave(node.id, { ...nodeData, properties });
       onClose();
@@ -813,6 +824,7 @@ export const ProcessNodePropertiesModal = ({
               resizable tools/editor panes on larger screens. */}
           <Box ref={taskRef} data-section="task" sx={sectionSx}>
             <Typography variant="h6" sx={{ mb: 2 }}>{t('flows.process.task')}</Typography>
+            <PersonaAbilities value={personaAbilities} onChange={setPersonaAbilities} />
             <Box
               ref={taskSplitContainerRef}
               data-testid="process-task-split-container"

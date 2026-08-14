@@ -131,6 +131,93 @@ describe('metadata-only statistics store', () => {
     ]));
   });
 
+  it('keeps a queued append bound to the data root resolved at enqueue time', async () => {
+    const originalDataDir = process.env.FLUJO_DATA_DIR;
+    const firstRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-statistics-root-a-'));
+    const secondRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-statistics-root-b-'));
+    _setStatisticsDirForTests(undefined);
+
+    try {
+      process.env.FLUJO_DATA_DIR = firstRoot;
+      const pending = appendStatisticsEvent(runStarted('enqueue-root'));
+
+      // The append operation runs in a promise continuation. Simulate Jest or
+      // runtime teardown restoring the inherited root before that continuation.
+      process.env.FLUJO_DATA_DIR = secondRoot;
+      await pending;
+
+      const relativeFile = path.join(
+        'workspaces',
+        'default-workspace',
+        'db',
+        'statistics',
+        '2026-07-30.jsonl',
+      );
+      await expect(fs.readFile(path.join(firstRoot, relativeFile), 'utf8'))
+        .resolves.toContain('enqueue-root');
+      await expect(fs.stat(path.join(secondRoot, relativeFile))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    } finally {
+      process.env.FLUJO_DATA_DIR = originalDataDir;
+      _setStatisticsDirForTests(tempDir);
+      await Promise.all([
+        fs.rm(firstRoot, { recursive: true, force: true }),
+        fs.rm(secondRoot, { recursive: true, force: true }),
+      ]);
+    }
+  });
+
+  it('flushes events enqueued while an earlier append is still pending', async () => {
+    const appendFile = fs.appendFile.bind(fs);
+    let appendCount = 0;
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    let signalFirstStarted!: () => void;
+    let signalSecondStarted!: () => void;
+    const firstStarted = new Promise<void>((resolve) => { signalFirstStarted = resolve; });
+    const secondStarted = new Promise<void>((resolve) => { signalSecondStarted = resolve; });
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const secondGate = new Promise<void>((resolve) => { releaseSecond = resolve; });
+    const appendSpy = jest.spyOn(fs, 'appendFile').mockImplementation(async (...args) => {
+      appendCount += 1;
+      if (appendCount === 1) {
+        signalFirstStarted();
+        await firstGate;
+      } else if (appendCount === 2) {
+        signalSecondStarted();
+        await secondGate;
+      }
+      return appendFile(...args);
+    });
+
+    try {
+      const first = appendStatisticsEvent(runStarted('flush-first'));
+      await firstStarted;
+      const flushing = flushStatisticsEvents();
+      const second = appendStatisticsEvent(runStarted('flush-second'));
+
+      releaseFirst();
+      await secondStarted;
+      let flushResolved = false;
+      void flushing.then(() => { flushResolved = true; });
+      await Promise.resolve();
+      expect(flushResolved).toBe(false);
+
+      releaseSecond();
+      await expect(flushing).resolves.toBeUndefined();
+      await Promise.all([first, second]);
+      await expect(readStatisticsEvents('2026-07-30')).resolves.toEqual([
+        expect.objectContaining({ runId: 'flush-first' }),
+        expect.objectContaining({ runId: 'flush-second' }),
+      ]);
+    } finally {
+      releaseFirst();
+      releaseSecond();
+      appendSpy.mockRestore();
+    }
+  });
+
   it('atomically and idempotently anonymizes only one Persona across queued partitions', async () => {
     const target = {
       personaId: 'persona-1',

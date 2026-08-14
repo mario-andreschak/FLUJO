@@ -127,6 +127,9 @@ describe('bundled browser MCP', () => {
     expect(html).toContain('ui/initialize');
     expect(html).toContain('tools/call');
     expect(html).toContain('browser_open');
+    expect(html).toContain('ui/notifications/tool-result');
+    expect(html).toContain('ownsSession');
+    expect(html).toContain('await call("browser_close", { sessionId: ownedId })');
     expect(html).toContain('availableDisplayModes: ["inline", "fullscreen", "pip"]');
     // Navigation still travels the tool channel so the model observes it.
     expect(html).toContain('browser_navigate');
@@ -302,7 +305,7 @@ describe('bundled browser MCP', () => {
     await fs.rm(dataDir, { recursive: true, force: true });
   });
 
-  it('reuses the most recently used live session when sessionId is omitted', async () => {
+  it('creates an isolated live session when sessionId is omitted', async () => {
     const contexts: Array<{ close: jest.Mock }> = [];
     mockLaunchBrowser.mockResolvedValue({
       close: jest.fn(async () => undefined),
@@ -328,14 +331,19 @@ describe('bundled browser MCP', () => {
     const first = await openSession('first-session', new AbortController().signal);
     const second = await openSession('second-session', new AbortController().signal);
     expect(getSession(undefined).id).toBe(second.id);
-    await expect(openSession(undefined, new AbortController().signal)).resolves.toBe(second);
+    const isolated = await openSession(undefined, new AbortController().signal);
+    expect(isolated.id).not.toBe(first.id);
+    expect(isolated.id).not.toBe(second.id);
+    expect(getSession(undefined)).toBe(isolated);
+    await expect(openSession('second-session', new AbortController().signal)).resolves.toBe(second);
 
     expect(getSession(first.id)).toBe(first);
-    await expect(openSession(undefined, new AbortController().signal)).resolves.toBe(first);
-    await expect(closeSession(undefined)).resolves.toBe(true);
+    await expect(closeSession(isolated.id)).resolves.toBe(true);
+    expect(contexts[2].close).toHaveBeenCalledTimes(1);
+    await expect(closeSession(first.id)).resolves.toBe(true);
     expect(contexts[0].close).toHaveBeenCalledTimes(1);
-    expect(getSession(undefined).id).toBe(second.id);
-    await expect(closeSession(undefined)).resolves.toBe(true);
+    await expect(closeSession(second.id)).resolves.toBe(true);
+    expect(contexts[1].close).toHaveBeenCalledTimes(1);
     const closedAgain = await browserCallTool('browser_close', {}, new AbortController().signal);
     expect(closedAgain.structuredContent).toEqual({ success: true, sessionId: null, closed: false });
   });

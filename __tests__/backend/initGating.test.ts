@@ -26,6 +26,7 @@ const isUserEncryptionEnabledMock = jest.fn();
 const ensureVendoredFlowGeneratorMock = jest.fn();
 const ensureBuiltInDeveloperRoleMock = jest.fn();
 const listPersonasMock = jest.fn();
+const reconcilePersonaRoleBehaviorsMock = jest.fn();
 const inspectPersonaRuntimeMock = jest.fn();
 const startPersonaFlowDispatcherMock = jest.fn();
 const reconcilePersonaSchedulerProjectionsMock = jest.fn();
@@ -62,6 +63,7 @@ jest.mock('@/backend/services/flow/systemFlows', () => ({
 jest.mock('@/backend/services/enduringAgents', () => ({
   ensureBuiltInDeveloperRole: (...a: unknown[]) => ensureBuiltInDeveloperRoleMock(...a),
   listPersonas: (...a: unknown[]) => listPersonasMock(...a),
+  reconcilePersonaRoleBehaviors: (...a: unknown[]) => reconcilePersonaRoleBehaviorsMock(...a),
   inspectAndReconcilePersonaRuntime: (...a: unknown[]) => inspectPersonaRuntimeMock(...a),
   startPersonaFlowDispatcher: (...a: unknown[]) => startPersonaFlowDispatcherMock(...a),
 }));
@@ -89,6 +91,7 @@ describe('backend init startup gating (#78)', () => {
     ensureVendoredFlowGeneratorMock.mockResolvedValue(undefined);
     ensureBuiltInDeveloperRoleMock.mockResolvedValue(undefined);
     listPersonasMock.mockResolvedValue([{ id: 'persona_startup' }]);
+    reconcilePersonaRoleBehaviorsMock.mockResolvedValue(undefined);
     inspectPersonaRuntimeMock.mockResolvedValue(undefined);
     startPersonaFlowDispatcherMock.mockResolvedValue(undefined);
     reconcilePersonaSchedulerProjectionsMock.mockResolvedValue(undefined);
@@ -169,6 +172,7 @@ describe('backend init startup gating (#78)', () => {
     expect(ensureBuiltInDeveloperRoleMock).toHaveBeenCalledTimes(1);
     expect(migrateInternalMcpServersMock).toHaveBeenCalledTimes(1);
     expect(startEnabledServersMock).toHaveBeenCalledTimes(1);
+    expect(reconcilePersonaRoleBehaviorsMock).toHaveBeenCalledTimes(1);
     expect(listPersonasMock).toHaveBeenCalledTimes(1);
     expect(inspectPersonaRuntimeMock).toHaveBeenCalledWith('persona_startup');
     expect(startPersonaFlowDispatcherMock).toHaveBeenCalledTimes(1);

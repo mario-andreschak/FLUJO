@@ -21,6 +21,7 @@ import { flowService } from '@/backend/services/flow';
 import { modelService } from '@/backend/services/model';
 import { isQuickChatFlowId, quickChatFlowId } from '@/utils/shared/quickChat';
 import { deleteRunResources } from '@/backend/services/runResources';
+import { deleteModelTurnArchive } from '@/backend/execution/flow/modelTurnArchive';
 import { markConversationDeleted, unmarkConversationDeleted } from '@/backend/execution/flow/cancellation';
 import { deleteCollectionItem } from '@/utils/storage/backend';
 import { reconcileInterruptedRecovery } from '@/backend/execution/flow/recoveryCheckpoint';
@@ -204,6 +205,9 @@ async function GET_handler(
         flowId: sharedState.flowId || null, // Ensure flowId is included
         ...((sharedState.personaAttribution?.personaId ?? sharedState.personaTargetId)
           ? { personaId: sharedState.personaAttribution?.personaId ?? sharedState.personaTargetId }
+          : {}),
+        ...((sharedState.personaAttribution?.personaId ?? sharedState.personaTargetId) && sharedState.personaBehaviorSlotKey
+          ? { personaBehaviorSlotKey: sharedState.personaBehaviorSlotKey }
           : {}),
         ...(sharedState.personaAttribution?.activityId
           ? { activityId: sharedState.personaAttribution.activityId }
@@ -589,6 +593,9 @@ async function DELETE_handler(
 
     // Remove the append-only conversation log alongside the state (idempotent).
     await deleteConversationLog(conversationId);
+
+    // Remove exact historical SDK-request sidecars and their archived media.
+    await deleteModelTurnArchive(conversationId);
 
     // Remove the conversation's run-scoped resources (Tier 3; idempotent).
     await deleteRunResources(conversationId);

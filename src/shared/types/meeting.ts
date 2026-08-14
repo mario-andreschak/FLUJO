@@ -48,6 +48,8 @@ export interface MeetingParticipant {
   personaRetired?: true;
   /** Optional Role Behavior slot used when reserving the Persona. */
   behaviorSlotKey?: string;
+  /** Friendly Behavior name frozen for meeting display; never used for execution. */
+  behaviorName?: string;
   /** Safe attribution for the currently owned meeting Activity lease. */
   activityId?: string;
   /**
@@ -186,6 +188,8 @@ export interface CreateMeetingParticipantInput {
   flowId?: string;
   personaId?: string;
   behaviorSlotKey?: string;
+  /** Friendly display snapshot for a selected specialist Behavior. */
+  behaviorName?: string;
   conversationId?: string;
   role?: MeetingParticipantRole;
 }

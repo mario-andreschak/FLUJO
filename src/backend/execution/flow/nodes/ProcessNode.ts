@@ -669,6 +669,7 @@ export class ProcessNode extends BaseNode {
     // prompts on this conversation's event stream and honour the approval setting.
     conversationId: sharedState.conversationId,
     runId: sharedState.logicalRunId,
+    archiveModelTurns: !sharedState.ephemeral,
     codexSession: sharedState.codexSessions?.[nodeId],
     onCodexSessionChange: (session) => {
       if (session) {
@@ -987,6 +988,7 @@ export class ProcessNode extends BaseNode {
       });
       prepResult.wireMessages = materialized.scoped;
     }
+    prepResult.modelInputForArchive = materialized.snapshot;
 
     log.info('Assembled node context', {
       systemMessageCount: 1,
@@ -1162,6 +1164,8 @@ export class ProcessNode extends BaseNode {
                   prepResult.modelInputs = [prepResult.modelInput!];
                 }
               : undefined,
+            archiveModelTurns: prepResult.archiveModelTurns,
+            modelInputForArchive: prepResult.modelInputForArchive,
             nodeName, // Pass the node name to be included in the response header
             nodeId: prepResult.nodeId, // Pass the node ID
             toolNameMap, // Lets self-orchestrating adapters dispatch tool calls to mcpService

@@ -4,8 +4,10 @@ import {
   AppsRounded,
   ArrowBackRounded,
   AutoStoriesRounded,
+  AutoAwesomeRounded,
   BoltRounded,
   ChatBubbleOutlineRounded,
+  GroupsRounded,
   HubRounded,
   MemoryRounded,
   RefreshRounded,
@@ -31,6 +33,7 @@ import { type ReactNode, useEffect, useState } from 'react';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { PersonaDetail } from '@/frontend/services/personas';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
+import { personaMeetingPath } from '@/frontend/components/Meetings/meetingLaunchIntent';
 import type { Persona } from '@/shared/types/enduringAgent';
 
 import {
@@ -49,6 +52,7 @@ const PERSONA_NAVIGATION_AREAS = [
   'memory',
   'conversations',
   'tasks',
+  'improvements',
   'settings',
 ] as const satisfies readonly PersonaNavigationArea[];
 
@@ -60,6 +64,7 @@ const AREA_ICON = {
   memory: MemoryRounded,
   conversations: ChatBubbleOutlineRounded,
   tasks: WorkOutlineRounded,
+  improvements: AutoAwesomeRounded,
   settings: SettingsRounded,
 } satisfies Record<PersonaNavigationArea, typeof BoltRounded>;
 
@@ -99,9 +104,11 @@ export default function PersonaDetailShell({
     ? t('personas.status.working')
     : detail.persona.lifecycleState === 'waiting'
       ? t('personas.status.waiting-for-you')
-      : detail.persona.lifecycleState === 'error' || detail.persona.lifecycleState === 'disabled'
-        ? t('personas.status.needs-attention')
-        : t('personas.status.up-next');
+      : detail.persona.lifecycleState === 'sleeping'
+        ? t('personas.status.paused')
+        : detail.persona.lifecycleState === 'error' || detail.persona.lifecycleState === 'disabled'
+          ? t('personas.status.needs-attention')
+          : t('personas.status.up-next');
 
   useEffect(() => {
     const syncFromLocation = () => {
@@ -211,18 +218,34 @@ export default function PersonaDetailShell({
             </Typography>
             <Typography sx={{ mt: 0.75, maxWidth: 900 }}>{detail.persona.mission}</Typography>
           </Box>
-          <Button
-            variant="contained"
-            startIcon={<ChatBubbleOutlineRounded />}
-            onClick={() => void startConversation()}
-            disabled={
-              busy
-              || detail.persona.lifecycleState === 'disabled'
-              || detail.persona.lifecycleState === 'error'
-            }
-          >
-            {t('personas.chat')}
-          </Button>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+            <Button
+              variant="outlined"
+              component={Link}
+              href={withWorkspaceUrl(personaMeetingPath(detail.persona))}
+              startIcon={<GroupsRounded />}
+              disabled={
+                busy
+                || detail.persona.provisioningState !== 'ready'
+                || detail.persona.lifecycleState === 'disabled'
+                || detail.persona.lifecycleState === 'error'
+              }
+            >
+              {t('meetings.persona.meet')}
+            </Button>
+            <Button
+              variant="contained"
+              startIcon={<ChatBubbleOutlineRounded />}
+              onClick={() => void startConversation()}
+              disabled={
+                busy
+                || detail.persona.lifecycleState === 'disabled'
+                || detail.persona.lifecycleState === 'error'
+              }
+            >
+              {t('personas.chat')}
+            </Button>
+          </Stack>
         </Stack>
       </Paper>
       <Paper variant="outlined" sx={{ borderRadius: 3, overflow: 'hidden' }}>

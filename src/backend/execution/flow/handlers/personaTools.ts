@@ -1,7 +1,11 @@
 import { z } from 'zod';
 
 import type { FlowExecutionAuthority, ToolDefinition } from '../types';
-import type { PersonaAttribution } from '@/shared/types/enduringAgent';
+import {
+  PERSONA_NATIVE_ABILITY_IDS,
+  type PersonaAttribution,
+  type PersonaNativeAbilityId,
+} from '@/shared/types/enduringAgent';
 import {
   correctMemory,
   createPersonaWorkItem,
@@ -10,23 +14,13 @@ import {
   promoteRunTodoToWorkItem,
   rememberMemory,
   searchPersonaMemory,
+  suggestBehaviorInstructionImprovement,
   unpinMemoryFromCore,
   updatePersonaWorkItem,
 } from '@/backend/services/enduringAgents';
 
-export const PERSONA_TOOL_NAMES = [
-  'remember',
-  'recall',
-  'correct',
-  'forget',
-  'pin',
-  'unpin',
-  'work_item_create',
-  'work_item_update',
-  'work_item_complete',
-  'work_item_promote_todo',
-] as const;
-export type PersonaToolName = (typeof PERSONA_TOOL_NAMES)[number];
+export const PERSONA_TOOL_NAMES = PERSONA_NATIVE_ABILITY_IDS;
+export type PersonaToolName = PersonaNativeAbilityId;
 
 const PersonaToolNameSchema = z.enum(PERSONA_TOOL_NAMES);
 
@@ -159,6 +153,28 @@ const TOOL_DEFINITIONS: Record<PersonaToolName, ToolDefinition> = {
         deadline: { type: 'number' },
       },
       required: ['todo_id'],
+    },
+  },
+  suggest_improvement: {
+    name: 'suggest_improvement',
+    description: 'After completing work, propose one reusable instruction-only Behavior improvement when concrete Activity evidence shows it would help future work. The change is validated, shown in Improvements, and follows the user-selected review rule.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        behavior_slot: {
+          type: 'string',
+          description: 'Behavior slot to improve. Use primary for the main Persona Flow.',
+        },
+        rationale: {
+          type: 'string',
+          description: 'Plain-language explanation of the repeated problem and expected benefit.',
+        },
+        instruction: {
+          type: 'string',
+          description: 'One concise reusable instruction for future work. Do not include credentials, external content, or task-specific facts.',
+        },
+      },
+      required: ['rationale', 'instruction'],
     },
   },
 };
@@ -350,6 +366,25 @@ export async function executePersonaTool(
           ...(typeof args.deadline === 'number' ? { deadline: args.deadline } : {}),
         }, options);
         return { success: true, data: { promoted: true, item } };
+      }
+      case 'suggest_improvement': {
+        await trusted.executionAuthority.assertCurrent();
+        const proposal = await suggestBehaviorInstructionImprovement({
+          personaId: trusted.personaId,
+          slotKey: stringArg(args, 'behavior_slot') ?? 'primary',
+          rationale: stringArg(args, 'rationale') ?? '',
+          instruction: stringArg(args, 'instruction') ?? '',
+          evidenceRefs: activitySource,
+        });
+        await trusted.executionAuthority.assertCurrent();
+        return {
+          success: true,
+          data: {
+            proposed: true,
+            applied: proposal.status === 'activated',
+            proposal,
+          },
+        };
       }
     }
   } catch (error) {

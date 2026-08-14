@@ -1,21 +1,28 @@
 import {
   PersonaDomainBusyError,
   PersonaDomainConflictError,
+  PersonaDomainNotFoundError,
   activatePersonaBehaviorRevision,
   behaviorRevisionId,
+  buildBuiltInDeveloperRoleVersion,
   claimNextPersonaActivity,
   hashBehaviorFlow,
+  readPersonaComposition,
   routePersonaMailboxItem,
   updatePersonaSettings,
 } from '@/backend/services/enduringAgents';
 import { createPersonaFromRole } from './fixtures/personaFactory';
 import {
   createBehaviorRevision,
+  createRoleVersion,
+  getPersona,
   listPersonaBundle,
+  updatePersona,
 } from '@/backend/services/enduringAgents/store';
 import {
   BehaviorRevisionSchema,
   ENDURING_AGENT_SCHEMA_VERSION,
+  RoleVersionSchema,
   type BehaviorRevision,
 } from '@/shared/types/enduringAgent';
 import { runWithWorkspace } from '@/utils/workspace';
@@ -55,20 +62,67 @@ function overrideRevision(base: BehaviorRevision, revision: number): BehaviorRev
 }
 
 describe('issue #415 phase 5 Persona administration', () => {
-  it('updates only editable settings with optimistic concurrency and keeps the Role pin immutable', async () => {
+  it('changes the future-work Role with CAS while preserving user-owned choices', async () => {
     await inFreshWorkspace(async () => {
       const { persona } = await createPersonaFromRole({
         name: 'Jim',
         idempotencyKey: 'phase5-settings',
       });
+      const baseRole = buildBuiltInDeveloperRoleVersion();
+      const nextRole = RoleVersionSchema.parse({
+        ...baseRole,
+        id: 'rolever_developer_future_work',
+        version: baseRole.version + 1,
+        name: 'Delivery lead',
+        mission: 'Coordinate reliable delivery and communicate decisions clearly.',
+        behaviorSlots: [
+          ...baseRole.behaviorSlots,
+          {
+            ...baseRole.behaviorSlots[0],
+            key: 'delivery_review',
+            name: 'Delivery review',
+            flowTemplate: {
+              ...baseRole.behaviorSlots[0].flowTemplate,
+              id: 'delivery_review_template',
+              name: 'Delivery review',
+            },
+          },
+        ],
+        createdAt: baseRole.createdAt + 1,
+      });
+      await createRoleVersion(nextRole);
+
+      const legacyCompositionRole = {
+        ref: baseRole.roleDefinitionId,
+        name: 'Legacy composition label',
+        prompt: 'Legacy composition prompt.',
+        suggestedAppRefs: [],
+      };
+      const before = await updatePersona({
+        ...persona,
+        composition: {
+          ...persona.composition,
+          role: legacyCompositionRole,
+        },
+        updatedAt: persona.updatedAt + 1,
+      });
+      const preservedComposition = {
+        coreFlowRef: before.composition?.coreFlowRef,
+        coreBinding: before.composition?.coreBinding,
+        appRefs: before.composition?.appRefs,
+        memoryRefs: before.composition?.memoryRefs,
+        behaviors: before.composition?.behaviors,
+      };
+
       const updated = await updatePersonaSettings(persona.id, {
         name: 'Jim Rivera',
+        roleVersionId: nextRole.id,
         mission: 'Own the release carefully.',
-        presentation: { avatarUrl: 'https://example.test/jim.png', voice: 'alloy' },
+        presentation: { avatarUrl: 'https://example.test/jim.png' },
         autonomyLevel: 'learn_hints',
         interruptionPolicy: 'related_only',
         lifecycleState: 'sleeping',
-        expectedUpdatedAt: persona.updatedAt,
+        expectedUpdatedAt: before.updatedAt,
       });
 
       expect(updated).toMatchObject({
@@ -77,19 +131,44 @@ describe('issue #415 phase 5 Persona administration', () => {
         lifecycleState: 'sleeping',
         autonomyLevel: 'learn_hints',
         interruptionPolicy: 'related_only',
-        roleVersionId: persona.roleVersionId,
+        roleVersionId: nextRole.id,
       });
       expect(updated.presentation).toEqual({
         avatarUrl: 'https://example.test/jim.png',
-        voice: 'alloy',
       });
+      expect(updated.composition).not.toHaveProperty('role');
+      expect(updated.composition).toMatchObject(preservedComposition);
+      expect(updated.coreMemoryItemIds).toEqual(before.coreMemoryItemIds);
+
+      const behaviorRefsBeforeProjection = updated.composition?.behaviors?.map(
+        (behavior) => behavior.ref,
+      );
+      await readPersonaComposition(persona.id);
+      const afterProjection = await getPersona(persona.id);
+      expect(afterProjection?.composition?.behaviors?.map((behavior) => behavior.ref))
+        .toEqual(behaviorRefsBeforeProjection);
+
       await expect(updatePersonaSettings(persona.id, {
         name: 'Stale Jim',
-        expectedUpdatedAt: persona.updatedAt,
+        expectedUpdatedAt: before.updatedAt,
+      })).rejects.toBeInstanceOf(PersonaDomainConflictError);
+
+      const roleWithoutMainWork = RoleVersionSchema.parse({
+        ...nextRole,
+        id: 'rolever_without_main_work',
+        version: nextRole.version + 1,
+        behaviorSlots: nextRole.behaviorSlots.filter((slot) => slot.key !== 'primary'),
+        createdAt: nextRole.createdAt + 1,
+      });
+      await createRoleVersion(roleWithoutMainWork);
+      await expect(updatePersonaSettings(persona.id, {
+        roleVersionId: roleWithoutMainWork.id,
+        expectedUpdatedAt: updated.updatedAt,
       })).rejects.toBeInstanceOf(PersonaDomainConflictError);
       await expect(updatePersonaSettings(persona.id, {
         roleVersionId: 'rolever_spoofed',
-      })).rejects.toThrow();
+        expectedUpdatedAt: updated.updatedAt,
+      })).rejects.toBeInstanceOf(PersonaDomainNotFoundError);
     });
   });
 
@@ -108,6 +187,8 @@ describe('issue #415 phase 5 Persona administration', () => {
 
       await expect(updatePersonaSettings(persona.id, {
         mission: 'This must wait.',
+        roleVersionId: persona.roleVersionId,
+        expectedUpdatedAt: persona.updatedAt,
       })).rejects.toBeInstanceOf(PersonaDomainBusyError);
     });
   });

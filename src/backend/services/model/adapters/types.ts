@@ -51,6 +51,15 @@ export interface ModelToolProgress {
   message?: string;
 }
 
+export interface SdkRequestSnapshot {
+  /** Stable adapter id used by the inspector (openai, anthropic, gemini, ...). */
+  adapter: string;
+  /** SDK/CLI method being invoked, e.g. chat.completions.create. */
+  operation: string;
+  /** Exact request object after provider-native translation, without credentials. */
+  request: unknown;
+}
+
 /**
  * Everything an adapter needs to perform a single chat completion. The caller
  * (ModelHandler) is responsible for resolving/decrypting the API key and
@@ -70,6 +79,13 @@ export interface CompletionInput {
     result?: unknown;
     error?: unknown;
   }) => void;
+  /** Durable Chat model-turn capture at the final SDK request boundary. */
+  onSdkRequest?: (snapshot: SdkRequestSnapshot) => Promise<string | undefined>;
+  /** Completes the durable dispatch record created by onSdkRequest. */
+  onSdkRequestResult?: (observation: {
+    dispatchId: string;
+    outcome: 'completed' | 'error' | 'cancelled';
+  }) => Promise<void>;
   /** Conversation messages in OpenAI wire format. */
   messages: OpenAI.ChatCompletionMessageParam[];
   /**
@@ -277,4 +293,56 @@ export interface CompletionAdapter {
    * delta sink is available and falls back to createCompletion otherwise.
    */
   createStreamCompletion?(input: CompletionInput): Promise<CompletionResult>;
+}
+
+/**
+ * Wrap one concrete SDK/CLI invocation with durable request observation. Archive
+ * failures are swallowed: observability must never make a model call fail.
+ */
+export async function observeSdkRequest<T>(
+  input: Pick<CompletionInput, 'onSdkRequest' | 'onSdkRequestResult' | 'signal'>,
+  snapshot: SdkRequestSnapshot,
+  task: () => Promise<T>,
+): Promise<T> {
+  let dispatchId: string | undefined;
+  let finalized = false;
+  try {
+    dispatchId = await input.onSdkRequest?.(snapshot);
+  } catch {
+    dispatchId = undefined;
+  }
+  const finalize = async (outcome: 'completed' | 'error' | 'cancelled'): Promise<void> => {
+    if (!dispatchId || finalized) return;
+    finalized = true;
+    await input.onSdkRequestResult?.({ dispatchId, outcome }).catch(() => undefined);
+  };
+  try {
+    const result = await task();
+    const iterable = result as unknown as AsyncIterable<unknown> | null | undefined;
+    if (iterable && typeof iterable[Symbol.asyncIterator] === 'function') {
+      const asyncIterable = iterable;
+      async function* observedIterator(): AsyncGenerator<unknown> {
+        try {
+          for await (const item of asyncIterable) yield item;
+        } catch (error) {
+          await finalize(input.signal?.aborted ? 'cancelled' : 'error');
+          throw error;
+        } finally {
+          await finalize(input.signal?.aborted ? 'cancelled' : 'completed');
+        }
+      }
+      return new Proxy(result as object, {
+        get(target, property) {
+          if (property === Symbol.asyncIterator) return observedIterator;
+          const value = Reflect.get(target, property, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      }) as T;
+    }
+    await finalize('completed');
+    return result;
+  } catch (error) {
+    await finalize(input.signal?.aborted ? 'cancelled' : 'error');
+    throw error;
+  }
 }

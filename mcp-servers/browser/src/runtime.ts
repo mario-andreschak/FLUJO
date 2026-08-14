@@ -714,10 +714,6 @@ function reusableTrustedPage(context: BrowserContext): Page | undefined {
 export async function openSession(requestedId: unknown, signal: AbortSignal): Promise<BrowserSession> {
   if (signal.aborted) throw new BrowserMcpError('CANCELLED', 'The browser request was cancelled.');
   const mode = browserMode();
-  if (requestedId === undefined || requestedId === '') {
-    const latest = lastLiveSession(mode);
-    if (latest) return touchSession(latest);
-  }
   const id = validateSessionId(requestedId);
   const existing = sessions.get(id);
   if (existing) return touchSession(existing);

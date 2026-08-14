@@ -56,7 +56,7 @@ function statesByWorkspace(): Map<string, Map<string, SharedState>> {
  *  promoted to its own DebugStep.modelInput field, so drop it from the raw
  *  prep snapshot to avoid embedding it twice per step. 'modelInputs' is the
  *  per-model-call array (issue #167) — promoted the same way, so strip it too. */
-const HEAVY_RESULT_KEYS = ['messages', 'availableTools', 'fullResponse', 'emit', 'modelInput', 'modelInputs'] as const;
+const HEAVY_RESULT_KEYS = ['messages', 'availableTools', 'fullResponse', 'emit', 'modelInput', 'modelInputs', 'modelInputForArchive'] as const;
 
 /** Lightweight state snapshot: everything except the conversation/tool payloads. */
 function slimStateSnapshot(state: SharedState): Partial<SharedState> {

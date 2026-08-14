@@ -134,7 +134,11 @@ to the live run indicator and uses them to keep a finite client request timeout
 alive. The Bash-side `timeout` defaults to 60 seconds, accepts any positive value
 up to a 12-hour ceiling, and accepts `-1` to run until completion, cancellation,
 or server shutdown. `wait` has the same timeout contract without killing the
-background session when a finite wait expires.
+background session when a finite wait expires. Because that timeout is a maximum,
+`wait` returns immediately when the session completes; finite results report
+`waitedMs`, `requestedTimeoutMs`, and `returnedEarly`. An early result also reports
+`remainingSeconds` and recommends `sleep`, whose required `seconds` argument waits
+for a fixed duration independent of session state. Both tools are cancellation-aware.
 
 ## System screenshot (internal `flujo` server, #366)
 

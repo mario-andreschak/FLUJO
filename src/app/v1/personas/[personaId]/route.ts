@@ -7,6 +7,8 @@ import {
   PersonaDeletionConflictError,
   PersonaDeletionNotFoundError,
   deletePersona,
+  listPersonaFlowDispatches,
+  pumpPersonaFlowDispatches,
   projectPersonaPresentation,
   readPersonaRuntimeSnapshot,
   updatePersonaSettings,
@@ -21,6 +23,15 @@ export const dynamic = 'force-dynamic';
 
 type RouteContext = { params: Promise<{ personaId: string }> };
 
+const PERSONA_RESULT_SUMMARY_LIMIT = 600;
+
+function boundedResultSummary(value: string | undefined): string | undefined {
+  const compact = value?.trim().replace(/\s+/g, ' ');
+  if (!compact) return undefined;
+  if (compact.length <= PERSONA_RESULT_SUMMARY_LIMIT) return compact;
+  return `${compact.slice(0, PERSONA_RESULT_SUMMARY_LIMIT - 3).trimEnd()}...`;
+}
+
 async function GET_handler(request: NextRequest, { params }: RouteContext) {
   const notLocal = assertLocalRequest(request); if (notLocal) return notLocal;
   const locked = await assertUnlocked({ openai: true }); if (locked) return locked;
@@ -29,13 +40,28 @@ async function GET_handler(request: NextRequest, { params }: RouteContext) {
     return NextResponse.json({ error: 'Persona not found.' }, { status: 404 });
   }
   try {
-    const snapshot = await readPersonaRuntimeSnapshot(personaId);
+    const [snapshot, dispatches] = await Promise.all([
+      readPersonaRuntimeSnapshot(personaId),
+      listPersonaFlowDispatches(personaId),
+    ]);
+    const resultByActivityId = new Map<string, string>();
+    for (const dispatch of dispatches) {
+      if (
+        dispatch.state !== 'completed'
+        || dispatch.admission.kind === 'maintenance'
+        || dispatch.outcome?.status !== 'completed'
+      ) continue;
+      const activityId = dispatch.activityId ?? dispatch.outcome?.activityId;
+      const result = boundedResultSummary(dispatch.outcome.outputText);
+      if (activityId && result) resultByActivityId.set(activityId, result);
+    }
     return snapshot
       ? NextResponse.json({
           ...snapshot.bundle,
           runtime: snapshot.runtime,
           presentation: projectPersonaPresentation(snapshot.bundle, {
             activeActivityId: snapshot.runtime.projection.active?.activityId,
+            resultByActivityId,
           }),
         })
       : NextResponse.json({ error: 'Persona not found.' }, { status: 404 });
@@ -54,7 +80,13 @@ async function PATCH_handler(request: NextRequest, { params }: RouteContext) {
   }
   const body = await request.json().catch(() => null);
   try {
-    return NextResponse.json(await updatePersonaSettings(personaId, body));
+    const persona = await updatePersonaSettings(personaId, body);
+    if (persona.lifecycleState === 'idle') {
+      void pumpPersonaFlowDispatches(persona.id).catch((error) => {
+        log.error(`Failed to resume queued work for Persona ${JSON.stringify(persona.id)}`, error);
+      });
+    }
+    return NextResponse.json(persona);
   } catch (error) {
     const response = personaDomainErrorResponse(error); if (response) return response;
     log.error(`Failed to update Persona ${JSON.stringify(personaId)}`, error);

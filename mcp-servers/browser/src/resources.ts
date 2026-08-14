@@ -110,13 +110,14 @@ body{background:var(--bg);color:var(--fg);font:13px/1.45 system-ui,-apple-system
 (function(){
   "use strict";
   var GATEWAY = ${config};
-  var parentWin = window.parent, idc = 1, pending = {}, sessionId = "", starting = false;
+  var parentWin = window.parent, idc = 1, pending = {}, sessionId = "", starting = false, ownsSession = false;
   var frame = document.getElementById("frame");
   var fallback = document.getElementById("fallback");
   var shot = document.getElementById("shot");
   var note = document.getElementById("note");
   var fbUrl = document.getElementById("fbUrl");
   var theme = "light", pollTimer = 0, usingFallback = false;
+  var standaloneTimer = 0, toolResultTimer = 0, pendingToolInput = null;
   // null = host did not report its sandbox CSP grant (unknown policy);
   // [] = host reported a grant that excludes the gateway (denied).
   var grantedFrameDomains = null, viewReady = false, readyTimer = 0;
@@ -230,9 +231,10 @@ body{background:var(--bg);color:var(--fg);font:13px/1.45 system-ui,-apple-system
   fbUrl.onkeydown = function(e){ if (e.key === "Enter"){ e.preventDefault(); document.getElementById("fbGo").click(); } };
 
   /* ---------- session ---------- */
-  async function start(initialUrl, requestedId){
+  async function start(initialUrl, requestedId, owned){
     if (starting) return;
     starting = true;
+    ownsSession = !!owned;
     try {
       var args = {};
       if (initialUrl) args.url = initialUrl;
@@ -245,9 +247,23 @@ body{background:var(--bg);color:var(--fg);font:13px/1.45 system-ui,-apple-system
       else if (!frameGrantCovers(GATEWAY.origin)) useFallback("This deployment cannot frame the local live-view gateway; showing periodic screenshots.");
       else mountLiveView();
     } catch (e) {
+      ownsSession = false;
       starting = false;
       useFallback(errorText(e));
     }
+  }
+
+  async function teardownResource(requestId){
+    clearTimeout(pollTimer);
+    clearTimeout(readyTimer);
+    clearTimeout(standaloneTimer);
+    clearTimeout(toolResultTimer);
+    var ownedId = ownsSession ? sessionId : "";
+    ownsSession = false;
+    if (ownedId){
+      try { await call("browser_close", { sessionId: ownedId }); } catch (e) {}
+    }
+    post({ jsonrpc: "2.0", id: requestId, result: {} });
   }
 
   /* ---------- commands relayed from the framed view ---------- */
@@ -295,13 +311,33 @@ body{background:var(--bg);color:var(--fg);font:13px/1.45 system-ui,-apple-system
     }
     if (m.method === "ui/notifications/tool-input"){
       var a = (m.params && m.params.arguments) || {};
-      if (!starting) void start(typeof a.url === "string" ? a.url : "", typeof a.sessionId === "string" ? a.sessionId : "");
+      pendingToolInput = a;
+      clearTimeout(standaloneTimer);
+      if (!starting && typeof a.sessionId === "string" && a.sessionId){
+        void start(typeof a.url === "string" ? a.url : "", a.sessionId, false);
+      } else if (!starting){
+        // Tool results carry the authoritative sessionId. Waiting for it avoids
+        // opening a second page after a no-id browser_open created its session.
+        clearTimeout(toolResultTimer);
+        toolResultTimer = setTimeout(function(){
+          if (!starting) void start(typeof a.url === "string" ? a.url : "", "", true);
+        }, 1000);
+      }
+      return;
+    }
+    if (m.method === "ui/notifications/tool-result"){
+      var toolState = payload(m.params);
+      var toolSessionId = toolState && typeof toolState.sessionId === "string" ? toolState.sessionId : "";
+      if (!starting && toolSessionId){
+        clearTimeout(toolResultTimer);
+        var input = pendingToolInput || {};
+        void start(typeof input.url === "string" ? input.url : "", toolSessionId, false);
+      }
       return;
     }
     if (m.method === "ping" && m.id !== undefined){ post({ jsonrpc: "2.0", id: m.id, result: {} }); return; }
     if (m.method === "ui/resource-teardown" && m.id !== undefined){
-      clearTimeout(pollTimer);
-      post({ jsonrpc: "2.0", id: m.id, result: {} });
+      void teardownResource(m.id);
       return;
     }
   });
@@ -317,7 +353,7 @@ body{background:var(--bg);color:var(--fg);font:13px/1.45 system-ui,-apple-system
     document.documentElement.setAttribute("data-theme", theme);
     notify("ui/notifications/initialized", {});
     notify("ui/notifications/size-changed", { width: 0, height: 640 });
-    setTimeout(function(){ if (!starting) void start("", ""); }, 300);
+    standaloneTimer = setTimeout(function(){ if (!starting) void start("", "", true); }, 300);
   }).catch(function(e){
     useFallback("App initialization failed: " + errorText(e));
   });

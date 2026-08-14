@@ -1,6 +1,7 @@
 const rememberMemoryMock = jest.fn();
 const searchPersonaMemoryMock = jest.fn();
 const unpinMemoryFromCoreMock = jest.fn();
+const suggestBehaviorInstructionImprovementMock = jest.fn();
 
 jest.mock('@/backend/services/enduringAgents', () => ({
   correctMemory: jest.fn(),
@@ -10,12 +11,21 @@ jest.mock('@/backend/services/enduringAgents', () => ({
   promoteRunTodoToWorkItem: jest.fn(),
   rememberMemory: (...args: unknown[]) => rememberMemoryMock(...args),
   searchPersonaMemory: (...args: unknown[]) => searchPersonaMemoryMock(...args),
+  suggestBehaviorInstructionImprovement: (...args: unknown[]) => (
+    suggestBehaviorInstructionImprovementMock(...args)
+  ),
   unpinMemoryFromCore: (...args: unknown[]) => unpinMemoryFromCoreMock(...args),
   updatePersonaWorkItem: jest.fn(),
 }));
 
-import { buildPersonaTools, executePersonaTool } from '@/backend/execution/flow/handlers/personaTools';
+import {
+  PERSONA_TOOL_NAMES,
+  buildPersonaTools,
+  executePersonaTool,
+  isPersonaToolName,
+} from '@/backend/execution/flow/handlers/personaTools';
 import type { FlowExecutionAuthority } from '@/backend/execution/flow/types';
+import { PERSONA_NATIVE_ABILITY_IDS } from '@/shared/types/enduringAgent';
 
 function authority(): FlowExecutionAuthority {
   const commitPersonaMutation = jest.fn(async (task: (context: never) => Promise<unknown>) => (
@@ -44,6 +54,13 @@ describe('authored Persona tools', () => {
       expect.objectContaining({ name: 'unpin' }),
     ]);
     expect(buildPersonaTools(undefined)).toEqual([]);
+  });
+
+  it('accepts every shared native ability in the backend without a second allow-list', () => {
+    expect(PERSONA_TOOL_NAMES).toBe(PERSONA_NATIVE_ABILITY_IDS);
+    expect(PERSONA_NATIVE_ABILITY_IDS.every(isPersonaToolName)).toBe(true);
+    expect(buildPersonaTools(PERSONA_NATIVE_ABILITY_IDS).map((tool) => tool.name))
+      .toEqual(PERSONA_NATIVE_ABILITY_IDS);
   });
 
   it.each([
@@ -135,6 +152,39 @@ describe('authored Persona tools', () => {
       limit: 5,
       coreOnly: false,
       statuses: ['active'],
+    });
+  });
+
+  it('turns a reusable lesson into a reviewable improvement under the live fence', async () => {
+    const executionAuthority = authority();
+    suggestBehaviorInstructionImprovementMock.mockResolvedValue({
+      id: 'proposal_safe',
+      status: 'awaiting_approval',
+    });
+
+    await expect(executePersonaTool('suggest_improvement', {
+      behavior_slot: 'primary',
+      rationale: 'The same validation step was missed twice.',
+      instruction: 'Run the focused regression test before reporting completion.',
+    }, {
+      executionAuthority,
+      personaAttribution: {
+        personaId: 'persona_test',
+        activityId: 'activity_test',
+        behaviorRevisionId: 'revision_test',
+      },
+    })).resolves.toMatchObject({
+      success: true,
+      data: { proposed: true, applied: false },
+    });
+
+    expect(executionAuthority.assertCurrent).toHaveBeenCalledTimes(2);
+    expect(suggestBehaviorInstructionImprovementMock).toHaveBeenCalledWith({
+      personaId: 'persona_test',
+      slotKey: 'primary',
+      rationale: 'The same validation step was missed twice.',
+      instruction: 'Run the focused regression test before reporting completion.',
+      evidenceRefs: [{ kind: 'activity', id: 'activity_test' }],
     });
   });
 });

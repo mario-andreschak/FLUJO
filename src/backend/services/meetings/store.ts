@@ -118,12 +118,18 @@ function normalizeParticipants(
     if (candidate.behaviorSlotKey !== undefined && !hasPersona) {
       throw new Error(`participants[${index}].behaviorSlotKey requires a Persona target`);
     }
+    if (candidate.behaviorName !== undefined && candidate.behaviorSlotKey === undefined) {
+      throw new Error(`participants[${index}].behaviorName requires a Behavior selection`);
+    }
     const personaId = hasPersona
       ? EnduringAgentIdSchema.parse(candidate.personaId)
       : undefined;
     const behaviorSlotKey = candidate.behaviorSlotKey === undefined
       ? undefined
       : BehaviorSlotKeySchema.parse(candidate.behaviorSlotKey);
+    const behaviorName = candidate.behaviorName === undefined
+      ? undefined
+      : requireNonEmpty(candidate.behaviorName, `participants[${index}].behaviorName`, 80);
     return {
       id: candidate.id === undefined
         ? randomUUID()
@@ -133,6 +139,7 @@ function normalizeParticipants(
         ? { flowId: requireSafeId(candidate.flowId!, `participants[${index}].flowId`) }
         : { personaId }),
       ...(behaviorSlotKey ? { behaviorSlotKey } : {}),
+      ...(behaviorName ? { behaviorName } : {}),
       conversationId: candidate.conversationId === undefined
         ? randomUUID()
         : requireSafeId(candidate.conversationId, `participants[${index}].conversationId`),
@@ -280,6 +287,12 @@ function assertMeetingRecord(record: MeetingRecord): void {
         throw new Error('A participant Behavior slot requires a Persona target');
       }
       BehaviorSlotKeySchema.parse(participant.behaviorSlotKey);
+    }
+    if (participant.behaviorName !== undefined) {
+      if ((!hasPersona && !hasArchivedPersona) || participant.behaviorSlotKey === undefined) {
+        throw new Error('A participant Behavior name requires a Persona Behavior target');
+      }
+      requireNonEmpty(participant.behaviorName, 'participant Behavior name', 80);
     }
     if (participant.activityId !== undefined) EnduringAgentIdSchema.parse(participant.activityId);
     if (participant.behaviorRevisionId !== undefined) {
@@ -457,6 +470,7 @@ export async function anonymizeMeetingPersonaAttribution(
         delete participant.personaId;
         delete participant.activityId;
         delete participant.behaviorRevisionId;
+        delete participant.behaviorName;
         participant.personaRetired = true;
         participant.personaArchived = true;
         participant.name = ARCHIVED_MEETING_PARTICIPANT_NAME;

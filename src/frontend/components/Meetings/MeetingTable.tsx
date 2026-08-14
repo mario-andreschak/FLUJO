@@ -5,6 +5,7 @@ import { alpha, useTheme } from '@mui/material/styles';
 import { AutoAwesomeRounded } from '@mui/icons-material';
 import type { MeetingParticipant } from '@/shared/types/meeting';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { meetingParticipantSourceLabel } from './meetingParticipantPresentation';
 
 const seats = [
   { left: '50%', top: '2%', transform: 'translate(-50%, 0)' },
@@ -69,8 +70,11 @@ export default function MeetingTable({ participants, onParticipantClick }: Meeti
         const extraLabel = index === 6 && overflow.length
           ? t('meetings.table.overflow', { count: overflow.length })
           : null;
+        const sourceLabel = participant
+          ? meetingParticipantSourceLabel(participant, t)
+          : null;
         const title = participant
-          ? `${participant.name}${overflow.length && index === 6 ? ` · ${overflow.map((item) => item.name).join(', ')}` : ''}`
+          ? `${participant.name} · ${sourceLabel}${overflow.length && index === 6 ? ` · ${overflow.map((item) => item.name).join(', ')}` : ''}`
           : t('meetings.table.emptySeat');
         return (
           <Tooltip key={index} title={title} arrow>
@@ -114,18 +118,28 @@ export default function MeetingTable({ participants, onParticipantClick }: Meeti
                 </Avatar>
               </Badge>
               {participant ? (
-                <Chip
-                  size="small"
-                  icon={participant.role === 'moderator' ? <AutoAwesomeRounded /> : undefined}
-                  label={extraLabel ?? participant.name}
-                  variant="outlined"
-                  sx={{
-                    maxWidth: '100%',
-                    height: 23,
-                    bgcolor: alpha(theme.palette.background.paper, 0.92),
-                    '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis' },
-                  }}
-                />
+                <>
+                  <Chip
+                    size="small"
+                    icon={participant.role === 'moderator' ? <AutoAwesomeRounded /> : undefined}
+                    label={extraLabel ?? participant.name}
+                    variant="outlined"
+                    sx={{
+                      maxWidth: '100%',
+                      height: 23,
+                      bgcolor: alpha(theme.palette.background.paper, 0.92),
+                      '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis' },
+                    }}
+                  />
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    noWrap
+                    sx={{ maxWidth: '100%', fontSize: { xs: '0.61rem', sm: '0.7rem' } }}
+                  >
+                    {sourceLabel}
+                  </Typography>
+                </>
               ) : (
                 <Typography variant="caption" color="text.disabled">{t('meetings.table.chair', { count: index + 1 })}</Typography>
               )}
