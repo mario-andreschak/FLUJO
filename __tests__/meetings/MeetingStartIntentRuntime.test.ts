@@ -35,6 +35,7 @@ import {
   listPersonaMailboxItems,
 } from '@/backend/services/enduringAgents';
 import { createPersonaFromRole } from '../enduringAgents/fixtures/personaFactory';
+import { resolveEffectiveBehaviorRevision } from '@/backend/services/enduringAgents/behaviorFlowResolver';
 import { flowService } from '@/backend/services/flow';
 import { meetingEventBus } from '@/backend/services/meetings/MeetingEventBus';
 import { deleteMeeting, getMeeting } from '@/backend/services/meetings/store';
@@ -108,6 +109,7 @@ describe('durable Persona meeting start intent', () => {
         idempotencyKey: 'meeting-start-intent-persona',
         interruptionPolicy: 'queue',
       });
+      await resolveEffectiveBehaviorRevision(persona.id, 'primary');
       const meetingId = 'meeting_start_crash';
       const crashingProcess = new MeetingEngine({
         isolateProcessRuntime: true,
@@ -126,6 +128,7 @@ describe('durable Persona meeting start intent', () => {
             id: 'living',
             name: 'Living',
             personaId: persona.id,
+            behaviorSlotKey: 'primary',
             conversationId: 'conversation_living',
           },
           {
