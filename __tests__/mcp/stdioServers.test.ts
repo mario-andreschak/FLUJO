@@ -151,8 +151,9 @@ describe('standalone stdio MCP packages', () => {
 
   it('serves the interactive browser and reports an absolute screenshot artifact', async () => {
     const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-mcp-browser-'));
-    const client = await connectPackage('browser', { FLUJO_DATA_DIR: dataDir });
-    let sessionId = '';
+      const client = await connectPackage('browser', { FLUJO_DATA_DIR: dataDir });
+      let sessionId = '';
+      let secondSessionId = '';
     try {
       const listed = await client.listTools();
       expect(listed.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
@@ -171,7 +172,9 @@ describe('standalone stdio MCP packages', () => {
       sessionId = (opened.structuredContent as { sessionId: string }).sessionId;
       expect(sessionId).toBeTruthy();
       const reopened = await client.callTool({ name: 'browser_open', arguments: {} });
-      expect((reopened.structuredContent as { sessionId: string }).sessionId).toBe(sessionId);
+      secondSessionId = (reopened.structuredContent as { sessionId: string }).sessionId;
+      expect(secondSessionId).toBeTruthy();
+      expect(secondSessionId).not.toBe(sessionId);
 
       const screenshot = await client.callTool({
         name: 'browser_screenshot',
@@ -183,13 +186,16 @@ describe('standalone stdio MCP packages', () => {
         path.resolve(dataDir),
         'screenshots',
         'browser',
-        sessionId,
+        secondSessionId,
         'viewport.png',
       ));
       expect((await fs.stat(screenshotPath)).isFile()).toBe(true);
     } finally {
       if (sessionId) {
-        await client.callTool({ name: 'browser_close', arguments: {} }).catch(() => undefined);
+        await client.callTool({ name: 'browser_close', arguments: { sessionId } }).catch(() => undefined);
+      }
+      if (secondSessionId) {
+        await client.callTool({ name: 'browser_close', arguments: { sessionId: secondSessionId } }).catch(() => undefined);
       }
       await client.close();
       await fs.rm(dataDir, { recursive: true, force: true });
