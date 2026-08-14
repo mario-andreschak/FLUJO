@@ -351,10 +351,10 @@ export interface ExperimentalSettings {
    * When true, FLUJO applies SUMMARIZING COMPACTION to long conversations
    * (issue #248): before a request that would overflow the model's context
    * window — and after a context-length error — it summarizes the older part of
-   * the persisted history into an anchored summary head and continues, instead
-   * of only shrinking the wire copy. Off by default: it MUTATES persisted
-   * conversation history (behind a recoverable run-resource anchor), so it stays
-   * opt-in until verified. A missing value is treated as disabled.
+   * the oldest provider-facing wire history into an anchored summary head and
+   * continues. The canonical persisted conversation is never replaced. Off by
+   * default because AI summarization is lossy even though the exact source is
+   * retained in a run-resource anchor. A missing value is treated as disabled.
    */
   compactionEnabled?: boolean;
   /**

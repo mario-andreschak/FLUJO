@@ -317,6 +317,7 @@ export async function archiveModelDispatch(
     provenance: input.modelInput?.provenance,
     counts: input.modelInput?.counts,
     visualCompaction: input.visualCompaction,
+    contextCompaction: input.modelInput?.contextCompaction,
   };
 
   await Promise.all([...ctx.writes.entries()].map(async ([sha256, bytes]) => {

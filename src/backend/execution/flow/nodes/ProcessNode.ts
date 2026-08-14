@@ -1141,7 +1141,11 @@ export class ProcessNode extends BaseNode {
             compactionMode: node_params?.properties?.compactionMode,
             compactionKeepTokens: node_params?.properties?.compactionKeepTokens,
             onFinalWire: prepResult.modelInput
-              ? (finalWire, visualCompaction) => {
+              ? (finalWire, visualCompaction, finalModelInput) => {
+                  if (finalModelInput) {
+                    prepResult.modelInput = finalModelInput;
+                    prepResult.modelInputForArchive = finalModelInput;
+                  }
                   const captured = finalWire.map((message, index) => ({
                     ...message,
                     id: `final-wire-${prepResult.nodeId}-${index}`,

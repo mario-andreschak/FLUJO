@@ -294,6 +294,17 @@ export default function ExperimentalFeaturesSettings() {
     });
   };
 
+  const handleSummarizingCompactionChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    log.debug(`AI summarizing compaction toggled: ${event.target.checked}`);
+    updateSettings({
+      ...settings,
+      experimental: {
+        ...experimental,
+        compactionEnabled: event.target.checked,
+      },
+    });
+  };
+
   const handleVisualToolResultsOnlyChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     log.debug(`Visual compaction tool-results-only toggled: ${event.target.checked}`);
     updateSettings({
@@ -318,6 +329,72 @@ export default function ExperimentalFeaturesSettings() {
 
   return (
     <Box sx={{ p: 2 }}>
+      <FormControl fullWidth sx={{ mb: 2 }}>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={experimental.compactionEnabled ?? false}
+              onChange={handleSummarizingCompactionChange}
+              name="compactionEnabled"
+            />
+          }
+          label={t('settings.experimental.summarizingCompaction')}
+        />
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+          {t('settings.experimental.summarizingCompactionDescription')}
+        </Typography>
+      </FormControl>
+
+      <FormControl fullWidth sx={{ mb: 2 }}>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={experimental.visualCompactionEnabled ?? false}
+              onChange={handleVisualCompactionChange}
+              name="visualCompactionEnabled"
+            />
+          }
+          label={t('settings.experimental.visualCompaction')}
+        />
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+          {t('settings.experimental.visualCompactionDescription')}
+        </Typography>
+      </FormControl>
+
+      <FormControl fullWidth sx={{ mb: 2, ml: 2 }}>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={experimental.visualCompactionToolResultsOnly !== false}
+              onChange={handleVisualToolResultsOnlyChange}
+              name="visualCompactionToolResultsOnly"
+              disabled={!experimental.visualCompactionEnabled}
+            />
+          }
+          label={t('settings.experimental.toolResultsOnly')}
+        />
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+          {t('settings.experimental.toolResultsOnlyDescription')}
+        </Typography>
+      </FormControl>
+
+      <FormControl fullWidth sx={{ mb: 2, ml: 2 }}>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={experimental.visualCompactionEvaluationMode ?? false}
+              onChange={handleVisualEvaluationModeChange}
+              name="visualCompactionEvaluationMode"
+              disabled={!experimental.visualCompactionEnabled}
+            />
+          }
+          label={t('settings.experimental.evaluation')}
+        />
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+          {t('settings.experimental.evaluationDescription')}
+        </Typography>
+      </FormControl>
+
       <FormControl fullWidth sx={{ mb: 2 }}>
         <FormControlLabel
           control={
@@ -397,56 +474,6 @@ export default function ExperimentalFeaturesSettings() {
         />
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
           {t('settings.experimental.codexModelCatalogCacheDescription')}
-        </Typography>
-      </FormControl>
-
-      <FormControl fullWidth sx={{ mb: 2 }}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={experimental.visualCompactionEnabled ?? false}
-              onChange={handleVisualCompactionChange}
-              name="visualCompactionEnabled"
-            />
-          }
-          label={t('settings.experimental.visualCompaction')}
-        />
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          {t('settings.experimental.visualCompactionDescription')}
-        </Typography>
-      </FormControl>
-
-      <FormControl fullWidth sx={{ mb: 2, ml: 2 }}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={experimental.visualCompactionToolResultsOnly !== false}
-              onChange={handleVisualToolResultsOnlyChange}
-              name="visualCompactionToolResultsOnly"
-              disabled={!experimental.visualCompactionEnabled}
-            />
-          }
-          label={t('settings.experimental.toolResultsOnly')}
-        />
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          {t('settings.experimental.toolResultsOnlyDescription')}
-        </Typography>
-      </FormControl>
-
-      <FormControl fullWidth sx={{ mb: 2, ml: 2 }}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={experimental.visualCompactionEvaluationMode ?? false}
-              onChange={handleVisualEvaluationModeChange}
-              name="visualCompactionEvaluationMode"
-              disabled={!experimental.visualCompactionEnabled}
-            />
-          }
-          label={t('settings.experimental.evaluation')}
-        />
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          {t('settings.experimental.evaluationDescription')}
         </Typography>
       </FormControl>
 

@@ -233,7 +233,6 @@ export function resolveVisionInputCapability(
   override?: VisionInputCapability,
 ): VisionInputCapability {
   if (override) return override;
-  if (model.adapter === 'claude-cli' || model.adapter === 'codex-cli') return 'unsupported';
   if (model.visionInputCapability) return model.visionInputCapability;
   if (!Array.isArray(model.inputModalities) || model.inputModalities.length === 0) return 'unknown';
   return model.inputModalities.some((value) => /^(?:image|vision)$/i.test(value))
@@ -392,9 +391,6 @@ export async function compactMessagesVisually(input: {
   });
   if (!input.config.enabled) return finish({ fallbackReason: 'disabled' });
   if (!input.conversationId) return finish({ fallbackReason: 'missing-conversation' });
-  if (input.model.adapter === 'claude-cli' || input.model.adapter === 'codex-cli') {
-    return finish({ fallbackReason: 'self-orchestrating-adapter' });
-  }
   if (capability !== 'supported') {
     return finish({ fallbackReason: capability === 'unknown' ? 'vision-unknown' : 'vision-unsupported' });
   }

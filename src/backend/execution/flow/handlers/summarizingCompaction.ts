@@ -265,6 +265,8 @@ export interface CompactHistoryResult {
   /** Provider-facing materialization. Never assign this to SharedState.messages. */
   wireMessages: FlujoChatMessage[];
   artifact: WireSummaryArtifact;
+  /** Canonical message identities replaced by the injected summary on this wire. */
+  summarizedMessageIds: string[];
 }
 
 /**
@@ -315,6 +317,7 @@ export async function compactHistory(
         ...split.toKeep,
       ],
       artifact: reusable,
+      summarizedMessageIds: split.toSummarize.map(message => message.id).filter((id): id is string => Boolean(id)),
     };
   }
 
@@ -394,5 +397,9 @@ export async function compactHistory(
     anchorUri: anchorUri ?? null,
   });
 
-  return { wireMessages, artifact };
+  return {
+    wireMessages,
+    artifact,
+    summarizedMessageIds: split.toSummarize.map(message => message.id).filter((id): id is string => Boolean(id)),
+  };
 }

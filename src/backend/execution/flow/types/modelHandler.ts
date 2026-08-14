@@ -50,6 +50,7 @@ export interface ModelCallInput {
   onFinalWire?: (
     messages: OpenAI.ChatCompletionMessageParam[],
     diagnostic?: VisualCompactionDiagnostic,
+    modelInput?: ModelInputSnapshot,
   ) => void;
   /** Persist actual provider dispatches for ordinary, durable Chat conversations. */
   archiveModelTurns?: boolean;

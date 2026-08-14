@@ -64,7 +64,13 @@ function MessageList({
                 <Chip
                   size="small"
                   label={status.status}
-                  color={status.status === 'sent' || status.status === 'system' ? 'success' : 'default'}
+                  color={status.status === 'sent' || status.status === 'system'
+                    ? 'success'
+                    : status.status === 'emergency-stripped'
+                      ? 'error'
+                      : status.status === 'content-truncated'
+                        ? 'warning'
+                        : 'default'}
                   variant="outlined"
                 />
               )}
@@ -121,6 +127,32 @@ export default function ModelTurnInspector({ snapshot, conversationId }: ModelTu
           Dispatch {entry.attempt} · {entry.canonicalMessageCount} canonical · {entry.wireMessageCount} wire · {entry.mediaCount} media
         </Typography>
       </Paper>
+
+      {snapshot.contextCompaction?.events.map((event, index) => (
+        <Alert
+          key={`${event.kind}-${index}`}
+          severity={event.kind === 'emergency-refit' ? 'warning' : 'info'}
+          variant="outlined"
+          sx={{ mb: 1 }}
+        >
+          <b>{event.kind}</b>: {event.reason}
+          {event.before !== undefined && event.after !== undefined
+            ? ` (${event.before.toLocaleString()} → ${event.after.toLocaleString()} ${event.unit ?? ''})`
+            : ''}
+          {event.omittedMessages ? ` · ${event.omittedMessages} omitted` : ''}
+          {event.truncatedMessages ? ` · ${event.truncatedMessages} truncated` : ''}
+        </Alert>
+      ))}
+
+      {snapshot.visualCompaction && (
+        <Alert severity={snapshot.visualCompaction.route === 'image' ? 'warning' : 'info'} variant="outlined" sx={{ mb: 1 }}>
+          Visual context route: {snapshot.visualCompaction.route}
+          {snapshot.visualCompaction.candidate
+            ? ` · ${snapshot.visualCompaction.candidate.messageCount} old messages evaluated`
+            : ''}
+          {snapshot.visualCompaction.fallbackReason ? ` · ${snapshot.visualCompaction.fallbackReason}` : ''}
+        </Alert>
+      )}
 
       <ToggleButtonGroup
         exclusive

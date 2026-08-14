@@ -10,7 +10,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import type { ModelInputSnapshot, WirePreviewWarning } from '@/backend/execution/flow/types';
 import type { ChatMessage } from './index';
 import ChatMessages from './ChatMessages';
-import { AnnotatedHistory, wireSummary } from './DebuggerModelInput';
+import { AnnotatedHistory, ContextCompactionPanel, wireSummary } from './DebuggerModelInput';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 
 /**
@@ -86,6 +86,24 @@ const DebuggerConversation: React.FC<DebuggerConversationProps> = ({
           {warning.message}
         </Alert>
       ))}
+
+      <ContextCompactionPanel diagnostic={modelInput.contextCompaction} />
+
+      {modelInput.visualCompaction && (
+        <Alert
+          severity={modelInput.visualCompaction.route === 'image' ? 'warning' : 'info'}
+          variant="outlined"
+          sx={{ mb: 1 }}
+        >
+          Visual context route: {modelInput.visualCompaction.route}
+          {modelInput.visualCompaction.candidate
+            ? ` · ${modelInput.visualCompaction.candidate.messageCount} old messages evaluated`
+            : ''}
+          {modelInput.visualCompaction.fallbackReason
+            ? ` · ${modelInput.visualCompaction.fallbackReason}`
+            : ''}
+        </Alert>
+      )}
 
       {/* Resolved system message — prominent, collapsible. */}
       <Accordion sx={{ boxShadow: 'none', '&:before': { display: 'none' } }}>
