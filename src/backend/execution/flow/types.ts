@@ -1564,6 +1564,11 @@ export interface ProcessNodePrepResult extends BasePrepResult {
      *  node produced during the visit, in call order (see DebugStep.modelInputs).
      *  `modelInput` above is the first/representative entry. Same debug gate. */
     modelInputs?: ModelInputSnapshot[];
+    /** Always-available structural snapshot used by the durable Chat model-turn
+     * archive. Kept separate from debugger state so normal runs stay trace-free. */
+    modelInputForArchive?: ModelInputSnapshot;
+    /** False for ephemeral child runs, whose state must never reach Chat storage. */
+    archiveModelTurns?: boolean;
     /** Durable Codex session for this node and a state-owned replacement hook. */
     codexSession?: CodexSessionMetadata;
     onCodexSessionChange?: (session: CodexSessionMetadata | undefined) => void;

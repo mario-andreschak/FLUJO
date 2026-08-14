@@ -76,7 +76,7 @@ import {
   DEFAULT_TOOL_RESULT_MAX_LINES,
   type RunResourceSettings,
 } from '@/shared/types/runResources';
-import type { ModelStreamDelta, ModelToolProgress, ToolResourceMarker } from '@/backend/services/model/adapters/types';
+import type { ModelStreamDelta, ModelToolProgress, SdkRequestSnapshot, ToolResourceMarker } from '@/backend/services/model/adapters/types';
 import type { RecoveryFailureDetails } from '@/shared/types/execution/events';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { mediaTypeFromMime } from '@/shared/types/model/media';
@@ -88,6 +88,10 @@ import {
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { applyPresetArguments } from '@/backend/utils/resolveDynamicReferences';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
+import {
+  archiveModelDispatch,
+  updateModelDispatchOutcome,
+} from '@/backend/execution/flow/modelTurnArchive';
 import { appendRawForState } from '@/backend/execution/flow/conversationLog';
 import {
   assertFlowExecutionCurrent,
@@ -1505,6 +1509,10 @@ export class ModelHandler {
       runResourceMarkers,
       sessionResume,
       onFinalWire,
+      archiveModelTurns: input.archiveModelTurns,
+      canonicalMessages: messages,
+      modelInputForArchive: input.modelInputForArchive,
+      nodeName,
       beforeToolDispatch: input.beforeToolDispatch,
       authorizePersonaCoreMcp: input.executionAuthority?.authorizePersonaCoreMcp,
       beforeModelDispatch: input.beforeModelDispatch ?? input.executionAuthority?.assertCurrent,
@@ -1772,6 +1780,10 @@ export class ModelHandler {
        * and node eligibility. */
       sessionResume?: boolean;
       onFinalWire?: ModelCallInput['onFinalWire'];
+      archiveModelTurns?: boolean;
+      canonicalMessages?: FlujoChatMessage[];
+      modelInputForArchive?: import('../types').ModelInputSnapshot;
+      nodeName?: string;
       /** Issue #400: called when a bounded session/rate limit is about to be
        *  waited out and retried. callModel projects this onto the existing
        *  `recovery:retry` execution event so the chat can show a countdown
@@ -2110,6 +2122,7 @@ export class ModelHandler {
       // One LOGICAL provider call; every retry below reuses this invocation id
       // and gets its own attempt id, so retries never look like separate calls.
       const providerInvocationId = newStatisticsInvocationId();
+      let sdkDispatchOrdinal = 0;
       const usageFromProviderResult = (value: unknown) => {
         if (!value || typeof value !== 'object') return undefined;
         const raw = (value as { usage?: Record<string, unknown> }).usage;
@@ -2313,6 +2326,53 @@ export class ModelHandler {
                 providerAttemptObserved = true;
                 recordProviderAttempt(observation);
               },
+              onSdkRequest: opts?.archiveModelTurns && opts.conversationId && opts.nodeId
+                ? async (snapshot: SdkRequestSnapshot): Promise<string | undefined> => {
+                    try {
+                      const entry = await archiveModelDispatch({
+                        conversationId: opts.conversationId!,
+                        runId: opts.runId,
+                        nodeId: opts.nodeId!,
+                        nodeName: opts.nodeName,
+                        modelId,
+                        modelName: model.displayName || model.name,
+                        adapter: snapshot.adapter,
+                        operation: snapshot.operation,
+                        attempt: ++sdkDispatchOrdinal,
+                        canonicalMessages: opts.canonicalMessages ?? messages,
+                        genericWire: hydratedMessages,
+                        sdkRequest: snapshot.request,
+                        modelInput: opts.modelInputForArchive,
+                        visualCompaction: visualDiagnostic,
+                      });
+                      executionEventBus.emit(opts.conversationId!, {
+                        type: 'model:dispatch',
+                        turn: entry,
+                      });
+                      return entry.id;
+                    } catch (error) {
+                      log.warn('Could not archive model SDK dispatch; continuing request', { error });
+                      return undefined;
+                    }
+                  }
+                : undefined,
+              onSdkRequestResult: opts?.archiveModelTurns && opts.conversationId
+                ? async ({ dispatchId, outcome }: {
+                    dispatchId: string;
+                    outcome: 'completed' | 'error' | 'cancelled';
+                  }): Promise<void> => {
+                    try {
+                      await updateModelDispatchOutcome(opts.conversationId!, dispatchId, outcome);
+                      executionEventBus.emit(opts.conversationId!, {
+                        type: 'model:dispatch-result',
+                        dispatchId,
+                        outcome,
+                      });
+                    } catch (error) {
+                      log.warn('Could not finalize model SDK dispatch archive', { dispatchId, error });
+                    }
+                  }
+                : undefined,
               messages: hydratedMessages,
               tools: attemptTools,
               temperature,

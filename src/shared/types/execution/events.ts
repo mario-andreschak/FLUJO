@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import type { NormalizedChatError } from '@/shared/types/execution/errors';
+import type { ModelDispatchOutcome, ModelTurnIndexEntry } from '@/shared/types/modelTurn';
 
 /** Additive, durable recovery semantics. Existing SharedState.status values stay
  * unchanged so older snapshots and clients remain readable. */
@@ -135,6 +136,8 @@ export type ExecutionEventType =
   | 'node:snapshot'
   | 'node:changed-files'
   | 'model:start'
+  | 'model:dispatch'
+  | 'model:dispatch-result'
   | 'model:delta'
   | 'model:end'
   | 'tool:call'
@@ -328,6 +331,15 @@ export interface ModelStartEvent extends ExecutionEventBase {
   type: 'model:start';
   node?: NodeRef;
   model?: string;
+}
+export interface ModelDispatchEvent extends ExecutionEventBase {
+  type: 'model:dispatch';
+  turn: ModelTurnIndexEntry;
+}
+export interface ModelDispatchResultEvent extends ExecutionEventBase {
+  type: 'model:dispatch-result';
+  dispatchId: string;
+  outcome: Exclude<ModelDispatchOutcome, 'running'>;
 }
 export interface ModelDeltaEvent extends ExecutionEventBase {
   type: 'model:delta';
@@ -543,6 +555,8 @@ export type ExecutionEvent =
   | NodeSnapshotEvent
   | NodeChangedFilesEvent
   | ModelStartEvent
+  | ModelDispatchEvent
+  | ModelDispatchResultEvent
   | ModelDeltaEvent
   | ModelEndEvent
   | ToolCallEvent

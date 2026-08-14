@@ -2,7 +2,7 @@ import { GoogleGenAI, Content, Part, FunctionDeclaration, GenerateContentRespons
 import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
-import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
+import { CompletionAdapter, CompletionInput, CompletionResult, observeSdkRequest } from './types';
 import { extractText, extractMediaParts, parseToolArgs } from './messageUtils';
 import { LLM_REQUEST_TIMEOUT_MS } from '@/shared/config/timeouts';
 import type { ModelMediaPart } from '@/shared/types/model/media';
@@ -340,6 +340,8 @@ export class GeminiAdapter implements CompletionAdapter {
     temperature,
     maxTokens,
     signal,
+    onSdkRequest,
+    onSdkRequestResult,
   }: CompletionInput): Promise<CompletionResult> {
     // Raise the per-request timeout (SDK default is short relative to a long
     // agentic turn) via httpOptions; see shared timeouts config.
@@ -364,7 +366,7 @@ export class GeminiAdapter implements CompletionAdapter {
       hasSystem: Boolean(systemInstruction),
     });
 
-    const resp = await ai.models.generateContent({
+    const request = {
       model: model.name,
       contents,
       config: {
@@ -379,7 +381,12 @@ export class GeminiAdapter implements CompletionAdapter {
         // The abort signal (Stop button) cancels the in-flight HTTP request.
         ...(signal ? { abortSignal: signal } : {}),
       },
-    });
+    };
+    const resp = await observeSdkRequest(
+      { onSdkRequest, onSdkRequestResult, signal },
+      { adapter: 'gemini', operation: 'models.generateContent', request },
+      () => ai.models.generateContent(request),
+    );
 
     return toChatCompletion(model.name, resp);
   }
@@ -393,6 +400,8 @@ export class GeminiAdapter implements CompletionAdapter {
     maxTokens,
     signal,
     onModelDelta,
+    onSdkRequest,
+    onSdkRequestResult,
   }: CompletionInput): Promise<CompletionResult> {
     const ai = new GoogleGenAI({ apiKey, httpOptions: { timeout: LLM_REQUEST_TIMEOUT_MS } });
     const { systemInstruction, contents } = await toGeminiContents(messages, signal);
@@ -408,7 +417,7 @@ export class GeminiAdapter implements CompletionAdapter {
             }
           : undefined;
     const liveMessageId = `stream_${uuidv4()}`;
-    const stream = await ai.models.generateContentStream({
+    const request = {
       model: model.name,
       contents,
       config: {
@@ -420,7 +429,12 @@ export class GeminiAdapter implements CompletionAdapter {
         ...(responseModalities ? { responseModalities } : {}),
         ...(signal ? { abortSignal: signal } : {}),
       },
-    });
+    };
+    const stream = await observeSdkRequest(
+      { onSdkRequest, onSdkRequestResult, signal },
+      { adapter: 'gemini', operation: 'models.generateContentStream', request },
+      () => ai.models.generateContentStream(request),
+    );
 
     let responseId = `gemini_${uuidv4()}`;
     let text = '';

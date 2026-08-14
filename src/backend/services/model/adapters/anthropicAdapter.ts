@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { createLogger } from '@/utils/logger';
-import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
+import { CompletionAdapter, CompletionInput, CompletionResult, observeSdkRequest } from './types';
 import {
   extractText,
   extractMediaParts,
@@ -641,7 +641,7 @@ export class AnthropicAdapter implements CompletionAdapter {
    *     cache and Models API lookup already handle that per model.
    */
   private async complete(
-    { model, apiKey, messages, tools, temperature, maxTokens, signal }: CompletionInput,
+    { model, apiKey, messages, tools, temperature, maxTokens, signal, onSdkRequest, onSdkRequestResult }: CompletionInput,
     label: string,
     send: (
       client: Anthropic,
@@ -711,7 +711,15 @@ export class AnthropicAdapter implements CompletionAdapter {
       });
 
       try {
-        const result = await send(client, params, options);
+        const result = await observeSdkRequest(
+          { onSdkRequest, onSdkRequestResult, signal },
+          {
+            adapter: 'anthropic',
+            operation: label === 'createStreamCompletion' ? 'messages.stream' : 'messages.create',
+            request: params,
+          },
+          () => send(client, params, options),
+        );
         return {
           ...toChatCompletion(model.name, result.message),
           liveMessageId: result.liveMessageId,

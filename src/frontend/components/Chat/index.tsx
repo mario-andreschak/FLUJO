@@ -69,6 +69,8 @@ import DebuggerCanvas from './DebuggerCanvas';
 import DebuggerConversation from './DebuggerConversation';
 import DebuggerPendingPanel from './DebuggerPendingPanel';
 import ExecutedFlowPanel from './ExecutedFlowPanel';
+import ModelTurnTimeline from './ModelTurnTimeline';
+import ModelTurnInspector from './ModelTurnInspector';
 import { isQuickChatFlowId } from '@/utils/shared/quickChat';
 import type { RecoveryRecord } from '@/shared/types/execution/events';
 import type { NormalizedChatError } from '@/shared/types/execution/errors';
@@ -99,6 +101,7 @@ import {
 } from '@/shared/types/chat'; // Import the shared types
 import type { ModelInputSnapshot, SharedState, WirePreviewResponse } from '@/backend/execution/flow/types'; // Import SharedState type from backend
 import type { ExecutionEvent, TodoEventItem } from '@/shared/types/execution/events'; // Live execution events (SSE)
+import type { ModelTurnIndexEntry, ModelTurnSnapshot } from '@/shared/types/modelTurn';
 import {
   LiveActivity,
   EMPTY_LIVE_ACTIVITY,
@@ -599,6 +602,20 @@ const Chat: React.FC = () => {
   const [wirePreviewRetry, setWirePreviewRetry] = useState(0);
   const wirePreviewAbortRef = useRef<AbortController | null>(null);
   const wirePreviewRequestRef = useRef(0);
+  // Durable, exact provider dispatches. The lightweight index drives the rail;
+  // the selected sidecar is loaded lazily only when Wire view is open.
+  const [modelTurns, setModelTurns] = useState<ModelTurnIndexEntry[]>([]);
+  const [selectedModelTurnId, setSelectedModelTurnId] = useState<string | null>(null);
+  const [modelTurnSnapshot, setModelTurnSnapshot] = useState<ModelTurnSnapshot | null>(null);
+  const [modelTurnLoading, setModelTurnLoading] = useState(false);
+  const [modelTurnError, setModelTurnError] = useState<string | null>(null);
+  const [modelTurnRetry, setModelTurnRetry] = useState(0);
+  const [modelTurnFollowLive, setModelTurnFollowLive] = useState(true);
+  const [unseenModelTurnCount, setUnseenModelTurnCount] = useState(0);
+  const modelTurnFollowLiveRef = useRef(true);
+  const modelTurnDetailCacheRef = useRef(new Map<string, ModelTurnSnapshot>());
+  const modelTurnIdsRef = useRef(new Set<string>());
+  const modelTurnsRef = useRef<ModelTurnIndexEntry[]>([]);
   // Whether a debug session is active (panel should stay open). Decoupled from
   // isDebugPaused so the debugger panel does NOT vanish while a step is executing
   // (between pauses) — it stays open and shows live progress, then re-populates
@@ -645,6 +662,18 @@ const Chat: React.FC = () => {
     setWirePreview(null);
     setWirePreviewLoading(false);
     setWirePreviewError(null);
+    setModelTurns([]);
+    setSelectedModelTurnId(null);
+    setModelTurnSnapshot(null);
+    setModelTurnLoading(false);
+    setModelTurnError(null);
+    setModelTurnRetry(0);
+    setModelTurnFollowLive(true);
+    modelTurnFollowLiveRef.current = true;
+    setUnseenModelTurnCount(0);
+    modelTurnDetailCacheRef.current.clear();
+    modelTurnIdsRef.current.clear();
+    modelTurnsRef.current = [];
   }, [currentConversationId]);
 
   useEffect(() => {
@@ -653,6 +682,31 @@ const Chat: React.FC = () => {
     setDebuggerSelectedStepIndex(-1);
     setDebuggerModelCallIndex(0);
   }, [debugState]);
+
+  useEffect(() => {
+    if (!currentConversationId) return;
+    const controller = new AbortController();
+    void chatService.getModelTurns(currentConversationId, { signal: controller.signal })
+      .then(({ turns }) => {
+        if (controller.signal.aborted) return;
+        const mergedById = new Map(turns.map(turn => [turn.id, turn]));
+        for (const turn of modelTurnsRef.current) mergedById.set(turn.id, turn);
+        const merged = [...mergedById.values()].sort((a, b) => a.timestamp - b.timestamp);
+        modelTurnsRef.current = merged;
+        modelTurnIdsRef.current = new Set(merged.map(turn => turn.id));
+        setModelTurns(merged);
+        if (modelTurnFollowLiveRef.current) {
+          const last = merged[merged.length - 1];
+          setSelectedModelTurnId(last?.id ?? null);
+          setUnseenModelTurnCount(0);
+        }
+      })
+      .catch(error => {
+        if (controller.signal.aborted) return;
+        log.warn('Could not load model-turn timeline', error);
+      });
+    return () => controller.abort();
+  }, [currentConversationId]);
 
   // Executed-steps panel (issue #213): a hideable, resizable side panel that
   // renders the current conversation's flow and highlights the executed path.
@@ -2043,6 +2097,39 @@ const Chat: React.FC = () => {
         if (event.conversationId) {
           patchConversationStatus(event.conversationId, 'running');
           markConversationStopped(event.conversationId, false); // a new run clears the prior Stop notice
+        }
+        break;
+      case 'model:dispatch': {
+        touch({ activeNode: event.turn.node.nodeName || event.turn.node.nodeId });
+        if (!modelTurnIdsRef.current.has(event.turn.id)) {
+          modelTurnIdsRef.current.add(event.turn.id);
+          const next = [...modelTurnsRef.current, event.turn].sort((a, b) => a.timestamp - b.timestamp);
+          modelTurnsRef.current = next;
+          setModelTurns(next);
+          if (modelTurnFollowLiveRef.current) {
+            setSelectedModelTurnId(event.turn.id);
+            setSelectedPreviewNodeId(null);
+            setModelTurnSnapshot(null);
+            setModelTurnError(null);
+            setUnseenModelTurnCount(0);
+          } else {
+            setUnseenModelTurnCount(count => count + 1);
+          }
+        }
+        break;
+      }
+      case 'model:dispatch-result':
+        touch({});
+        modelTurnsRef.current = modelTurnsRef.current.map(turn =>
+          turn.id === event.dispatchId ? { ...turn, outcome: event.outcome } : turn
+        );
+        setModelTurns(modelTurnsRef.current);
+        setModelTurnSnapshot(prev => prev?.entry.id === event.dispatchId
+          ? { ...prev, entry: { ...prev.entry, outcome: event.outcome } }
+          : prev
+        );
+        for (const key of modelTurnDetailCacheRef.current.keys()) {
+          if (key.endsWith(`:${event.dispatchId}`)) modelTurnDetailCacheRef.current.delete(key);
         }
         break;
       case 'model:delta': {
@@ -4501,6 +4588,10 @@ const Chat: React.FC = () => {
   const handleDebuggerStepSelectionChange = useCallback((index: number) => {
     setDebuggerSelectedStepIndex(index);
     setDebuggerModelCallIndex(0);
+    setSelectedModelTurnId(null);
+    setModelTurnSnapshot(null);
+    setModelTurnFollowLive(false);
+    modelTurnFollowLiveRef.current = false;
   }, []);
 
   const debuggerTrace = debugState?.executionTrace ?? [];
@@ -4539,16 +4630,57 @@ const Chat: React.FC = () => {
     ? Math.min(debuggerModelCallIndex, debuggerModelInputs.length - 1)
     : 0;
   const selectedDebuggerModelInput = debuggerModelInputs[safeDebuggerModelCallIndex];
+  const selectedModelTurn = modelTurns.find(turn => turn.id === selectedModelTurnId);
+  const archivedModelTurnAvailable = !!selectedModelTurn;
   const historicalWireViewAvailable = debugPanelOpen && !!debugState && (
     debuggerModelInputs.length > 0 || activeDebuggerStepIndex >= 0
   );
   const currentPreviewAvailable = !!selectedPreviewNodeId && !!currentConversationId;
-  const wireViewAvailable = historicalWireViewAvailable || currentPreviewAvailable;
+  const wireViewAvailable = archivedModelTurnAvailable || historicalWireViewAvailable || currentPreviewAvailable;
+  const showingArchivedModelTurn = transcriptView === 'wire' && archivedModelTurnAvailable;
   const showingHistoricalWireView =
-    transcriptView === 'wire' && historicalWireViewAvailable;
+    transcriptView === 'wire' && !archivedModelTurnAvailable && historicalWireViewAvailable;
   const showingCurrentPreview =
-    transcriptView === 'wire' && !historicalWireViewAvailable && currentPreviewAvailable;
-  const showingWireView = showingHistoricalWireView || showingCurrentPreview;
+    transcriptView === 'wire'
+    && !archivedModelTurnAvailable
+    && !historicalWireViewAvailable
+    && currentPreviewAvailable;
+  const showingWireView = showingArchivedModelTurn || showingHistoricalWireView || showingCurrentPreview;
+
+  useEffect(() => {
+    if (!showingArchivedModelTurn || !selectedModelTurn) {
+      setModelTurnLoading(false);
+      return;
+    }
+    const cacheKey = `${selectedModelTurn.conversationId}:${selectedModelTurn.id}`;
+    const cached = modelTurnDetailCacheRef.current.get(cacheKey);
+    if (cached) {
+      setModelTurnSnapshot(cached);
+      setModelTurnError(null);
+      setModelTurnLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    setModelTurnSnapshot(null);
+    setModelTurnError(null);
+    setModelTurnLoading(true);
+    void chatService.getModelTurn(
+      selectedModelTurn.conversationId,
+      selectedModelTurn.id,
+      { signal: controller.signal },
+    ).then(snapshot => {
+      if (controller.signal.aborted) return;
+      modelTurnDetailCacheRef.current.set(cacheKey, snapshot);
+      setModelTurnSnapshot(snapshot);
+    }).catch(error => {
+      if (controller.signal.aborted) return;
+      setModelTurnError(error instanceof Error ? error.message : 'Could not load this model turn.');
+    }).finally(() => {
+      if (!controller.signal.aborted) setModelTurnLoading(false);
+    });
+    return () => controller.abort();
+  }, [showingArchivedModelTurn, selectedModelTurn, modelTurnRetry]);
 
   // Fetch only while the user is looking at the predictive wire view. Cleanup
   // aborts view-close, node-change, conversation-change, and unmount requests;
@@ -4937,6 +5069,7 @@ const Chat: React.FC = () => {
                 py: { xs: 0.5, sm: 0.75 },
                 display: 'flex',
                 alignItems: 'center',
+                flexWrap: 'wrap',
                 gap: 1,
                 minWidth: 0,
                 borderBottom: 1,
@@ -5061,6 +5194,26 @@ const Chat: React.FC = () => {
                   </Box>
                 )}
               </Box>
+              {modelTurns.length > 0 && (
+                <ModelTurnTimeline
+                  turns={modelTurns}
+                  selectedId={selectedModelTurnId}
+                  followLive={modelTurnFollowLive}
+                  unseenCount={unseenModelTurnCount}
+                  onSelect={(turn, atEnd) => {
+                    setSelectedModelTurnId(turn.id);
+                    setSelectedPreviewNodeId(null);
+                    setWirePreview(null);
+                    setWirePreviewError(null);
+                    setModelTurnSnapshot(null);
+                    setModelTurnError(null);
+                    setModelTurnFollowLive(atEnd);
+                    modelTurnFollowLiveRef.current = atEnd;
+                    if (atEnd) setUnseenModelTurnCount(0);
+                    setTranscriptView('wire');
+                  }}
+                />
+              )}
               {wireViewAvailable && (
                 <ToggleButtonGroup
                   exclusive
@@ -5199,7 +5352,39 @@ const Chat: React.FC = () => {
                       </Tooltip>
                     </Box>
                   )}
-                  {showingHistoricalWireView && selectedDebuggerModelInput ? (
+                  {showingArchivedModelTurn && modelTurnLoading ? (
+                    <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 1, py: 4 }}>
+                      <CircularProgress size={20} />
+                      <Typography variant="body2">Loading exact model turn…</Typography>
+                    </Box>
+                  ) : showingArchivedModelTurn && modelTurnError ? (
+                    <Alert
+                      severity="error"
+                      variant="outlined"
+                      sx={{ mx: 'auto', mt: 2, maxWidth: 720 }}
+                      action={
+                        <Button
+                          color="inherit"
+                          size="small"
+                          onClick={() => {
+                            if (selectedModelTurn) {
+                              modelTurnDetailCacheRef.current.delete(`${selectedModelTurn.conversationId}:${selectedModelTurn.id}`);
+                            }
+                            setModelTurnRetry(value => value + 1);
+                          }}
+                        >
+                          Retry
+                        </Button>
+                      }
+                    >
+                      {modelTurnError}
+                    </Alert>
+                  ) : showingArchivedModelTurn && modelTurnSnapshot && selectedModelTurn ? (
+                    <ModelTurnInspector
+                      snapshot={modelTurnSnapshot}
+                      conversationId={selectedModelTurn.conversationId}
+                    />
+                  ) : showingHistoricalWireView && selectedDebuggerModelInput ? (
                     <DebuggerConversation
                       modelInput={selectedDebuggerModelInput}
                       source="historical-request"
@@ -5742,6 +5927,10 @@ const Chat: React.FC = () => {
                 selectedNodeId={selectedPreviewNodeId}
                 onSelectNode={(nodeId) => {
                   setSelectedPreviewNodeId(nodeId);
+                  setSelectedModelTurnId(null);
+                  setModelTurnSnapshot(null);
+                  setModelTurnFollowLive(false);
+                  modelTurnFollowLiveRef.current = false;
                   setWirePreview(null);
                   setWirePreviewError(null);
                 }}
@@ -5855,6 +6044,10 @@ const Chat: React.FC = () => {
               selectedNodeId={selectedPreviewNodeId}
               onSelectNode={(nodeId) => {
                 setSelectedPreviewNodeId(nodeId);
+                setSelectedModelTurnId(null);
+                setModelTurnSnapshot(null);
+                setModelTurnFollowLive(false);
+                modelTurnFollowLiveRef.current = false;
                 setWirePreview(null);
                 setWirePreviewError(null);
               }}

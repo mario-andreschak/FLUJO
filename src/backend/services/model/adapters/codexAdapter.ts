@@ -182,6 +182,8 @@ export class CodexAdapter implements CompletionAdapter {
       sessionResume,
       codexSession,
       onCodexSessionChange,
+      onSdkRequest,
+      onSdkRequestResult,
     } = input;
     // Lazy-load the Codex SDK: ESM-only, so a module-scope import would break
     // the CommonJS Jest transform for every module referencing the adapter
@@ -753,6 +755,7 @@ export class CodexAdapter implements CompletionAdapter {
       while (true) {
         let attemptFailure: Error | undefined;
         let steeringMessages: FlujoChatMessage[] = [];
+        let dispatchId: string | undefined;
         const streamedAgentText = new Map<string, string>();
         const turnIndex = sdkTurnIndex++;
         const streamId = (itemId: string) =>
@@ -765,6 +768,23 @@ export class CodexAdapter implements CompletionAdapter {
         else abortController.signal.addEventListener('abort', abortTurn, { once: true });
 
         try {
+          try {
+            dispatchId = await onSdkRequest?.({
+              adapter: 'codex-cli',
+              operation: 'thread.runStreamed',
+              request: {
+                input: nextTurnInput,
+                options: { signal: '[AbortSignal]' },
+                thread: {
+                  resumed: Boolean(resumeThreadId),
+                  id: capturedThreadId,
+                  options: threadOptions,
+                },
+              },
+            });
+          } catch (archiveError) {
+            log.warn('Could not archive Codex SDK request', archiveError);
+          }
           const { events } = await thread.runStreamed(nextTurnInput, {
             signal: turnAbortController.signal,
           });
@@ -875,6 +895,20 @@ export class CodexAdapter implements CompletionAdapter {
           attemptFailure = err instanceof Error ? err : new Error(String(err));
         } finally {
           abortController.signal.removeEventListener('abort', abortTurn);
+          if (dispatchId && onSdkRequestResult) {
+            const outcome = handoffCalls.length > 0
+              ? 'completed'
+              : steeringMessages.length > 0 || signal?.aborted
+                ? 'cancelled'
+                : attemptFailure
+                  ? 'error'
+                  : 'completed';
+            try {
+              await onSdkRequestResult({ dispatchId, outcome });
+            } catch (archiveError) {
+              log.warn('Could not update Codex SDK request archive', archiveError);
+            }
+          }
         }
 
         if (signal?.aborted && handoffCalls.length === 0) {

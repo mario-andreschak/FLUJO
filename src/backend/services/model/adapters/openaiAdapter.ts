@@ -1,7 +1,7 @@
 import OpenAI from 'openai';
 import { createLogger } from '@/utils/logger';
 import { createOpenAIClient, getProviderDefaultHeaders } from '../openaiClient';
-import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
+import { CompletionAdapter, CompletionInput, CompletionResult, observeSdkRequest } from './types';
 import { withTransientRetry } from '@/backend/utils/transientRetry';
 import { v4 as uuidv4 } from 'uuid';
 import { extractAssistantMedia } from './messageUtils';
@@ -133,6 +133,8 @@ export class OpenAiAdapter implements CompletionAdapter {
     maxTokens,
     signal,
     onProviderAttempt,
+    onSdkRequest,
+    onSdkRequestResult,
     promptCacheKey,
     promptCacheMode,
   }: CompletionInput): Promise<CompletionResult> {
@@ -205,11 +207,18 @@ export class OpenAiAdapter implements CompletionAdapter {
         ...(withCacheControls ? { prompt_cache_options: { mode: 'explicit' as const } } : {}),
       };
       return withTransientRetry(
-        () =>
-          openai.chat.completions.create(
-            body as OpenAI.Chat.ChatCompletionCreateParams,
-            signal ? { signal } : undefined
-          ),
+        () => observeSdkRequest(
+          { onSdkRequest, onSdkRequestResult, signal },
+          {
+            adapter: model.adapter || 'openai',
+            operation: 'chat.completions.create',
+            request: body,
+          },
+          () => openai.chat.completions.create(
+              body as OpenAI.Chat.ChatCompletionCreateParams,
+              signal ? { signal } : undefined
+            ),
+        ),
         { signal, onAttempt: onProviderAttempt }
       ) as Promise<OpenAI.Chat.Completions.ChatCompletion>;
     };
@@ -263,6 +272,8 @@ export class OpenAiAdapter implements CompletionAdapter {
     promptCacheKey,
     promptCacheMode,
     onModelDelta,
+    onSdkRequest,
+    onSdkRequestResult,
   }: CompletionInput): Promise<CompletionResult> {
     const openai = this.createClient(model, apiKey);
     const requestParams: OpenAI.Chat.ChatCompletionCreateParamsStreaming = {
@@ -310,9 +321,17 @@ export class OpenAiAdapter implements CompletionAdapter {
         ...(withCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
         ...(withCacheControls ? { prompt_cache_options: { mode: 'explicit' as const } } : {}),
       };
-      const stream = await openai.chat.completions.create(
-        body as OpenAI.Chat.ChatCompletionCreateParamsStreaming,
-        signal ? { signal } : undefined,
+      const stream = await observeSdkRequest(
+        { onSdkRequest, onSdkRequestResult, signal },
+        {
+          adapter: model.adapter || 'openai',
+          operation: 'chat.completions.create(stream)',
+          request: body,
+        },
+        () => openai.chat.completions.create(
+          body as OpenAI.Chat.ChatCompletionCreateParamsStreaming,
+          signal ? { signal } : undefined,
+        ),
       );
 
       let completionId = `chatcmpl_${uuidv4()}`;

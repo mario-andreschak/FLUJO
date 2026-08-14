@@ -76,8 +76,42 @@ describe('standalone stdio MCP packages', () => {
     try {
       const listed = await client.listTools();
       expect(listed.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
-        'run', 'start', 'status', 'wait', 'write_stdin', 'kill', 'list_sessions',
+        'run', 'start', 'status', 'wait', 'sleep', 'write_stdin', 'kill', 'list_sessions',
       ]));
+      const slept = await client.callTool({ name: 'sleep', arguments: { seconds: 0.02 } });
+      expect(slept.isError).not.toBe(true);
+      const sleepContent = (slept as { content?: Array<{ type?: string; text?: unknown }> }).content;
+      const sleepText = sleepContent?.[0]?.text;
+      expect(typeof sleepText).toBe('string');
+      expect(JSON.parse(String(sleepText))).toEqual(expect.objectContaining({
+        slept: true,
+        requestedSeconds: 0.02,
+      }));
+      const quickCommand = process.platform === 'win32'
+        ? "Write-Output 'wait-finished'"
+        : "printf 'wait-finished\\n'";
+      const started = await client.callTool({
+        name: 'start',
+        arguments: { command: quickCommand, cwd: root },
+      });
+      const startText = (started as { content?: Array<{ type?: string; text?: unknown }> }).content?.[0]?.text;
+      expect(typeof startText).toBe('string');
+      const sessionId = (JSON.parse(String(startText)) as { sessionId?: string }).sessionId;
+      expect(sessionId).toBeTruthy();
+      const waited = await client.callTool({
+        name: 'wait',
+        arguments: { sessionId, timeout: 10 },
+      });
+      const waitText = (waited as { content?: Array<{ type?: string; text?: unknown }> }).content?.[0]?.text;
+      expect(typeof waitText).toBe('string');
+      expect(JSON.parse(String(waitText))).toEqual(expect.objectContaining({
+        running: false,
+        timedOut: false,
+        requestedTimeoutMs: 10_000,
+        returnedEarly: true,
+        remainingSeconds: expect.any(Number),
+        hint: expect.stringContaining('call sleep'),
+      }));
       const progressMessages: string[] = [];
       const command = process.platform === 'win32'
         ? "Write-Output 'progress-one'; Start-Sleep -Milliseconds 150; Write-Output 'progress-two'"

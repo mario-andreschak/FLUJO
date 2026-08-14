@@ -3,7 +3,12 @@ import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/utils/logger';
 import { getProviderDefaultHeaders } from '../openaiClient';
 import type { ModelMediaPart } from '@/shared/types/model/media';
-import type { CompletionAdapter, CompletionInput, CompletionResult } from './types';
+import {
+  observeSdkRequest,
+  type CompletionAdapter,
+  type CompletionInput,
+  type CompletionResult,
+} from './types';
 import { extractImageParts, extractText } from './messageUtils';
 import { resolveOpenRouterMediaRoute } from './openrouterMediaRouting';
 
@@ -182,22 +187,27 @@ async function generateImage(input: CompletionInput): Promise<CompletionResult> 
   const url = endpoint(input.model.baseUrl, 'images');
   const prompt = latestUserPrompt(input.messages);
   const referenceImage = latestReferenceImage(input.messages);
-  const response = await observedFetch(url, {
-    method: 'POST',
-    headers: requestHeaders(input),
-    body: JSON.stringify({
-      model: input.model.name,
-      prompt,
-      ...(referenceImage
-        ? {
-            input_references: [{
-              type: 'image_url',
-              image_url: { url: referenceImage },
-            }],
-          }
-        : {}),
-    }),
-  }, input);
+  const requestBody = {
+    model: input.model.name,
+    prompt,
+    ...(referenceImage
+      ? {
+          input_references: [{
+            type: 'image_url',
+            image_url: { url: referenceImage },
+          }],
+        }
+      : {}),
+  };
+  const response = await observeSdkRequest(
+    input,
+    { adapter: 'openrouter-media', operation: 'POST /images', request: requestBody },
+    () => observedFetch(url, {
+      method: 'POST',
+      headers: requestHeaders(input),
+      body: JSON.stringify(requestBody),
+    }, input),
+  );
   if (!response.ok) throw await responseError(response, input.model, 'images');
   const body = await response.json() as ImageResponse;
   if (body.error) throw new Error(`OpenRouter image generation failed: ${safeErrorText(body.error)}`);
@@ -293,23 +303,28 @@ async function generateVideo(input: CompletionInput): Promise<CompletionResult> 
   const apiUrl = endpoint(input.model.baseUrl, 'videos');
   const prompt = latestUserPrompt(input.messages);
   const referenceImage = latestReferenceImage(input.messages);
-  const response = await observedFetch(apiUrl, {
-    method: 'POST',
-    headers: requestHeaders(input),
-    body: JSON.stringify({
-      model: input.model.name,
-      prompt,
-      ...(referenceImage
-        ? {
-            frame_images: [{
-              type: 'image_url',
-              image_url: { url: referenceImage },
-              frame_type: 'first_frame',
-            }],
-          }
-        : {}),
-    }),
-  }, input);
+  const requestBody = {
+    model: input.model.name,
+    prompt,
+    ...(referenceImage
+      ? {
+          frame_images: [{
+            type: 'image_url',
+            image_url: { url: referenceImage },
+            frame_type: 'first_frame',
+          }],
+        }
+      : {}),
+  };
+  const response = await observeSdkRequest(
+    input,
+    { adapter: 'openrouter-media', operation: 'POST /videos', request: requestBody },
+    () => observedFetch(apiUrl, {
+      method: 'POST',
+      headers: requestHeaders(input),
+      body: JSON.stringify(requestBody),
+    }, input),
+  );
   if (!response.ok) throw await responseError(response, input.model, 'videos');
   let job = await response.json() as VideoJob;
   if (job.error && job.status !== 'completed') {

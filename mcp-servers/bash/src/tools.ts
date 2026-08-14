@@ -1524,7 +1524,7 @@ function buildPtySpawn(shell: ShellKind): PtySpawnPlan {
   };
 }
 
-function createCommandProgressReporter(context?: BashExecutionContext): {
+function createCommandProgressReporter(context?: BashExecutionContext, heartbeatMs = 10_000): {
   push: (chunk: string) => void;
   stop: () => Promise<void>;
 } {
@@ -1566,7 +1566,7 @@ function createCommandProgressReporter(context?: BashExecutionContext): {
     if (stopped) return;
     if (pending) flush();
     else deliver(`[command still running: ${Math.max(1, Math.round((Date.now() - startedAt) / 1000))}s]`);
-  }, 10_000);
+  }, heartbeatMs);
   heartbeat.unref?.();
 
   return {
@@ -1772,7 +1772,9 @@ export function bashToolDefinitions(): Tool[] {
     },
     {
       name: 'wait',
-      description: 'Wait for a background session, sending new output as live progress when supported. The wait timeout does not kill the session.',
+      description:
+        'Wait until a background session completes or the maximum timeout elapses, sending new output as live progress when supported. '
+        + 'The timeout does not kill the session. A finite wait that completes early reports the remaining duration and points to sleep for fixed delays.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1784,6 +1786,22 @@ export function bashToolDefinitions(): Tool[] {
           },
         },
         required: ['sessionId'],
+      },
+    },
+    {
+      name: 'sleep',
+      description:
+        'Wait for a fixed duration independent of background-session state. Use this instead of wait when the full delay must elapse even if a command finishes early.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          seconds: {
+            type: 'number',
+            exclusiveMinimum: 0,
+            description: 'Fixed positive number of seconds to sleep. Values above the configured Bash timeout ceiling are rejected rather than shortened.',
+          },
+        },
+        required: ['seconds'],
       },
     },
     {
@@ -2281,15 +2299,43 @@ async function waitTool(
   const id = String(args?.sessionId ?? '');
   const session = ownedSession(id, ownerScope);
   if (!session) return textResult({ error: `No background session with id "${id}".` }, true);
-  if (!session.running) return textResult(snapshot(session, { timedOut: false }));
+  const timeoutMs = resolveCommandTimeoutMs(args.timeout);
+  const timing = (
+    outcome: 'completed' | 'timedOut' | 'cancelled',
+    waitedMs: number,
+  ): Record<string, unknown> => {
+    const finite = timeoutMs !== undefined;
+    const returnedEarly = finite && outcome === 'completed' && waitedMs < timeoutMs;
+    const remainingSeconds = returnedEarly
+      ? Math.ceil(Math.max(0, timeoutMs - waitedMs)) / 1_000
+      : 0;
+    return {
+      timedOut: outcome === 'timedOut',
+      waitedMs,
+      ...(finite ? { requestedTimeoutMs: timeoutMs, returnedEarly } : {}),
+      ...(returnedEarly
+        ? {
+            remainingSeconds,
+            hint:
+              '`wait.timeout` is a maximum, so wait returned when the background session completed. '
+              + `To wait the full requested duration, call sleep with {"seconds": ${remainingSeconds}}.`,
+          }
+        : {}),
+      ...(outcome === 'cancelled' ? { cancelled: true } : {}),
+    };
+  };
+  if (!session.running) return textResult(snapshot(session, timing('completed', 0)));
   if (context?.signal?.aborted) {
-    return textResult(snapshot(session, { timedOut: false, cancelled: true }), true);
+    return textResult(snapshot(session, timing('cancelled', 0)), true);
   }
 
-  const timeoutMs = resolveCommandTimeoutMs(args.timeout);
+  const startedAt = Date.now();
   const progress = createCommandProgressReporter(context);
 
-  const outcome = await new Promise<'completed' | 'timedOut' | 'cancelled'>((resolve) => {
+  const outcome = await new Promise<{
+    kind: 'completed' | 'timedOut' | 'cancelled';
+    waitedMs: number;
+  }>((resolve) => {
     let settled = false;
     let pollTimer: NodeJS.Timeout | undefined;
     let timeoutTimer: NodeJS.Timeout | undefined;
@@ -2301,8 +2347,9 @@ async function waitTool(
       if (timeoutTimer) clearTimeout(timeoutTimer);
       context?.signal?.removeEventListener('abort', onAbort);
       if (session.output.length > outputOffset) progress.push(session.output.slice(outputOffset));
+      const waitedMs = Date.now() - startedAt;
       await progress.stop();
-      resolve(value);
+      resolve({ kind: value, waitedMs });
     };
     const onAbort = () => void finish('cancelled');
     const poll = () => {
@@ -2323,12 +2370,59 @@ async function waitTool(
     poll();
   });
   return textResult(
-    snapshot(session, {
-      timedOut: outcome === 'timedOut',
-      ...(outcome === 'cancelled' ? { cancelled: true } : {}),
-    }),
-    outcome === 'cancelled',
+    snapshot(session, timing(outcome.kind, outcome.waitedMs)),
+    outcome.kind === 'cancelled',
   );
+}
+
+async function sleepTool(
+  args: Record<string, unknown>,
+  context?: BashExecutionContext,
+): Promise<CallToolResult> {
+  const seconds = args.seconds;
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) {
+    return textResult({ error: 'Provide "seconds" as a finite number greater than 0.' }, true);
+  }
+  const requestedMs = seconds * 1_000;
+  const ceilingMs = Math.min(commandMaxTimeoutMs(), 2 ** 31 - 1);
+  if (requestedMs > ceilingMs) {
+    return textResult({
+      error: `Requested sleep exceeds the configured maximum of ${ceilingMs / 1_000} seconds.`,
+      requestedSeconds: seconds,
+      maxSeconds: ceilingMs / 1_000,
+    }, true);
+  }
+  if (context?.signal?.aborted) {
+    return textResult({ slept: false, cancelled: true, requestedSeconds: seconds, elapsedMs: 0 }, true);
+  }
+
+  const startedAt = Date.now();
+  // A one-second heartbeat keeps finite MCP request timers alive even when the
+  // requested fixed delay is longer than the caller's ordinary silent window.
+  const progress = createCommandProgressReporter(context, 1_000);
+  progress.push(`[sleeping for ${seconds}s]`);
+  const outcome = await new Promise<{ slept: boolean; elapsedMs: number }>((resolve) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    const finish = (slept: boolean) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      context?.signal?.removeEventListener('abort', onAbort);
+      resolve({ slept, elapsedMs: Date.now() - startedAt });
+    };
+    const onAbort = () => finish(false);
+    timer = setTimeout(() => finish(true), requestedMs);
+    if (context?.signal?.aborted) onAbort();
+    else context?.signal?.addEventListener('abort', onAbort, { once: true });
+  });
+  await progress.stop();
+  return textResult({
+    slept: outcome.slept,
+    requestedSeconds: seconds,
+    elapsedMs: outcome.elapsedMs,
+    ...(!outcome.slept ? { cancelled: true } : {}),
+  }, !outcome.slept);
 }
 
 function writeStdinTool(args: Record<string, unknown>, ownerScope: string): CallToolResult {
@@ -2628,6 +2722,8 @@ export async function bashCallTool(
         return statusTool(args, scope);
       case 'wait':
         return await waitTool(args, scope, context);
+      case 'sleep':
+        return await sleepTool(args, context);
       case 'write_stdin':
         return writeStdinTool(args, scope);
       case 'kill':

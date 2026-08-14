@@ -1,7 +1,7 @@
 import OpenAI from 'openai';
 import { createLogger } from '@/utils/logger';
 import { createOpenAIClient, getProviderDefaultHeaders } from '../openaiClient';
-import { CompletionAdapter, CompletionInput, CompletionResult } from './types';
+import { CompletionAdapter, CompletionInput, CompletionResult, observeSdkRequest } from './types';
 import { withTransientRetry } from '@/backend/utils/transientRetry';
 import { v4 as uuidv4 } from 'uuid';
 import type { ModelMediaPart } from '@/shared/types/model/media';
@@ -557,6 +557,8 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     maxTokens,
     signal,
     onProviderAttempt,
+    onSdkRequest,
+    onSdkRequestResult,
     conversationId,
     nodeId,
     promptCacheKey,
@@ -606,15 +608,20 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
       droppedParams: Array.from(dropped),
     });
 
-    const send = (omit: Set<Droppable>) =>
-      withTransientRetry(
-        () =>
-          openai.responses.create(
-            buildBody(omit) as unknown as OpenAI.Responses.ResponseCreateParamsNonStreaming,
-            signal ? { signal } : undefined,
-          ),
+    const send = (omit: Set<Droppable>) => {
+      const body = buildBody(omit);
+      return withTransientRetry(
+        () => observeSdkRequest(
+          { onSdkRequest, onSdkRequestResult, signal },
+          { adapter: 'openai-responses', operation: 'responses.create', request: body },
+          () => openai.responses.create(
+              body as unknown as OpenAI.Responses.ResponseCreateParamsNonStreaming,
+              signal ? { signal } : undefined,
+            ),
+        ),
         { signal, onAttempt: onProviderAttempt },
       ) as Promise<OpenAI.Responses.Response>;
+    };
 
     // Negotiate away unsupported optional parameters, one per rejection. Bounded
     // by the number of droppable parameters, so this cannot spin.
@@ -670,6 +677,8 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     nodeId,
     promptCacheKey,
     onModelDelta,
+    onSdkRequest,
+    onSdkRequestResult,
   }: CompletionInput): Promise<CompletionResult> {
     const openai = createOpenAIClient({
       apiKey,
@@ -705,9 +714,14 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
     });
 
     const consume = async (omit: Set<Droppable>): Promise<OpenAI.Responses.Response> => {
-      const stream = await openai.responses.create(
-        buildBody(omit) as unknown as OpenAI.Responses.ResponseCreateParamsStreaming,
-        signal ? { signal } : undefined,
+      const body = buildBody(omit);
+      const stream = await observeSdkRequest(
+        { onSdkRequest, onSdkRequestResult, signal },
+        { adapter: 'openai-responses', operation: 'responses.create(stream)', request: body },
+        () => openai.responses.create(
+          body as unknown as OpenAI.Responses.ResponseCreateParamsStreaming,
+          signal ? { signal } : undefined,
+        ),
       );
       let response: OpenAI.Responses.Response | undefined;
       const toolIndexes = new Map<string, number>();
