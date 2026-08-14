@@ -156,7 +156,7 @@ describe('behavioral learning policy and evidence', () => {
     });
   });
 
-  it('automatically applies only the bounded checked improvement when selected', async () => {
+  it('keeps bounded checked improvements in manual review during shadow rollout', async () => {
     await inFreshWorkspace(async () => {
       const setup = await setupPersona('auto_apply_validated');
       const proposal = await suggestBehaviorInstructionImprovement({
@@ -168,12 +168,17 @@ describe('behavioral learning policy and evidence', () => {
       });
 
       expect(proposal).toMatchObject({
-        status: 'activated',
-        approval: { kind: 'policy', actor: 'persona-safe-improvement-policy' },
-        activatedRevisionId: expect.any(String),
+        status: 'awaiting_approval',
+        provenance: {
+          origin: 'persona_tool',
+          diffRiskClass: 'instruction_only',
+          policyDecisionCode: 'owner_approval_required',
+        },
       });
+      expect(proposal.approval).toBeUndefined();
+      expect(proposal.activatedRevisionId).toBeUndefined();
       expect((await getBehaviorBinding(setup.binding.id))?.activeRevisionId)
-        .toBe(proposal.activatedRevisionId);
+        .toBe(setup.baseRevision.id);
     });
   });
 

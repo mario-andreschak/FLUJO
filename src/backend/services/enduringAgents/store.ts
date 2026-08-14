@@ -2,6 +2,7 @@ import type { ZodType } from 'zod';
 
 import {
   BehaviorBindingSchema,
+  BehaviorMaintenanceRunSchema,
   BehaviorRevisionSchema,
   MemoryItemSchema,
   PersonaAppGrantSchema,
@@ -14,6 +15,7 @@ import {
   RoleDefinitionSchema,
   RoleVersionSchema,
   type BehaviorBinding,
+  type BehaviorMaintenanceRun,
   type BehaviorRevision,
   type MemoryItem,
   type Persona,
@@ -1090,6 +1092,43 @@ export function createBehaviorBindingIfAbsent(
 
     await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.behaviorBindings, record.id, record);
     return record;
+  });
+}
+
+export function getBehaviorMaintenanceRun(id: string): Promise<BehaviorMaintenanceRun | null> {
+  return getRecord({
+    collection: ENDURING_AGENT_COLLECTIONS.behaviorMaintenanceRuns,
+    id,
+    recordKind: 'BehaviorMaintenanceRun',
+    schema: BehaviorMaintenanceRunSchema,
+  });
+}
+
+export async function listBehaviorMaintenanceRuns(personaId: string): Promise<BehaviorMaintenanceRun[]> {
+  assertSafeCollectionId(personaId);
+  const records = await listRecords({
+    collection: ENDURING_AGENT_COLLECTIONS.behaviorMaintenanceRuns,
+    recordKind: 'BehaviorMaintenanceRun',
+    schema: BehaviorMaintenanceRunSchema,
+    strict: true,
+  });
+  return records.filter((record) => record.personaId === personaId);
+}
+
+export async function saveBehaviorMaintenanceRun(
+  value: BehaviorMaintenanceRun,
+): Promise<BehaviorMaintenanceRun> {
+  const record = parseRecord(
+    'BehaviorMaintenanceRun',
+    BehaviorMaintenanceRunSchema,
+    value,
+  );
+  await requireWritablePersona(record.personaId, `BehaviorMaintenanceRun ${JSON.stringify(record.id)}`);
+  return saveValidatedRecord({
+    collection: ENDURING_AGENT_COLLECTIONS.behaviorMaintenanceRuns,
+    recordKind: 'BehaviorMaintenanceRun',
+    schema: BehaviorMaintenanceRunSchema,
+    value: record,
   });
 }
 

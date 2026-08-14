@@ -13,6 +13,25 @@ import {
   MemorySourceRefSchema,
 } from './schemas';
 
+export const BEHAVIOR_PROPOSAL_ORIGINS = [
+  'manual',
+  'persona_tool',
+  'engine_maintenance',
+] as const;
+export type BehaviorProposalOrigin = (typeof BEHAVIOR_PROPOSAL_ORIGINS)[number];
+
+export interface BehaviorProposalProvenance {
+  schemaVersion: 1;
+  origin: BehaviorProposalOrigin;
+  maintenanceRunId?: string;
+  detectorVersion?: string;
+  evaluationSuiteVersion?: string;
+  evidenceDigest: string;
+  evidenceTaint: 'trusted' | 'external_untrusted' | 'mixed' | 'unknown';
+  diffRiskClass: 'instruction_only' | 'capability_or_authority' | 'unknown';
+  policyDecisionCode: string;
+}
+
 export const BEHAVIOR_PROPOSAL_STATUSES = [
   'validation_failed',
   'awaiting_approval',
@@ -83,6 +102,8 @@ export interface BehaviorProposal {
   /** Plain-language preview of the candidate's observable behavior change. */
   changeSummary?: string;
   evidenceRefs: MemorySourceRef[];
+  /** Independently versioned additive provenance; absent only on legacy proposals. */
+  provenance?: BehaviorProposalProvenance;
   candidateSpecDigest: string;
   candidateFlow?: Flow;
   candidateContentHash?: string;
@@ -148,6 +169,17 @@ export const BehaviorProposalSchema: z.ZodType<BehaviorProposal> = z.object({
   rationale: NonEmptyText(20_000),
   changeSummary: NonEmptyText(20_000).optional(),
   evidenceRefs: z.array(MemorySourceRefSchema).min(1).max(100),
+  provenance: z.object({
+    schemaVersion: z.literal(1),
+    origin: z.enum(BEHAVIOR_PROPOSAL_ORIGINS),
+    maintenanceRunId: EnduringAgentIdSchema.optional(),
+    detectorVersion: NonEmptyText(128).optional(),
+    evaluationSuiteVersion: NonEmptyText(128).optional(),
+    evidenceDigest: Sha256Schema,
+    evidenceTaint: z.enum(['trusted', 'external_untrusted', 'mixed', 'unknown']),
+    diffRiskClass: z.enum(['instruction_only', 'capability_or_authority', 'unknown']),
+    policyDecisionCode: z.string().regex(/^[a-z0-9_:-]{1,128}$/),
+  }).strict().optional(),
   candidateSpecDigest: Sha256Schema,
   candidateFlow: FlowSnapshotSchema.optional(),
   candidateContentHash: Sha256Schema.optional(),

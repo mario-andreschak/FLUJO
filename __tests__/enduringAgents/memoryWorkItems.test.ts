@@ -179,6 +179,10 @@ describe('issue #415 phase 4 WorkItems', () => {
         personaId: persona.id,
         title: 'Stop this work',
       });
+      const missingSemanticOutcome = await createPersonaWorkItem({
+        personaId: persona.id,
+        title: 'Review runtime-only completion',
+      });
       const explicitlyCompleted = await createPersonaWorkItem({
         personaId: persona.id,
         title: 'Model already completed this',
@@ -197,11 +201,13 @@ describe('issue #415 phase 4 WorkItems', () => {
       const terminalActivity = (
         workItemId: string,
         status: 'completed' | 'error' | 'cancelled',
+        resolution?: 'succeeded' | 'failed' | 'unknown',
       ): PersonaActivity => {
         const now = Date.now();
+        const activityId = `activity_sync_${status}_${workItemId}`;
         return {
           schemaVersion: 1,
-          id: `activity_sync_${status}_${workItemId}`,
+          id: activityId,
           personaId: persona.id,
           kind: 'assignment',
           status,
@@ -212,25 +218,42 @@ describe('issue #415 phase 4 WorkItems', () => {
           startedAt: now,
           updatedAt: now,
           completedAt: now,
+          ...(resolution ? {
+            outcome: {
+              schemaVersion: 1,
+              resolution,
+              ...(resolution === 'failed' ? { blockerKind: 'unknown' as const } : {}),
+              decisionSource: 'engine',
+              evidenceRefs: [{ kind: 'activity', id: activityId }],
+              decidedAt: now,
+            },
+          } : {}),
           ...(status === 'error' ? { error: 'The Flow could not finish the Task.' } : {}),
         };
       };
 
       await expect(synchronizeAssignedWorkItemFromActivity(
-        terminalActivity(successful.id, 'completed'),
+        terminalActivity(successful.id, 'completed', 'succeeded'),
       )).resolves.toMatchObject({ status: 'completed', completedAt: expect.any(Number) });
       await expect(synchronizeAssignedWorkItemFromActivity(
-        terminalActivity(failed.id, 'error'),
+        terminalActivity(failed.id, 'error', 'failed'),
       )).resolves.toMatchObject({ status: 'blocked', completedAt: undefined });
       await expect(synchronizeAssignedWorkItemFromActivity(
-        terminalActivity(cancelled.id, 'cancelled'),
+        terminalActivity(cancelled.id, 'cancelled', 'unknown'),
       )).resolves.toMatchObject({ status: 'cancelled', completedAt: undefined });
+      await expect(synchronizeAssignedWorkItemFromActivity(
+        terminalActivity(missingSemanticOutcome.id, 'completed'),
+      )).resolves.toMatchObject({
+        status: 'blocked',
+        completedAt: undefined,
+        nextAction: 'Review the Activity result and decide the next safe action.',
+      });
 
       await expect(synchronizeAssignedWorkItemFromActivity(
-        terminalActivity(explicitlyCompleted.id, 'error'),
+        terminalActivity(explicitlyCompleted.id, 'error', 'failed'),
       )).resolves.toEqual(completedByModel);
       await expect(synchronizeAssignedWorkItemFromActivity(
-        terminalActivity(explicitlyBlocked.id, 'completed'),
+        terminalActivity(explicitlyBlocked.id, 'completed', 'succeeded'),
       )).resolves.toEqual(blockedByModel);
       expect(await getPersonaWorkItem(explicitlyCompleted.id)).toEqual(completedByModel);
       expect(await getPersonaWorkItem(explicitlyBlocked.id)).toEqual(blockedByModel);

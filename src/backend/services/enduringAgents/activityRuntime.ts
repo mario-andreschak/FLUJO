@@ -11,6 +11,7 @@ import {
   EnduringAgentIdSchema,
   PERSONA_LIFECYCLE_STATES,
   PERSONA_PRIORITIES,
+  PersonaActivityOutcomeSchema,
   PersonaActivitySchema,
   PersonaInstructionContextSchema,
   PersonaLeaseSchema,
@@ -19,6 +20,7 @@ import {
   type CreatePersonaMailboxItemInput,
   type Persona,
   type PersonaActivity,
+  type PersonaActivityOutcome,
   type PersonaActivityStatus,
   type PersonaInstructionContext,
   type PersonaLease,
@@ -109,6 +111,7 @@ const RenewPersonaActivityLeaseInputSchema = LeaseFenceSchema.extend({
 
 const CompletePersonaActivityInputSchema = LeaseFenceSchema.extend({
   status: z.enum(['completed', 'cancelled', 'error']).optional(),
+  outcome: PersonaActivityOutcomeSchema.optional(),
   outcomeRef: z.string().trim().max(4_096).optional(),
   error: z.string().trim().min(1).max(20_000).optional(),
 }).strict().superRefine((input, ctx) => {
@@ -234,6 +237,7 @@ export interface RenewPersonaActivityLeaseInput extends PersonaLeaseFence {
 
 export interface CompletePersonaActivityInput extends PersonaLeaseFence {
   status?: Extract<PersonaActivityStatus, 'completed' | 'cancelled' | 'error'>;
+  outcome?: PersonaActivityOutcome;
   outcomeRef?: string;
   error?: string;
 }
@@ -2567,8 +2571,29 @@ function completionMatches(
   input: CompletePersonaActivityInput,
 ): boolean {
   return activity.status === (input.status ?? 'completed')
+    && (input.outcome === undefined || canonicalJson(activity.outcome) === canonicalJson(input.outcome))
     && (input.outcomeRef === undefined || activity.outcomeRef === input.outcomeRef)
     && (activity.error ?? undefined) === input.error;
+}
+
+function conservativeSemanticOutcome(
+  activity: PersonaActivity,
+  status: Extract<PersonaActivityStatus, 'completed' | 'cancelled' | 'error'>,
+  decidedAt: number,
+): PersonaActivityOutcome {
+  return PersonaActivityOutcomeSchema.parse({
+    schemaVersion: 1,
+    resolution: status === 'error' ? 'failed' : 'unknown',
+    ...(status === 'error' ? { blockerKind: 'unknown' } : {}),
+    summary: status === 'error'
+      ? 'The Activity ended with an execution error.'
+      : status === 'cancelled'
+        ? 'The Activity was cancelled before its semantic result was confirmed.'
+        : 'The Activity completed without a trusted semantic outcome claim.',
+    decisionSource: 'engine',
+    evidenceRefs: [{ kind: 'activity', id: activity.id }],
+    decidedAt,
+  }) as PersonaActivityOutcome;
 }
 
 async function requeuePendingRelatedDeliveries(
@@ -2673,9 +2698,11 @@ export async function completePersonaActivityWithinRuntimeLock(
     // turn such late input back into independent queued work so it is neither
     // falsely acknowledged nor orphaned against a terminal Activity.
     await requeuePendingRelatedDeliveries(lock, activity, items, now);
+    const outcome = input.outcome ?? conservativeSemanticOutcome(activity, status, now);
     const completed = await saveActivity(lock, {
       ...activity,
       status,
+      outcome,
       ...(input.outcomeRef !== undefined ? { outcomeRef: input.outcomeRef } : {}),
       ...(input.error !== undefined ? { error: input.error } : { error: undefined }),
       updatedAt: now,

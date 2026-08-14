@@ -610,6 +610,50 @@ export const PERSONA_ACTIVITY_STATUSES = [
 ] as const;
 export type PersonaActivityStatus = (typeof PERSONA_ACTIVITY_STATUSES)[number];
 
+/** Semantic result of the work, independent from runtime/lease status. */
+export const PERSONA_ACTIVITY_OUTCOME_SCHEMA_VERSION = 1 as const;
+export const PERSONA_ACTIVITY_OUTCOME_RESOLUTIONS = [
+  'succeeded',
+  'partial',
+  'blocked',
+  'failed',
+  'unknown',
+] as const;
+export type PersonaActivityOutcomeResolution =
+  (typeof PERSONA_ACTIVITY_OUTCOME_RESOLUTIONS)[number];
+export const PERSONA_ACTIVITY_BLOCKER_KINDS = [
+  'information',
+  'approval',
+  'permission',
+  'capability',
+  'dependency',
+  'external',
+  'transient',
+  'policy',
+  'unknown',
+] as const;
+export type PersonaActivityBlockerKind =
+  (typeof PERSONA_ACTIVITY_BLOCKER_KINDS)[number];
+export const PERSONA_ACTIVITY_OUTCOME_DECISION_SOURCES = [
+  'persona_claim',
+  'engine',
+  'user',
+  'legacy',
+] as const;
+export type PersonaActivityOutcomeDecisionSource =
+  (typeof PERSONA_ACTIVITY_OUTCOME_DECISION_SOURCES)[number];
+
+export interface PersonaActivityOutcome {
+  schemaVersion: typeof PERSONA_ACTIVITY_OUTCOME_SCHEMA_VERSION;
+  resolution: PersonaActivityOutcomeResolution;
+  blockerKind?: PersonaActivityBlockerKind;
+  summary?: string;
+  nextAction?: string;
+  decisionSource: PersonaActivityOutcomeDecisionSource;
+  evidenceRefs: MemorySourceRef[];
+  decidedAt: number;
+}
+
 export const PERSONA_ACTIVITY_SOURCE_KINDS = [
   'chat',
   'assignment',
@@ -651,6 +695,9 @@ export interface PersonaActivity {
   runId?: string;
   meetingId?: string;
   resourceRefs?: string[];
+  /** Product/learning meaning; runtime status remains authoritative for execution. */
+  outcome?: PersonaActivityOutcome;
+  /** Opaque link to the private dispatch outcome retained for compatibility. */
   outcomeRef?: string;
   error?: string;
   /** Durable cooperative-interruption request; the current holder yields explicitly. */
@@ -669,6 +716,65 @@ export interface CreatePersonaActivityInput {
   source: PersonaActivitySource;
   behaviorId?: string;
   behaviorRevisionId?: string;
+}
+
+export const BEHAVIOR_MAINTENANCE_RUN_SCHEMA_VERSION = 1 as const;
+export const BEHAVIOR_MAINTENANCE_RUN_STATES = [
+  'queued',
+  'collecting',
+  'diagnosing',
+  'drafting',
+  'evaluating',
+  'awaiting_review',
+  'completed',
+  'failed',
+  'cancelled',
+] as const;
+export type BehaviorMaintenanceRunState =
+  (typeof BEHAVIOR_MAINTENANCE_RUN_STATES)[number];
+export const BEHAVIOR_MAINTENANCE_ACTIONS = [
+  'no_change',
+  'memory_candidate',
+  'instruction_behavior_candidate',
+  'setup_recommendation',
+  'eval_candidate',
+  'needs_human_diagnosis',
+] as const;
+export type BehaviorMaintenanceAction =
+  (typeof BEHAVIOR_MAINTENANCE_ACTIONS)[number];
+
+/** Private-content-free durable lifecycle record for post-Activity diagnosis. */
+export interface BehaviorMaintenanceRun {
+  schemaVersion: typeof BEHAVIOR_MAINTENANCE_RUN_SCHEMA_VERSION;
+  id: string;
+  workspaceId: string;
+  personaId: string;
+  sourceActivityIds: string[];
+  sourceWindowDigest: string;
+  behaviorSlotKey: string;
+  baseRevisionId: string;
+  baseContentHash: string;
+  detectorVersion: string;
+  policyVersion: string;
+  evaluationSuiteVersion: string;
+  state: BehaviorMaintenanceRunState;
+  reasonCode?: string;
+  action?: BehaviorMaintenanceAction;
+  evidenceTrust: {
+    trustedCount: number;
+    untrustedCount: number;
+    missingCount: number;
+    externallyTainted: boolean;
+  };
+  relatedProposalIds: string[];
+  attempts: number;
+  modelCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  durationMs: number;
+  createdAt: number;
+  updatedAt: number;
+  completedAt?: number;
 }
 
 export const PERSONA_WORK_ITEM_STATUSES = [
@@ -1036,6 +1142,7 @@ export interface PersonaDeletionCounts {
   behaviorBindings: number;
   behaviorRevisions: number;
   behaviorProposals: number;
+  behaviorMaintenanceRuns: number;
   appGrants: number;
   memoryItems: number;
   workItems: number;

@@ -21,6 +21,7 @@ import { buildHandoffDescription } from '../buildHandoffDescription';
 import { buildHandoffToolNameMap, buildSubflowToolNameMap, SUBFLOW_TOOL_PREFIX } from '@/shared/utils/handoffNaming';
 import { buildSubflowTool } from '../handlers/subflowToolInvocation';
 import { buildBehaviorToolDefinitions } from '../handlers/behaviorToolInvocation';
+import { buildPersonaTools } from '../handlers/personaTools';
 import { buildDetachedSubflowTool, SUBFLOW_DETACHED_TOOL_PREFIX } from '../handlers/subflowDetachedInvocation';
 import { flowService } from '@/backend/services/flow/index';
 import { modelService } from '@/backend/services/model';
@@ -577,6 +578,23 @@ export class ProcessNode extends BaseNode {
 
     // Add handoff tools to available tools
     availableTools = [...availableTools, ...handoffTools];
+
+    // Persona-native abilities are authored into the immutable Process snapshot.
+    // Definitions stay in canonical order and are denied before advertisement;
+    // ModelHandler remains the fenced execution boundary.
+    const personaTools = buildPersonaTools(node_params?.properties?.personaTools).filter(
+      (tool) => !(sharedState.permissionRules ?? []).some((rule) => (
+        rule.effect === 'deny'
+        && (rule.action === '*' || rule.action === tool.name)
+        && (rule.resource === '*' || rule.resource === undefined)
+      )),
+    );
+    const existingToolNames = new Set(availableTools.map((tool) => tool.name));
+    const collision = personaTools.find((tool) => existingToolNames.has(tool.name));
+    if (collision) {
+      throw new Error(`Persona tool name collides with another advertised tool: ${collision.name}`);
+    }
+    availableTools = [...availableTools, ...personaTools];
 
     // Tier 3 (issue #161): when a PRODUCE-role run-artifact resource node is
     // wired to this step, offer an explicit `write_resource` tool so the model

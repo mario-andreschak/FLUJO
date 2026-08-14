@@ -2,6 +2,7 @@ import type { ZodType } from 'zod';
 
 import {
   BEHAVIOR_BINDING_SCHEMA_VERSION,
+  BEHAVIOR_MAINTENANCE_RUN_SCHEMA_VERSION,
   BEHAVIOR_REVISION_SCHEMA_VERSION,
   ENDURING_AGENT_SCHEMA_VERSION,
   PERSONA_SCHEMA_VERSION,
@@ -68,6 +69,8 @@ export function enduringAgentRecordSchemaVersion(recordKind: string): number {
       return BEHAVIOR_REVISION_SCHEMA_VERSION;
     case 'BehaviorBinding':
       return BEHAVIOR_BINDING_SCHEMA_VERSION;
+    case 'BehaviorMaintenanceRun':
+      return BEHAVIOR_MAINTENANCE_RUN_SCHEMA_VERSION;
     default:
       return ENDURING_AGENT_SCHEMA_VERSION;
   }

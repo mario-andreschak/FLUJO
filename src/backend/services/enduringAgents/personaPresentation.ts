@@ -50,7 +50,11 @@ function presentationOutcome(activity: PersonaActivity): PersonaPresentationOutc
     case 'queued': return 'queued';
     case 'running': return 'working';
     case 'waiting': return 'waiting';
-    case 'completed': return 'completed';
+    case 'completed':
+      if (activity.kind === 'maintenance' || !activity.outcome) return 'completed';
+      return activity.outcome.resolution === 'succeeded'
+        ? 'completed'
+        : 'needs_attention';
     case 'cancelled': return 'cancelled';
     case 'error': return 'needs_attention';
   }

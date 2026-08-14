@@ -583,7 +583,11 @@ async function synchronizeAssignedWorkItemRecord(
     || existing.status === 'blocked'
   ) return existing;
 
+  // Runtime completion is not product success. Only a trusted semantic success
+  // may auto-complete an assignment; partial/blocked/failed/unknown outcomes
+  // remain blocked until an explicit Task mutation or user decision wins.
   let status: PersonaWorkItemStatus = activity.status === 'completed'
+    && activity.outcome?.resolution === 'succeeded'
     ? 'completed'
     : activity.status === 'cancelled'
       ? 'cancelled'
@@ -612,6 +616,13 @@ async function synchronizeAssignedWorkItemRecord(
   const candidate = PersonaWorkItemSchema.parse({
     ...existing,
     status,
+    ...(status === 'blocked'
+      ? {
+          nextAction: activity.outcome?.nextAction
+            ?? existing.nextAction
+            ?? 'Review the Activity result and decide the next safe action.',
+        }
+      : {}),
     updatedAt,
     completedAt,
   }) as PersonaWorkItem;

@@ -114,6 +114,12 @@ export interface CreateBehaviorProposalInput {
   candidateSpec: unknown;
   evals: DeterministicBehaviorEval[];
   actor?: string;
+  origin?: 'manual' | 'persona_tool' | 'engine_maintenance';
+  maintenanceRunId?: string;
+  detectorVersion?: string;
+  evaluationSuiteVersion?: string;
+  diffRiskClass?: 'instruction_only' | 'capability_or_authority' | 'unknown';
+  policyDecisionCode?: string;
 }
 
 export interface CreateBehaviorProposalOptions {
@@ -513,6 +519,14 @@ export async function createBehaviorProposal(
       candidateSpecDigest,
     },
   });
+  const externallyTaintedEvidence = normalizedEvidence.filter(
+    (ref) => ref.producer === 'external_untrusted',
+  ).length;
+  const evidenceTaint = externallyTaintedEvidence === 0
+    ? 'trusted' as const
+    : externallyTaintedEvidence === normalizedEvidence.length
+      ? 'external_untrusted' as const
+      : 'mixed' as const;
   const proposal = BehaviorProposalSchema.parse({
     schemaVersion: ENDURING_AGENT_SCHEMA_VERSION,
     id: proposalId,
@@ -525,6 +539,19 @@ export async function createBehaviorProposal(
       ? { changeSummary: requireText(input.changeSummary, 'Proposal change summary') }
       : {}),
     evidenceRefs: normalizedEvidence,
+    provenance: {
+      schemaVersion: 1,
+      origin: input.origin ?? 'manual',
+      ...(input.maintenanceRunId ? { maintenanceRunId: input.maintenanceRunId } : {}),
+      ...(input.detectorVersion ? { detectorVersion: input.detectorVersion } : {}),
+      ...(input.evaluationSuiteVersion
+        ? { evaluationSuiteVersion: input.evaluationSuiteVersion }
+        : {}),
+      evidenceDigest: digest(normalizedEvidence),
+      evidenceTaint,
+      diffRiskClass: input.diffRiskClass ?? 'unknown',
+      policyDecisionCode: input.policyDecisionCode ?? 'manual_review_required',
+    },
     candidateSpecDigest,
     ...(candidateFlow ? { candidateFlow } : {}),
     ...(candidateContentHash ? { candidateContentHash } : {}),
@@ -648,6 +675,9 @@ export async function suggestBehaviorInstructionImprovement(
       baseContentHash: base.contentHash,
     },
     actor: 'persona-self-improvement',
+    origin: 'persona_tool',
+    diffRiskClass: 'instruction_only',
+    policyDecisionCode: 'owner_approval_required',
     evals: [{
       id: 'bounded-instruction-only',
       run: ({ baseRevision, candidateFlow }) => {
@@ -679,11 +709,6 @@ export async function suggestBehaviorInstructionImprovement(
         })),
       };
     },
-    autoApplyPolicy: () => ({
-      allowed: true,
-      actor: 'persona-safe-improvement-policy',
-      reason: 'Applied a validated instruction-only improvement under the user-selected automatic rule.',
-    }),
   });
 }
 

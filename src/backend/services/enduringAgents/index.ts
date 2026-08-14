@@ -1,5 +1,6 @@
 export * from './behaviorRevisions';
 export * from './behaviorLearning';
+export * from './behaviorMaintenance';
 export * from './behaviorFlowResolver';
 export * from './behaviorCallPins';
 export * from './activityRuntime';

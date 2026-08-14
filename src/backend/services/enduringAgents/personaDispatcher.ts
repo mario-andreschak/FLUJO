@@ -21,7 +21,10 @@ import {
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import {
   EnduringAgentIdSchema,
+  MemorySourceRefSchema,
   PERSONA_ACTIVITY_KINDS,
+  PERSONA_ACTIVITY_BLOCKER_KINDS,
+  PERSONA_ACTIVITY_OUTCOME_RESOLUTIONS,
   PERSONA_ACTIVITY_SOURCE_KINDS,
   PERSONA_PRIORITIES,
   PersonaInstructionContextSchema,
@@ -30,6 +33,7 @@ import {
   type Persona,
   type PersonaActivity,
   type PersonaActivityKind,
+  type PersonaActivityOutcome,
   type PersonaActivitySource,
   type PersonaAttribution,
   type PersonaInstructionContext,
@@ -81,6 +85,7 @@ import {
   type RoutePersonaMailboxResult,
 } from './activityRuntime';
 import { canonicalJson } from './behaviorRevisions';
+import { admitBehaviorMaintenanceRun } from './behaviorMaintenance';
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
 import {
   createPersonaActivitySnapshot,
@@ -125,6 +130,61 @@ export const PERSONA_FLOW_DISPATCH_SCHEMA_VERSION = 1 as const;
 export const DEFAULT_PERSONA_FLOW_LEASE_TTL_MS = 30_000;
 const MAX_OUTCOME_TEXT = 20_000;
 const MAX_ERROR_TEXT = 4_000;
+const PERSONA_OUTCOME_TAG = /<persona_activity_outcome>([\s\S]{1,12000}?)<\/persona_activity_outcome>/i;
+const PersonaOutcomeClaimSchema = z.object({
+  resolution: z.enum(PERSONA_ACTIVITY_OUTCOME_RESOLUTIONS),
+  blockerKind: z.enum(PERSONA_ACTIVITY_BLOCKER_KINDS).optional(),
+  summary: z.string().trim().min(1).max(2_000).optional(),
+  nextAction: z.string().trim().min(1).max(2_000).optional(),
+  evidenceRefs: z.array(MemorySourceRefSchema).max(24).default([]),
+}).strict();
+
+function semanticOutcomeFromDispatch(input: {
+  status: 'completed' | 'cancelled' | 'error';
+  outcome?: PersonaFlowDispatchOutcome;
+  activityId: string;
+  decidedAt: number;
+}): PersonaActivityOutcome {
+  const fallbackResolution = input.status === 'error' ? 'failed' : 'unknown';
+  const fallback = (summary: string): PersonaActivityOutcome => ({
+    schemaVersion: 1,
+    resolution: fallbackResolution,
+    ...(input.status === 'error' ? { blockerKind: 'unknown' as const } : {}),
+    summary,
+    decisionSource: 'engine',
+    evidenceRefs: [{ kind: 'activity', id: input.activityId }],
+    decidedAt: input.decidedAt,
+  });
+  if (input.status !== 'completed' || !input.outcome?.outputText) {
+    return fallback(input.status === 'error'
+      ? 'The Activity ended with an execution error.'
+      : 'The Activity ended without a trusted semantic outcome claim.');
+  }
+  const match = PERSONA_OUTCOME_TAG.exec(input.outcome.outputText);
+  if (!match) {
+    return fallback('The Activity completed without a trusted semantic outcome claim.');
+  }
+  try {
+    const claim = PersonaOutcomeClaimSchema.parse(JSON.parse(match[1]));
+    if (claim.evidenceRefs.some((ref) => ref.kind !== 'activity' || ref.id !== input.activityId)) {
+      return fallback('The Activity outcome claim referenced evidence outside the owning Activity.');
+    }
+    return {
+      schemaVersion: 1,
+      resolution: claim.resolution,
+      ...(claim.blockerKind ? { blockerKind: claim.blockerKind } : {}),
+      ...(claim.summary ? { summary: claim.summary } : {}),
+      ...(claim.nextAction ? { nextAction: claim.nextAction } : {}),
+      decisionSource: 'persona_claim',
+      evidenceRefs: claim.evidenceRefs.length > 0
+        ? claim.evidenceRefs
+        : [{ kind: 'activity', id: input.activityId }],
+      decidedAt: input.decidedAt,
+    };
+  } catch {
+    return fallback('The Activity outcome claim was malformed and was downgraded to unknown.');
+  }
+}
 
 export const PERSONA_FLOW_DISPATCH_STATES = [
   'queued',
@@ -2007,9 +2067,16 @@ export class PersonaFlowDispatcher {
             'An errored terminal dispatch requires a sanitized error.',
           );
         }
+        const semanticOutcome = semanticOutcomeFromDispatch({
+          status: effectiveStatus,
+          outcome: requested.outcome,
+          activityId: fence.activityId,
+          decidedAt: Date.now(),
+        });
         completion = await this.dependencies.completePersonaActivityWithinRuntimeLock({
           ...fence,
           status: effectiveStatus,
+          outcome: semanticOutcome,
           ...(effectiveStatus === 'completed' || effectiveStatus === 'cancelled'
             ? { outcomeRef: latest.id }
             : { error: requested.error!.message }),
@@ -2072,6 +2139,13 @@ export class PersonaFlowDispatcher {
       }
       if (!assignmentSynchronized) {
         await this.synchronizeAssignedWorkItem(completion.activity);
+      }
+      try {
+        // The rollout gate defaults off, making this a no-write call. When
+        // enabled, admission occurs only after the source terminal commit.
+        await this.inWorkspace(() => admitBehaviorMaintenanceRun(completion!.activity));
+      } catch (error) {
+        log.warn(`Deferred Behavior maintenance admission for ${fence.activityId}:`, error);
       }
     }
     return terminal;
@@ -3227,6 +3301,16 @@ export class PersonaFlowDispatcher {
         }
       }
       record = await this.reconcileRecord(record);
+      if (isTerminalDispatch(record.state) && record.activityId) {
+        try {
+          const sourceActivity = await this.inWorkspace(() => getPersonaActivity(record.activityId!));
+          if (sourceActivity) {
+            await this.inWorkspace(() => admitBehaviorMaintenanceRun(sourceActivity));
+          }
+        } catch (error) {
+          log.warn(`Failed to reconcile Behavior maintenance admission for ${record.id}:`, error);
+        }
+      }
       if (record.state === 'completed') {
         try {
           const maintenance = await this.ensurePostActivityMaintenance(record);

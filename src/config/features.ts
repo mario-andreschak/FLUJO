@@ -32,6 +32,12 @@ export const FEATURES = {
    */
   ENABLE_EXECUTION_TRACKER: false, // Enabled by default
 
+  /** Admit durable post-Activity Behavior assessment records. Shadow rollout is opt-in. */
+  ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION: false,
+
+  /** Permit diagnosis work after admission. Independent so admission can be observed safely. */
+  ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS: false,
+
   /**
    * MCP Tasks extension (issue #404), CLIENT side.
    *

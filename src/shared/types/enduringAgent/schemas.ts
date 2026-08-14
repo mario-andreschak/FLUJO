@@ -3,6 +3,9 @@ import { z } from 'zod';
 import type { Flow } from '@/shared/types/flow';
 import {
   BEHAVIOR_BINDING_SCHEMA_VERSION,
+  BEHAVIOR_MAINTENANCE_ACTIONS,
+  BEHAVIOR_MAINTENANCE_RUN_SCHEMA_VERSION,
+  BEHAVIOR_MAINTENANCE_RUN_STATES,
   BEHAVIOR_REVISION_SCHEMA_VERSION,
   ENDURING_AGENT_SCHEMA_VERSION,
   MEMORY_KINDS,
@@ -10,7 +13,11 @@ import {
   MEMORY_SOURCE_KINDS,
   MEMORY_STATUSES,
   MEMORY_TRUST_LEVELS,
+  PERSONA_ACTIVITY_BLOCKER_KINDS,
   PERSONA_ACTIVITY_KINDS,
+  PERSONA_ACTIVITY_OUTCOME_DECISION_SOURCES,
+  PERSONA_ACTIVITY_OUTCOME_RESOLUTIONS,
+  PERSONA_ACTIVITY_OUTCOME_SCHEMA_VERSION,
   PERSONA_SCHEMA_VERSION,
   PERSONA_CREATION_DRAFT_SCHEMA_VERSION,
   PERSONA_ACTIVITY_SOURCE_KINDS,
@@ -705,6 +712,25 @@ export const PersonaActivitySourceSchema = z.object({
   idempotencyKey: z.string().min(1).max(512).optional(),
 }).strict();
 
+export const PersonaActivityOutcomeSchema = z.object({
+  schemaVersion: z.literal(PERSONA_ACTIVITY_OUTCOME_SCHEMA_VERSION),
+  resolution: z.enum(PERSONA_ACTIVITY_OUTCOME_RESOLUTIONS),
+  blockerKind: z.enum(PERSONA_ACTIVITY_BLOCKER_KINDS).optional(),
+  summary: NonEmptyText(2_000).optional(),
+  nextAction: NonEmptyText(2_000).optional(),
+  decisionSource: z.enum(PERSONA_ACTIVITY_OUTCOME_DECISION_SOURCES),
+  evidenceRefs: z.array(MemorySourceRefSchema).max(24),
+  decidedAt: TimestampSchema,
+}).strict().superRefine((outcome, ctx) => {
+  if (outcome.resolution === 'succeeded' && outcome.blockerKind !== undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'A succeeded Activity cannot include a blocker kind.',
+      path: ['blockerKind'],
+    });
+  }
+});
+
 export const PersonaActivitySchema = z.object({
   schemaVersion: z.literal(ENDURING_AGENT_SCHEMA_VERSION),
   id: EnduringAgentIdSchema,
@@ -726,6 +752,7 @@ export const PersonaActivitySchema = z.object({
   runId: EnduringAgentIdSchema.optional(),
   meetingId: EnduringAgentIdSchema.optional(),
   resourceRefs: z.array(NonEmptyText(4096)).max(1_000).optional(),
+  outcome: PersonaActivityOutcomeSchema.optional(),
   outcomeRef: z.string().max(4096).optional(),
   error: z.string().max(20_000).optional(),
   interruptionRequestedAt: TimestampSchema.optional(),
@@ -738,6 +765,27 @@ export const PersonaActivitySchema = z.object({
   const terminal = record.status === 'completed'
     || record.status === 'cancelled'
     || record.status === 'error';
+  if (!terminal && record.outcome !== undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Only a terminal Activity may include a semantic outcome.',
+      path: ['outcome'],
+    });
+  }
+  if (record.status === 'error' && record.outcome?.resolution === 'succeeded') {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'An errored Activity cannot have a succeeded semantic outcome.',
+      path: ['outcome', 'resolution'],
+    });
+  }
+  if (record.outcome && record.outcome.decidedAt > record.updatedAt) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Activity outcome cannot be decided after updatedAt.',
+      path: ['outcome', 'decidedAt'],
+    });
+  }
   const snapshotFields = [
     record.coreFlowId,
     record.coreFlowRevisionId,
@@ -932,6 +980,51 @@ export const CreatePersonaActivityInputSchema = z.object({
   behaviorId: EnduringAgentIdSchema.optional(),
   behaviorRevisionId: EnduringAgentIdSchema.optional(),
 }).strict();
+
+export const BehaviorMaintenanceRunSchema = z.object({
+  schemaVersion: z.literal(BEHAVIOR_MAINTENANCE_RUN_SCHEMA_VERSION),
+  id: EnduringAgentIdSchema,
+  workspaceId: NonEmptyText(256),
+  personaId: EnduringAgentIdSchema,
+  sourceActivityIds: z.array(EnduringAgentIdSchema).min(1).max(20),
+  sourceWindowDigest: z.string().regex(SHA256_PATTERN),
+  behaviorSlotKey: BehaviorSlotKeySchema,
+  baseRevisionId: EnduringAgentIdSchema,
+  baseContentHash: z.string().regex(SHA256_PATTERN),
+  detectorVersion: NonEmptyText(128),
+  policyVersion: NonEmptyText(128),
+  evaluationSuiteVersion: NonEmptyText(128),
+  state: z.enum(BEHAVIOR_MAINTENANCE_RUN_STATES),
+  reasonCode: z.string().regex(/^[a-z0-9_:-]{1,128}$/).optional(),
+  action: z.enum(BEHAVIOR_MAINTENANCE_ACTIONS).optional(),
+  evidenceTrust: z.object({
+    trustedCount: z.number().int().nonnegative(),
+    untrustedCount: z.number().int().nonnegative(),
+    missingCount: z.number().int().nonnegative(),
+    externallyTainted: z.boolean(),
+  }).strict(),
+  relatedProposalIds: z.array(EnduringAgentIdSchema).max(3),
+  attempts: z.number().int().nonnegative(),
+  modelCalls: z.number().int().nonnegative(),
+  inputTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+  durationMs: z.number().int().nonnegative(),
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+  completedAt: TimestampSchema.optional(),
+}).strict().superRefine((run, ctx) => {
+  if (run.updatedAt < run.createdAt) {
+    ctx.addIssue({ code: 'custom', message: 'updatedAt cannot precede createdAt.', path: ['updatedAt'] });
+  }
+  const terminal = run.state === 'completed' || run.state === 'failed' || run.state === 'cancelled';
+  if (terminal !== (run.completedAt !== undefined)) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Only terminal maintenance runs require completedAt.',
+      path: ['completedAt'],
+    });
+  }
+});
 
 export const PersonaWorkItemSchema = z.object({
   schemaVersion: z.literal(ENDURING_AGENT_SCHEMA_VERSION),
@@ -1400,6 +1493,7 @@ export const PersonaDeletionCountsSchema = z.object({
   behaviorRevisions: z.number().int().nonnegative(),
   // Additive defaults preserve already-written deletion tombstones from earlier phases.
   behaviorProposals: z.number().int().nonnegative().default(0),
+  behaviorMaintenanceRuns: z.number().int().nonnegative().default(0),
   appGrants: z.number().int().nonnegative().default(0),
   memoryItems: z.number().int().nonnegative(),
   workItems: z.number().int().nonnegative(),
