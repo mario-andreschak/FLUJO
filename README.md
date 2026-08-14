@@ -23,7 +23,7 @@ FLUJO is open-source and local-first: connect models, tools, and reusable subflo
 
 ## ⚡ Quick Install (recommended)
 
-The installer sets up everything FLUJO needs (Git, Node.js, Python, uv), clones FLUJO, builds it, and creates a global `flujo` command. This is the recommended way to run FLUJO — MCP servers get all their runtimes too.
+The installer sets up everything FLUJO needs (Git, Node.js, Python, uv, ripgrep), clones FLUJO, builds it, and creates a global `flujo` command. This is the recommended way to run FLUJO — MCP servers get all their runtimes too.
 
 **Windows installer (recommended)** — click below to download the latest `flujo-setup.exe`:
 
@@ -180,6 +180,7 @@ A searchable `/docs` page inside the app documents every REST endpoint FLUJO exp
 - python (optional, if you want to use python-based MCP servers)
 - pip (optional, if you want to use python-based MCP servers that build with pip)
 - uv and/or yarn (optional, if you prefer these over npm or pip)
+- ripgrep (optional filesystem-search acceleration; the installer adds it automatically)
 
 ### Installation
 
@@ -303,7 +304,7 @@ installed command is still `flujo`.)
 
 ### One-line install (Windows)
 
-On a fresh Windows machine you can install everything (Git, Node.js, Python, uv),
+On a fresh Windows machine you can install everything (Git, Node.js, Python, uv, ripgrep),
 clone FLUJO, build it, and optionally start it with a single PowerShell command:
 
 ```powershell
@@ -327,7 +328,7 @@ wizard around the same `install.ps1` script above (see
 The Windows installer is a networked bootstrapper, not an offline file-copy
 package. It requires Windows App Installer (`winget`) and access to GitHub, the
 winget catalog, npm, and Python package sources. Missing Git, Node.js, Python,
-and uv are installed through winget; Ollama is optional. The installer also
+uv, and ripgrep are installed through winget; Ollama is optional. The installer also
 installs the Claude Code CLI used by the optional Claude Subscription provider.
 Running the installer again against an existing FLUJO Git checkout updates and
 rebuilds that checkout. For safety, an existing target that is not a Git checkout
@@ -336,7 +337,7 @@ is rejected before registration or cloning.
 ### One-line install (Linux / macOS)
 
 The same for Linux and macOS — installs the prerequisites (Git, Node.js, Python,
-uv) via your package manager (or Homebrew on macOS), clones FLUJO, builds it, and
+uv, ripgrep) via your package manager (or Homebrew on macOS), clones FLUJO, builds it, and
 registers the `flujo` command:
 
 ```bash
@@ -366,7 +367,7 @@ or, from inside your install folder:
 powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1
 ```
 
-It asks, per prerequisite (Git, Node.js, Python, uv, and optional Ollama), whether
+It asks, per prerequisite (Git, Node.js, Python, uv, ripgrep, and optional Ollama), whether
 to remove it — defaulting to **yes** for ones FLUJO installed and **no** for ones
 that were already on your system — then removes the `flujo` command and the FLUJO
 folder. These ownership decisions come from

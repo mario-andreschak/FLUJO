@@ -49,6 +49,21 @@ describe('standalone stdio MCP packages', () => {
       ]));
       const called = await client.callTool({ name: 'get_allowed_directories', arguments: {} });
       expect(called.structuredContent).toEqual({ directories: [path.resolve(root)] });
+
+      await fs.writeFile(path.join(root, 'searchable.txt'), 'first\npackaged search token\nlast');
+      const searched = await client.callTool({
+        name: 'search',
+        arguments: { path: root, content: 'search token' },
+      });
+      expect(searched.isError).not.toBe(true);
+      expect(searched.structuredContent).toEqual(expect.objectContaining({
+        matches: [expect.objectContaining({
+          path: path.join(root, 'searchable.txt'),
+          line: 2,
+          text: 'packaged search token',
+        })],
+        truncated: false,
+      }));
     } finally {
       await client.close();
       await fs.rm(root, { recursive: true, force: true });

@@ -3,7 +3,7 @@
 # FLUJO installer / updater for Linux and macOS — the Unix counterpart of
 # scripts/install.ps1.
 #
-# Installs the prerequisites (Git, Node.js + npm, Python 3, uv), clones (or
+# Installs the prerequisites (Git, Node.js + npm, Python 3, uv, ripgrep), clones (or
 # updates) FLUJO, builds it, registers a global 'flujo' command (start FLUJO
 # from any folder), and optionally starts it. Can also optionally install Ollama
 # (the local-model runtime) — FLUJO then talks to it over HTTP.
@@ -151,6 +151,7 @@ PRE_GIT=$(have git && echo true || echo false)
 PRE_NODE=$(have node && echo true || echo false)
 PRE_PYTHON=$(have python3 && echo true || echo false)
 PRE_UV=$(have uv && echo true || echo false)
+PRE_RG=$(have rg && echo true || echo false)
 PRE_CLAUDE=$(have claude && echo true || echo false)
 PRE_OLLAMA=$(have ollama && echo true || echo false)
 
@@ -236,6 +237,19 @@ if have git; then
 else
   step "Installing Git"
   pm_install git || die "Could not install Git. Install it manually and re-run."
+fi
+
+# ripgrep accelerates the built-in filesystem MCP search. The server retains a
+# portable Node fallback, so an unusual distro without a package can continue.
+if have rg; then
+  ok "ripgrep already installed ($(command -v rg))"
+else
+  step "Installing ripgrep"
+  if pm_install ripgrep && have rg; then
+    ok "ripgrep installed."
+  else
+    warn "Could not install ripgrep automatically; filesystem search will use its portable fallback."
+  fi
 fi
 
 # Node.js (includes npm). Distro repos are often too old for Next.js 15, so
@@ -474,7 +488,8 @@ cat > "$MANIFEST_DIR/install-manifest.json" <<EOF
     { "command": "git",     "displayName": "Git",                     "preexisting": $PRE_GIT },
     { "command": "node",    "displayName": "Node.js (includes npm)",  "preexisting": $PRE_NODE },
     { "command": "python3", "displayName": "Python 3",                "preexisting": $PRE_PYTHON },
-    { "command": "uv",      "displayName": "uv",                      "preexisting": $PRE_UV }$OLLAMA_MANIFEST
+    { "command": "uv",      "displayName": "uv",                      "preexisting": $PRE_UV },
+    { "command": "rg",      "displayName": "ripgrep",                 "preexisting": $PRE_RG }$OLLAMA_MANIFEST
   ]
 }
 EOF

@@ -56,6 +56,7 @@ RUN apt-get update \
         python-is-python3 \
         ca-certificates \
         curl \
+        ripgrep \
     && rm -rf /var/lib/apt/lists/*
 # Debian refuses bare `pip install` into system site-packages (PEP 668). MCP
 # server configs run exactly that, and inside a disposable container the

@@ -183,6 +183,7 @@ function Get-KnownInstallerPrerequisites {
         [PSCustomObject]@{ command = 'node';   wingetId = 'OpenJS.NodeJS';      displayName = 'Node.js (includes npm)' }
         [PSCustomObject]@{ command = 'python'; wingetId = 'Python.Python.3.12'; displayName = 'Python 3.12' }
         [PSCustomObject]@{ command = 'uv';     wingetId = 'astral-sh.uv';       displayName = 'uv' }
+        [PSCustomObject]@{ command = 'rg';     wingetId = 'BurntSushi.ripgrep.MSVC'; displayName = 'ripgrep' }
         [PSCustomObject]@{ command = 'ollama'; wingetId = 'Ollama.Ollama';      displayName = 'Ollama' }
     )
 }
