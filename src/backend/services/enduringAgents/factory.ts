@@ -51,11 +51,14 @@ import {
   createMemoryItem,
   createPersona,
   createPersonaAppGrant,
+  getBehaviorRevision,
   getMemoryItem,
   getPersona,
   getPersonaDeletionTombstone,
   getRoleVersion,
+  listBehaviorBindings,
   listPersonaBundle,
+  listPersonasStrict,
   updatePersonaWithinRuntimeLock,
   type PersonaBundle,
 } from './store';
@@ -639,4 +642,151 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
     if (!bundle) throw new Error(`Persona ${JSON.stringify(persona.id)} vanished after creation.`);
     return bundle;
   });
+}
+
+/**
+ * Materialize Role slots introduced by a record migration for already-existing
+ * Personas without changing their immutable RoleVersion pin.
+ */
+export async function reconcilePersonaRoleBehaviors(personaId?: string): Promise<void> {
+  const personas = personaId
+    ? [await getPersona(personaId)].filter((persona): persona is Persona => persona !== null)
+    : await listPersonasStrict();
+
+  for (const candidate of personas) {
+    if (candidate.provisioningState !== 'ready') continue;
+    try {
+      await withPersonaRuntimeLock(candidate.id, async (lock) => {
+        if (await getPersonaDeletionTombstone(candidate.id)) return;
+        const bundle = await listPersonaBundle(candidate.id);
+        if (!bundle) return;
+
+        const roleVersion = bundle.roleVersion;
+        const inheritedRoleVersionIds = new Set(bundle.behaviorRevisions.flatMap((revision) => (
+          revision.source.kind === 'role_template'
+            ? [revision.source.roleVersionId]
+            : []
+        )));
+        if (
+          inheritedRoleVersionIds.size > 0
+          && !inheritedRoleVersionIds.has(roleVersion.id)
+        ) {
+          // A post-create Role choice intentionally changes only the frame for
+          // future Activities. Existing Behavior choices are user-owned; adding
+          // the new Role's defaults here would silently change that selection.
+          return;
+        }
+        const existingBindings = new Map(
+          bundle.behaviorBindings.map((binding) => [binding.slotKey, binding]),
+        );
+        const missingSlots = roleVersion.behaviorSlots.filter(
+          (slot) => !existingBindings.has(slot.key),
+        );
+        const configuredRefs = new Set(
+          bundle.persona.composition?.behaviors?.map((behavior) => behavior.ref) ?? [],
+        );
+        const missingConfiguredSlots = bundle.persona.composition?.behaviors
+          ? roleVersion.behaviorSlots.filter((slot) => {
+              const binding = existingBindings.get(slot.key);
+              return binding && !configuredRefs.has(binding.id);
+            })
+          : [];
+        if (missingSlots.length === 0 && missingConfiguredSlots.length === 0) return;
+
+        const inheritedModelId = roleVersion.defaultModelId
+          ?? bundle.behaviorRevisions.map((revision) => firstBoundModel(revision.flowSnapshot))
+            .find((modelId): modelId is string => Boolean(modelId));
+        const configuredModels = inheritedModelId ? [] : await modelService.loadModels();
+        const defaultModelId = inheritedModelId
+          ?? (configuredModels.length === 1 ? configuredModels[0].id : undefined);
+        const preparedMissingFlows = await Promise.all(missingSlots.map((slot) => (
+          requireRunnableGeneratedFlow(
+            bindDefaultModelToFlow(slot.flowTemplate as Flow, defaultModelId),
+            `Required Behavior ${JSON.stringify(slot.key)}`,
+          )
+        )));
+
+        for (const [index, slot] of missingSlots.entries()) {
+          await materializeBehavior(
+            bundle.persona,
+            roleVersion,
+            slot,
+            preparedMissingFlows[index],
+          );
+        }
+
+        const refreshedBindings = new Map(
+          (await listBehaviorBindings(candidate.id)).map((binding) => [binding.slotKey, binding]),
+        );
+        const personaFlows = new Map<string, Flow>();
+        for (const slot of roleVersion.behaviorSlots) {
+          const binding = refreshedBindings.get(slot.key);
+          if (!binding) continue;
+          const revision = await getBehaviorRevision(binding.activeRevisionId);
+          if (!revision) {
+            throw new PersonaFactoryConflictError(
+              `Required Behavior ${JSON.stringify(slot.key)} has no active revision.`,
+            );
+          }
+          personaFlows.set(slot.key, await savePersonaOwnedFlow({
+            persona: bundle.persona,
+            source: revision.flowSnapshot,
+            id: stableEnduringAgentId('personaflow', {
+              personaId: candidate.id,
+              behaviorId: binding.id,
+            }),
+            name: `${candidate.name} ${slot.name}`,
+            sourceFlowId: slot.flowTemplate.id,
+            kind: 'role_behavior',
+          }));
+        }
+
+        const current = await getPersona(candidate.id);
+        const configured = current?.composition?.behaviors;
+        if (!current || !configured) return;
+        const currentConfiguredRefs = new Set(configured.map((behavior) => behavior.ref));
+        const missingComposition = roleVersion.behaviorSlots.flatMap((slot) => {
+          const binding = refreshedBindings.get(slot.key);
+          const flow = personaFlows.get(slot.key);
+          if (!binding || !flow || currentConfiguredRefs.has(binding.id)) return [];
+          return [{
+            ref: binding.id,
+            slotKey: slot.key,
+            name: slot.name,
+            ...(slot.description ? { description: slot.description } : {}),
+            order: 0,
+            binding: {
+              mode: 'persona_copy' as const,
+              personaFlowRef: flow.id,
+            },
+          }];
+        });
+        if (missingComposition.length === 0) return;
+
+        const nextOrder = configured.reduce(
+          (maximum, behavior) => Math.max(maximum, behavior.order ?? -1),
+          -1,
+        ) + 1;
+        await updatePersonaWithinRuntimeLock(PersonaSchema.parse({
+          ...current,
+          composition: {
+            ...current.composition,
+            behaviors: [
+              ...configured,
+              ...missingComposition.map((behavior, index) => ({
+                ...behavior,
+                order: nextOrder + index,
+              })),
+            ],
+          },
+          updatedAt: Math.max(Date.now(), current.updatedAt + 1),
+        }), lock);
+      });
+    } catch (error) {
+      log.warn('Persona required-Behavior reconciliation failed', {
+        personaId: candidate.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 }

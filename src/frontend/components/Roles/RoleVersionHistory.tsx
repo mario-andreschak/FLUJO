@@ -68,7 +68,19 @@ export default function RoleVersionHistory({ role, onChanged }: { role: PublicRo
             >
               <ListItemText
                 primary={t('roles.version', { version: version.version })}
-                secondary={version.prompt}
+                secondary={(
+                  <Stack component="span" gap={0.5} sx={{ mt: 0.5 }}>
+                    <Typography component="span" variant="body2" color="text.secondary">
+                      {version.prompt}
+                    </Typography>
+                    <Typography component="span" variant="caption" color="text.secondary">
+                      {t('roles.versionBehaviors', {
+                        behaviors: version.behaviors.map((behavior) => behavior.name).join(', '),
+                      })}
+                    </Typography>
+                  </Stack>
+                )}
+                secondaryTypographyProps={{ component: 'div' }}
               />
             </ListItem>
           ))}

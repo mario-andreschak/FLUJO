@@ -3,7 +3,7 @@ import type { Flow } from '@/shared/types/flow';
 export const ENDURING_AGENT_SCHEMA_VERSION = 1 as const;
 /** Affected product records advance independently from durable runtime records. */
 export const ROLE_DEFINITION_SCHEMA_VERSION = 2 as const;
-export const ROLE_VERSION_SCHEMA_VERSION = 2 as const;
+export const ROLE_VERSION_SCHEMA_VERSION = 3 as const;
 export const PERSONA_SCHEMA_VERSION = 2 as const;
 export const PERSONA_CREATION_DRAFT_SCHEMA_VERSION = 1 as const;
 export const BEHAVIOR_REVISION_SCHEMA_VERSION = 2 as const;
@@ -101,6 +101,12 @@ export interface PublicRoleSuggestedApp extends RoleSuggestedAppReference {
   status: RoleSuggestedAppStatus;
 }
 
+export interface PublicRoleBehavior {
+  key: string;
+  name: string;
+  description?: string;
+}
+
 export interface CreatePublicRoleInput {
   id?: string;
   name: string;
@@ -138,6 +144,7 @@ export interface PublicRole {
   name: string;
   prompt: string;
   suggestedApps: PublicRoleSuggestedApp[];
+  behaviors: PublicRoleBehavior[];
   archived: boolean;
   currentVersionId: string;
   createdAt: number;
@@ -151,6 +158,7 @@ export interface PublicRoleVersion {
   name: string;
   prompt: string;
   suggestedApps: PublicRoleSuggestedApp[];
+  behaviors: PublicRoleBehavior[];
   createdAt: number;
   current: boolean;
 }

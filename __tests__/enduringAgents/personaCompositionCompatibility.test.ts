@@ -74,6 +74,19 @@ describe('Persona composition compatibility', () => {
     expect(revision.source).toEqual(legacyRecords.behaviorRevision.source);
   });
 
+  it('adds memory maintenance to every legacy Role version', () => {
+    const roleVersion = migrateAndParseRecord({
+      recordKind: 'RoleVersion',
+      value: legacyRecords.roleVersion,
+      currentVersion: enduringAgentRecordSchemaVersion('RoleVersion'),
+      schema: RoleVersionSchema,
+      migrations: enduringAgentRecordMigrations('RoleVersion'),
+    });
+
+    expect(roleVersion.behaviorSlots.map((slot) => slot.key))
+      .toEqual(expect.arrayContaining(['primary', 'maintain_memory']));
+  });
+
   it('rejects unsupported future record versions', () => {
     const currentVersion = enduringAgentRecordSchemaVersion('Persona');
     expect(() => migrateAndParseRecord({

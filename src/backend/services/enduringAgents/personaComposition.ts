@@ -22,6 +22,7 @@ import {
 } from '@/shared/types/enduringAgent';
 
 import { behaviorCompositionFlowRefs } from './behaviorRevisions';
+import { reconcilePersonaRoleBehaviors } from './factory';
 import { stableEnduringAgentId } from './ids';
 import {
   PersonaDomainConflictError,
@@ -330,6 +331,7 @@ async function projectBundle(bundle: PersonaBundle): Promise<PersonaComposition>
 export async function readPersonaComposition(
   personaId: string,
 ): Promise<PersonaComposition | null> {
+  await reconcilePersonaRoleBehaviors(personaId);
   let bundle = await listPersonaBundle(personaId);
   if (!bundle) return null;
 

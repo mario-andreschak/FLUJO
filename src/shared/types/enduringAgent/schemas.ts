@@ -291,11 +291,18 @@ export const PublicRoleSuggestedAppSchema = RoleSuggestedAppReferenceSchema.exte
   status: z.enum(['available', 'disabled', 'apps_disabled', 'missing']),
 }).strict();
 
+export const PublicRoleBehaviorSchema = z.object({
+  key: BehaviorSlotKeySchema,
+  name: NonEmptyText(160),
+  description: z.string().trim().max(20_000).optional(),
+}).strict();
+
 export const PublicRoleSchema = z.object({
   id: EnduringAgentIdSchema,
   name: NonEmptyText(160),
   prompt: NonEmptyText(20_000),
   suggestedApps: z.array(PublicRoleSuggestedAppSchema).max(64),
+  behaviors: z.array(PublicRoleBehaviorSchema).min(1).max(64),
   archived: z.boolean(),
   currentVersionId: EnduringAgentIdSchema,
   createdAt: TimestampSchema,
@@ -309,6 +316,7 @@ export const PublicRoleVersionSchema = z.object({
   name: NonEmptyText(160),
   prompt: NonEmptyText(20_000),
   suggestedApps: z.array(PublicRoleSuggestedAppSchema).max(64),
+  behaviors: z.array(PublicRoleBehaviorSchema).min(1).max(64),
   createdAt: TimestampSchema,
   current: z.boolean(),
 }).strict();
