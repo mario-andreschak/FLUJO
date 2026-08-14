@@ -35,7 +35,7 @@ import {
   listPersonaMailboxItems,
 } from '@/backend/services/enduringAgents';
 import { createPersonaFromRole } from '../enduringAgents/fixtures/personaFactory';
-import { resolvePersonaCoreRevision } from '@/backend/services/enduringAgents/personaCoreResolver';
+import { resolveEffectiveBehaviorRevision } from '@/backend/services/enduringAgents/behaviorFlowResolver';
 import { flowService } from '@/backend/services/flow';
 import { meetingEventBus } from '@/backend/services/meetings/MeetingEventBus';
 import { deleteMeeting, getMeeting } from '@/backend/services/meetings/store';
@@ -109,13 +109,13 @@ describe('durable Persona meeting start intent', () => {
         idempotencyKey: 'meeting-start-intent-persona',
         interruptionPolicy: 'queue',
       });
-      await resolvePersonaCoreRevision(persona.id);
+      await resolveEffectiveBehaviorRevision(persona.id, 'primary');
       const meetingId = 'meeting_start_crash';
       const crashingProcess = new MeetingEngine({
         isolateProcessRuntime: true,
         failpoints: {
           afterPersonaClaimsBeforeRunningPersist: () => {
-            throw new Error('failpoint: process exited');
+            throw new Error('Simulated meeting process crash');
           },
         },
       });

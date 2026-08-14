@@ -18,6 +18,7 @@ import {
   PERSONA_ACTIVITY_OUTCOME_DECISION_SOURCES,
   PERSONA_ACTIVITY_OUTCOME_RESOLUTIONS,
   PERSONA_ACTIVITY_OUTCOME_SCHEMA_VERSION,
+  PERSONA_ACTIVITY_SCHEMA_VERSION,
   PERSONA_SCHEMA_VERSION,
   PERSONA_CREATION_DRAFT_SCHEMA_VERSION,
   PERSONA_ACTIVITY_SOURCE_KINDS,
@@ -732,7 +733,10 @@ export const PersonaActivityOutcomeSchema = z.object({
 });
 
 export const PersonaActivitySchema = z.object({
-  schemaVersion: z.literal(ENDURING_AGENT_SCHEMA_VERSION),
+  schemaVersion: z.union([
+    z.literal(ENDURING_AGENT_SCHEMA_VERSION),
+    z.literal(PERSONA_ACTIVITY_SCHEMA_VERSION),
+  ]),
   id: EnduringAgentIdSchema,
   personaId: EnduringAgentIdSchema,
   kind: z.enum(PERSONA_ACTIVITY_KINDS),
@@ -986,7 +990,7 @@ export const BehaviorMaintenanceRunSchema = z.object({
   id: EnduringAgentIdSchema,
   workspaceId: NonEmptyText(256),
   personaId: EnduringAgentIdSchema,
-  sourceActivityIds: z.array(EnduringAgentIdSchema).min(1).max(20),
+  sourceActivityIds: z.array(EnduringAgentIdSchema).max(20),
   sourceWindowDigest: z.string().regex(SHA256_PATTERN),
   behaviorSlotKey: BehaviorSlotKeySchema,
   baseRevisionId: EnduringAgentIdSchema,
@@ -995,6 +999,8 @@ export const BehaviorMaintenanceRunSchema = z.object({
   policyVersion: NonEmptyText(128),
   evaluationSuiteVersion: NonEmptyText(128),
   state: z.enum(BEHAVIOR_MAINTENANCE_RUN_STATES),
+  diagnosisLeaseId: EnduringAgentIdSchema.optional(),
+  diagnosisLeaseExpiresAt: TimestampSchema.optional(),
   reasonCode: z.string().regex(/^[a-z0-9_:-]{1,128}$/).optional(),
   action: z.enum(BEHAVIOR_MAINTENANCE_ACTIONS).optional(),
   evidenceTrust: z.object({
@@ -1012,6 +1018,7 @@ export const BehaviorMaintenanceRunSchema = z.object({
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
   completedAt: TimestampSchema.optional(),
+  compactedAt: TimestampSchema.optional(),
 }).strict().superRefine((run, ctx) => {
   if (run.updatedAt < run.createdAt) {
     ctx.addIssue({ code: 'custom', message: 'updatedAt cannot precede createdAt.', path: ['updatedAt'] });
@@ -1022,6 +1029,23 @@ export const BehaviorMaintenanceRunSchema = z.object({
       code: 'custom',
       message: 'Only terminal maintenance runs require completedAt.',
       path: ['completedAt'],
+    });
+  }
+  const hasLease = run.diagnosisLeaseId !== undefined || run.diagnosisLeaseExpiresAt !== undefined;
+  if (hasLease && (run.state !== 'diagnosing'
+    || run.diagnosisLeaseId === undefined
+    || run.diagnosisLeaseExpiresAt === undefined)) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Only diagnosing maintenance runs may hold one complete diagnosis lease.',
+      path: ['diagnosisLeaseId'],
+    });
+  }
+  if (run.compactedAt !== undefined && (!terminal || run.sourceActivityIds.length !== 0)) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Only terminal metadata-only maintenance runs may be compacted.',
+      path: ['compactedAt'],
     });
   }
 });

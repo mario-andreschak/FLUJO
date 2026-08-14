@@ -5,6 +5,8 @@ import {
   BEHAVIOR_MAINTENANCE_RUN_SCHEMA_VERSION,
   BEHAVIOR_REVISION_SCHEMA_VERSION,
   ENDURING_AGENT_SCHEMA_VERSION,
+  PERSONA_ACTIVITY_OUTCOME_SCHEMA_VERSION,
+  PERSONA_ACTIVITY_SCHEMA_VERSION,
   PERSONA_SCHEMA_VERSION,
   ROLE_DEFINITION_SCHEMA_VERSION,
   ROLE_VERSION_SCHEMA_VERSION,
@@ -57,6 +59,41 @@ export const BEHAVIOR_REVISION_RECORD_MIGRATIONS =
 export const BEHAVIOR_BINDING_RECORD_MIGRATIONS =
   migrationTo(BEHAVIOR_BINDING_SCHEMA_VERSION);
 
+function legacyActivityOutcome(record: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (record.outcome !== undefined) return record.outcome as Record<string, unknown>;
+  const status = record.status;
+  if (status !== 'completed' && status !== 'error' && status !== 'cancelled') return undefined;
+  const timestamps = [record.completedAt, record.updatedAt, record.createdAt];
+  const decidedAt = timestamps.find((value) => (
+    typeof value === 'number' && Number.isInteger(value) && value >= 0
+  )) ?? 0;
+  return {
+    schemaVersion: PERSONA_ACTIVITY_OUTCOME_SCHEMA_VERSION,
+    resolution: status === 'error' ? 'failed' : 'unknown',
+    ...(status === 'error' ? { blockerKind: 'unknown' } : {}),
+    summary: status === 'error'
+      ? 'Legacy Activity failed before semantic outcomes were recorded.'
+      : 'Legacy Activity has no verified semantic outcome.',
+    nextAction: 'Review the original work before treating its goal as achieved.',
+    decisionSource: 'legacy',
+    evidenceRefs: [{ kind: 'activity', id: String(record.id ?? '') }],
+    decidedAt,
+  };
+}
+
+export const PERSONA_ACTIVITY_RECORD_MIGRATIONS: readonly RecordMigration[] = [{
+  from: ENDURING_AGENT_SCHEMA_VERSION,
+  to: PERSONA_ACTIVITY_SCHEMA_VERSION,
+  migrate: (record) => {
+    const outcome = legacyActivityOutcome(record);
+    return {
+      ...record,
+      schemaVersion: PERSONA_ACTIVITY_SCHEMA_VERSION,
+      ...(outcome ? { outcome } : {}),
+    };
+  },
+}];
+
 export function enduringAgentRecordSchemaVersion(recordKind: string): number {
   switch (recordKind) {
     case 'RoleDefinition':
@@ -71,6 +108,8 @@ export function enduringAgentRecordSchemaVersion(recordKind: string): number {
       return BEHAVIOR_BINDING_SCHEMA_VERSION;
     case 'BehaviorMaintenanceRun':
       return BEHAVIOR_MAINTENANCE_RUN_SCHEMA_VERSION;
+    case 'PersonaActivity':
+      return PERSONA_ACTIVITY_SCHEMA_VERSION;
     default:
       return ENDURING_AGENT_SCHEMA_VERSION;
   }
@@ -88,6 +127,8 @@ export function enduringAgentRecordMigrations(recordKind: string): readonly Reco
       return BEHAVIOR_REVISION_RECORD_MIGRATIONS;
     case 'BehaviorBinding':
       return BEHAVIOR_BINDING_RECORD_MIGRATIONS;
+    case 'PersonaActivity':
+      return PERSONA_ACTIVITY_RECORD_MIGRATIONS;
     default:
       return [];
   }

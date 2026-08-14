@@ -8,6 +8,7 @@ import {
   CreatePersonaLeaseInputSchema,
   CreatePersonaMailboxItemInputSchema,
   ENDURING_AGENT_SCHEMA_VERSION,
+  PERSONA_ACTIVITY_SCHEMA_VERSION,
   EnduringAgentIdSchema,
   PERSONA_LIFECYCLE_STATES,
   PERSONA_PRIORITIES,
@@ -1107,7 +1108,7 @@ async function ensureQueuedActivity(
   }
 
   const activity = PersonaActivitySchema.parse({
-    schemaVersion: ENDURING_AGENT_SCHEMA_VERSION,
+    schemaVersion: PERSONA_ACTIVITY_SCHEMA_VERSION,
     id,
     personaId: item.personaId,
     kind: item.kind,

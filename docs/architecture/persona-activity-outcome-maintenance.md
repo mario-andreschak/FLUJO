@@ -10,7 +10,7 @@ Runtime status and semantic outcome are separate contracts.
 - `PersonaActivity.outcome` is an independently versioned, bounded product/learning result: `succeeded | partial | blocked | failed | unknown`.
 - Missing or malformed Persona claims fail closed to an engine-authored `unknown` outcome (or `failed` after a runtime error).
 - Only semantic `succeeded` may automatically complete an assigned WorkItem. Other terminal outcomes block the WorkItem with a safe next action; explicit terminal WorkItem mutations retain precedence.
-- Legacy Activities without an outcome remain readable. New terminal transitions always persist one.
+- Legacy Activities migrate deterministically: completed/cancelled become `unknown`, error becomes `failed`, and no missing outcome is interpreted as success. New terminal transitions always persist one.
 
 Persona outcome claims use a closed JSON envelope inside
 `<persona_activity_outcome>...</persona_activity_outcome>`. The dispatcher validates
@@ -26,9 +26,16 @@ detector version. Evidence windows are limited to the newest 20 eligible termina
 Activities from seven days and persist only digests/trust counts in the run record.
 
 Admission and diagnosis use separate rollout flags. Both default off. Disabled
-admission is a no-write path. Admission occurs only after the source Activity commits,
-never for maintenance Activities, and one active run per Persona coalesces bursts.
-Restart reconciliation repeats the idempotent admission check.
+admission is a no-write path. Admission occurs only after an eligible completed/error
+source Activity commits; cancelled and maintenance Activities never trigger learning.
+The cross-process Persona lock makes active-run inspection plus save atomic, and
+shadow-only admissions are terminal records so they cannot block later windows.
+
+Diagnosis is detached from the source commit. A short-lived durable lease fences the
+`queued -> diagnosing -> completed | awaiting_review | failed` lifecycle. Startup
+reclaims expired diagnosis leases without replaying source side effects. Terminal run
+evidence pointers are compacted after 30 days, and only the newest 100 terminal runs
+retain detail; identifiers, hashes, actions, proposal links, and counters remain.
 
 Diagnosis has closed actions: `no_change`, `memory_candidate`,
 `instruction_behavior_candidate`, `setup_recommendation`, `eval_candidate`,

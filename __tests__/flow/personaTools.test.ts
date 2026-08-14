@@ -18,6 +18,9 @@ jest.mock('@/backend/services/enduringAgents', () => ({
   updatePersonaWorkItem: jest.fn(),
 }));
 
+import type OpenAI from 'openai';
+
+import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import {
   PERSONA_TOOL_NAMES,
   buildPersonaTools,
@@ -109,6 +112,45 @@ describe('authored Persona tools', () => {
         id: 'activity_test',
         uri: 'flujo://conversation/conversation_persona',
       }],
+    }), { executionAuthority });
+  });
+
+  it('dispatches an advertised Persona tool through ModelHandler with the same fence', async () => {
+    const executionAuthority = authority();
+    rememberMemoryMock.mockResolvedValue({ id: 'memory_dispatched', status: 'candidate' });
+    const toolCall = {
+      id: 'call_remember',
+      type: 'function',
+      function: {
+        name: 'remember',
+        arguments: JSON.stringify({ content: 'Dispatched candidate fact' }),
+      },
+    } as OpenAI.ChatCompletionMessageFunctionToolCall;
+
+    const result = await ModelHandler.processToolCalls({
+      conversationId: 'conversation_persona',
+      toolCalls: [toolCall],
+      executionAuthority,
+      personaAttribution: {
+        personaId: 'persona_test',
+        activityId: 'activity_test',
+        behaviorRevisionId: 'revision_test',
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error(result.error.message);
+    expect(result.value.toolCallMessages).toHaveLength(1);
+    expect(result.value.toolCallMessages[0]).toMatchObject({
+      role: 'tool',
+      tool_call_id: 'call_remember',
+      content: expect.stringContaining('memory_dispatched'),
+    });
+    expect(rememberMemoryMock).toHaveBeenCalledWith(expect.objectContaining({
+      personaId: 'persona_test',
+      content: 'Dispatched candidate fact',
+      status: 'candidate',
+      trust: 'model_inference',
     }), { executionAuthority });
   });
 

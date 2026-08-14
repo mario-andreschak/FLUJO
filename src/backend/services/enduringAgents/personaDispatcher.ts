@@ -85,7 +85,10 @@ import {
   type RoutePersonaMailboxResult,
 } from './activityRuntime';
 import { canonicalJson } from './behaviorRevisions';
-import { admitBehaviorMaintenanceRun } from './behaviorMaintenance';
+import {
+  admitBehaviorMaintenanceRun,
+  reconcileBehaviorMaintenanceRuns,
+} from './behaviorMaintenance';
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
 import {
   createPersonaActivitySnapshot,
@@ -139,7 +142,7 @@ const PersonaOutcomeClaimSchema = z.object({
   evidenceRefs: z.array(MemorySourceRefSchema).max(24).default([]),
 }).strict();
 
-function semanticOutcomeFromDispatch(input: {
+export function semanticOutcomeFromDispatch(input: {
   status: 'completed' | 'cancelled' | 'error';
   outcome?: PersonaFlowDispatchOutcome;
   activityId: string;
@@ -2143,7 +2146,16 @@ export class PersonaFlowDispatcher {
       try {
         // The rollout gate defaults off, making this a no-write call. When
         // enabled, admission occurs only after the source terminal commit.
-        await this.inWorkspace(() => admitBehaviorMaintenanceRun(completion!.activity));
+        const maintenanceRun = await this.inWorkspace(() => (
+          admitBehaviorMaintenanceRun(completion!.activity)
+        ));
+        if (maintenanceRun) {
+          void this.inWorkspace(() => (
+            reconcileBehaviorMaintenanceRuns(maintenanceRun.personaId)
+          )).catch((error) => {
+            log.warn(`Deferred Behavior maintenance diagnosis for ${fence.activityId}:`, error);
+          });
+        }
       } catch (error) {
         log.warn(`Deferred Behavior maintenance admission for ${fence.activityId}:`, error);
       }
@@ -3323,6 +3335,11 @@ export class PersonaFlowDispatcher {
       }
       if (record.state === 'queued' || record.state === 'running') personas.add(record.personaId);
     }
+    // Reconcile queued or lease-expired Behavior diagnosis even when no source
+    // dispatch remains. This is deliberately detached from source replay.
+    void this.inWorkspace(() => reconcileBehaviorMaintenanceRuns()).catch((error) => {
+      log.warn('Failed to reconcile Behavior maintenance lifecycle:', error);
+    });
     const pumps = [...personas].map((personaId) => this.pump(personaId));
     if (options.waitForIdle !== false) await Promise.all(pumps);
   }

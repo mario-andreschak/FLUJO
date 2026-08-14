@@ -67,12 +67,12 @@ function state(overrides: Partial<SharedState> = {}): SharedState {
   } as SharedState;
 }
 
-function params(): ProcessNodeParams {
+function params(properties: Record<string, unknown> = {}): ProcessNodeParams {
   return {
     id: 'process-1',
     label: 'Process',
     type: 'process',
-    properties: { boundModel: 'model-1' },
+    properties: { boundModel: 'model-1', ...properties },
   } as ProcessNodeParams;
 }
 
@@ -152,6 +152,16 @@ describe('trusted Persona instruction context', () => {
     );
     expect(prep.currentPrompt).toContain('${global:DO_NOT_INTERPOLATE}');
     expect(prep.availableTools).toEqual([]);
+  });
+
+  it('advertises configured Persona tools canonically and filters denied abilities', async () => {
+    const prep = await new ProcessNode().prep(state({
+      permissionRules: [{ effect: 'deny', action: 'suggest_improvement', resource: '*' }],
+    }), params({
+      personaTools: ['suggest_improvement', 'remember', 'remember'],
+    }));
+
+    expect((prep.availableTools ?? []).map((tool) => tool.name)).toEqual(['remember']);
   });
 
   it('does not apply root Persona identity instructions to an attributed structural child', async () => {

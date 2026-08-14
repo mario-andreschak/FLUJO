@@ -1104,15 +1104,17 @@ export function getBehaviorMaintenanceRun(id: string): Promise<BehaviorMaintenan
   });
 }
 
-export async function listBehaviorMaintenanceRuns(personaId: string): Promise<BehaviorMaintenanceRun[]> {
-  assertSafeCollectionId(personaId);
+export async function listBehaviorMaintenanceRuns(personaId?: string): Promise<BehaviorMaintenanceRun[]> {
+  if (personaId !== undefined) assertSafeCollectionId(personaId);
   const records = await listRecords({
     collection: ENDURING_AGENT_COLLECTIONS.behaviorMaintenanceRuns,
     recordKind: 'BehaviorMaintenanceRun',
     schema: BehaviorMaintenanceRunSchema,
     strict: true,
   });
-  return records.filter((record) => record.personaId === personaId);
+  return personaId === undefined
+    ? records
+    : records.filter((record) => record.personaId === personaId);
 }
 
 export async function saveBehaviorMaintenanceRun(

@@ -9,6 +9,7 @@ export const PERSONA_CREATION_DRAFT_SCHEMA_VERSION = 1 as const;
 export const BEHAVIOR_REVISION_SCHEMA_VERSION = 2 as const;
 export const BEHAVIOR_BINDING_SCHEMA_VERSION = 2 as const;
 export const PERSONA_INSTRUCTION_CONTEXT_SCHEMA_VERSION = 1 as const;
+export const PERSONA_ACTIVITY_SCHEMA_VERSION = 2 as const;
 
 export const PERSONA_LIFECYCLE_STATES = [
   'idle',
@@ -673,7 +674,7 @@ export interface PersonaActivitySource {
 }
 
 export interface PersonaActivity {
-  schemaVersion: typeof ENDURING_AGENT_SCHEMA_VERSION;
+  schemaVersion: typeof ENDURING_AGENT_SCHEMA_VERSION | typeof PERSONA_ACTIVITY_SCHEMA_VERSION;
   id: string;
   personaId: string;
   kind: PersonaActivityKind;
@@ -758,6 +759,9 @@ export interface BehaviorMaintenanceRun {
   policyVersion: string;
   evaluationSuiteVersion: string;
   state: BehaviorMaintenanceRunState;
+  /** Short-lived ownership fence for crash-safe asynchronous diagnosis. */
+  diagnosisLeaseId?: string;
+  diagnosisLeaseExpiresAt?: number;
   reasonCode?: string;
   action?: BehaviorMaintenanceAction;
   evidenceTrust: {
@@ -775,6 +779,8 @@ export interface BehaviorMaintenanceRun {
   createdAt: number;
   updatedAt: number;
   completedAt?: number;
+  /** Detail was removed while hashes/counters/audit state were retained. */
+  compactedAt?: number;
 }
 
 export const PERSONA_WORK_ITEM_STATUSES = [
