@@ -185,6 +185,60 @@ export function isLoopbackRequest(host: string | null, origin: string | null): b
   }
 }
 
+/** Loopback peer addresses that Next's self-injected `x-forwarded-for` carries
+ *  for a genuine local client (Windows reports IPv6-mapped forms). */
+function isLoopbackAddress(value: string): boolean {
+  const address = value.trim().toLowerCase().replace(/^\[|\]$/g, '').split('%')[0];
+  if (!address) return false;
+  if (address === '::1' || address === '::ffff:127.0.0.1' || address === 'localhost') return true;
+  return address.startsWith('127.');
+}
+
+/**
+ * Whether the request carries evidence of a REAL reverse proxy in front of FLUJO.
+ *
+ * The mere PRESENCE of an `x-forwarded-*` header proves nothing: Next's own
+ * server unconditionally synthesizes `x-forwarded-host`, `x-forwarded-port`,
+ * `x-forwarded-proto` and `x-forwarded-for` for EVERY request before a handler
+ * ever sees it (`next/dist/server/base-server.js`, "Update the `x-forwarded-*`
+ * headers"). Treating presence as proof therefore denied EVERY strict-loopback
+ * request under a real server — silently disabling the whole Persona control
+ * plane — while unit tests that hand-build `NextRequest`s still passed.
+ *
+ * So compare the values against what a direct local connection must look like:
+ *   - `forwarded` / `x-real-ip` are never synthesized by Next => presence is proof;
+ *   - `x-forwarded-host` mirrors Host => a DIFFERENT value means a proxy rewrote it;
+ *   - `x-forwarded-for` mirrors the socket peer => any non-loopback hop, or a
+ *     multi-hop chain, means the peer is not a local client;
+ *   - `x-forwarded-proto` is `http` for FLUJO's local listener => `https`
+ *     indicates a TLS-terminating proxy.
+ */
+function hasUntrustedForwarding(request: Request): boolean {
+  if (request.headers.get('forwarded') !== null) return true;
+  if (request.headers.get('x-real-ip') !== null) return true;
+
+  const host = request.headers.get('host');
+  const forwardedHost = request.headers.get('x-forwarded-host');
+  if (
+    forwardedHost !== null
+    && (!host || forwardedHost.trim().toLowerCase() !== host.trim().toLowerCase())
+  ) {
+    return true;
+  }
+
+  const forwardedFor = request.headers.get('x-forwarded-for');
+  if (forwardedFor !== null) {
+    const hops = forwardedFor.split(',').map(hop => hop.trim()).filter(Boolean);
+    if (hops.length > 1) return true;
+    if (hops.some(hop => !isLoopbackAddress(hop))) return true;
+  }
+
+  const forwardedProto = request.headers.get('x-forwarded-proto');
+  if (forwardedProto !== null && forwardedProto.trim().toLowerCase() !== 'http') return true;
+
+  return false;
+}
+
 /** Host-only half of the exposure policy for intentionally public routes. */
 export function isRequestHostAllowed(host: string | null): boolean {
   const hostname = hostnameOf(host);
@@ -213,13 +267,7 @@ export function assertLocalRequest(
   request: Request,
   options: { strictLoopback?: boolean } = {},
 ): NextResponse | null {
-  const hasForwardingHeaders = [
-    'forwarded',
-    'x-forwarded-for',
-    'x-forwarded-host',
-    'x-forwarded-proto',
-    'x-real-ip',
-  ].some(header => request.headers.get(header) !== null);
+  const hasForwardingHeaders = hasUntrustedForwarding(request);
   const allowed = options.strictLoopback
     // Host and Origin are client-controlled headers. They become a meaningful
     // local trust boundary only while FLUJO's launcher has selected localhost
