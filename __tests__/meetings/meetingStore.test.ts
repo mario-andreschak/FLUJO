@@ -106,6 +106,7 @@ describe('meeting snapshot store', () => {
           name: 'Living',
           personaId: 'persona_living',
           behaviorSlotKey: 'council',
+          behaviorName: 'Decision council',
         },
       ],
     }));
@@ -116,6 +117,7 @@ describe('meeting snapshot store', () => {
         id: 'living',
         personaId: 'persona_living',
         behaviorSlotKey: 'council',
+        behaviorName: 'Decision council',
       }),
     ]));
     expect(record.participants.find((participant) => participant.id === 'legacy'))
@@ -331,6 +333,12 @@ describe('meeting snapshot store', () => {
         { id: 'second', name: 'Second', personaId: 'persona_same' },
       ],
     }))).toThrow(/Duplicate Persona participant/i);
+    expect(() => createMeetingRecord(input({
+      participants: [
+        { id: 'persona', name: 'Persona', personaId: 'persona_named', behaviorName: 'Unbound label' },
+        { id: 'legacy', name: 'Legacy', flowId: 'flow-b' },
+      ],
+    }))).toThrow(/Behavior selection/i);
   });
 
   it('creates, updates, lists, summarizes, and fully deletes a meeting', async () => {

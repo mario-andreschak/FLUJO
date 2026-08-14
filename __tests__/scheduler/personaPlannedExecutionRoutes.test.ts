@@ -129,6 +129,31 @@ describe('planned execution Persona trust boundary', () => {
     expect(updateMock).not.toHaveBeenCalled();
   });
 
+  it('translates explicit null target fields so a local editor can switch Persona to Flow', async () => {
+    getMock.mockResolvedValue({
+      id: 'execution_1',
+      flowId: 'flow_provenance',
+      personaId: 'persona_jim',
+      behaviorSlotKey: 'research',
+    });
+
+    const response = await updateExecution(
+      request('/api/planned-executions/execution_1', {
+        flowId: 'flow_legacy',
+        personaId: null,
+        behaviorSlotKey: null,
+      }),
+      context,
+    );
+
+    expect(response.status).toBe(200);
+    expect(updateMock).toHaveBeenCalledWith('execution_1', {
+      flowId: 'flow_legacy',
+      personaId: undefined,
+      behaviorSlotKey: undefined,
+    });
+  });
+
   it('guards Persona run-now while retaining legacy run-now behavior', async () => {
     getMock.mockResolvedValueOnce({
       id: 'execution_1',

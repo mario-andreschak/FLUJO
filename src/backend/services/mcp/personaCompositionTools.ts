@@ -16,11 +16,6 @@ export function isPersonaCompositionTool(name: string): boolean {
 }
 
 export function personaCompositionToolDefinitions(): Tool[] {
-  const appRefs = {
-    type: 'array' as const,
-    maxItems: 128,
-    items: { type: 'string' as const, minLength: 1, maxLength: 200 },
-  };
   return [
     {
       name: 'read_persona_composition',
@@ -38,7 +33,7 @@ export function personaCompositionToolDefinitions(): Tool[] {
     {
       name: 'update_persona_composition',
       description:
-        'Atomically update friendly Persona composition references after validating them in the active workspace. Requires the expected_updated_at concurrency token.',
+        'Atomically update the Persona name, Core Flow, Behaviors, or core Memories after validating them in the active workspace. Apps are changed through Persona App grants. Requires the expected_updated_at concurrency token.',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
@@ -46,20 +41,7 @@ export function personaCompositionToolDefinitions(): Tool[] {
           persona_id: { type: 'string', minLength: 1, maxLength: 64 },
           expected_updated_at: { type: 'number', minimum: 0 },
           name: { type: 'string', minLength: 1, maxLength: 160 },
-          description: { type: ['string', 'null'], maxLength: 10_000 },
-          role: {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-              ref: { type: 'string', minLength: 1, maxLength: 64 },
-              name: { type: 'string', minLength: 1, maxLength: 160 },
-              prompt: { type: 'string', minLength: 1, maxLength: 20_000 },
-              suggested_app_refs: appRefs,
-            },
-            required: ['ref', 'name', 'prompt', 'suggested_app_refs'],
-          },
           core_flow_ref: { type: ['string', 'null'], minLength: 1, maxLength: 256 },
-          app_refs: appRefs,
           memory_refs: {
             type: 'array',
             maxItems: 256,
@@ -94,17 +76,6 @@ export function personaCompositionToolDefinitions(): Tool[] {
 function text(payload: unknown): CallToolResult {
   return {
     content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
-  };
-}
-
-function roleInput(value: unknown): unknown {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
-  const role = value as Record<string, unknown>;
-  return {
-    ref: role.ref,
-    name: role.name,
-    prompt: role.prompt,
-    suggestedAppRefs: role.suggested_app_refs,
   };
 }
 
@@ -143,17 +114,8 @@ export async function callPersonaCompositionTool(
     return text(await updatePersonaComposition(personaId, {
       expectedUpdatedAt: args.expected_updated_at,
       ...(Object.prototype.hasOwnProperty.call(args, 'name') ? { name: args.name } : {}),
-      ...(Object.prototype.hasOwnProperty.call(args, 'description')
-        ? { description: args.description }
-        : {}),
-      ...(Object.prototype.hasOwnProperty.call(args, 'role')
-        ? { role: roleInput(args.role) }
-        : {}),
       ...(Object.prototype.hasOwnProperty.call(args, 'core_flow_ref')
         ? { coreFlowRef: args.core_flow_ref }
-        : {}),
-      ...(Object.prototype.hasOwnProperty.call(args, 'app_refs')
-        ? { appRefs: args.app_refs }
         : {}),
       ...(Object.prototype.hasOwnProperty.call(args, 'memory_refs')
         ? { memoryRefs: args.memory_refs }

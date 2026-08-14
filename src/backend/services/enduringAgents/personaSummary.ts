@@ -15,6 +15,7 @@ export const MAX_PERSONA_SUMMARY_PAGE_SIZE = 100;
 export type PersonaHumanStatus =
   | 'working'
   | 'waiting-for-you'
+  | 'paused'
   | 'up-next'
   | 'needs-attention';
 
@@ -41,7 +42,6 @@ export interface PersonaSummary {
     talk: boolean;
     open: boolean;
     assign: boolean;
-    call: boolean;
   };
   updatedAt: number;
 }
@@ -124,6 +124,7 @@ function humanStatus(
   if (persona.lifecycleState === 'disabled' || persona.lifecycleState === 'error') {
     return 'needs-attention';
   }
+  if (persona.lifecycleState === 'sleeping') return 'paused';
   if (activity?.status === 'running' || persona.lifecycleState === 'busy') {
     return 'working';
   }
@@ -131,7 +132,7 @@ function humanStatus(
     return 'waiting-for-you';
   }
   if (activity?.status === 'error') return 'needs-attention';
-  if (hasQueuedWork || persona.lifecycleState === 'sleeping') return 'up-next';
+  if (hasQueuedWork) return 'up-next';
   return 'up-next';
 }
 
@@ -202,7 +203,6 @@ export async function listPersonaSummaries(
         talk: persona.lifecycleState !== 'disabled' && persona.lifecycleState !== 'error',
         open: true,
         assign: persona.lifecycleState !== 'disabled',
-        call: false,
       },
       updatedAt: Math.max(
         persona.updatedAt,

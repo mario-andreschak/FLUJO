@@ -369,14 +369,12 @@ async function validateUpdate(
   bundle: PersonaBundle,
   input: UpdatePersonaCompositionInput,
 ): Promise<void> {
-  if (input.role) await requireRole(input.role);
   if (input.coreFlowRef) {
     await assertBindingOwnership(persona.id, {
       mode: 'shared',
       sharedFlowRef: input.coreFlowRef,
     });
   }
-  if (input.appRefs) await requireApps(input.appRefs);
   if (input.memoryRefs) await requireMemories(persona, input.memoryRefs);
 
   if (input.behaviors) {
@@ -416,10 +414,6 @@ function nextPreferences(
 ): PersonaCompositionPreferences {
   return {
     ...current,
-    ...(input.description !== undefined
-      ? { description: input.description ?? undefined }
-      : {}),
-    ...(input.role !== undefined ? { role: input.role } : {}),
     ...(input.coreFlowRef !== undefined
       ? {
           coreFlowRef: input.coreFlowRef ?? undefined,
@@ -428,7 +422,6 @@ function nextPreferences(
             : undefined,
         }
       : {}),
-    ...(input.appRefs !== undefined ? { appRefs: input.appRefs } : {}),
     ...(input.memoryRefs !== undefined ? { memoryRefs: input.memoryRefs } : {}),
     ...(input.behaviors !== undefined
       ? {

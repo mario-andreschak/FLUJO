@@ -5,6 +5,7 @@ import type {
   AssignPersonaWorkItemInput,
   AssignPersonaWorkItemResult,
   BehaviorBinding,
+  BehaviorProposal,
   BehaviorRevision,
   CopyPersonaFlowInput,
   CopyPersonaFlowResult,
@@ -20,6 +21,7 @@ import type {
   PersonaComposition,
   PersonaFlowReadiness,
   PersonaMailboxItem,
+  PersonaNativeAbilityId,
   PersonaPresentationSummary,
   PersonaCreationDraft,
   PersonaWorkItem,
@@ -97,12 +99,54 @@ export interface PersonaDetail {
   presentation: PersonaPresentationSummary;
 }
 
+export interface PersonaExecutionPreview {
+  personaId: string;
+  coreFlowRef?: string;
+  apps: string[];
+  behaviors: Array<{
+    slotKey: string;
+    name: string;
+    description?: string;
+  }>;
+  nativeAbilities: PersonaNativeAbilityId[];
+  readOnly: true;
+}
+
+export type PersonaWorkItemControlAction =
+  | 'pause'
+  | 'stop'
+  | 'retry'
+  | 'move_earlier'
+  | 'move_later';
+
+export interface PersonaWorkItemControlResult {
+  action: PersonaWorkItemControlAction;
+  workItem: PersonaWorkItem;
+  admission?: AssignPersonaWorkItemResult['admission'];
+  moved?: boolean;
+}
+
+export interface PromotePersonaImprovementInput {
+  confirmation: 'PROMOTE';
+  migrationNotes: string;
+}
+
+export interface PromotePersonaImprovementResult {
+  proposal: BehaviorProposal;
+  roleVersion: RoleVersion;
+}
+
 export type PersonaBundle = Omit<PersonaDetail, 'runtime' | 'presentation'>;
 
 export interface MemorySearchResult {
   item: MemoryItem;
   score: number;
   core: boolean;
+}
+
+export interface PersonaMemoryAvailabilityInput {
+  validFrom?: number;
+  validUntil?: number;
 }
 
 export interface RolesResponse {
@@ -164,6 +208,10 @@ class PersonasService {
 
   get(personaId: string): Promise<PersonaDetail> {
     return parse(fetch(withWorkspaceUrl(personaPath(personaId))));
+  }
+
+  executionPreview(personaId: string): Promise<PersonaExecutionPreview> {
+    return parse(fetch(withWorkspaceUrl(personaPath(personaId, '/execution-preview'))));
   }
 
   create(input: CreatePersonaInput): Promise<PersonaBundle> {
@@ -240,7 +288,7 @@ class PersonasService {
 
   createMemory(
     personaId: string,
-    input: { content: string; requestId: string },
+    input: { content: string; requestId: string } & PersonaMemoryAvailabilityInput,
   ): Promise<MemoryItem> {
     const observedAt = Date.now();
     return jsonRequest(personaPath(personaId, '/memories'), 'POST', {
@@ -253,6 +301,8 @@ class PersonasService {
       importance: 0.5,
       status: 'active',
       trust: 'explicit_user',
+      ...(input.validFrom !== undefined ? { validFrom: input.validFrom } : {}),
+      ...(input.validUntil !== undefined ? { validUntil: input.validUntil } : {}),
       sourceRefs: [{
         kind: 'user_statement',
         id: `persona-desk-create-${input.requestId}`,
@@ -268,7 +318,15 @@ class PersonasService {
     ), 'POST');
   }
 
-  correctMemory(personaId: string, memory: MemoryItem, content: string): Promise<MemoryItem> {
+  correctMemory(
+    personaId: string,
+    memory: MemoryItem,
+    content: string,
+    availability: PersonaMemoryAvailabilityInput = {
+      validFrom: memory.validFrom,
+      validUntil: memory.validUntil,
+    },
+  ): Promise<MemoryItem> {
     return jsonRequest(personaPath(
       personaId,
       `/memories/${encodeURIComponent(memory.id)}/correct`,
@@ -276,6 +334,8 @@ class PersonasService {
       content,
       confidence: memory.confidence,
       importance: memory.importance,
+      ...(availability.validFrom !== undefined ? { validFrom: availability.validFrom } : {}),
+      ...(availability.validUntil !== undefined ? { validUntil: availability.validUntil } : {}),
       sourceRefs: [{
         kind: 'user_statement',
         id: `persona-desk-correction-${memory.id}`,
@@ -314,6 +374,17 @@ class PersonasService {
     ), 'POST', input);
   }
 
+  controlWorkItem(
+    personaId: string,
+    workItemId: string,
+    action: PersonaWorkItemControlAction,
+  ): Promise<PersonaWorkItemControlResult> {
+    return jsonRequest(personaPath(
+      personaId,
+      `/work-items/${encodeURIComponent(workItemId)}/control`,
+    ), 'POST', { action });
+  }
+
   updateWorkItem(
     personaId: string,
     workItemId: string,
@@ -340,6 +411,42 @@ class PersonasService {
     return jsonRequest(personaPath(
       personaId,
       `/behaviors/${encodeURIComponent(behaviorId)}/activate`,
+    ), 'POST', input);
+  }
+
+  improvements(personaId: string): Promise<BehaviorProposal[]> {
+    return parse(fetch(withWorkspaceUrl(personaPath(personaId, '/improvements'))));
+  }
+
+  applyImprovement(personaId: string, proposalId: string): Promise<BehaviorProposal> {
+    return jsonRequest(personaPath(
+      personaId,
+      `/improvements/${encodeURIComponent(proposalId)}/apply`,
+    ), 'POST');
+  }
+
+  rejectImprovement(personaId: string, proposalId: string): Promise<BehaviorProposal> {
+    return jsonRequest(personaPath(
+      personaId,
+      `/improvements/${encodeURIComponent(proposalId)}/reject`,
+    ), 'POST');
+  }
+
+  undoImprovement(personaId: string, proposalId: string): Promise<BehaviorProposal> {
+    return jsonRequest(personaPath(
+      personaId,
+      `/improvements/${encodeURIComponent(proposalId)}/undo`,
+    ), 'POST');
+  }
+
+  promoteImprovement(
+    personaId: string,
+    proposalId: string,
+    input: PromotePersonaImprovementInput,
+  ): Promise<PromotePersonaImprovementResult> {
+    return jsonRequest(personaPath(
+      personaId,
+      `/improvements/${encodeURIComponent(proposalId)}/promote`,
     ), 'POST', input);
   }
 

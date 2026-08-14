@@ -10,6 +10,7 @@ import {
   BehaviorBindingSchema,
   BehaviorRevisionSchema,
   CreatePersonaInputSchema,
+  DEFAULT_PERSONA_NATIVE_ABILITY_IDS,
   ENDURING_AGENT_SCHEMA_VERSION,
   MemoryItemSchema,
   PERSONA_SCHEMA_VERSION,
@@ -20,6 +21,7 @@ import {
   type CreatePersonaInput,
   type MemoryItem,
   type Persona,
+  type PersonaPresentation,
   type RoleVersion,
 } from '@/shared/types/enduringAgent';
 import { createLogger } from '@/utils/logger';
@@ -82,6 +84,22 @@ function sha256(value: unknown): string {
   return createHash('sha256').update(canonicalJson(value)).digest('hex');
 }
 
+function withDefaultPersonaAbilities(source: Flow): Flow {
+  const flow = structuredClone(source);
+  for (const node of flow.nodes) {
+    if (node.type !== 'process') continue;
+    const data = node.data as typeof node.data & {
+      properties?: Record<string, unknown> & { personaTools?: unknown };
+    };
+    const properties = data.properties ?? {};
+    if (properties.personaTools === undefined) {
+      properties.personaTools = [...DEFAULT_PERSONA_NATIVE_ABILITY_IDS];
+    }
+    data.properties = properties;
+  }
+  return flow;
+}
+
 function resolvePersonaId(input: CreatePersonaInput): string {
   if (input.id) return input.id;
   if (input.idempotencyKey) {
@@ -103,10 +121,24 @@ async function resolveRoleVersion(roleVersionId?: string): Promise<RoleVersion> 
   return selected;
 }
 
+function editablePersonaPresentation(
+  presentation: PersonaPresentation | undefined,
+): Pick<PersonaPresentation, 'avatarUrl' | 'language'> | undefined {
+  if (!presentation) return undefined;
+  const editable = {
+    ...(presentation.avatarUrl ? { avatarUrl: presentation.avatarUrl } : {}),
+    ...(presentation.language ? { language: presentation.language } : {}),
+  };
+  return Object.keys(editable).length > 0 ? editable : undefined;
+}
+
 function effectiveFactoryRequest(
   input: CreatePersonaInput,
   roleVersion: RoleVersion,
 ): Record<string, unknown> {
+  const presentation = editablePersonaPresentation(
+    input.presentation ?? roleVersion.defaults?.presentation,
+  );
   return {
     name: input.name,
     coreFlowRef: input.coreFlowRef ?? null,
@@ -116,8 +148,11 @@ function effectiveFactoryRequest(
       ? { behaviorFlowRefs: input.behaviorFlowRefs }
       : {}),
     mission: input.mission ?? roleVersion.mission,
-    presentation: input.presentation ?? roleVersion.defaults?.presentation ?? null,
-    autonomyLevel: input.autonomyLevel ?? roleVersion.defaults?.autonomyLevel ?? 'locked',
+    presentation: presentation ?? null,
+    // New Personas safely learn by default: memory remains reviewable and
+    // Behavior changes still require the owner unless the Role says otherwise.
+    autonomyLevel:
+      input.autonomyLevel ?? roleVersion.defaults?.autonomyLevel ?? 'propose_overrides',
     interruptionPolicy:
       input.interruptionPolicy ?? roleVersion.defaults?.interruptionPolicy ?? 'queue',
     initialMemories: input.initialMemories ?? [],
@@ -429,7 +464,7 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
 
     const defaultModelId = await resolveDefaultModelId(roleVersion, coreTemplate as Flow);
     const preparedCore = await requireRunnableGeneratedFlow(
-      bindDefaultModelToFlow(coreTemplate as Flow, defaultModelId),
+      bindDefaultModelToFlow(withDefaultPersonaAbilities(coreTemplate as Flow), defaultModelId),
       'Core Flow',
     );
     const preparedRoleFlows = await Promise.all(roleVersion.behaviorSlots.map(
@@ -456,6 +491,9 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
       assertRetryMatches(persona, personaId, requestHash, effectiveRequest);
     } else {
       const now = Date.now();
+      const presentation = editablePersonaPresentation(
+        input.presentation ?? roleVersion.defaults?.presentation,
+      );
       persona = PersonaSchema.parse({
         schemaVersion: PERSONA_SCHEMA_VERSION,
         id: personaId,
@@ -463,11 +501,11 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
         roleVersionId: roleVersion.id,
         lifecycleState: 'disabled',
         mission: input.mission ?? roleVersion.mission,
-        ...(input.presentation ?? roleVersion.defaults?.presentation
-          ? { presentation: input.presentation ?? roleVersion.defaults?.presentation }
-          : {}),
+        ...(presentation ? { presentation } : {}),
         autonomyLevel:
-          input.autonomyLevel ?? roleVersion.defaults?.autonomyLevel ?? 'locked',
+          input.autonomyLevel
+          ?? roleVersion.defaults?.autonomyLevel
+          ?? 'propose_overrides',
         interruptionPolicy:
           input.interruptionPolicy ?? roleVersion.defaults?.interruptionPolicy ?? 'queue',
         coreMemoryItemIds: [],

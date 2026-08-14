@@ -25,22 +25,9 @@ export const PERSONA_EXPORT_EXCLUDED_CATEGORIES = [
 
 export const PersonaSettingsOptionsSchema = z.object({
   roles: z.array(z.object({
-    roleDefinitionId: SafeIdSchema,
     roleVersionId: SafeIdSchema,
     name: z.string().trim().min(1).max(160),
-    version: z.number().int().positive(),
-    current: z.boolean(),
-  }).strict()),
-  avatars: z.array(z.object({
-    value: z.string().trim().min(1).max(2048),
-    label: z.string().trim().min(1).max(160),
-  }).strict()),
-  voices: z.array(z.object({
-    value: z.string().trim().min(1).max(128),
-    label: z.string().trim().min(1).max(160),
-    languageCodes: z.array(z.string().trim().min(1).max(64)),
-    available: z.boolean(),
-    previewAvailable: z.boolean(),
+    description: z.string().trim().min(1).max(20_000).optional(),
   }).strict()),
   languages: z.array(z.object({
     code: z.string().trim().min(1).max(64),
@@ -49,13 +36,6 @@ export const PersonaSettingsOptionsSchema = z.object({
   lifecycleStates: z.array(z.enum(['idle', 'sleeping', 'disabled'])),
   autonomyLevels: z.array(z.enum(PERSONA_AUTONOMY_LEVELS)),
   interruptionPolicies: z.array(z.enum(PERSONA_INTERRUPTION_POLICIES)),
-  capabilities: z.object({
-    avatarPicker: z.boolean(),
-    roleChange: z.boolean(),
-    voicePicker: z.boolean(),
-    voicePreview: z.boolean(),
-    languagePicker: z.boolean(),
-  }).strict(),
 }).strict();
 
 export type PersonaSettingsOptions = z.infer<typeof PersonaSettingsOptionsSchema>;

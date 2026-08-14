@@ -16,6 +16,7 @@ import type {
   PersonaActivity,
   PersonaAttribution,
   PersonaInstructionContext,
+  PersonaNativeAbilityId,
 } from '@/shared/types/enduringAgent';
 
 // --- Custom Chat Message Type is now imported from shared/types/chat.ts ---
@@ -297,17 +298,7 @@ export interface ProcessNodeProperties {
      *  live in the UI. Off by default (undefined/false = off). */
     enableTodoTool?: boolean;
     /** Issue #415: explicit native Persona tools authored for this Process. */
-    personaTools?: Array<
-      | 'remember'
-      | 'recall'
-      | 'correct'
-      | 'forget'
-      | 'pin'
-      | 'work_item_create'
-      | 'work_item_update'
-      | 'work_item_complete'
-      | 'work_item_promote_todo'
-    >;
+    personaTools?: PersonaNativeAbilityId[];
     boundModel?: string;
     allowedTools?: string[];
     mcpNodes?: MCPNodeReference[];
@@ -1388,6 +1379,13 @@ export interface SharedState {
      * Strict-loopback conversation routes are the only writers/readers.
      */
     personaTargetId?: string;
+
+    /**
+     * Plain Chat target choice captured before the first Persona turn. `primary`
+     * means the Persona's Main role; any other value names one of its specialist
+     * Behaviors. This is routing preference only, never execution authority.
+     */
+    personaBehaviorSlotKey?: string;
 
     /**
      * Non-identifying tombstone for a retained conversation whose Persona was

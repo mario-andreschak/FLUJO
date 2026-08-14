@@ -14,9 +14,9 @@ import { isPersonaOwnedConversationState } from './personaConversationOwnership'
 
 const log = createLogger('backend/execution/flow/conversationSummaryStore');
 // Issue #390: session metadata changes the serialized summary projection.
-// Advance the current lineage from v6 to v7 (the issue's v3 reference predates
+// Advance the current lineage from v6 to v8 (the issue's v3 reference predates
 // later migrations); mismatched sidecars are rebuilt from authoritative snapshots.
-const SUMMARY_VERSION = 7;
+const SUMMARY_VERSION = 8;
 const SUMMARY_READ_CONCURRENCY = 32;
 
 export type ConversationStatus = NonNullable<SharedState['status']>;
@@ -45,6 +45,8 @@ export interface ConversationSummary {
   personaArchived?: true;
   /** Trusted-local Persona attribution projection (drafts expose only personaId). */
   personaId?: string;
+  /** User-selected Main role (`primary`) or named Persona Behavior. */
+  personaBehaviorSlotKey?: string;
   activityId?: string;
   behaviorRevisionId?: string;
   /**
@@ -100,6 +102,9 @@ export function summarizeConversation(state: SharedState, fallbackId: string): C
     ...(state.personaArchived ? { personaArchived: true as const } : {}),
     ...((state.personaAttribution?.personaId ?? state.personaTargetId)
       ? { personaId: state.personaAttribution?.personaId ?? state.personaTargetId }
+      : {}),
+    ...((state.personaAttribution?.personaId ?? state.personaTargetId) && state.personaBehaviorSlotKey
+      ? { personaBehaviorSlotKey: state.personaBehaviorSlotKey }
       : {}),
     ...(state.personaAttribution?.activityId
       ? { activityId: state.personaAttribution.activityId }

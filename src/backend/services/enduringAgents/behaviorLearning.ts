@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
 
+import { validateFlowObjectForRun } from '@/backend/execution/flow/validateFlowForRun';
 import { compileSpec } from '@/backend/services/flow/compileFlow';
 import {
   BehaviorProposalSchema,
@@ -46,6 +47,7 @@ import {
   getBehaviorRevision,
   getPersona,
   getRoleVersion,
+  listBehaviorBindings,
   listBehaviorRevisions,
   listRoleVersions,
 } from './store';
@@ -107,6 +109,7 @@ export interface CreateBehaviorProposalInput {
   behaviorId: string;
   baseBehaviorRevisionId: string;
   rationale: string;
+  changeSummary?: string;
   evidenceRefs: MemorySourceRef[];
   candidateSpec: unknown;
   evals: DeterministicBehaviorEval[];
@@ -142,6 +145,14 @@ export interface PromoteBehaviorProposalInput {
   actor: string;
   name?: string;
   migrationNotes: string;
+}
+
+export interface SuggestBehaviorInstructionImprovementInput {
+  personaId: string;
+  slotKey: string;
+  rationale: string;
+  instruction: string;
+  evidenceRefs: MemorySourceRef[];
 }
 
 function digest(value: unknown): string {
@@ -498,6 +509,7 @@ export async function createBehaviorProposal(
     now,
     digestMaterial: {
       rationale: input.rationale,
+      ...(input.changeSummary?.trim() ? { changeSummary: input.changeSummary.trim() } : {}),
       candidateSpecDigest,
     },
   });
@@ -509,6 +521,9 @@ export async function createBehaviorProposal(
     slotKey: binding.slotKey,
     baseBehaviorRevisionId: baseRevision.id,
     rationale: requireText(input.rationale, 'Proposal rationale'),
+    ...(input.changeSummary?.trim()
+      ? { changeSummary: requireText(input.changeSummary, 'Proposal change summary') }
+      : {}),
     evidenceRefs: normalizedEvidence,
     candidateSpecDigest,
     ...(candidateFlow ? { candidateFlow } : {}),
@@ -562,6 +577,116 @@ export async function createBehaviorProposal(
   return saved;
 }
 
+/**
+ * Turn one bounded, plain-language lesson from trusted Persona work into an
+ * evaluated Behavior proposal. The candidate only appends an instruction to
+ * an existing Process step; it cannot add tools, Apps, nodes, or permissions.
+ */
+export async function suggestBehaviorInstructionImprovement(
+  input: SuggestBehaviorInstructionImprovementInput,
+): Promise<BehaviorProposal> {
+  const instruction = requireText(input.instruction, 'Reusable instruction');
+  const rationale = requireText(input.rationale, 'Improvement rationale');
+  const slotKey = requireText(input.slotKey, 'Behavior');
+  if (instruction.length > 4_000) {
+    throw new BehaviorProposalConflictError(
+      'A reusable instruction must be 4,000 characters or fewer.',
+    );
+  }
+  const binding = (await listBehaviorBindings(input.personaId)).find(
+    (candidate) => candidate.slotKey === slotKey,
+  );
+  if (!binding) {
+    throw new BehaviorProposalConflictError(
+      'The selected Behavior is not available to this Persona.',
+    );
+  }
+  const base = await getBehaviorRevision(binding.activeRevisionId);
+  if (!base || base.personaId !== input.personaId) {
+    throw new BehaviorProposalConflictError(
+      'The selected Behavior has no current version.',
+    );
+  }
+
+  const candidate = structuredClone(base.flowSnapshot);
+  const processNode = candidate.nodes.find((node) => node.type === 'process');
+  if (!processNode) {
+    throw new BehaviorProposalConflictError(
+      'The selected Behavior has no AI work step to improve.',
+    );
+  }
+  const data = processNode.data as typeof processNode.data & {
+    properties?: Record<string, unknown> & { promptTemplate?: unknown };
+  };
+  const properties = data.properties ?? {};
+  const existingPrompt = typeof properties.promptTemplate === 'string'
+    ? properties.promptTemplate.trim()
+    : '';
+  if (existingPrompt.includes(instruction)) {
+    throw new BehaviorProposalConflictError(
+      'This Behavior already includes that improvement.',
+    );
+  }
+  properties.promptTemplate = [
+    existingPrompt,
+    'Reusable lesson from completed Persona work:',
+    instruction,
+  ].filter(Boolean).join('\n\n');
+  data.properties = properties;
+
+  return createBehaviorProposal({
+    personaId: input.personaId,
+    behaviorId: binding.id,
+    baseBehaviorRevisionId: base.id,
+    rationale,
+    changeSummary: instruction,
+    evidenceRefs: input.evidenceRefs,
+    candidateSpec: {
+      kind: 'append_process_instruction',
+      slotKey,
+      instruction,
+      baseContentHash: base.contentHash,
+    },
+    actor: 'persona-self-improvement',
+    evals: [{
+      id: 'bounded-instruction-only',
+      run: ({ baseRevision, candidateFlow }) => {
+        const sameNodes = baseRevision.flowSnapshot.nodes.map((node) => node.id).join('\n')
+          === candidateFlow.nodes.map((node) => node.id).join('\n');
+        const sameEdges = baseRevision.flowSnapshot.edges.map((edge) => edge.id).join('\n')
+          === candidateFlow.edges.map((edge) => edge.id).join('\n');
+        const retainedInstruction = JSON.stringify(candidateFlow).includes(instruction);
+        return {
+          passed: sameNodes && sameEdges && retainedInstruction,
+          details: sameNodes && sameEdges && retainedInstruction
+            ? 'Only one existing Process instruction changed; graph authority stayed the same.'
+            : 'The candidate changed more than the reviewed Process instruction.',
+        };
+      },
+    }],
+  }, {
+    compiler: async () => {
+      const validation = await validateFlowObjectForRun(candidate);
+      return {
+        success: validation.isRunnable,
+        ...(validation.isRunnable ? { flow: candidate } : {}),
+        errorCount: validation.errorCount,
+        warningCount: validation.warningCount,
+        issues: validation.issues.map((issue) => ({
+          severity: issue.severity,
+          code: issue.code,
+          message: issue.message,
+        })),
+      };
+    },
+    autoApplyPolicy: () => ({
+      allowed: true,
+      actor: 'persona-safe-improvement-policy',
+      reason: 'Applied a validated instruction-only improvement under the user-selected automatic rule.',
+    }),
+  });
+}
+
 async function approveBehaviorProposalInternal(
   proposalId: string,
   input: ApproveBehaviorProposalInput & { kind: 'manual' | 'policy' },
@@ -609,6 +734,31 @@ export function approveBehaviorProposal(
   input: ApproveBehaviorProposalInput,
 ): Promise<BehaviorProposal> {
   return approveBehaviorProposalInternal(proposalId, { ...input, kind: 'manual' });
+}
+
+/** Record a durable human decision to leave a proposed change unapplied. */
+export function rejectBehaviorProposal(
+  proposalId: string,
+  input: ApproveBehaviorProposalInput,
+): Promise<BehaviorProposal> {
+  return mutateProposal(proposalId, (proposal) => {
+    if (proposal.status === 'rejected') return proposal;
+    if (proposal.status === 'activated' || proposal.status === 'rolled_back') {
+      throw new BehaviorLearningPolicyError(
+        'An applied Behavior improvement must be undone instead of rejected.',
+      );
+    }
+    const now = Date.now();
+    return {
+      ...proposal,
+      status: 'rejected',
+      auditTrail: [
+        ...proposal.auditTrail,
+        auditEvent('rejected', input.actor, input.reason, now),
+      ],
+      updatedAt: now,
+    };
+  });
 }
 
 async function revisionForProposal(proposal: BehaviorProposal) {

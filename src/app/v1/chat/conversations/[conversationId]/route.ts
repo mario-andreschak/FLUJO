@@ -206,6 +206,9 @@ async function GET_handler(
         ...((sharedState.personaAttribution?.personaId ?? sharedState.personaTargetId)
           ? { personaId: sharedState.personaAttribution?.personaId ?? sharedState.personaTargetId }
           : {}),
+        ...((sharedState.personaAttribution?.personaId ?? sharedState.personaTargetId) && sharedState.personaBehaviorSlotKey
+          ? { personaBehaviorSlotKey: sharedState.personaBehaviorSlotKey }
+          : {}),
         ...(sharedState.personaAttribution?.activityId
           ? { activityId: sharedState.personaAttribution.activityId }
           : {}),

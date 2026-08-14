@@ -58,7 +58,7 @@ import { GET as listPersonas } from '@/app/v1/personas/route';
 
 const previousExposureMode = process.env.FLUJO_EXPOSURE_MODE;
 
-function parsed(personaTarget?: { personaId: string }) {
+function parsed(personaTarget?: { personaId: string; behaviorSlotKey?: string }) {
   return {
     model: 'flow-support',
     messages: [{ role: 'user', content: 'Help me' }],
@@ -173,6 +173,34 @@ describe('Persona selected-exposure control plane', () => {
     expect(response.status).toBe(409);
 
     mockParseRequestParameters.mockResolvedValueOnce(parsed({ personaId: 'persona_support' }));
+    response = await POST(request('localhost'));
+    expect(response.status).toBe(200);
+    expect(mockProcessChatCompletion).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a conversation on its selected Persona Behavior', async () => {
+    process.env.FLUJO_EXPOSURE_MODE = 'localhost';
+    mockLoadConversationState.mockResolvedValue({
+      conversationId: 'conversation-1',
+      flowId: '',
+      personaTargetId: 'persona_support',
+      personaBehaviorSlotKey: 'research',
+    });
+
+    mockParseRequestParameters.mockResolvedValueOnce(parsed({
+      personaId: 'persona_support',
+      behaviorSlotKey: 'writing',
+    }));
+    let response = await POST(request('localhost'));
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'persona_conversation_behavior_locked' },
+    });
+
+    mockParseRequestParameters.mockResolvedValueOnce(parsed({
+      personaId: 'persona_support',
+      behaviorSlotKey: 'research',
+    }));
     response = await POST(request('localhost'));
     expect(response.status).toBe(200);
     expect(mockProcessChatCompletion).toHaveBeenCalledTimes(1);

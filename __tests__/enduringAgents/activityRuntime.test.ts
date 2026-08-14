@@ -11,13 +11,17 @@ import {
   assertPersonaActivityLease,
   claimNextPersonaActivity,
   completePersonaActivity,
+  createPersonaWorkItem,
   enqueuePersonaMailboxItem,
   listPersonaRuntimeBundle,
+  movePersonaMailboxItemWithinRuntimeLock,
   releasePersonaActivityLease,
   renewPersonaActivityLease,
+  type EnqueuePersonaMailboxResult,
   type PersonaActivityClaim,
   type PersonaLeaseFence,
 } from '@/backend/services/enduringAgents';
+import { projectPersonaPresentation } from '@/backend/services/enduringAgents/personaPresentation';
 import { createPersonaFromRole } from './fixtures/personaFactory';
 import { flowService } from '@/backend/services/flow';
 import { ENDURING_AGENT_COLLECTIONS } from '@/backend/services/enduringAgents/collections';
@@ -281,7 +285,7 @@ describe('enduring-agent Activity runtime', () => {
     });
   });
 
-  it('orders eligible work by priority, then readiness/FIFO, and honors notBefore inclusively', async () => {
+  it('orders eligible work by priority, then queue order/FIFO, and honors notBefore inclusively', async () => {
     await inFreshWorkspace(async () => {
       const now = 100_000;
       const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(now);
@@ -316,6 +320,67 @@ describe('enduring-agent Activity runtime', () => {
       expect(future.mailboxItem.summary).toBe('Assignment future');
     });
   });
+
+  it('moves same-priority Tasks with unique sequences and keeps product order runtime-faithful', async () => {
+    await inFreshWorkspace(async () => {
+      const { persona } = await createJim('runtime-manual-order-jim');
+      const tasks = await Promise.all([
+        createPersonaWorkItem({ id: 'work_move_first', personaId: persona.id, title: 'First' }),
+        createPersonaWorkItem({ id: 'work_move_second', personaId: persona.id, title: 'Second' }),
+        createPersonaWorkItem({ id: 'work_move_third', personaId: persona.id, title: 'Third' }),
+      ]);
+      const admissions: EnqueuePersonaMailboxResult[] = [];
+      for (const [index, task] of tasks.entries()) {
+        admissions.push(await enqueuePersonaMailboxItem(assignment(
+          persona.id,
+          `manual-order-${index}`,
+          {
+            source: { kind: 'assignment', sourceId: task.id },
+            notBefore: (index + 1) * 10,
+          },
+        )));
+      }
+
+      const move = (direction: 'earlier' | 'later') => withPersonaRuntimeLock(
+        persona.id,
+        (lock) => movePersonaMailboxItemWithinRuntimeLock({
+          personaId: persona.id,
+          mailboxItemId: admissions[2].item.id,
+          direction,
+        }, lock),
+      );
+      await expect(move('earlier')).resolves.toMatchObject({ moved: true });
+      await expect(move('later')).resolves.toMatchObject({ moved: true });
+      await expect(move('earlier')).resolves.toMatchObject({ moved: true });
+
+      const queued = (await listPersonaMailboxItems(persona.id))
+        .filter((item) => item.status === 'queued')
+        .sort((left, right) => left.sequence - right.sequence);
+      expect(queued.map((item) => item.source.sourceId)).toEqual([
+        tasks[0].id,
+        tasks[2].id,
+        tasks[1].id,
+      ]);
+      expect(new Set(queued.map((item) => item.sequence)).size).toBe(queued.length);
+
+      const bundle = await listPersonaRuntimeBundle(persona.id);
+      expect(projectPersonaPresentation(bundle!).tasks
+        .filter((task) => task.state === 'waiting')
+        .map((task) => task.id)).toEqual([
+        tasks[0].id,
+        tasks[2].id,
+        tasks[1].id,
+      ]);
+
+      const claimedOrder: string[] = [];
+      for (let index = 0; index < 3; index += 1) {
+        const next = await claim(persona.id);
+        claimedOrder.push(next.activity.source.sourceId!);
+        await completePersonaActivity(fence(next));
+      }
+      expect(claimedOrder).toEqual([tasks[0].id, tasks[2].id, tasks[1].id]);
+    });
+  }, 30_000);
 
   it('keeps independent work queued while busy and drains it after completion', async () => {
     await inFreshWorkspace(async () => {

@@ -119,6 +119,7 @@ describe('POST /v1/chat/conversations path-traversal guard (issue #126)', () => 
       title: 'Ask Persona',
       flowId: null,
       personaTargetId: 'persona-target',
+      personaBehaviorSlotKey: 'research',
       createdAt: 1,
       updatedAt: 1,
     }));
@@ -128,6 +129,7 @@ describe('POST /v1/chat/conversations path-traversal guard (issue #126)', () => 
       id,
       flowId: null,
       personaId: 'persona-target',
+      personaBehaviorSlotKey: 'research',
     });
     const stored = JSON.parse(await fs.readFile(
       path.join(dbDir, 'conversations', `${id}.json`),
@@ -137,7 +139,23 @@ describe('POST /v1/chat/conversations path-traversal guard (issue #126)', () => 
       conversationId: id,
       flowId: '',
       personaTargetId: 'persona-target',
+      personaBehaviorSlotKey: 'research',
     });
+  });
+
+  it('rejects a Persona Behavior key with no Persona target', async () => {
+    const id = 'flow-with-persona-behavior';
+    const response = await POST(makeReq({
+      id,
+      title: 'Flow chat',
+      flowId: 'flow-1',
+      personaBehaviorSlotKey: 'research',
+      createdAt: 1,
+      updatedAt: 1,
+    }));
+
+    expect(response.status).toBe(400);
+    expect(await exists(path.join(dbDir, 'conversations', `${id}.json`))).toBe(false);
   });
 
   it('rejects an invalid Persona id before lookup or persistence', async () => {

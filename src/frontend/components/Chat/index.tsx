@@ -64,6 +64,7 @@ import LiveRunIndicator, { LiveRunStats } from './LiveRunIndicator';
 import TodoDock from './TodoDock';
 import ConversationStats from './ConversationStats';
 import ChatTargetSelector from './ChatTargetSelector';
+import { personaChatRoutingMetadata } from './personaChatTarget';
 import QuickChatDialog, { QuickChatStartSelection } from './QuickChatDialog';
 import DebuggerCanvas from './DebuggerCanvas';
 import DebuggerConversation from './DebuggerConversation';
@@ -253,6 +254,8 @@ export interface Conversation {
   flowId: string | null;
   /** Trusted-local Persona target/attribution. Drafts expose only personaId. */
   personaId?: string;
+  /** User-selected Main role (`primary`) or named Persona Behavior. */
+  personaBehaviorSlotKey?: string;
   activityId?: string;
   behaviorRevisionId?: string;
   /** Read-only retained evidence after Persona identity anonymization. */
@@ -312,6 +315,8 @@ export interface ConversationListItem {
   flowId: string | null;
   /** Trusted-local Persona target/attribution. Drafts expose only personaId. */
   personaId?: string;
+  /** User-selected Main role (`primary`) or named Persona Behavior. */
+  personaBehaviorSlotKey?: string;
   activityId?: string;
   behaviorRevisionId?: string;
   /** Read-only retained evidence after Persona identity anonymization. */
@@ -1597,6 +1602,9 @@ const Chat: React.FC = () => {
       title: created.title,
       flowId: created.flowId,
       ...(created.personaId ? { personaId: created.personaId } : {}),
+      ...(created.personaBehaviorSlotKey
+        ? { personaBehaviorSlotKey: created.personaBehaviorSlotKey }
+        : {}),
       ...(created.activityId ? { activityId: created.activityId } : {}),
       ...(created.behaviorRevisionId ? { behaviorRevisionId: created.behaviorRevisionId } : {}),
       createdAt: created.createdAt,
@@ -1677,7 +1685,7 @@ const Chat: React.FC = () => {
 
   // A Persona draft has no Flow authority. The separate target marker is
   // replaced by the dispatcher with the full attribution triple on first run.
-  const createPersonaConversation = async (personaId: string) => {
+  const createPersonaConversation = async (personaId: string, behaviorSlotKey: string) => {
     // The ref closes the same-render gap that state-based loading flags leave
     // open when a selection is double-clicked before React re-renders.
     if (personaCreationPendingRef.current) return;
@@ -1690,6 +1698,7 @@ const Chat: React.FC = () => {
       title: t('chat.page.newTitle'),
       flowId: null,
       personaTargetId: personaId,
+      personaBehaviorSlotKey: behaviorSlotKey,
       createdAt: now,
       updatedAt: now,
     };
@@ -2810,7 +2819,7 @@ const Chat: React.FC = () => {
     }
   };
 
-  const handlePersonaSelect = (personaId: string) => {
+  const handlePersonaSelect = (personaId: string, behaviorSlotKey: string) => {
     if (detailedConversation?.personaArchived || currentConversationSummary?.personaArchived) {
       setError(t('chat.target.locked'));
       return;
@@ -2823,7 +2832,7 @@ const Chat: React.FC = () => {
     // Starting a Persona chat always creates a distinct Persona-owned draft.
     // The previous Flow draft remains available, and adoption only happens once
     // the server confirms the Persona-aware POST.
-    void createPersonaConversation(personaId);
+    void createPersonaConversation(personaId, behaviorSlotKey);
   };
 
   // --- Conversation rename (issue #134, item 2) ---
@@ -3403,13 +3412,14 @@ const Chat: React.FC = () => {
         stream: false,
         metadata: (() => {
             const appContexts = mcpAppContextsByConversationRef.current.get(conversation.id);
+            const personaRouting = personaChatRoutingMetadata(conversation);
             const meta: ChatCompletionMetadata = {
                 flujo: "true",
                 requireApproval: requireApproval ? "true" : undefined,
                 flujodebug: executeInDebugger ? "true" : undefined, // Add flujodebug flag
                 conversationId: conversation.id, // Pass the correct ID
                 compactToolPayloads: "true",
-                personaId: conversation.personaId,
+                ...personaRouting,
                 // Undefined means "retain backend state"; only a hydrated or
                 // explicitly updated map is sent. This prevents navigation from
                 // accidentally clearing a conversation with `{}`.
@@ -3425,6 +3435,7 @@ const Chat: React.FC = () => {
             if (meta.conversationId) filteredMeta.conversationId = meta.conversationId;
             if (meta.compactToolPayloads) filteredMeta.compactToolPayloads = meta.compactToolPayloads;
             if (meta.personaId) filteredMeta.personaId = meta.personaId;
+            if (meta.behaviorSlotKey) filteredMeta.behaviorSlotKey = meta.behaviorSlotKey;
             if (meta.mcpAppContexts !== undefined) {
               filteredMeta.mcpAppContexts = meta.mcpAppContexts;
             }
@@ -4035,6 +4046,9 @@ const Chat: React.FC = () => {
       messages: messagesBeforeSplit,
       flowId: detailedConversation.flowId,
       ...(detailedConversation.personaId ? { personaId: detailedConversation.personaId } : {}),
+      ...(detailedConversation.personaBehaviorSlotKey
+        ? { personaBehaviorSlotKey: detailedConversation.personaBehaviorSlotKey }
+        : {}),
       createdAt: Date.now(), // New creation time
       updatedAt: Date.now(),
     };
@@ -4045,6 +4059,9 @@ const Chat: React.FC = () => {
        title: newSplitConversation.title,
        flowId: newSplitConversation.flowId,
        ...(newSplitConversation.personaId ? { personaId: newSplitConversation.personaId } : {}),
+       ...(newSplitConversation.personaBehaviorSlotKey
+         ? { personaBehaviorSlotKey: newSplitConversation.personaBehaviorSlotKey }
+         : {}),
        createdAt: newSplitConversation.createdAt,
        updatedAt: newSplitConversation.updatedAt,
     };
@@ -5161,6 +5178,11 @@ const Chat: React.FC = () => {
                     <ChatTargetSelector
                       selectedFlowId={currentConversationSummary?.flowId || detailedConversation?.flowId || null} // Use summary first, fallback to detail
                       selectedPersonaId={currentConversationSummary?.personaId || detailedConversation?.personaId || null}
+                      selectedPersonaBehaviorSlotKey={
+                        currentConversationSummary?.personaBehaviorSlotKey
+                        || detailedConversation?.personaBehaviorSlotKey
+                        || null
+                      }
                       onSelectFlow={handleFlowSelect}
                       onSelectPersona={handlePersonaSelect}
                       disabled={Boolean(
@@ -5699,7 +5721,9 @@ const Chat: React.FC = () => {
               <ChatTargetSelector
                 selectedFlowId={null}
                 onSelectFlow={(flowId) => void createNewConversation(flowId)}
-                onSelectPersona={(personaId) => void createPersonaConversation(personaId)}
+                onSelectPersona={(personaId, behaviorSlotKey) => (
+                  void createPersonaConversation(personaId, behaviorSlotKey)
+                )}
                 compact
                 fullScreenPicker
               />
@@ -5724,7 +5748,9 @@ const Chat: React.FC = () => {
               <ChatTargetSelector
                 selectedFlowId={null}
                 onSelectFlow={(flowId) => void createNewConversation(flowId)}
-                onSelectPersona={(personaId) => void createPersonaConversation(personaId)}
+                onSelectPersona={(personaId, behaviorSlotKey) => (
+                  void createPersonaConversation(personaId, behaviorSlotKey)
+                )}
                 compact
               />
             </Box>

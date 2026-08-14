@@ -138,6 +138,11 @@ export const PersonaPresentationSchema = z.object({
   language: z.string().trim().max(64).optional(),
 }).strict();
 
+const EditablePersonaPresentationSchema = z.object({
+  avatarUrl: z.string().trim().max(2048).optional(),
+  language: z.string().trim().max(64).optional(),
+}).strict();
+
 export const WorkspaceFlowRefSchema = z.string().trim().min(1).max(256);
 export const PersonaAppRefSchema = z.string().min(1).max(200).refine(
   (name) => name !== '.' && name !== '..'
@@ -430,7 +435,7 @@ export const CreatePersonaInputSchema = z.object({
     .refine((refs) => new Set(refs).size === refs.length, 'Behavior Flow references must be unique.')
     .optional(),
   mission: z.string().trim().max(20_000).optional(),
-  presentation: PersonaPresentationSchema.optional(),
+  presentation: EditablePersonaPresentationSchema.optional(),
   autonomyLevel: z.enum(PERSONA_AUTONOMY_LEVELS).optional(),
   interruptionPolicy: z.enum(PERSONA_INTERRUPTION_POLICIES).optional(),
   idempotencyKey: z.string().min(1).max(512).optional(),
@@ -510,10 +515,10 @@ export const DeletePersonaCreationDraftInputSchema = z.object({
 
 export const UpdatePersonaInputSchema = z.object({
   name: NonEmptyText(160).optional(),
+  roleVersionId: EnduringAgentIdSchema.optional(),
   mission: z.string().trim().max(20_000).nullable().optional(),
   presentation: z.object({
     avatarUrl: z.string().trim().max(2048).nullable().optional(),
-    voice: z.string().trim().max(128).nullable().optional(),
     language: z.string().trim().max(64).nullable().optional(),
   }).strict().optional(),
   autonomyLevel: z.enum(PERSONA_AUTONOMY_LEVELS).optional(),
@@ -574,12 +579,7 @@ export const CopyPersonaFlowInputSchema = z.object({
 export const UpdatePersonaCompositionInputSchema = z.object({
   expectedUpdatedAt: TimestampSchema,
   name: NonEmptyText(160).optional(),
-  description: z.string().trim().max(10_000).nullable().optional(),
-  role: PersonaRoleCompositionSchema.optional(),
   coreFlowRef: WorkspaceFlowRefSchema.nullable().optional(),
-  appRefs: z.array(PersonaAppRefSchema).max(128)
-    .refine((refs) => new Set(refs).size === refs.length, 'App references must be unique.')
-    .optional(),
   memoryRefs: UniqueIdsSchema.optional(),
   behaviors: z.array(UpdatePersonaBehaviorCompositionSchema).max(64)
     .refine((items) => new Set(items.map((item) => item.ref)).size === items.length,

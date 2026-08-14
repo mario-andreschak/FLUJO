@@ -5,10 +5,8 @@ import {
   type PersonaSettingsOptions,
 } from '@/shared/types/enduringAgent';
 
-import {
-  listRoleDefinitions,
-  listRoleVersions,
-} from './store';
+import { ensureBuiltInDeveloperRole } from './builtInRoleStore';
+import { listRoleDefinitions, listRoleVersions } from './store';
 
 const LANGUAGE_OPTIONS = [
   { code: 'en', label: 'English' },
@@ -25,43 +23,28 @@ const LANGUAGE_OPTIONS = [
  * until a provider exposes a stable catalog and a working end-to-end action.
  */
 export async function getPersonaSettingsOptions(): Promise<PersonaSettingsOptions> {
+  await ensureBuiltInDeveloperRole();
   const [definitions, versions] = await Promise.all([
     listRoleDefinitions(),
     listRoleVersions(),
   ]);
-  const definitionsById = new Map(
-    definitions
-      .filter((definition) => definition.archivedAt === undefined)
-      .map((definition) => [definition.id, definition]),
-  );
+  const versionById = new Map(versions.map((version) => [version.id, version]));
+  const roles = definitions.flatMap((definition) => {
+    if (definition.archivedAt !== undefined || !definition.currentVersionId) return [];
+    const version = versionById.get(definition.currentVersionId);
+    if (!version || !version.behaviorSlots.some((slot) => slot.key === 'primary')) return [];
+    return [{
+      roleVersionId: version.id,
+      name: definition.name,
+      ...(version.mission ? { description: version.mission } : {}),
+    }];
+  }).sort((left, right) => left.name.localeCompare(right.name));
 
   return PersonaSettingsOptionsSchema.parse({
-    roles: versions
-      .filter((version) => definitionsById.has(version.roleDefinitionId))
-      .map((version) => {
-        const definition = definitionsById.get(version.roleDefinitionId)!;
-        return {
-          roleDefinitionId: definition.id,
-          roleVersionId: version.id,
-          name: definition.name,
-          version: version.version,
-          current: definition.currentVersionId === version.id,
-        };
-      })
-      .sort((left, right) => left.name.localeCompare(right.name)
-        || right.version - left.version),
-    avatars: [],
-    voices: [],
+    roles,
     languages: LANGUAGE_OPTIONS,
     lifecycleStates: ['idle', 'sleeping', 'disabled'],
     autonomyLevels: PERSONA_AUTONOMY_LEVELS,
     interruptionPolicies: PERSONA_INTERRUPTION_POLICIES,
-    capabilities: {
-      avatarPicker: false,
-      roleChange: false,
-      voicePicker: false,
-      voicePreview: false,
-      languagePicker: true,
-    },
   });
 }

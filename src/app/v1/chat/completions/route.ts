@@ -167,6 +167,19 @@ async function handleRequest(request: NextRequest) {
             },
           }, { status: 409, headers: corsHeaders });
         }
+        if (
+          existingState.personaBehaviorSlotKey
+          && (personaTarget.behaviorSlotKey ?? 'primary') !== existingState.personaBehaviorSlotKey
+        ) {
+          return NextResponse.json({
+            error: {
+              message: 'This conversation is already using a different Persona role or Behavior.',
+              type: 'invalid_request_error',
+              code: 'persona_conversation_behavior_locked',
+              param: 'metadata.behaviorSlotKey',
+            },
+          }, { status: 409, headers: corsHeaders });
+        }
       } else if (isPersonaOwnedConversationState(existingState)) {
         return NextResponse.json({
           error: {

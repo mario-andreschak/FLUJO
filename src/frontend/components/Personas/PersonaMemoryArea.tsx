@@ -2,6 +2,7 @@
 
 import {
   EditRounded,
+  HistoryRounded,
   MemoryRounded,
   PushPinRounded,
 } from '@mui/icons-material';
@@ -65,6 +66,50 @@ function actorKey(memory: MemoryItem): TranslationKey {
   return 'personas.memory.externalEvidence';
 }
 
+function earlierMemoryVersions(
+  memory: MemoryItem,
+  allMemories: readonly MemoryItem[],
+): MemoryItem[] {
+  const byId = new Map(allMemories.map((candidate) => [candidate.id, candidate]));
+  const seen = new Set<string>();
+  const earlier: MemoryItem[] = [];
+  const pending = [...(memory.supersedes ?? [])];
+  while (pending.length > 0) {
+    const id = pending.shift()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const candidate = byId.get(id);
+    if (!candidate || candidate.personaId !== memory.personaId) continue;
+    earlier.push(candidate);
+    pending.push(...(candidate.supersedes ?? []));
+  }
+  return earlier;
+}
+
+function dateInputValue(timestamp: number | undefined): string {
+  if (timestamp === undefined) return '';
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return '';
+  const year = String(date.getFullYear()).padStart(4, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function availabilityTimestamp(
+  value: string,
+  original: number | undefined,
+  boundary: 'start' | 'end',
+): number | undefined {
+  if (!value) return undefined;
+  if (original !== undefined && value === dateInputValue(original)) return original;
+  const [year, month, day] = value.split('-').map(Number);
+  const date = boundary === 'start'
+    ? new Date(year, month - 1, day, 0, 0, 0, 0)
+    : new Date(year, month - 1, day, 23, 59, 59, 999);
+  return Number.isNaN(date.getTime()) ? undefined : date.getTime();
+}
+
 export default function PersonaMemoryArea({
   detail,
   busy,
@@ -79,10 +124,15 @@ export default function PersonaMemoryArea({
   const [addOpen, setAddOpen] = useState(false);
   const [addContent, setAddContent] = useState('');
   const [addRequestId, setAddRequestId] = useState('');
+  const [addValidFromDate, setAddValidFromDate] = useState('');
+  const [addValidUntilDate, setAddValidUntilDate] = useState('');
   const [correction, setCorrection] = useState<MemoryItem | null>(null);
   const [correctionContent, setCorrectionContent] = useState('');
+  const [correctionValidFromDate, setCorrectionValidFromDate] = useState('');
+  const [correctionValidUntilDate, setCorrectionValidUntilDate] = useState('');
   const [forgetting, setForgetting] = useState<MemoryItem | null>(null);
   const [provenanceOpen, setProvenanceOpen] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState<string | null>(null);
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   const [optimistic, setOptimistic] = useState<Record<string, OptimisticMemory>>({});
   const [memoryError, setMemoryError] = useState<{
@@ -118,6 +168,24 @@ export default function PersonaMemoryArea({
     ]);
 
   const isPending = busy || pendingKey !== null;
+  const addValidFrom = availabilityTimestamp(addValidFromDate, undefined, 'start');
+  const addValidUntil = availabilityTimestamp(addValidUntilDate, undefined, 'end');
+  const addRangeInvalid = addValidFrom !== undefined
+    && addValidUntil !== undefined
+    && addValidUntil < addValidFrom;
+  const correctionValidFrom = availabilityTimestamp(
+    correctionValidFromDate,
+    correction?.validFrom,
+    'start',
+  );
+  const correctionValidUntil = availabilityTimestamp(
+    correctionValidUntilDate,
+    correction?.validUntil,
+    'end',
+  );
+  const correctionRangeInvalid = correctionValidFrom !== undefined
+    && correctionValidUntil !== undefined
+    && correctionValidUntil < correctionValidFrom;
 
   const clearOptimistic = (memoryId: string) => {
     setOptimistic((current) => {
@@ -173,6 +241,8 @@ export default function PersonaMemoryArea({
   const openAdd = () => {
     setAddRequestId(`memory_${uuidv4().replaceAll('-', '')}`);
     setAddContent('');
+    setAddValidFromDate('');
+    setAddValidUntilDate('');
     setMemoryError(null);
     setAddOpen(true);
   };
@@ -183,12 +253,16 @@ export default function PersonaMemoryArea({
       () => personasService.createMemory(detail.persona.id, {
         content: addContent.trim(),
         requestId: addRequestId,
+        ...(addValidFrom !== undefined ? { validFrom: addValidFrom } : {}),
+        ...(addValidUntil !== undefined ? { validUntil: addValidUntil } : {}),
       }),
     );
     if (succeeded) {
       setAddOpen(false);
       setAddContent('');
       setAddRequestId('');
+      setAddValidFromDate('');
+      setAddValidUntilDate('');
     }
   };
 
@@ -281,6 +355,7 @@ export default function PersonaMemoryArea({
                     <Stack spacing={1.25} sx={{ mt: 0.75 }}>
                       {items.map((memory) => {
                         const core = optimistic[memory.id]?.core ?? coreIds.has(memory.id);
+                        const earlierVersions = earlierMemoryVersions(memory, detail.memoryItems);
                         const canPin = memory.status === 'active'
                           && (memory.trust === 'explicit_user' || memory.trust === 'verified_tool');
                         const disclosureId = `memory-provenance-${memory.id}`;
@@ -322,6 +397,22 @@ export default function PersonaMemoryArea({
                               <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
                                 {t(actorKey(memory))}
                               </Typography>
+                              {(memory.validFrom !== undefined || memory.validUntil !== undefined) && (
+                                <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                                  {memory.validFrom !== undefined && memory.validUntil !== undefined
+                                    ? t('personas.memory.usefulRange', {
+                                      from: formatDate(memory.validFrom, { dateStyle: 'medium' }),
+                                      until: formatDate(memory.validUntil, { dateStyle: 'medium' }),
+                                    })
+                                    : memory.validFrom !== undefined
+                                      ? t('personas.memory.usefulFromValue', {
+                                        date: formatDate(memory.validFrom, { dateStyle: 'medium' }),
+                                      })
+                                      : t('personas.memory.usefulUntilValue', {
+                                        date: formatDate(memory.validUntil!, { dateStyle: 'medium' }),
+                                      })}
+                                </Typography>
+                              )}
                               <Button
                                 size="small"
                                 sx={{ mt: 0.5, px: 0 }}
@@ -333,6 +424,22 @@ export default function PersonaMemoryArea({
                               >
                                 {t('personas.memory.provenance')}
                               </Button>
+                              {earlierVersions.length > 0 && (
+                                <Button
+                                  size="small"
+                                  startIcon={<HistoryRounded />}
+                                  sx={{ mt: 0.5, ml: 1 }}
+                                  aria-expanded={historyOpen === memory.id}
+                                  aria-controls={`memory-history-${memory.id}`}
+                                  onClick={() => setHistoryOpen(
+                                    historyOpen === memory.id ? null : memory.id,
+                                  )}
+                                >
+                                  {t('personas.memory.earlierVersions', {
+                                    count: earlierVersions.length,
+                                  })}
+                                </Button>
+                              )}
                               {disclosureOpen && (
                                 <Box
                                   id={disclosureId}
@@ -353,6 +460,35 @@ export default function PersonaMemoryArea({
                                     </Typography>
                                   )}
                                 </Box>
+                              )}
+                              {historyOpen === memory.id && earlierVersions.length > 0 && (
+                                <Stack
+                                  id={`memory-history-${memory.id}`}
+                                  spacing={1}
+                                  sx={{ mt: 1.25 }}
+                                >
+                                  <Typography variant="subtitle2">
+                                    {t('personas.memory.earlierVersionsTitle')}
+                                  </Typography>
+                                  {earlierVersions.map((earlier) => (
+                                    <Box
+                                      key={earlier.id}
+                                      sx={{ p: 1.5, borderRadius: 2, bgcolor: 'action.hover' }}
+                                    >
+                                      <Typography sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+                                        {earlier.content}
+                                      </Typography>
+                                      <Typography variant="caption" color="text.secondary">
+                                        {t('personas.memory.versionChanged', {
+                                          date: formatDate(earlier.updatedAt, {
+                                            dateStyle: 'medium',
+                                            timeStyle: 'short',
+                                          }),
+                                        })}
+                                      </Typography>
+                                    </Box>
+                                  ))}
+                                </Stack>
                               )}
                             </CardContent>
                             <CardActions sx={{ flexWrap: 'wrap' }}>
@@ -377,9 +513,11 @@ export default function PersonaMemoryArea({
                                   startIcon={<EditRounded />}
                                   disabled={isPending}
                                   onClick={() => {
-                                    setCorrection(memory);
-                                    setCorrectionContent(memory.content);
-                                    setMemoryError(null);
+                                     setCorrection(memory);
+                                     setCorrectionContent(memory.content);
+                                     setCorrectionValidFromDate(dateInputValue(memory.validFrom));
+                                     setCorrectionValidUntilDate(dateInputValue(memory.validUntil));
+                                     setMemoryError(null);
                                   }}
                                 >
                                   {t('personas.memory.correct')}
@@ -430,15 +568,39 @@ export default function PersonaMemoryArea({
         <DialogContent dividers>
           <Stack spacing={1.5}>
             <Typography color="text.secondary">{t('personas.memory.addHelp')}</Typography>
-            <TextField
+             <TextField
               autoFocus
               fullWidth
               multiline
               minRows={4}
               label={t('personas.memory.content')}
               value={addContent}
-              onChange={(event) => setAddContent(event.target.value)}
-            />
+               onChange={(event) => setAddContent(event.target.value)}
+             />
+             <Typography variant="body2" color="text.secondary">
+               {t('personas.memory.availabilityHelp')}
+             </Typography>
+             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
+               <TextField
+                 fullWidth
+                 type="date"
+                 label={t('personas.memory.usefulFrom')}
+                 value={addValidFromDate}
+                 onChange={(event) => setAddValidFromDate(event.target.value)}
+                 slotProps={{ inputLabel: { shrink: true } }}
+               />
+               <TextField
+                 fullWidth
+                 type="date"
+                 label={t('personas.memory.usefulUntil')}
+                 value={addValidUntilDate}
+                 onChange={(event) => setAddValidUntilDate(event.target.value)}
+                 slotProps={{ inputLabel: { shrink: true } }}
+               />
+             </Stack>
+             {addRangeInvalid && (
+               <Alert severity="error">{t('personas.memory.availabilityInvalid')}</Alert>
+             )}
           </Stack>
         </DialogContent>
         <DialogActions>
@@ -447,7 +609,7 @@ export default function PersonaMemoryArea({
           </Button>
           <Button
             variant="contained"
-            disabled={isPending || !addContent.trim()}
+            disabled={isPending || !addContent.trim() || addRangeInvalid}
             onClick={() => void submitAdd()}
           >
             {t('personas.memory.add')}
@@ -465,15 +627,39 @@ export default function PersonaMemoryArea({
         <DialogContent dividers>
           <Stack spacing={1.5}>
             <Alert severity="info">{t('personas.memory.correctHelp')}</Alert>
-            <TextField
+             <TextField
               autoFocus
               fullWidth
               multiline
               minRows={5}
               label={t('personas.memory.content')}
               value={correctionContent}
-              onChange={(event) => setCorrectionContent(event.target.value)}
-            />
+               onChange={(event) => setCorrectionContent(event.target.value)}
+             />
+             <Typography variant="body2" color="text.secondary">
+               {t('personas.memory.availabilityHelp')}
+             </Typography>
+             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
+               <TextField
+                 fullWidth
+                 type="date"
+                 label={t('personas.memory.usefulFrom')}
+                 value={correctionValidFromDate}
+                 onChange={(event) => setCorrectionValidFromDate(event.target.value)}
+                 slotProps={{ inputLabel: { shrink: true } }}
+               />
+               <TextField
+                 fullWidth
+                 type="date"
+                 label={t('personas.memory.usefulUntil')}
+                 value={correctionValidUntilDate}
+                 onChange={(event) => setCorrectionValidUntilDate(event.target.value)}
+                 slotProps={{ inputLabel: { shrink: true } }}
+               />
+             </Stack>
+             {correctionRangeInvalid && (
+               <Alert severity="error">{t('personas.memory.availabilityInvalid')}</Alert>
+             )}
           </Stack>
         </DialogContent>
         <DialogActions>
@@ -482,16 +668,20 @@ export default function PersonaMemoryArea({
           </Button>
           <Button
             variant="contained"
-            disabled={isPending || !correctionContent.trim()}
+            disabled={isPending || !correctionContent.trim() || correctionRangeInvalid}
             onClick={() => {
               if (!correction) return;
               void runMutation(
                 `correct:${correction.id}`,
                 () => personasService.correctMemory(
                   detail.persona.id,
-                  correction,
-                  correctionContent.trim(),
-                ),
+                   correction,
+                   correctionContent.trim(),
+                   {
+                     validFrom: correctionValidFrom,
+                     validUntil: correctionValidUntil,
+                   },
+                 ),
               ).then((succeeded) => {
                 if (succeeded) setCorrection(null);
               });

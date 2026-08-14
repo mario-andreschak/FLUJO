@@ -15,7 +15,6 @@ const ADVANCED_PROCESS_PROPERTIES = new Set([
   'isolatedPrompt',
   'allowCallerPrompt',
   'enableTodoTool',
-  'personaTools',
   'captureVariable',
   'captureResource',
   'captureKv',

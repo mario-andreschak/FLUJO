@@ -20,6 +20,7 @@ import {
   listRoleVersions,
 } from '@/backend/services/enduringAgents/store';
 import {
+  DEFAULT_PERSONA_NATIVE_ABILITY_IDS,
   RoleVersionSchema,
   type RoleVersion,
 } from '@/shared/types/enduringAgent';
@@ -211,6 +212,10 @@ describe('createPersonaFromRole', () => {
         .filter((candidate: FlowNode) => candidate.data.type === 'process')
         .map((candidate: FlowNode) => candidate.data.properties?.boundModel))
         .toEqual(expect.arrayContaining(['model-test']));
+      expect(coreFlow!.nodes
+        .filter((candidate: FlowNode) => candidate.data.type === 'process')
+        .map((candidate: FlowNode) => candidate.data.properties?.personaTools))
+        .toEqual(expect.arrayContaining([[...DEFAULT_PERSONA_NATIVE_ABILITY_IDS]]));
       expect(bundle.behaviorBindings.map((binding) => binding.slotKey).sort()).toEqual([
         'maintain_memory',
         'primary',

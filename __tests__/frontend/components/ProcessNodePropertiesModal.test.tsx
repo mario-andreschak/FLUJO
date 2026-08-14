@@ -57,14 +57,14 @@ const mockUseServerConnection = useServerConnection as jest.MockedFunction<typeo
 const mockUseHandoffTools = useHandoffTools as jest.MockedFunction<typeof useHandoffTools>;
 
 const longDescription = 'Summarizes a large body of text into a concise result while preserving the most important details.';
-const processNode = (id: string) => ({
+const processNode = (id: string, properties: Record<string, unknown> = {}) => ({
   id,
   type: 'process',
   position: { x: 0, y: 0 },
   data: {
     label: `Process ${id}`,
     type: 'process',
-    properties: { promptTemplate: '' },
+    properties: { promptTemplate: '', ...properties },
   },
 }) as any;
 
@@ -268,5 +268,79 @@ describe('ProcessNodePropertiesModal issue #320 interactions', () => {
 
     expect(screen.getByTestId('prompt-editor')).toBe(editor);
     expect(editor).toHaveTextContent('${tool:server-one__summarize}');
+  });
+});
+
+describe('ProcessNodePropertiesModal Persona abilities', () => {
+  it('shows every native ability in plain language and saves the full preset', async () => {
+    const onSave = jest.fn();
+    renderModal({
+      node: processNode('persona-core', {
+        personaTools: ['recall', 'work_item_create'],
+      }),
+      onSave,
+    });
+
+    const friendlyAbilityLabels = [
+      'Use existing memories',
+      'Suggest things to remember',
+      'Suggest memory corrections',
+      'Keep important memories always available',
+      'Stop keeping a memory always available',
+      'Forget memories',
+      'Create ongoing tasks',
+      'Update ongoing tasks',
+      'Finish ongoing tasks',
+      'Keep checklist items for later',
+      'Suggest reusable improvements',
+    ];
+    for (const label of friendlyAbilityLabels) {
+      expect(await screen.findByRole('checkbox', { name: label })).toBeInTheDocument();
+    }
+    expect(screen.getByRole('checkbox', { name: 'Use existing memories' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Create ongoing tasks' })).toBeChecked();
+    expect(screen.queryByText('work_item_create')).not.toBeInTheDocument();
+    expect(screen.queryByText('recall')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'All abilities' }));
+    expect(screen.getByRole('checkbox', { name: 'Forget memories' })).toBeChecked();
+    expect(screen.getByText('Forgetting takes effect immediately.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    expect(onSave).toHaveBeenCalledWith('persona-core', expect.objectContaining({
+      properties: expect.objectContaining({
+        personaTools: [
+          'remember',
+          'recall',
+          'correct',
+          'forget',
+          'pin',
+          'unpin',
+          'work_item_create',
+          'work_item_update',
+          'work_item_complete',
+          'work_item_promote_todo',
+          'suggest_improvement',
+        ],
+      }),
+    }));
+  });
+
+  it('keeps the friendly controls in Guided mode and saves an explicit Off choice', async () => {
+    const onSave = jest.fn();
+    renderModal({
+      authoringMode: 'guided',
+      node: processNode('guided-persona', { personaTools: ['remember', 'unpin'] }),
+      onSave,
+    });
+
+    expect(await screen.findByText('Persona abilities')).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Advanced' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Off' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    const saved = onSave.mock.calls[0][1] as { properties: Record<string, unknown> };
+    expect(saved.properties).toHaveProperty('personaTools', []);
   });
 });

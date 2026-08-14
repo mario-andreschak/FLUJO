@@ -13,6 +13,10 @@ const authorizeAppLaunchMock = jest.fn();
 const emitLaunchGlobalMcpAppMock = jest.fn();
 const discoveryRefreshMock = jest.fn();
 const recoverRuntimeMock = jest.fn();
+const executionPreviewMock = jest.fn();
+const createWorkItemMock = jest.fn();
+const assignWorkItemMock = jest.fn();
+const controlWorkItemMock = jest.fn();
 
 const mockDiscoveryState = {
   servers: [
@@ -54,15 +58,17 @@ jest.mock('@/frontend/services/personas', () => ({
     forgetMemory: jest.fn(),
     pinMemory: jest.fn(),
     unpinMemoryFromCore: jest.fn(),
-    createWorkItem: jest.fn(),
+    createWorkItem: (...args: unknown[]) => createWorkItemMock(...args),
     updateWorkItem: jest.fn(),
     deleteWorkItem: jest.fn(),
-    assignWorkItem: jest.fn(),
+    assignWorkItem: (...args: unknown[]) => assignWorkItemMock(...args),
+    controlWorkItem: (...args: unknown[]) => controlWorkItemMock(...args),
     activateBehavior: jest.fn(),
     grantApp: (...args: unknown[]) => grantAppMock(...args),
     revokeApp: (...args: unknown[]) => revokeAppMock(...args),
     authorizeAppLaunch: (...args: unknown[]) => authorizeAppLaunchMock(...args),
     recoverRuntime: (...args: unknown[]) => recoverRuntimeMock(...args),
+    executionPreview: (...args: unknown[]) => executionPreviewMock(...args),
   },
 }));
 
@@ -218,6 +224,25 @@ beforeEach(() => {
   grantAppMock.mockResolvedValue(detail.appGrants[0]);
   revokeAppMock.mockResolvedValue(undefined);
   recoverRuntimeMock.mockResolvedValue(detail.runtime);
+  executionPreviewMock.mockResolvedValue({
+    personaId: 'jim',
+    apps: ['github-jim'],
+    behaviors: [],
+    nativeAbilities: [],
+    readOnly: true,
+  });
+  createWorkItemMock.mockResolvedValue({
+    id: 'work_goal',
+    personaId: 'jim',
+    title: 'Prepare the launch plan',
+    status: 'open',
+    priority: 'normal',
+    dependencyIds: [],
+    createdAt: 30,
+    updatedAt: 31,
+  });
+  assignWorkItemMock.mockResolvedValue({ admission: 'queued' });
+  controlWorkItemMock.mockResolvedValue({ admission: 'queued' });
   authorizeAppLaunchMock.mockResolvedValue({
     personaId: 'jim',
     grantId: 'appgrant_jim',
@@ -231,8 +256,8 @@ it('exposes the complete Phase 5 desk areas and inspectable revision/memory evid
   render(<PersonasDesk initialPersonaId="jim" />);
 
   expect(await screen.findByRole('heading', { name: 'Jim' })).toBeInTheDocument();
-  expect(screen.getByText('Current Activity')).toBeInTheDocument();
-  expect(screen.getAllByRole('tab')).toHaveLength(8);
+  expect(screen.getByText('Working now')).toBeInTheDocument();
+  expect(screen.getAllByRole('tab')).toHaveLength(9);
 
   fireEvent.click(screen.getByRole('tab', { name: /Memory/i }));
   expect(await screen.findByText('The release must preserve workspace isolation.')).toBeInTheDocument();
@@ -246,7 +271,7 @@ it('exposes the complete Phase 5 desk areas and inspectable revision/memory evid
 it('shows recovery only for actionable stuck state and keeps Call unavailable', async () => {
   render(<PersonasDesk initialPersonaId="jim" />);
   expect(await screen.findByRole('heading', { name: 'Jim' })).toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: 'Repair runtime projection' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Repair and continue' })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: /call/i })).not.toBeInTheDocument();
 });
 
@@ -254,12 +279,12 @@ it('shows runtime evidence and refreshes after recovery', async () => {
   getMock.mockResolvedValue(stuckDetail);
   render(<PersonasDesk initialPersonaId="jim" />);
 
-  expect(await screen.findByText('The runtime projection needs attention.')).toBeInTheDocument();
+  expect(await screen.findByText('Saved work needs attention.')).toBeInTheDocument();
   expect(screen.getByText('expired_lease')).toBeInTheDocument();
   expect(screen.getByText(/Lease: expired/)).toBeInTheDocument();
   expect(screen.getByText(/Reconciliation attempted: yes/)).toBeInTheDocument();
 
-  fireEvent.click(screen.getByRole('button', { name: 'Repair runtime projection' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Repair and continue' }));
   await waitFor(() => expect(recoverRuntimeMock).toHaveBeenCalledWith('jim'));
 });
 
@@ -271,7 +296,7 @@ it('prevents duplicate recovery clicks while pending and surfaces backend failur
   }));
   render(<PersonasDesk initialPersonaId="jim" />);
 
-  const button = await screen.findByRole('button', { name: 'Repair runtime projection' });
+  const button = await screen.findByRole('button', { name: 'Repair and continue' });
   fireEvent.click(button);
   fireEvent.click(button);
   expect(recoverRuntimeMock).toHaveBeenCalledTimes(1);
@@ -283,7 +308,7 @@ it('prevents duplicate recovery clicks while pending and surfaces backend failur
   fireEvent.click(button);
   await waitFor(() => expect(recoverRuntimeMock).toHaveBeenCalledTimes(2));
   expect(await screen.findByText('Runtime recovery failed')).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: 'Repair runtime projection' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Repair and continue' })).toBeInTheDocument();
 });
 
 it('shows exact account identity and launches only through a grant-scoped descriptor', async () => {
@@ -306,4 +331,275 @@ it('shows exact account identity and launches only through a grant-scoped descri
     uri: 'ui://github/dashboard',
   });
   expect(screen.getByText(/never add tools or permissions/i)).toBeInTheDocument();
+});
+
+it('turns a plain-language goal into durable work and immediately assigns it', async () => {
+  let resolveCreate!: (value: unknown) => void;
+  createWorkItemMock.mockReturnValueOnce(new Promise((resolve) => {
+    resolveCreate = resolve;
+  }));
+  render(<PersonasDesk initialPersonaId="jim" />);
+
+  expect(await screen.findByRole('heading', { name: 'Jim' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Give this Persona a goal' }));
+  fireEvent.change(await screen.findByRole('textbox', { name: /Goal/ }), {
+    target: { value: '  Prepare the launch plan  ' },
+  });
+  fireEvent.change(screen.getByRole('textbox', { name: 'Helpful context (optional)' }), {
+    target: { value: '  Include approvals and owners.  ' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Start working' }));
+
+  await waitFor(() => expect(createWorkItemMock).toHaveBeenCalledWith('jim', {
+    title: 'Prepare the launch plan',
+    description: 'Include approvals and owners.',
+    priority: 'normal',
+    dependencyIds: [],
+  }));
+  expect(assignWorkItemMock).not.toHaveBeenCalled();
+
+  resolveCreate({
+    id: 'work_goal',
+    personaId: 'jim',
+    title: 'Prepare the launch plan',
+    status: 'open',
+    priority: 'normal',
+    dependencyIds: [],
+    createdAt: 30,
+    updatedAt: 31,
+  });
+
+  await waitFor(() => expect(assignWorkItemMock).toHaveBeenCalledWith(
+    'jim',
+    'work_goal',
+    {
+      expectedUpdatedAt: 31,
+      idempotencyKey: expect.any(String),
+    },
+  ));
+  expect(await screen.findByText(/Goal saved and queued/)).toBeInTheDocument();
+});
+
+it('shows what finished work produced and a plain route back to its record', async () => {
+  const workItem = {
+    schemaVersion: 1,
+    id: 'work_finished',
+    personaId: 'jim',
+    title: 'Prepare the launch report',
+    status: 'completed',
+    priority: 'normal',
+    dependencyIds: [],
+    createdAt: 30,
+    updatedAt: 42,
+    completedAt: 42,
+  };
+  getMock.mockResolvedValue({
+    ...detail,
+    workItems: [workItem],
+    presentation: {
+      ...detail.presentation,
+      tasks: [{
+        id: workItem.id,
+        title: workItem.title,
+        state: 'completed',
+        priority: workItem.priority,
+        blockerTitles: [],
+        completedAt: workItem.completedAt,
+        resultSummary: 'The launch report is ready for review.',
+        recordLinks: [{ kind: 'conversation', id: 'conversation_result' }],
+        expectedUpdatedAt: workItem.updatedAt,
+      }],
+    },
+  });
+
+  render(<PersonasDesk initialPersonaId="jim" />);
+
+  expect(await screen.findByText('The launch report is ready for review.')).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'Open chat' }))
+    .toHaveAttribute('href', expect.stringContaining('conversation_result'));
+});
+
+it('offers Pause and Stop for active work from the Persona desk', async () => {
+  const workItem = {
+    schemaVersion: 1,
+    id: 'work_active',
+    personaId: 'jim',
+    title: 'Prepare the active launch',
+    status: 'open',
+    priority: 'high',
+    dependencyIds: [],
+    createdAt: 30,
+    updatedAt: 31,
+  };
+  getMock.mockResolvedValue({
+    ...detail,
+    workItems: [workItem],
+    presentation: {
+      ...detail.presentation,
+      tasks: [{
+        id: workItem.id,
+        title: workItem.title,
+        state: 'in_progress',
+        priority: workItem.priority,
+        blockerTitles: [],
+        expectedUpdatedAt: workItem.updatedAt,
+      }],
+    },
+  });
+  render(<PersonasDesk initialPersonaId="jim" />);
+
+  expect(await screen.findByText(workItem.title)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
+  await waitFor(() => expect(controlWorkItemMock).toHaveBeenCalledWith(
+    'jim',
+    workItem.id,
+    'pause',
+  ));
+  expect(await screen.findByText('Work paused.')).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+  await waitFor(() => expect(controlWorkItemMock).toHaveBeenCalledWith(
+    'jim',
+    workItem.id,
+    'stop',
+  ));
+  expect(await screen.findByText('Work stopped.')).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('tab', { name: /Tasks/i }));
+  expect(await screen.findByRole('button', { name: 'Delete' })).toBeDisabled();
+  expect(screen.queryByRole('button', { name: 'Complete' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Task' }));
+  expect(screen.queryByRole('combobox', { name: 'Status' })).not.toBeInTheDocument();
+  expect(screen.getByRole('combobox', { name: 'Priority' })).toBeInTheDocument();
+});
+
+it('offers one plain Resume or retry action for paused or failed work', async () => {
+  const workItem = {
+    schemaVersion: 1,
+    id: 'work_blocked',
+    personaId: 'jim',
+    title: 'Prepare the blocked launch',
+    status: 'blocked',
+    priority: 'normal',
+    dependencyIds: [],
+    createdAt: 30,
+    updatedAt: 32,
+  };
+  getMock.mockResolvedValue({
+    ...detail,
+    workItems: [workItem],
+    presentation: {
+      ...detail.presentation,
+      tasks: [{
+        id: workItem.id,
+        title: workItem.title,
+        state: 'blocked',
+        priority: workItem.priority,
+        blockerTitles: [],
+        expectedUpdatedAt: workItem.updatedAt,
+      }],
+    },
+  });
+  render(<PersonasDesk initialPersonaId="jim" />);
+
+  const button = await screen.findByRole('button', { name: 'Resume or retry' });
+  fireEvent.click(button);
+
+  await waitFor(() => expect(controlWorkItemMock).toHaveBeenCalledWith(
+    'jim',
+    workItem.id,
+    'retry',
+  ));
+  expect(await screen.findByText('Work started again.')).toBeInTheDocument();
+});
+
+it('moves queued Tasks earlier or later inside the same importance bucket', async () => {
+  const workItems = [
+    {
+      schemaVersion: 1,
+      id: 'work_queue_first',
+      personaId: 'jim',
+      title: 'First queued Task',
+      status: 'open',
+      priority: 'normal',
+      dependencyIds: [],
+      createdAt: 30,
+      updatedAt: 31,
+    },
+    {
+      schemaVersion: 1,
+      id: 'work_queue_second',
+      personaId: 'jim',
+      title: 'Second queued Task',
+      status: 'open',
+      priority: 'normal',
+      dependencyIds: [],
+      createdAt: 32,
+      updatedAt: 33,
+    },
+  ];
+  getMock.mockResolvedValue({
+    ...detail,
+    workItems,
+    presentation: {
+      ...detail.presentation,
+      tasks: workItems.map((item) => ({
+        id: item.id,
+        title: item.title,
+        state: 'waiting',
+        priority: item.priority,
+        blockerTitles: [],
+        expectedUpdatedAt: item.updatedAt,
+      })),
+    },
+  });
+  render(<PersonasDesk initialPersonaId="jim" />);
+
+  expect(await screen.findByRole('heading', { name: 'Jim' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('tab', { name: /Tasks/i }));
+  const earlier = await screen.findAllByRole('button', { name: 'Move earlier' });
+  const later = screen.getAllByRole('button', { name: 'Move later' });
+  expect(earlier[0]).toBeDisabled();
+  expect(earlier[1]).not.toBeDisabled();
+  expect(later[0]).not.toBeDisabled();
+  expect(later[1]).toBeDisabled();
+
+  fireEvent.click(later[0]);
+  await waitFor(() => expect(controlWorkItemMock).toHaveBeenCalledWith(
+    'jim',
+    workItems[0].id,
+    'move_later',
+  ));
+  await waitFor(() => expect(earlier[1]).not.toBeDisabled());
+  fireEvent.click(earlier[1]);
+  await waitFor(() => expect(controlWorkItemMock).toHaveBeenCalledWith(
+    'jim',
+    workItems[1].id,
+    'move_earlier',
+  ));
+});
+
+it('shows the effective Apps, specialist Behaviors, and native abilities from preview', async () => {
+  executionPreviewMock.mockResolvedValueOnce({
+    personaId: 'jim',
+    coreFlowRef: 'flow_effective_core',
+    apps: ['calendar-team'],
+    behaviors: [{
+      slotKey: 'incident_triage',
+      name: 'Incident triage',
+      description: 'Investigate and summarize an incident.',
+    }],
+    nativeAbilities: ['remember', 'work_item_create'],
+    readOnly: true,
+  });
+  render(<PersonasDesk initialPersonaId="jim" />);
+
+  expect(await screen.findByRole('heading', { name: 'Jim' })).toBeInTheDocument();
+  await waitFor(() => expect(executionPreviewMock).toHaveBeenCalledWith('jim'));
+  expect(await screen.findByText('Can use and organize memory')).toBeInTheDocument();
+  expect(screen.getByText('Can create and finish Tasks')).toBeInTheDocument();
+  expect(screen.getByText('Some everyday abilities are off. Choose Change setup to turn memory, Tasks, or improvements on.')).toBeInTheDocument();
+  expect(screen.getByText('calendar-team')).toBeInTheDocument();
+  expect(screen.getByText('Incident triage')).toBeInTheDocument();
+  expect(screen.queryByText('github-jim')).not.toBeInTheDocument();
 });

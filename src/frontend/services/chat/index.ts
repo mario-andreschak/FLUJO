@@ -45,6 +45,8 @@ export interface CreateConversationPayload {
   flowSnapshot?: Flow;
   /** Strict-local, non-authoritative target for a fresh Persona chat. */
   personaTargetId?: string;
+  /** `primary` selects the Persona's Main role; another key selects a named Behavior. */
+  personaBehaviorSlotKey?: string;
 }
 
 // Handlers for the live execution event stream (SSE).

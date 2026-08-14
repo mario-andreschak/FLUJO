@@ -36,7 +36,7 @@ import {
   getPersona,
   getPersonaDeletionTombstone,
 } from '@/backend/services/enduringAgents';
-import { EnduringAgentIdSchema } from '@/shared/types/enduringAgent';
+import { BehaviorSlotKeySchema, EnduringAgentIdSchema } from '@/shared/types/enduringAgent';
 import {
   ConversationCursorError,
   paginateConversationSummaries,
@@ -179,6 +179,8 @@ interface CreateConversationPayload {
   flowSnapshot?: Flow;
   /** Non-authoritative target intent for a fresh Persona chat. */
   personaTargetId?: string;
+  /** Main role (`primary`) or a named Persona Behavior selected in Chat. */
+  personaBehaviorSlotKey?: string;
 }
 
 
@@ -404,6 +406,9 @@ async function GET_handler(request: NextRequest) {
             ...((state.personaAttribution?.personaId ?? state.personaTargetId)
               ? { personaId: state.personaAttribution?.personaId ?? state.personaTargetId }
               : {}),
+            ...((state.personaAttribution?.personaId ?? state.personaTargetId) && state.personaBehaviorSlotKey
+              ? { personaBehaviorSlotKey: state.personaBehaviorSlotKey }
+              : {}),
             ...(state.personaAttribution?.activityId
               ? { activityId: state.personaAttribution.activityId }
               : {}),
@@ -622,6 +627,20 @@ async function POST_handler(req: NextRequest) {
         { status: 400 },
       );
     }
+    const personaBehaviorSlotKey = payload.personaBehaviorSlotKey ?? 'primary';
+    if (!BehaviorSlotKeySchema.safeParse(personaBehaviorSlotKey).success) {
+      return NextResponse.json(
+        { error: 'Persona-targeted conversations require a valid personaBehaviorSlotKey.' },
+        { status: 400 },
+      );
+    }
+    // Legacy callers that predate the choice UI keep the documented Main role.
+    payload.personaBehaviorSlotKey = personaBehaviorSlotKey;
+  } else if (payload.personaBehaviorSlotKey !== undefined) {
+    return NextResponse.json(
+      { error: 'personaBehaviorSlotKey can only be used with a Persona target.' },
+      { status: 400 },
+    );
   } else if (typeof payload.flowId !== 'string' || !payload.flowId) {
     return NextResponse.json({ error: 'Invalid request body: Missing or invalid "flowId" (must be a non-empty string)' }, { status: 400 });
   }
@@ -707,6 +726,7 @@ async function POST_handler(req: NextRequest) {
       // immutable Behavior Flow immediately before execution.
       flowId: hasPersonaTarget ? '' : payload.flowId!,
       ...(hasPersonaTarget ? { personaTargetId: payload.personaTargetId } : {}),
+      ...(hasPersonaTarget ? { personaBehaviorSlotKey: payload.personaBehaviorSlotKey } : {}),
       // Quick-Chats (issue #61): seed the in-memory flow snapshot so the engine
       // resolves the flow from the conversation state rather than the store.
       ...(payload.flowSnapshot ? { flowSnapshot: payload.flowSnapshot } : {}),
@@ -753,9 +773,13 @@ async function POST_handler(req: NextRequest) {
       const safeState = existingState ?? {
         ...initialState,
         personaTargetId: undefined,
+        personaBehaviorSlotKey: undefined,
         personaArchived: true as const,
       };
-      if (!existingState) delete safeState.personaTargetId;
+      if (!existingState) {
+        delete safeState.personaTargetId;
+        delete safeState.personaBehaviorSlotKey;
+      }
       await saveCollectionItem('conversations', conversationId, safeState);
       await persistConversationSummaryStrict(conversationId, safeState);
       return NextResponse.json(
@@ -775,6 +799,9 @@ async function POST_handler(req: NextRequest) {
       status: initialState.status, // This is 'running' | ... | undefined in both types
       source: initialState.source,
       ...(initialState.personaTargetId ? { personaId: initialState.personaTargetId } : {}),
+      ...(initialState.personaTargetId && initialState.personaBehaviorSlotKey
+        ? { personaBehaviorSlotKey: initialState.personaBehaviorSlotKey }
+        : {}),
     };
 
     const duration = Date.now() - startTime;

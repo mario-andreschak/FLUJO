@@ -47,6 +47,7 @@ import BreakoutPanel from './BreakoutPanel';
 import { countDiscussionRounds, isTranscriptVisibleEvent } from './meetingTranscriptProjection';
 import { magicLinkPath } from '@/frontend/utils/magicLink';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
+import { meetingParticipantSourceLabel } from './meetingParticipantPresentation';
 
 interface MeetingViewProps {
   meeting: MeetingRecord;
@@ -173,7 +174,7 @@ export default function MeetingView({
         const chatPath = participant ? magicLinkPath({ kind: 'conversation', id: participant.conversationId }) : null;
         return (
           <Drawer anchor="right" open={Boolean(participant)} onClose={() => setSelectedParticipantId(null)} PaperProps={{ sx: { width: { xs: '100%', md: 'min(920px, 76vw)' }, maxWidth: '100%' } }}>
-            {participant && chatPath && <Stack sx={{ height: '100%', minHeight: 0 }}><Stack direction="row" spacing={1} alignItems="center" sx={{ px: 1.5, py: 1 }}><Box sx={{ flex: 1, minWidth: 0 }}><Typography variant="subtitle1" fontWeight={760} noWrap>{participant.name}</Typography><Typography variant="caption" color="text.secondary">FLUJO Chat · meeting run</Typography></Box><Tooltip title={t('meetings.openChat')}><IconButton onClick={() => router.push(chatPath)} aria-label={t('meetings.openChat')}><OpenInNewRounded /></IconButton></Tooltip><IconButton onClick={() => setSelectedParticipantId(null)} aria-label={t('common.close')}><CloseRounded /></IconButton></Stack><Divider /><Box component="iframe" title={`${participant.name} FLUJO Chat`} src={withWorkspaceUrl(chatPath)} sx={{ flex: 1, width: '100%', minHeight: 0, border: 0, bgcolor: 'background.default' }} /></Stack>}
+            {participant && chatPath && <Stack sx={{ height: '100%', minHeight: 0 }}><Stack direction="row" spacing={1} alignItems="center" sx={{ px: 1.5, py: 1 }}><Box sx={{ flex: 1, minWidth: 0 }}><Typography variant="subtitle1" fontWeight={760} noWrap>{participant.name}</Typography><Typography variant="caption" color="text.secondary">{meetingParticipantSourceLabel(participant, t)}</Typography></Box><Tooltip title={t('meetings.openChat')}><IconButton onClick={() => router.push(chatPath)} aria-label={t('meetings.openChat')}><OpenInNewRounded /></IconButton></Tooltip><IconButton onClick={() => setSelectedParticipantId(null)} aria-label={t('common.close')}><CloseRounded /></IconButton></Stack><Divider /><Box component="iframe" title={`${participant.name} FLUJO Chat`} src={withWorkspaceUrl(chatPath)} sx={{ flex: 1, width: '100%', minHeight: 0, border: 0, bgcolor: 'background.default' }} /></Stack>}
           </Drawer>
         );
       })()}

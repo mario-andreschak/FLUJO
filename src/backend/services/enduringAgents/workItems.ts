@@ -13,6 +13,7 @@ import {
   type AssignPersonaWorkItemInput,
   type AssignPersonaWorkItemResult,
   type CreatePersonaWorkItemInput,
+  type PersonaActivity,
   type PersonaPriority,
   type PersonaWorkItem,
   type PersonaWorkItemStatus,
@@ -20,7 +21,14 @@ import {
 } from '@/shared/types/enduringAgent';
 import { getCurrentWorkspace } from '@/utils/workspace';
 
-import { submitPersonaFlowDispatch } from './personaDispatcher';
+import {
+  cancelPersonaFlowDispatchById,
+  listPersonaFlowDispatches,
+  movePersonaWorkItemDispatch,
+  reprioritizePersonaWorkItemDispatches,
+  submitPersonaFlowDispatch,
+  type PersonaFlowDispatchRecord,
+} from './personaDispatcher';
 import {
   PersonaDomainConflictError,
   PersonaDomainNotFoundError,
@@ -29,6 +37,10 @@ import {
 } from './domainMutation';
 import { randomEnduringAgentId, stableEnduringAgentId } from './ids';
 import { normalizeMemorySourceRefs } from './provenance';
+import {
+  withPersonaRuntimeLock,
+  type PersonaRuntimeLock,
+} from './runtimeLock';
 import {
   deletePersonaWorkItemRecord,
   getPersonaActivity,
@@ -177,10 +189,25 @@ export async function updatePersonaWorkItem(
   EnduringAgentIdSchema.parse(personaId);
   EnduringAgentIdSchema.parse(workItemId);
   const parsed = UpdatePersonaWorkItemInputSchema.parse(patch) as UpdatePersonaWorkItemInput;
-  return withPersonaDomainMutation(personaId, options, async () => {
+  const updated = await withPersonaDomainMutation(personaId, options, async () => {
     const existing = requireOwnedWorkItem(await getPersonaWorkItem(workItemId), personaId);
     if (parsed.expectedUpdatedAt !== undefined && parsed.expectedUpdatedAt !== existing.updatedAt) {
       throw new PersonaDomainConflictError('WorkItem changed since it was inspected.');
+    }
+    if (
+      !options.executionAuthority
+      && parsed.status !== undefined
+      && parsed.status !== existing.status
+      && (parsed.status === 'completed' || parsed.status === 'cancelled')
+      && (await listActiveWorkItemDispatches(personaId, workItemId)).length > 0
+    ) {
+      throw new PersonaDomainConflictError(
+        parsed.status === 'completed'
+          ? 'This Task is still active. Let it finish normally, or Stop it first.'
+          : 'This Task is still active. Use Stop so its work ends safely.',
+        'PERSONA_WORK_ITEM_ACTIVE',
+        { reason: 'active_assignment' },
+      );
     }
     const now = Math.max(Date.now(), existing.updatedAt + 1);
     const status = parsed.status ?? existing.status;
@@ -199,6 +226,14 @@ export async function updatePersonaWorkItem(
     assertDependencyGraph(personaId, candidate, await listStoredPersonaWorkItems(personaId));
     return savePersonaWorkItem(candidate);
   });
+  if (parsed.priority !== undefined) {
+    await reprioritizePersonaWorkItemDispatches({
+      personaId,
+      workItemId,
+      priority: updated.priority,
+    });
+  }
+  return updated;
 }
 
 function assignmentRelationKey(workItemId: string): string {
@@ -270,6 +305,7 @@ export async function assignPersonaWorkItem(
   personaId: string,
   workItemId: string,
   input: AssignPersonaWorkItemInput,
+  options: AssignPersonaWorkItemOptions = {},
 ): Promise<AssignPersonaWorkItemResult> {
   EnduringAgentIdSchema.parse(personaId);
   EnduringAgentIdSchema.parse(workItemId);
@@ -286,10 +322,11 @@ export async function assignPersonaWorkItem(
   const submission = await submitPersonaFlowDispatch({
     personaId,
     idempotencyKey: stableEnduringAgentId('taskassign', {
-      purpose: 'persona-work-item-assignment-v1',
+      purpose: 'persona-work-item-assignment-v2',
       workspaceId: getCurrentWorkspace(),
       personaId,
       workItemId,
+      attemptKey: options.attemptKey ?? 'initial',
     }),
     kind: 'assignment',
     priority: inspected.priority,
@@ -320,6 +357,289 @@ export async function assignPersonaWorkItem(
   };
 }
 
+export const PERSONA_WORK_ITEM_CONTROL_ACTIONS = [
+  'pause',
+  'stop',
+  'retry',
+  'move_earlier',
+  'move_later',
+] as const;
+export type PersonaWorkItemControlAction =
+  (typeof PERSONA_WORK_ITEM_CONTROL_ACTIONS)[number];
+
+export interface PersonaWorkItemControlResult {
+  action: PersonaWorkItemControlAction;
+  workItem: PersonaWorkItem;
+  admission?: AssignPersonaWorkItemResult['admission'];
+  moved?: boolean;
+}
+
+interface AssignPersonaWorkItemOptions {
+  /** Trusted attempt version; omitted for the original, forever-idempotent assignment. */
+  attemptKey?: string;
+}
+
+function isActiveWorkItemDispatch(
+  record: PersonaFlowDispatchRecord,
+  personaId: string,
+  workItemId: string,
+): boolean {
+  return record.personaId === personaId
+    && record.admission.kind === 'assignment'
+    && record.admission.source.kind === 'assignment'
+    && record.admission.source.sourceId === workItemId
+    && record.state !== 'completed'
+    && record.state !== 'error'
+    && record.state !== 'cancelled';
+}
+
+async function listActiveWorkItemDispatches(
+  personaId: string,
+  workItemId: string,
+): Promise<PersonaFlowDispatchRecord[]> {
+  return (await listPersonaFlowDispatches(personaId)).filter((record) => (
+    isActiveWorkItemDispatch(record, personaId, workItemId)
+  ));
+}
+
+async function persistWorkItemControlStatus(
+  personaId: string,
+  workItemId: string,
+  status: 'open' | 'blocked' | 'cancelled',
+): Promise<PersonaWorkItem> {
+  return withPersonaRuntimeLock(personaId, async (lock) => {
+    await lock.assertOwned();
+    const existing = requireOwnedWorkItem(await getPersonaWorkItem(workItemId), personaId);
+    if (existing.status === status) return existing;
+    if (existing.status === 'completed' || existing.status === 'cancelled') {
+      throw new PersonaDomainConflictError(
+        'This Task is already finished and cannot be changed with a work control.',
+        'PERSONA_WORK_ITEM_NOT_ACTIONABLE',
+        { reason: 'terminal' },
+      );
+    }
+    const records = await listStoredPersonaWorkItems(personaId);
+    if (status === 'open') {
+      const incompleteDependencies = existing.dependencyIds.filter((dependencyId) => (
+        records.find((record) => record.id === dependencyId)?.status !== 'completed'
+      ));
+      if (incompleteDependencies.length > 0) {
+        throw new PersonaDomainConflictError(
+          'Finish this Task’s blockers before starting it again.',
+          'PERSONA_WORK_ITEM_BLOCKED',
+          { reason: 'dependencies' },
+        );
+      }
+    }
+    const now = Math.max(Date.now(), existing.updatedAt + 1);
+    const candidate = PersonaWorkItemSchema.parse({
+      ...existing,
+      status,
+      updatedAt: now,
+      completedAt: undefined,
+    }) as PersonaWorkItem;
+    assertDependencyGraph(personaId, candidate, records);
+    await lock.assertOwned();
+    return savePersonaWorkItem(candidate);
+  });
+}
+
+/**
+ * Plain Task controls backed by durable intent. Pause/Stop save the desired
+ * Task state before cancelling execution, so terminal lifecycle projection
+ * cannot undo the user's choice. The Resume or retry control uses the reopened
+ * Task version as an idempotent identity and therefore starts a new run after failure.
+ */
+export async function controlPersonaWorkItem(
+  personaId: string,
+  workItemId: string,
+  action: PersonaWorkItemControlAction,
+): Promise<PersonaWorkItemControlResult> {
+  EnduringAgentIdSchema.parse(personaId);
+  EnduringAgentIdSchema.parse(workItemId);
+  if (!PERSONA_WORK_ITEM_CONTROL_ACTIONS.includes(action)) {
+    throw new TypeError('Unknown Task control.');
+  }
+
+  const inspected = requireOwnedWorkItem(await getPersonaWorkItem(workItemId), personaId);
+  const activeDispatches = await listActiveWorkItemDispatches(personaId, workItemId);
+
+  if (action === 'move_earlier' || action === 'move_later') {
+    const movement = await movePersonaWorkItemDispatch({
+      personaId,
+      workItemId,
+      direction: action === 'move_earlier' ? 'earlier' : 'later',
+    });
+    if (!movement.found) {
+      throw new PersonaDomainConflictError(
+        'Only a waiting Task can be moved.',
+        'PERSONA_WORK_ITEM_NOT_ACTIONABLE',
+        { reason: 'not_queued' },
+      );
+    }
+    return { action, workItem: inspected, moved: movement.moved };
+  }
+
+  if (action === 'pause' || action === 'stop') {
+    if (action === 'pause' && inspected.status === 'blocked' && activeDispatches.length === 0) {
+      return { action, workItem: inspected };
+    }
+    if (action === 'stop' && inspected.status === 'cancelled') {
+      return { action, workItem: inspected };
+    }
+    if (activeDispatches.length === 0) {
+      throw new PersonaDomainConflictError(
+        'This Task is no longer active. Refresh the desk to see its latest state.',
+        'PERSONA_WORK_ITEM_NOT_ACTIONABLE',
+        { reason: 'not_active' },
+      );
+    }
+
+    const intendedStatus = action === 'pause' ? 'blocked' : 'cancelled';
+    await persistWorkItemControlStatus(personaId, workItemId, intendedStatus);
+    await Promise.all(activeDispatches.map((dispatch) => (
+      cancelPersonaFlowDispatchById({
+        personaId,
+        dispatchId: dispatch.id,
+        reason: action === 'pause'
+          ? 'This Task was paused from the Persona desk.'
+          : 'This Task was stopped from the Persona desk.',
+      }, { waitForCompletion: true })
+    )));
+    const workItem = requireOwnedWorkItem(await getPersonaWorkItem(workItemId), personaId);
+    return { action, workItem };
+  }
+
+  if (inspected.status === 'completed' || inspected.status === 'cancelled') {
+    throw new PersonaDomainConflictError(
+      'Only paused or blocked Tasks can be started again.',
+      'PERSONA_WORK_ITEM_NOT_ACTIONABLE',
+      { reason: 'terminal' },
+    );
+  }
+  if (activeDispatches.length > 0) {
+    if (inspected.status === 'open' || inspected.status === 'in_progress') {
+      return { action, workItem: inspected, admission: 'already_queued' };
+    }
+    throw new PersonaDomainConflictError(
+      'This Task is still stopping. Try again in a moment.',
+      'PERSONA_WORK_ITEM_NOT_ACTIONABLE',
+      { reason: 'stopping' },
+    );
+  }
+
+  const reopened = inspected.status === 'blocked'
+    ? await persistWorkItemControlStatus(personaId, workItemId, 'open')
+    : inspected;
+  const attemptKey = stableEnduringAgentId('taskattempt', {
+    purpose: 'persona-work-item-control-attempt-v1',
+    workspaceId: getCurrentWorkspace(),
+    personaId,
+    workItemId,
+    reopenedAt: reopened.updatedAt,
+  });
+  const assignment = await assignPersonaWorkItem(personaId, workItemId, {
+    expectedUpdatedAt: reopened.updatedAt,
+    idempotencyKey: attemptKey,
+  }, { attemptKey });
+  return {
+    action,
+    workItem: assignment.workItem,
+    admission: assignment.admission,
+  };
+}
+
+/**
+ * Project the terminal outcome of a Task assignment Activity back onto the
+ * durable WorkItem that originated it. Generic assignment Activities are
+ * intentionally ignored: only an existing, same-Persona WorkItem id carried
+ * by the assignment source is eligible.
+ *
+ * A model may have already made a more specific terminal decision while it
+ * held execution authority. Preserve completed, cancelled, and blocked Tasks
+ * so this fallback can never regress an explicit tool update. Otherwise a
+ * successful Activity completes the Task, a failed Activity blocks it for
+ * review, and a cancelled Activity cancels it.
+ */
+function isTerminalWorkItemAssignment(activity: PersonaActivity): boolean {
+  return activity.kind === 'assignment'
+    && activity.source.kind === 'assignment'
+    && Boolean(activity.source.sourceId)
+    && (
+      activity.status === 'completed'
+      || activity.status === 'error'
+      || activity.status === 'cancelled'
+    );
+}
+
+async function synchronizeAssignedWorkItemRecord(
+  activity: PersonaActivity,
+): Promise<PersonaWorkItem | null> {
+  const existing = await getPersonaWorkItem(activity.source.sourceId!);
+  if (!existing || existing.personaId !== activity.personaId) return null;
+  if (
+    existing.status === 'completed'
+    || existing.status === 'cancelled'
+    || existing.status === 'blocked'
+  ) return existing;
+
+  let status: PersonaWorkItemStatus = activity.status === 'completed'
+    ? 'completed'
+    : activity.status === 'cancelled'
+      ? 'cancelled'
+      : 'blocked';
+  const records = await listStoredPersonaWorkItems(activity.personaId);
+  if (
+    status === 'completed'
+    && existing.dependencyIds.some((dependencyId) => (
+      records.find((record) => record.id === dependencyId)?.status !== 'completed'
+    ))
+  ) {
+    // A Task edited during its Activity may have acquired a new unfinished
+    // dependency. Keep the dependency invariant and surface it as blocked.
+    status = 'blocked';
+  }
+
+  const updatedAt = Math.max(
+    Date.now(),
+    existing.updatedAt + 1,
+    activity.updatedAt,
+    activity.completedAt ?? 0,
+  );
+  const completedAt = status === 'completed'
+    ? Math.max(existing.createdAt, activity.completedAt ?? updatedAt)
+    : undefined;
+  const candidate = PersonaWorkItemSchema.parse({
+    ...existing,
+    status,
+    updatedAt,
+    completedAt,
+  }) as PersonaWorkItem;
+  assertDependencyGraph(activity.personaId, candidate, records);
+  return savePersonaWorkItem(candidate);
+}
+
+export async function synchronizeAssignedWorkItemFromActivity(
+  activity: PersonaActivity,
+): Promise<PersonaWorkItem | null> {
+  if (!isTerminalWorkItemAssignment(activity)) return null;
+  const inspected = await getPersonaWorkItem(activity.source.sourceId!);
+  if (!inspected || inspected.personaId !== activity.personaId) return null;
+  return withPersonaDomainMutation(activity.personaId, {}, async () => (
+    synchronizeAssignedWorkItemRecord(activity)
+  ));
+}
+
+/** Same projection for callers that already hold the authoritative Persona lock. */
+export async function synchronizeAssignedWorkItemFromActivityWithinRuntimeLock(
+  activity: PersonaActivity,
+  lock: PersonaRuntimeLock,
+): Promise<PersonaWorkItem | null> {
+  if (!isTerminalWorkItemAssignment(activity)) return null;
+  await lock.assertOwned();
+  return synchronizeAssignedWorkItemRecord(activity);
+}
+
 export async function deletePersonaWorkItem(
   personaId: string,
   workItemId: string,
@@ -329,6 +649,13 @@ export async function deletePersonaWorkItem(
   EnduringAgentIdSchema.parse(workItemId);
   await withPersonaDomainMutation(personaId, options, async () => {
     requireOwnedWorkItem(await getPersonaWorkItem(workItemId), personaId);
+    if ((await listActiveWorkItemDispatches(personaId, workItemId)).length > 0) {
+      throw new PersonaDomainConflictError(
+        'This Task is still active. Stop it before deleting it.',
+        'PERSONA_WORK_ITEM_ACTIVE',
+        { reason: 'active_assignment' },
+      );
+    }
     const dependent = (await listStoredPersonaWorkItems(personaId)).find(
       (item) => item.id !== workItemId && item.dependencyIds.includes(workItemId),
     );

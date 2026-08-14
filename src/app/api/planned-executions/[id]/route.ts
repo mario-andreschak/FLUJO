@@ -51,6 +51,23 @@ async function PATCH_handler(
   try {
     const { id } = await params;
     const patch = await request.json();
+    // JSON has no representation for undefined. Accept an explicit null from
+    // the editor as "remove this Persona route" and hand the scheduler the
+    // undefined value it already canonicalizes by deleting the stored field.
+    if (patch && typeof patch === 'object' && !Array.isArray(patch)) {
+      if (
+        Object.prototype.hasOwnProperty.call(patch, 'personaId')
+        && patch.personaId === null
+      ) {
+        patch.personaId = undefined;
+      }
+      if (
+        Object.prototype.hasOwnProperty.call(patch, 'behaviorSlotKey')
+        && patch.behaviorSlotKey === null
+      ) {
+        patch.behaviorSlotKey = undefined;
+      }
+    }
     const scheduler = getSchedulerService();
     const existing = await scheduler.get(id);
     if (

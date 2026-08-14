@@ -17,6 +17,7 @@ export const BEHAVIOR_PROPOSAL_STATUSES = [
   'validation_failed',
   'awaiting_approval',
   'approved',
+  'rejected',
   'activated',
   'rolled_back',
 ] as const;
@@ -27,6 +28,7 @@ export const BEHAVIOR_PROPOSAL_AUDIT_ACTIONS = [
   'validation_failed',
   'approved',
   'auto_approved',
+  'rejected',
   'activated',
   'rolled_back',
   'promoted_to_role',
@@ -78,6 +80,8 @@ export interface BehaviorProposal {
   slotKey: string;
   baseBehaviorRevisionId: string;
   rationale: string;
+  /** Plain-language preview of the candidate's observable behavior change. */
+  changeSummary?: string;
   evidenceRefs: MemorySourceRef[];
   candidateSpecDigest: string;
   candidateFlow?: Flow;
@@ -142,6 +146,7 @@ export const BehaviorProposalSchema: z.ZodType<BehaviorProposal> = z.object({
   slotKey: BehaviorSlotKeySchema,
   baseBehaviorRevisionId: EnduringAgentIdSchema,
   rationale: NonEmptyText(20_000),
+  changeSummary: NonEmptyText(20_000).optional(),
   evidenceRefs: z.array(MemorySourceRefSchema).min(1).max(100),
   candidateSpecDigest: Sha256Schema,
   candidateFlow: FlowSnapshotSchema.optional(),
@@ -183,7 +188,7 @@ export const BehaviorProposalSchema: z.ZodType<BehaviorProposal> = z.object({
       message: 'Every eval result must be bound to the proposal candidate content hash.',
     });
   }
-  if (proposal.status !== 'validation_failed' && (
+  if (!['validation_failed', 'rejected'].includes(proposal.status) && (
     proposal.validation.errorCount > 0
     || proposal.evalResults.length === 0
     || proposal.evalResults.some((result) => !result.passed)

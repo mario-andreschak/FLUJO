@@ -16,6 +16,7 @@ import {
   type MemoryScope,
   type MemoryStatus,
   type MemoryTrust,
+  type Persona,
 } from '@/shared/types/enduringAgent';
 
 import {
@@ -85,6 +86,19 @@ export interface CorrectMemoryInput {
   validFrom?: number;
   validUntil?: number;
   expectedUpdatedAt?: number;
+}
+
+function assertPersonaMayChangeMemory(
+  persona: Persona,
+  options: PersonaDomainMutationOptions,
+): void {
+  if (options.executionAuthority && persona.autonomyLevel === 'locked') {
+    throw new PersonaDomainConflictError(
+      'Automatic memory changes are turned off for this Persona.',
+      'PERSONA_LEARNING_DISABLED',
+      { reason: 'learning_disabled' },
+    );
+  }
 }
 
 function stableSourceRefValue(memory: MemoryItem): string {
@@ -182,9 +196,10 @@ export async function rememberMemory(
   options: MemoryMutationOptions = {},
 ): Promise<MemoryItem> {
   const parsed = CreateMemoryItemInputSchema.parse(input) as CreateMemoryItemInput;
-  return withPersonaDomainMutation(parsed.personaId, options, ({ activity }) => (
-    createMemoryWithinMutation(parsed, options, activity?.id)
-  ));
+  return withPersonaDomainMutation(parsed.personaId, options, ({ persona, activity }) => {
+    assertPersonaMayChangeMemory(persona, options);
+    return createMemoryWithinMutation(parsed, options, activity?.id);
+  });
 }
 
 export async function getPersonaMemory(personaId: string, memoryId: string): Promise<MemoryItem> {
@@ -249,6 +264,7 @@ export async function correctMemory(
   EnduringAgentIdSchema.parse(memoryId);
   const parsed = CorrectMemoryInputSchema.parse(input) as CorrectMemoryInput;
   return withPersonaDomainMutation(personaId, options, async ({ persona, activity, updatePersona }) => {
+    assertPersonaMayChangeMemory(persona, options);
     const original = requireOwnedMemory(await getMemoryItem(memoryId), personaId, memoryId);
     if (original.status === 'forgotten') {
       throw new PersonaDomainConflictError('Forgotten memory cannot be corrected in place.');
@@ -347,6 +363,7 @@ export async function forgetMemory(
   options: PersonaDomainMutationOptions = {},
 ): Promise<MemoryItem> {
   return withPersonaDomainMutation(personaId, options, async ({ persona, updatePersona }) => {
+    assertPersonaMayChangeMemory(persona, options);
     const item = requireOwnedMemory(await getMemoryItem(memoryId), personaId, memoryId);
     if (item.status === 'forgotten') return item;
     if (persona.coreMemoryItemIds?.includes(item.id)) {
@@ -370,6 +387,7 @@ export async function pinMemoryToCore(
   options: PersonaDomainMutationOptions = {},
 ): Promise<MemoryItem[]> {
   return withPersonaDomainMutation(personaId, options, async ({ persona, updatePersona }) => {
+    assertPersonaMayChangeMemory(persona, options);
     const item = requireOwnedMemory(await getMemoryItem(memoryId), personaId, memoryId);
     if (item.status !== 'active' || (item.trust !== 'explicit_user' && item.trust !== 'verified_tool')) {
       throw new PersonaDomainConflictError('Core memory requires active explicit-user or verified-tool trust.');
@@ -405,6 +423,7 @@ export async function unpinMemoryFromCore(
   options: PersonaDomainMutationOptions = {},
 ): Promise<MemoryItem[]> {
   return withPersonaDomainMutation(personaId, options, async ({ persona, updatePersona }) => {
+    assertPersonaMayChangeMemory(persona, options);
     requireOwnedMemory(await getMemoryItem(memoryId), personaId, memoryId);
     const ids = (persona.coreMemoryItemIds ?? []).filter((id) => id !== memoryId);
     if (ids.length !== (persona.coreMemoryItemIds ?? []).length) {

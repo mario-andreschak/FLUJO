@@ -609,12 +609,21 @@ async function requireWritablePersona(personaId: string, recordKind: string): Pr
   return persona;
 }
 
+interface PersonaRoleVersionTransition {
+  expectedCurrentRoleVersionId: string;
+  nextRoleVersionId: string;
+}
+
 /**
- * Constrained Persona update used to finish crash-safe factory provisioning.
- * Role upgrades are a separate future operation; this path cannot change the
- * identity, original creation time, or pinned RoleVersion.
+ * Constrained Persona update used by runtime and administrative mutations.
+ * Generic callers cannot move the immutable Role pin. The settings operation
+ * must supply an exact, lock-scoped transition so an incidental whole-record
+ * write can never change it.
  */
-function updatePersonaRecord(value: Persona): Promise<Persona> {
+function updatePersonaRecord(
+  value: Persona,
+  roleTransition?: PersonaRoleVersionTransition,
+): Promise<Persona> {
   const record = parseRecord('Persona', PersonaSchema, value);
   assertSafeCollectionId(record.id);
 
@@ -626,7 +635,14 @@ function updatePersonaRecord(value: Persona): Promise<Persona> {
     if (record.createdAt !== existing.createdAt) {
       throw new Error(`Persona ${JSON.stringify(record.id)} createdAt is immutable.`);
     }
-    if (record.roleVersionId !== existing.roleVersionId) {
+    if (
+      record.roleVersionId !== existing.roleVersionId
+      && (
+        !roleTransition
+        || roleTransition.expectedCurrentRoleVersionId !== existing.roleVersionId
+        || roleTransition.nextRoleVersionId !== record.roleVersionId
+      )
+    ) {
       throw new Error(
         `Persona ${JSON.stringify(record.id)} cannot change RoleVersion through updatePersona.`,
       );
@@ -656,6 +672,22 @@ export async function updatePersonaWithinRuntimeLock(
     lock,
     record.id,
     () => updatePersonaRecord(record),
+  );
+}
+
+/** Explicit Role-pin transition; callers must already own this Persona's runtime lock. */
+export async function updatePersonaRoleVersionWithinRuntimeLock(
+  value: Persona,
+  transition: PersonaRoleVersionTransition,
+  lock: PersonaRuntimeLock,
+): Promise<Persona> {
+  const record = parseRecord('Persona', PersonaSchema, value);
+  assertSafeCollectionId(transition.expectedCurrentRoleVersionId);
+  assertSafeCollectionId(transition.nextRoleVersionId);
+  return withIssuedPersonaRuntimeLockOperation(
+    lock,
+    record.id,
+    () => updatePersonaRecord(record, transition),
   );
 }
 

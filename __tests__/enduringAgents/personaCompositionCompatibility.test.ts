@@ -17,6 +17,7 @@ import {
   enduringAgentRecordSchemaVersion,
   migrateAndParseRecord,
 } from '@/backend/services/enduringAgents/recordMigrations';
+import { personaCompositionToolDefinitions } from '@/backend/services/mcp/personaCompositionTools';
 
 describe('Persona composition compatibility', () => {
   const cases: ReadonlyArray<readonly [string, unknown, ZodType<unknown>]> = [
@@ -110,7 +111,6 @@ describe('Persona composition compatibility', () => {
 
     expect(UpdatePersonaCompositionInputSchema.safeParse({
       expectedUpdatedAt: 10,
-      role,
       behaviors: [{
         ref: 'behavior_legacy',
         name: 'Primary',
@@ -118,5 +118,24 @@ describe('Persona composition compatibility', () => {
         overrideFlowRef: null,
       }],
     }).success).toBe(true);
+
+    for (const hiddenMutation of [
+      { appRefs: ['github'] },
+      { role },
+      { description: 'Cosmetic-only description.' },
+    ]) {
+      expect(UpdatePersonaCompositionInputSchema.safeParse({
+        expectedUpdatedAt: 10,
+        ...hiddenMutation,
+      }).success).toBe(false);
+    }
+
+    const updateTool = personaCompositionToolDefinitions().find(
+      (tool) => tool.name === 'update_persona_composition',
+    );
+    const toolProperties = updateTool?.inputSchema.properties as Record<string, unknown>;
+    expect(toolProperties).not.toHaveProperty('app_refs');
+    expect(toolProperties).not.toHaveProperty('role');
+    expect(toolProperties).not.toHaveProperty('description');
   });
 });
