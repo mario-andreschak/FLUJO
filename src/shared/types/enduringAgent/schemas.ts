@@ -1024,6 +1024,7 @@ export const BehaviorMaintenanceRunSchema = z.object({
     ctx.addIssue({ code: 'custom', message: 'updatedAt cannot precede createdAt.', path: ['updatedAt'] });
   }
   const terminal = run.state === 'completed' || run.state === 'failed' || run.state === 'cancelled';
+  const compactionEligible = terminal || run.state === 'awaiting_review';
   if (terminal !== (run.completedAt !== undefined)) {
     ctx.addIssue({
       code: 'custom',
@@ -1041,10 +1042,10 @@ export const BehaviorMaintenanceRunSchema = z.object({
       path: ['diagnosisLeaseId'],
     });
   }
-  if (run.compactedAt !== undefined && (!terminal || run.sourceActivityIds.length !== 0)) {
+  if (run.compactedAt !== undefined && (!compactionEligible || run.sourceActivityIds.length !== 0)) {
     ctx.addIssue({
       code: 'custom',
-      message: 'Only terminal metadata-only maintenance runs may be compacted.',
+      message: 'Only compaction-eligible metadata-only maintenance runs may be compacted.',
       path: ['compactedAt'],
     });
   }

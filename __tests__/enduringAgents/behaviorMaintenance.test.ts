@@ -1,5 +1,6 @@
 import { FEATURES } from '@/config/features';
 import {
+  BEHAVIOR_MAINTENANCE_DETAILED_RUN_LIMIT,
   BEHAVIOR_MAINTENANCE_DIAGNOSIS_LEASE_MS,
   BEHAVIOR_MAINTENANCE_RETENTION_MS,
   admitBehaviorMaintenanceRun,
@@ -8,6 +9,7 @@ import {
   executeBehaviorMaintenanceRun,
   reconcileBehaviorMaintenanceRuns,
 } from '@/backend/services/enduringAgents/behaviorMaintenance';
+import { getBehaviorProposal } from '@/backend/services/enduringAgents/behaviorLearning';
 import { ENDURING_AGENT_COLLECTIONS } from '@/backend/services/enduringAgents/collections';
 import {
   getBehaviorRevision,
@@ -441,32 +443,224 @@ describe('Behavior maintenance lifecycle', () => {
     });
   });
 
-  it('compacts expired terminal detail while retaining audit metadata', async () => {
+  it('compacts an aged awaiting-review run without changing its proposal or audit metadata', async () => {
     await inFreshWorkspace(async () => {
       const setup = await setupPersona();
       const now = Date.now();
-      const completed = activity({
-        id: 'activity_retention',
+      const reusableLesson = 'Verify the focused change before reporting success.';
+      const first = activity({
+        id: 'activity_review_first',
+        personaId: setup.persona.id,
+        behaviorRevisionId: setup.revision.id,
+        now,
+        status: 'error',
+        resolution: 'failed',
+        nextAction: reusableLesson,
+      });
+      const second = activity({
+        id: 'activity_review_second',
+        personaId: setup.persona.id,
+        behaviorRevisionId: setup.revision.id,
+        now: now + 1,
+        status: 'error',
+        resolution: 'failed',
+        nextAction: reusableLesson,
+      });
+      await persistActivity(first);
+      await persistActivity(second);
+      const admitted = await admitBehaviorMaintenanceRun(second, now + 1);
+      if (!admitted) throw new Error('Expected maintenance admission.');
+
+      await expect(diagnoseBehaviorMaintenanceRun(admitted)).resolves.toEqual({
+        action: 'instruction_behavior_candidate',
+        reasonCode: 'repeated_reusable_instruction_lesson',
+        instruction: reusableLesson,
+      });
+      const awaitingReview = await executeBehaviorMaintenanceRun(admitted.id, { now: now + 2 });
+      if (!awaitingReview) throw new Error('Expected review-pending maintenance run.');
+      expect(awaitingReview).toMatchObject({
+        state: 'awaiting_review',
+        action: 'instruction_behavior_candidate',
+        relatedProposalIds: [expect.any(String)],
+      });
+      expect(awaitingReview.completedAt).toBeUndefined();
+
+      const proposalId = awaitingReview.relatedProposalIds[0];
+      const proposalBefore = await getBehaviorProposal(proposalId);
+      expect(proposalBefore).toMatchObject({
+        id: proposalId,
+        personaId: setup.persona.id,
+        status: 'awaiting_approval',
+        evidenceRefs: expect.arrayContaining([
+          expect.objectContaining({ kind: 'activity', id: first.id }),
+          expect.objectContaining({ kind: 'activity', id: second.id }),
+        ]),
+        auditTrail: expect.arrayContaining([
+          expect.objectContaining({ action: 'proposed' }),
+        ]),
+      });
+
+      const compactAt = now + BEHAVIOR_MAINTENANCE_RETENTION_MS + 3;
+      await expect(compactBehaviorMaintenanceRuns(setup.persona.id, compactAt)).resolves.toBe(1);
+      const compacted = await getBehaviorMaintenanceRun(admitted.id);
+      expect(BehaviorMaintenanceRunSchema.parse(compacted)).toEqual({
+        ...awaitingReview,
+        sourceActivityIds: [],
+        updatedAt: compactAt,
+        compactedAt: compactAt,
+      });
+      expect(compacted?.state).toBe('awaiting_review');
+      expect(compacted?.completedAt).toBeUndefined();
+      expect(await getBehaviorProposal(proposalId)).toEqual(proposalBefore);
+
+      await expect(compactBehaviorMaintenanceRuns(setup.persona.id, compactAt + 1)).resolves.toBe(0);
+      expect(await getBehaviorMaintenanceRun(admitted.id)).toEqual(compacted);
+      expect(await getBehaviorProposal(proposalId)).toEqual(proposalBefore);
+    });
+  });
+
+  it.each(['completed', 'failed', 'cancelled'] as const)(
+    'compacts expired %s detail while retaining audit metadata',
+    async (state) => {
+      await inFreshWorkspace(async () => {
+        const setup = await setupPersona();
+        const now = Date.now();
+        const source = activity({
+          id: 'activity_retention_' + state,
+          personaId: setup.persona.id,
+          behaviorRevisionId: setup.revision.id,
+          now,
+        });
+        await persistActivity(source);
+        const admitted = await admitBehaviorMaintenanceRun(source, now);
+        if (!admitted) throw new Error('Expected maintenance admission.');
+        const terminalAt = now + 1;
+        const terminal = await saveBehaviorMaintenanceRun(BehaviorMaintenanceRunSchema.parse({
+          ...admitted,
+          state,
+          reasonCode: 'retention_' + state,
+          action: state === 'completed' ? 'no_change' : undefined,
+          updatedAt: terminalAt,
+          completedAt: terminalAt,
+        }));
+
+        const compactAt = terminalAt + BEHAVIOR_MAINTENANCE_RETENTION_MS + 1;
+        await expect(compactBehaviorMaintenanceRuns(setup.persona.id, compactAt)).resolves.toBe(1);
+        expect(await getBehaviorMaintenanceRun(admitted.id)).toEqual({
+          ...terminal,
+          sourceActivityIds: [],
+          updatedAt: compactAt,
+          compactedAt: compactAt,
+        });
+      });
+    },
+  );
+
+  it('uses updatedAt for the strict awaiting-review retention cutoff', async () => {
+    await inFreshWorkspace(async () => {
+      const setup = await setupPersona();
+      const now = Date.now();
+      const source = activity({
+        id: 'activity_cutoff_exact',
         personaId: setup.persona.id,
         behaviorRevisionId: setup.revision.id,
         now,
       });
-      await persistActivity(completed);
-      const admitted = await admitBehaviorMaintenanceRun(completed, now);
+      await persistActivity(source);
+      const admitted = await admitBehaviorMaintenanceRun(source, now);
       if (!admitted) throw new Error('Expected maintenance admission.');
-      const terminal = await executeBehaviorMaintenanceRun(admitted.id, { now: now + 1 });
-      if (!terminal) throw new Error('Expected terminal maintenance run.');
+      const cutoff = now + 1_000;
+      const exact = await saveBehaviorMaintenanceRun(BehaviorMaintenanceRunSchema.parse({
+        ...admitted,
+        state: 'awaiting_review',
+        reasonCode: 'cutoff_exact',
+        action: 'instruction_behavior_candidate',
+        updatedAt: cutoff,
+      }));
+      const older = await saveBehaviorMaintenanceRun(BehaviorMaintenanceRunSchema.parse({
+        ...exact,
+        id: 'maint_cutoff_older',
+        sourceActivityIds: ['activity_cutoff_older'],
+        reasonCode: 'cutoff_older',
+        updatedAt: cutoff - 1,
+      }));
+      const compactAt = cutoff + BEHAVIOR_MAINTENANCE_RETENTION_MS;
 
-      const compactAt = now + BEHAVIOR_MAINTENANCE_RETENTION_MS + 2;
       await expect(compactBehaviorMaintenanceRuns(setup.persona.id, compactAt)).resolves.toBe(1);
-      expect(await getBehaviorMaintenanceRun(admitted.id)).toMatchObject({
-        id: admitted.id,
-        state: 'completed',
+      expect(await getBehaviorMaintenanceRun(exact.id)).toEqual(exact);
+      expect(await getBehaviorMaintenanceRun(older.id)).toEqual({
+        ...older,
         sourceActivityIds: [],
-        sourceWindowDigest: admitted.sourceWindowDigest,
-        action: 'no_change',
+        updatedAt: compactAt,
         compactedAt: compactAt,
       });
+    });
+  });
+
+  it('retains only the newest 100 detailed runs across all compactable states', async () => {
+    await inFreshWorkspace(async () => {
+      const setup = await setupPersona();
+      const now = Date.now();
+      const source = activity({
+        id: 'activity_limit_template',
+        personaId: setup.persona.id,
+        behaviorRevisionId: setup.revision.id,
+        now,
+      });
+      await persistActivity(source);
+      const admitted = await admitBehaviorMaintenanceRun(source, now);
+      if (!admitted) throw new Error('Expected maintenance admission.');
+      const states = ['completed', 'failed', 'cancelled', 'awaiting_review'] as const;
+
+      for (let index = 0; index <= BEHAVIOR_MAINTENANCE_DETAILED_RUN_LIMIT; index += 1) {
+        const state = states[index % states.length];
+        const timestamp = now + index + 1;
+        const suffix = index.toString().padStart(3, '0');
+        await saveBehaviorMaintenanceRun(BehaviorMaintenanceRunSchema.parse({
+          ...admitted,
+          id: 'maint_limit_' + suffix,
+          sourceActivityIds: ['activity_limit_' + suffix],
+          state,
+          reasonCode: 'retention_limit_' + state,
+          action: state === 'awaiting_review' ? 'instruction_behavior_candidate' : 'no_change',
+          createdAt: now,
+          updatedAt: timestamp,
+          completedAt: state === 'awaiting_review' ? undefined : timestamp,
+        }));
+      }
+
+      const alreadyCompacted = await saveBehaviorMaintenanceRun(BehaviorMaintenanceRunSchema.parse({
+        ...admitted,
+        id: 'maint_limit_already_compacted',
+        sourceActivityIds: [],
+        state: 'awaiting_review',
+        reasonCode: 'retention_limit_already_compacted',
+        action: 'instruction_behavior_candidate',
+        createdAt: now,
+        updatedAt: now + 150,
+        compactedAt: now + 150,
+      }));
+      const compactAt = now + 200;
+
+      await expect(compactBehaviorMaintenanceRuns(setup.persona.id, compactAt)).resolves.toBe(1);
+      const limitRuns = (await listBehaviorMaintenanceRuns(setup.persona.id))
+        .filter((run) => run.id.startsWith('maint_limit_'));
+      expect(limitRuns.filter((run) => run.compactedAt === undefined))
+        .toHaveLength(BEHAVIOR_MAINTENANCE_DETAILED_RUN_LIMIT);
+      expect(limitRuns.filter((run) => run.compactedAt !== undefined)).toHaveLength(2);
+      expect(await getBehaviorMaintenanceRun('maint_limit_000')).toMatchObject({
+        state: 'completed',
+        sourceActivityIds: [],
+        compactedAt: compactAt,
+      });
+      const retainedReviewRun = await getBehaviorMaintenanceRun('maint_limit_099');
+      expect(retainedReviewRun).toMatchObject({
+        state: 'awaiting_review',
+        sourceActivityIds: ['activity_limit_099'],
+      });
+      expect(retainedReviewRun?.compactedAt).toBeUndefined();
+      expect(await getBehaviorMaintenanceRun(alreadyCompacted.id)).toEqual(alreadyCompacted);
+      await expect(compactBehaviorMaintenanceRuns(setup.persona.id, compactAt + 1)).resolves.toBe(0);
     });
   });
 });

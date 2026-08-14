@@ -33,9 +33,13 @@ shadow-only admissions are terminal records so they cannot block later windows.
 
 Diagnosis is detached from the source commit. A short-lived durable lease fences the
 `queued -> diagnosing -> completed | awaiting_review | failed` lifecycle. Startup
-reclaims expired diagnosis leases without replaying source side effects. Terminal run
-evidence pointers are compacted after 30 days, and only the newest 100 terminal runs
-retain detail; identifiers, hashes, actions, proposal links, and counters remain.
+reclaims expired diagnosis leases without replaying source side effects. Completed,
+failed, cancelled, and `awaiting_review` runs participate in compaction after 30 days,
+and only the newest 100 uncompacted runs in those states retain source Activity
+evidence pointers. Compaction leaves review-pending runs in `awaiting_review` and
+preserves identifiers, digests, hashes, actions and reasons, trust counts, counters,
+review state, and proposal links. Proposal records and their review metadata remain
+available through the existing proposal APIs.
 
 Diagnosis has closed actions: `no_change`, `memory_candidate`,
 `instruction_behavior_candidate`, `setup_recommendation`, `eval_candidate`,

@@ -41,10 +41,11 @@ const ACTIVE_EXECUTION_STATES = new Set<BehaviorMaintenanceRun['state']>([
   'evaluating',
 ]);
 
-const TERMINAL_STATES = new Set<BehaviorMaintenanceRun['state']>([
+const COMPACTION_ELIGIBLE_STATES = new Set<BehaviorMaintenanceRun['state']>([
   'completed',
   'failed',
   'cancelled',
+  'awaiting_review',
 ]);
 
 function digest(value: unknown): string {
@@ -474,10 +475,14 @@ async function completeShadowOnlyRun(run: BehaviorMaintenanceRun, now: number): 
   });
 }
 
+function compactionTimestamp(run: BehaviorMaintenanceRun): number {
+  return run.completedAt ?? run.updatedAt;
+}
+
 /**
  * Compact private evidence pointers after 30 days and enforce a bounded number
- * of detailed terminal runs. Audit identity, hashes, decisions, proposals, and
- * counters remain durable.
+ * of detailed compactable runs. Audit identity, hashes, decisions, proposals,
+ * and counters remain durable.
  */
 export async function compactBehaviorMaintenanceRuns(
   personaId: string,
@@ -485,19 +490,18 @@ export async function compactBehaviorMaintenanceRuns(
 ): Promise<number> {
   return withPersonaRuntimeLock(personaId, async (lock) => {
     await lock.assertOwned();
-    const terminal = (await listBehaviorMaintenanceRuns(personaId))
-      .filter((run) => TERMINAL_STATES.has(run.state))
+    const compactable = (await listBehaviorMaintenanceRuns(personaId))
+      .filter((run) => COMPACTION_ELIGIBLE_STATES.has(run.state))
       .sort((left, right) => (
-        (right.completedAt ?? 0) - (left.completedAt ?? 0)
+        compactionTimestamp(right) - compactionTimestamp(left)
         || right.id.localeCompare(left.id)
       ));
-    const detailed = terminal.filter((run) => run.compactedAt === undefined);
+    const detailed = compactable.filter((run) => run.compactedAt === undefined);
     const cutoff = now - BEHAVIOR_MAINTENANCE_RETENTION_MS;
     let compacted = 0;
 
-    for (const run of detailed) {
-      const rank = detailed.indexOf(run);
-      const expired = (run.completedAt ?? run.updatedAt) < cutoff;
+    for (const [rank, run] of detailed.entries()) {
+      const expired = compactionTimestamp(run) < cutoff;
       if (!expired && rank < BEHAVIOR_MAINTENANCE_DETAILED_RUN_LIMIT) continue;
       const compactedAt = Math.max(now, run.updatedAt);
       await saveBehaviorMaintenanceRun(BehaviorMaintenanceRunSchema.parse({
