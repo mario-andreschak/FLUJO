@@ -28,6 +28,12 @@ function text(r: CallToolResult): string {
 
 /** A command that echoes the seeded secret env var, cross-platform. */
 const ECHO_SECRET = process.platform === 'win32' ? 'Write-Output $env:FAKE_SECRET' : 'echo "$FAKE_SECRET"';
+const ECHO_PARENT_DATA_DIR = process.platform === 'win32'
+  ? 'Write-Output $env:FLUJO_PARENT_DATA_DIR'
+  : 'echo "$FLUJO_PARENT_DATA_DIR"';
+const ECHO_WORKSPACE = process.platform === 'win32'
+  ? 'Write-Output $env:FLUJO_WORKSPACE'
+  : 'echo "$FLUJO_WORKSPACE"';
 const SECRET = 'super-secret-value-abc123';
 
 describe('bash cwd confinement (issue #175)', () => {
@@ -103,12 +109,16 @@ describe('bash env scrubbing (issue #175)', () => {
   let dir: string;
   const prevSecret = process.env.FAKE_SECRET;
   const prevInherit = process.env.FLUJO_BASH_INHERIT_ENV;
+  const prevParentDataDir = process.env.FLUJO_PARENT_DATA_DIR;
+  const prevWorkspace = process.env.FLUJO_WORKSPACE;
 
   beforeEach(async () => {
     mockedRoots.mockReset();
     dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'flujo-bashenv-'));
     mockedRoots.mockResolvedValue([dir]); // allow cwd in temp dir for testing
     process.env.FAKE_SECRET = SECRET;
+    process.env.FLUJO_PARENT_DATA_DIR = dir;
+    process.env.FLUJO_WORKSPACE = 'bash-owner';
     delete process.env.FLUJO_BASH_INHERIT_ENV;
   });
   afterEach(async () => {
@@ -116,12 +126,25 @@ describe('bash env scrubbing (issue #175)', () => {
     await fsp.rm(dir, { recursive: true, force: true });
     if (prevSecret === undefined) delete process.env.FAKE_SECRET; else process.env.FAKE_SECRET = prevSecret;
     if (prevInherit === undefined) delete process.env.FLUJO_BASH_INHERIT_ENV; else process.env.FLUJO_BASH_INHERIT_ENV = prevInherit;
+    if (prevParentDataDir === undefined) delete process.env.FLUJO_PARENT_DATA_DIR; else process.env.FLUJO_PARENT_DATA_DIR = prevParentDataDir;
+    if (prevWorkspace === undefined) delete process.env.FLUJO_WORKSPACE; else process.env.FLUJO_WORKSPACE = prevWorkspace;
   });
 
   it('does NOT leak a secret env var to spawned commands by default', async () => {
     const r = await bashCallTool('run', { command: ECHO_SECRET, cwd: dir });
     const payload = JSON.parse(text(r)) as { output?: string };
     expect(payload.output ?? '').not.toContain(SECRET);
+  });
+
+  it('passes the non-secret FLUJO root and workspace markers by default', async () => {
+    const [parentResult, workspaceResult] = await Promise.all([
+      bashCallTool('run', { command: ECHO_PARENT_DATA_DIR, cwd: dir }),
+      bashCallTool('run', { command: ECHO_WORKSPACE, cwd: dir }),
+    ]);
+    const parentPayload = JSON.parse(text(parentResult)) as { output?: string };
+    const workspacePayload = JSON.parse(text(workspaceResult)) as { output?: string };
+    expect(parentPayload.output ?? '').toContain(dir);
+    expect(workspacePayload.output ?? '').toContain('bash-owner');
   });
 
   it('restores full env inheritance when FLUJO_BASH_INHERIT_ENV is set', async () => {

@@ -28,6 +28,7 @@ import { ChildProcess } from "child_process";
 import { createOAuthClientProvider } from "./oauth";
 import { isClientConnectionClosed } from "@/utils/mcp/utils";
 import { killProcessTreeAndWait } from "@/utils/process/killProcessTree";
+import { getDataDir } from "@/utils/paths";
 import { resolveServerCwd } from "@/utils/mcp/resolveServerCwd";
 import { resolveNodeCommand } from "@/utils/mcp/resolveNodeCommand";
 import {
@@ -807,23 +808,26 @@ export function resolveStdioLaunch(config: MCPStdioConfig): StdioLaunch {
   // host account and let workspace A reuse workspace B's auth/config state.
   Object.assign(transformedEnv, runtime.env);
   applyWindowsSpawnEssentials(transformedEnv);
-  transformedEnv.FLUJO_DATA_DIR = getWorkspaceDataDir();
+  const parentDataDir = getDataDir();
+  const workspaceDataDir = getWorkspaceDataDir();
+  transformedEnv.FLUJO_PARENT_DATA_DIR = parentDataDir;
+  transformedEnv.FLUJO_DATA_DIR = workspaceDataDir;
   transformedEnv.FLUJO_WORKSPACE = getCurrentWorkspace();
   if (shippedDescriptorForConfig(config)?.defaultName === 'browser') {
     // Durable browser output/profile overrides from a pre-workspace config must
     // not keep writing beside (or outside) the workspace tree.
     transformedEnv.FLUJO_BROWSER_PROFILE_DIR = path.join(
-      getWorkspaceDataDir(),
+      workspaceDataDir,
       'browser-profile',
       'trusted',
     );
     transformedEnv.FLUJO_BROWSER_SCREENSHOT_DIR = path.join(
-      getWorkspaceDataDir(),
+      workspaceDataDir,
       'screenshots',
       'browser',
     );
     transformedEnv.FLUJO_BROWSER_RECORD_DIR = path.join(
-      getWorkspaceDataDir(),
+      workspaceDataDir,
       'recordings',
       'browser',
     );

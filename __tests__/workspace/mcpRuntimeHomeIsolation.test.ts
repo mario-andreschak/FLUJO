@@ -14,10 +14,12 @@ import {
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 
 const priorDataDir = process.env.FLUJO_DATA_DIR;
+const priorParentDataDir = process.env.FLUJO_PARENT_DATA_DIR;
 let dataRoot: string;
 
 beforeAll(async () => {
   dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-mcp-runtime-isolation-'));
+  process.env.FLUJO_PARENT_DATA_DIR = dataRoot;
   process.env.FLUJO_DATA_DIR = dataRoot;
   await ensureWorkspaceDirs();
   await ensureWorkspaceDirs('runtime-a');
@@ -25,6 +27,8 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  if (priorParentDataDir === undefined) delete process.env.FLUJO_PARENT_DATA_DIR;
+  else process.env.FLUJO_PARENT_DATA_DIR = priorParentDataDir;
   if (priorDataDir === undefined) delete process.env.FLUJO_DATA_DIR;
   else process.env.FLUJO_DATA_DIR = priorDataDir;
   await fs.rm(dataRoot, { recursive: true, force: true });
@@ -40,6 +44,7 @@ const config: MCPStdioConfig = {
     USERPROFILE: 'C:\\host-profile',
     XDG_CONFIG_HOME: '/host/config',
     NPM_CONFIG_CACHE: '/host/npm-cache',
+    FLUJO_PARENT_DATA_DIR: 'C:\\stale-parent',
   },
   disabled: false,
   rootPath: '',
@@ -57,6 +62,7 @@ describe('stdio MCP runtime homes', () => {
     for (const [launch, root] of [[launchA, rootA], [launchB, rootB]] as const) {
       expect(path.relative(root, launch.env.HOME)).not.toMatch(/^\.\.(?:[\\/]|$)/);
       expect(launch.env.USERPROFILE).toBe(launch.env.HOME);
+      expect(launch.env.FLUJO_PARENT_DATA_DIR).toBe(dataRoot);
       expect(launch.env.FLUJO_DATA_DIR).toBe(root);
       expect(launch.env.XDG_CONFIG_HOME).toBe(path.join(launch.env.HOME, '.config'));
       expect(launch.env.NPM_CONFIG_CACHE).toBe(path.join(launch.env.HOME, '.npm'));

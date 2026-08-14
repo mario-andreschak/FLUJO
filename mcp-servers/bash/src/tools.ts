@@ -860,6 +860,10 @@ const ENV_ALLOWLIST = new Set([
   'systemroot', 'windir', 'comspec', 'pathext', 'systemdrive',
   'programfiles', 'programfiles(x86)',
   'number_of_processors', 'processor_architecture',
+  // Non-secret FLUJO installation-root marker. A command that launches FLUJO
+  // must not reinterpret this Bash server's workspace-scoped FLUJO_DATA_DIR as
+  // the parent of a second `workspaces/<workspace>` namespace.
+  'flujo_parent_data_dir', 'flujo_workspace',
 ]);
 
 /**

@@ -154,11 +154,27 @@ describe('normal stdio delivery', () => {
       SECRET_THAT_MUST_NOT_LEAK: 'secret',
     });
     expect(env).toMatchObject({
+      FLUJO_PARENT_DATA_DIR: path.resolve('/data'),
       FLUJO_DATA_DIR: path.join(path.resolve('/data'), 'workspaces', 'default-workspace'),
       FLUJO_WORKSPACE: 'default-workspace',
       FLUJO_FS_ROOTS: '/workspace',
     });
     expect(env).not.toHaveProperty('SECRET_THAT_MUST_NOT_LEAK');
+  });
+
+  it('uses the parent marker instead of nesting a workspace-scoped child root again', () => {
+    const descriptor = SHIPPED_MCP_SERVERS.find((item) => item.defaultName === 'filesystem')!;
+    const parentDataDir = path.resolve('/parent-data');
+    const workspaceDataDir = path.join(parentDataDir, 'workspaces', 'default-workspace');
+
+    expect(shippedServerEnv(descriptor, {
+      FLUJO_PARENT_DATA_DIR: parentDataDir,
+      FLUJO_DATA_DIR: workspaceDataDir,
+    })).toMatchObject({
+      FLUJO_PARENT_DATA_DIR: parentDataDir,
+      FLUJO_DATA_DIR: workspaceDataDir,
+      FLUJO_WORKSPACE: 'default-workspace',
+    });
   });
 
   it('keeps durable browser outputs in the workspace while sharing only package binaries', () => {

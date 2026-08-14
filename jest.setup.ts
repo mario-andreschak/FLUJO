@@ -16,8 +16,11 @@ jest.setTimeout(15_000);
 // Workspace route wrappers now await the real layout barrier. Give every Jest
 // environment an isolated installation root before test modules are evaluated,
 // so an unmocked route can never migrate or write the checkout's real data.
-const inheritedTestDataDir = process.env.FLUJO_DATA_DIR;
 const jestDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), `flujo-jest-data-${process.pid}-`));
+// An MCP-launched command may carry the installation parent separately from its
+// workspace-scoped FLUJO_DATA_DIR. Jest owns a wholly independent root, so drop
+// that inherited boundary marker before test modules resolve application paths.
+delete process.env.FLUJO_PARENT_DATA_DIR;
 process.env.FLUJO_DATA_DIR = jestDataRoot;
 fs.mkdirSync(path.join(jestDataRoot, 'workspaces', 'default-workspace'), { recursive: true });
 
@@ -31,11 +34,30 @@ beforeEach(async () => {
   await ready;
 });
 
-afterAll(() => {
+afterAll(async () => {
+  // Some suites temporarily replace (or delete) FLUJO_DATA_DIR in afterEach.
+  // Reassert the sandbox before any global teardown work can enqueue or resolve
+  // another path.
+  delete process.env.FLUJO_PARENT_DATA_DIR;
+  process.env.FLUJO_DATA_DIR = jestDataRoot;
+
+  // Statistics writes are intentionally fire-and-forget in production. Keep
+  // this environment's isolated data root selected until every queued append
+  // has settled; otherwise a late append resolves FLUJO_DATA_DIR after it has
+  // been restored and leaks test telemetry into the inherited workspace.
+  const { flushStatisticsEvents } = jest.requireActual<
+    typeof import('@/backend/services/statistics')
+  >('@/backend/services/statistics');
+  await flushStatisticsEvents();
+
   setWorkspaceLayoutPreparation(undefined);
-  if (inheritedTestDataDir === undefined) delete process.env.FLUJO_DATA_DIR;
-  else process.env.FLUJO_DATA_DIR = inheritedTestDataDir;
   fs.rmSync(jestDataRoot, { recursive: true, force: true });
+  // Deliberately do not restore an inherited FLUJO_DATA_DIR. Jest's next test
+  // environment replaces it with another isolated root, and the worker exits
+  // after its final environment. Keeping this temp path selected also confines
+  // callbacks that outlive the suite instead of letting them reach real data.
+  delete process.env.FLUJO_PARENT_DATA_DIR;
+  process.env.FLUJO_DATA_DIR = jestDataRoot;
 });
 
 // Load the log after each test module has installed its mocks. Importing it at

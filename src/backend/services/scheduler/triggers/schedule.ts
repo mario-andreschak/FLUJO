@@ -81,7 +81,7 @@ export function catchUpOccurrence(
 /** Arm the cron job. Throws on an invalid pattern/timezone. */
 export function armSchedule(
   config: ScheduleTriggerConfig,
-  onFire: (occurrence: Date) => void
+  onFire: (occurrence: Date) => void | Promise<void>
 ): ArmedTrigger {
   const job = new Cron(
     config.cron,
