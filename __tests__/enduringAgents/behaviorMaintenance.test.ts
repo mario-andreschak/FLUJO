@@ -111,6 +111,25 @@ describe('Behavior maintenance lifecycle', () => {
     maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = false;
   });
 
+  it('does not write a run when admission and diagnosis are disabled', async () => {
+    await inFreshWorkspace(async () => {
+      maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = false;
+      maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = false;
+      const setup = await setupPersona();
+      const now = Date.now();
+      const completed = activity({
+        id: 'activity_disabled',
+        personaId: setup.persona.id,
+        behaviorRevisionId: setup.revision.id,
+        now,
+      });
+      await persistActivity(completed);
+
+      await expect(admitBehaviorMaintenanceRun(completed, now)).resolves.toBeNull();
+      expect(await listBehaviorMaintenanceRuns(setup.persona.id)).toEqual([]);
+    });
+  });
+
   it('never admits cancelled Activities', async () => {
     await inFreshWorkspace(async () => {
       const setup = await setupPersona();
@@ -277,8 +296,13 @@ describe('Behavior maintenance lifecycle', () => {
       expect(firstRun).toMatchObject({
         state: 'completed',
         reasonCode: 'shadow_admission_only',
+        action: 'no_change',
         completedAt: now,
       });
+
+      const replayed = await admitBehaviorMaintenanceRun(first, now);
+      expect(replayed).toEqual(firstRun);
+      expect(await listBehaviorMaintenanceRuns(setup.persona.id)).toHaveLength(1);
 
       const second = activity({
         id: 'activity_shadow_two',
@@ -290,6 +314,130 @@ describe('Behavior maintenance lifecycle', () => {
       const secondRun = await admitBehaviorMaintenanceRun(second, now + 1);
       expect(secondRun?.id).not.toBe(firstRun?.id);
       expect(await listBehaviorMaintenanceRuns(setup.persona.id)).toHaveLength(2);
+    });
+  });
+
+  it('repairs a legacy queued shadow admission before admitting a later window', async () => {
+    await inFreshWorkspace(async () => {
+      maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = false;
+      const setup = await setupPersona();
+      const now = Date.now();
+      const first = activity({
+        id: 'activity_legacy_shadow_one',
+        personaId: setup.persona.id,
+        behaviorRevisionId: setup.revision.id,
+        now,
+      });
+      await persistActivity(first);
+      const firstRun = await admitBehaviorMaintenanceRun(first, now);
+      if (!firstRun) throw new Error('Expected shadow maintenance admission.');
+      const legacySourceActivityIds = [...firstRun.sourceActivityIds];
+      const legacyDigest = firstRun.sourceWindowDigest;
+      await saveBehaviorMaintenanceRun(BehaviorMaintenanceRunSchema.parse({
+        ...firstRun,
+        state: 'queued',
+        reasonCode: 'shadow_admission_only',
+        action: undefined,
+        completedAt: undefined,
+      }));
+
+      const second = activity({
+        id: 'activity_legacy_shadow_two',
+        personaId: setup.persona.id,
+        behaviorRevisionId: setup.revision.id,
+        now: now + 1,
+      });
+      await persistActivity(second);
+      const secondRun = await admitBehaviorMaintenanceRun(second, now + 1);
+
+      expect(await getBehaviorMaintenanceRun(firstRun.id)).toMatchObject({
+        id: firstRun.id,
+        state: 'completed',
+        reasonCode: 'shadow_admission_only',
+        action: 'no_change',
+        sourceActivityIds: legacySourceActivityIds,
+        sourceWindowDigest: legacyDigest,
+        baseRevisionId: firstRun.baseRevisionId,
+        createdAt: firstRun.createdAt,
+        updatedAt: now + 1,
+        completedAt: now + 1,
+      });
+      expect(secondRun).toMatchObject({
+        state: 'completed',
+        reasonCode: 'shadow_admission_only',
+        action: 'no_change',
+      });
+      expect(secondRun?.id).not.toBe(firstRun.id);
+      expect(await listBehaviorMaintenanceRuns(setup.persona.id)).toHaveLength(2);
+    });
+  });
+
+  it('does not repair an ordinary queued diagnosis run when diagnosis is disabled', async () => {
+    await inFreshWorkspace(async () => {
+      const setup = await setupPersona();
+      const now = Date.now();
+      const first = activity({
+        id: 'activity_pending_diagnosis_one',
+        personaId: setup.persona.id,
+        behaviorRevisionId: setup.revision.id,
+        now,
+      });
+      await persistActivity(first);
+      const pending = await admitBehaviorMaintenanceRun(first, now);
+      if (!pending) throw new Error('Expected queued maintenance admission.');
+
+      maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = false;
+      const second = activity({
+        id: 'activity_pending_diagnosis_two',
+        personaId: setup.persona.id,
+        behaviorRevisionId: setup.revision.id,
+        now: now + 1,
+      });
+      await persistActivity(second);
+      const coalesced = await admitBehaviorMaintenanceRun(second, now + 1);
+
+      expect(coalesced).toEqual(pending);
+      expect(await getBehaviorMaintenanceRun(pending.id)).toMatchObject({
+        state: 'queued',
+        reasonCode: 'diagnosis_pending',
+      });
+      expect(await listBehaviorMaintenanceRuns(setup.persona.id)).toHaveLength(1);
+    });
+  });
+
+  it('does not repair a queued shadow admission while diagnosis is enabled', async () => {
+    await inFreshWorkspace(async () => {
+      const setup = await setupPersona();
+      const now = Date.now();
+      const first = activity({
+        id: 'activity_enabled_shadow_one',
+        personaId: setup.persona.id,
+        behaviorRevisionId: setup.revision.id,
+        now,
+      });
+      await persistActivity(first);
+      const pending = await admitBehaviorMaintenanceRun(first, now);
+      if (!pending) throw new Error('Expected queued maintenance admission.');
+      const legacyShadow = await saveBehaviorMaintenanceRun(BehaviorMaintenanceRunSchema.parse({
+        ...pending,
+        reasonCode: 'shadow_admission_only',
+      }));
+
+      const second = activity({
+        id: 'activity_enabled_shadow_two',
+        personaId: setup.persona.id,
+        behaviorRevisionId: setup.revision.id,
+        now: now + 1,
+      });
+      await persistActivity(second);
+      const coalesced = await admitBehaviorMaintenanceRun(second, now + 1);
+
+      expect(coalesced).toEqual(legacyShadow);
+      expect(await getBehaviorMaintenanceRun(legacyShadow.id)).toMatchObject({
+        state: 'queued',
+        reasonCode: 'shadow_admission_only',
+      });
+      expect(await listBehaviorMaintenanceRuns(setup.persona.id)).toHaveLength(1);
     });
   });
 

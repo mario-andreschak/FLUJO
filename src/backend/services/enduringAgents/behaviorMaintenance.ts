@@ -120,6 +120,32 @@ export async function collectBehaviorMaintenanceEvidenceWindow(
   };
 }
 
+async function completeLegacyShadowAdmissionRuns(
+  runs: BehaviorMaintenanceRun[],
+  now: number,
+  diagnosisEnabled: boolean,
+): Promise<BehaviorMaintenanceRun[]> {
+  if (diagnosisEnabled) return runs;
+
+  const normalized: BehaviorMaintenanceRun[] = [];
+  for (const run of runs) {
+    if (run.state !== 'queued' || run.reasonCode !== 'shadow_admission_only') {
+      normalized.push(run);
+      continue;
+    }
+
+    const completedAt = Math.max(now, run.updatedAt);
+    normalized.push(await saveBehaviorMaintenanceRun(BehaviorMaintenanceRunSchema.parse({
+      ...run,
+      state: 'completed',
+      action: 'no_change',
+      updatedAt: completedAt,
+      completedAt,
+    }) as BehaviorMaintenanceRun));
+  }
+  return normalized;
+}
+
 /**
  * Admission is serialized by the same cross-process Persona lock used by the
  * Activity runtime. This makes the active-run check and deterministic save one
@@ -137,7 +163,13 @@ export async function admitBehaviorMaintenanceRun(
     const persona = await getPersona(sourceActivity.personaId);
     if (!persona || persona.autonomyLevel === 'locked') return null;
 
-    const existingActive = (await listBehaviorMaintenanceRuns(sourceActivity.personaId))
+    const diagnosisEnabled = FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS;
+    const maintenanceRuns = await completeLegacyShadowAdmissionRuns(
+      await listBehaviorMaintenanceRuns(sourceActivity.personaId),
+      now,
+      diagnosisEnabled,
+    );
+    const existingActive = maintenanceRuns
       .filter((run) => ACTIVE_EXECUTION_STATES.has(run.state))
       .sort((left, right) => right.updatedAt - left.updatedAt)[0];
     if (existingActive) return existingActive;
@@ -159,7 +191,6 @@ export async function admitBehaviorMaintenanceRun(
     const existing = await getBehaviorMaintenanceRun(id);
     if (existing) return existing;
 
-    const diagnosisEnabled = FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS;
     return saveBehaviorMaintenanceRun(BehaviorMaintenanceRunSchema.parse({
       schemaVersion: BEHAVIOR_MAINTENANCE_RUN_SCHEMA_VERSION,
       id,
@@ -184,7 +215,7 @@ export async function admitBehaviorMaintenanceRun(
       durationMs: 0,
       createdAt: now,
       updatedAt: now,
-      ...(diagnosisEnabled ? {} : { completedAt: now }),
+      ...(diagnosisEnabled ? {} : { action: 'no_change', completedAt: now }),
     }) as BehaviorMaintenanceRun);
   });
 }
