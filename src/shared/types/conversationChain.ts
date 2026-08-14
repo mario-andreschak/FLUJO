@@ -22,10 +22,14 @@ export const CHAIN_MESSAGE_PREVIEW_MAX_CHARS = 240;
 
 /** Bounded, plain-text projection of a node's latest displayable message. */
 export interface ConversationChainMessagePreview {
-  /** Only user- or assistant-visible messages are previewed. */
-  role: 'user' | 'assistant';
+  /** User, assistant, and compact tool activity can all anchor the preview. */
+  role: 'user' | 'assistant' | 'tool';
   /** Whitespace-collapsed plain text, never HTML, never longer than the cap. */
   text: string;
+  /** Friendly function name when the preview represents a tool call/result. */
+  toolName?: string;
+  /** Distinguishes a pending/invoked tool from its collapsed result marker. */
+  toolKind?: 'call' | 'result';
   /** Message timestamp, 0 when the stored message has none. */
   timestamp: number;
   /** True when `text` was cut at the cap. */
@@ -35,6 +39,8 @@ export interface ConversationChainMessagePreview {
 export interface ConversationChainNode {
   id: string;
   title: string;
+  /** Friendly Flow identity shown on the structural node when resolvable. */
+  flowName?: string;
   status?: ConversationChainNodeStatus;
   /** True when the node's status is in the shared active allowlist. */
   active: boolean;

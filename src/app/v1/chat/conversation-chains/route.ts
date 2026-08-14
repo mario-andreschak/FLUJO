@@ -4,7 +4,7 @@ import { withWorkspaceRoute } from '@/app/api/_workspace';
  *
  * The experimental "chain chat" page needs recent persisted conversations,
  * grouped by their parent/child chain, plus one short preview of each
- * conversation's latest displayable message. Doing that from the browser would
+ * conversation's latest user/assistant/tool activity. Doing that from the browser would
  * mean one full-conversation GET per node (N+1 requests, each carrying the complete
  * message history). This route is the minimal server-side projection instead:
  *
@@ -65,12 +65,25 @@ const PREVIEW_READ_CONCURRENCY = 8;
 interface ResolvedConversation {
   id: string;
   title: string;
+  flowId: string | null;
+  flowName?: string;
   status?: ConversationChainNodeStatus;
   active: boolean;
   createdAt: number;
   updatedAt: number;
   parentConversationId: string | null;
   rootConversationId: string | null;
+}
+
+function projectedFlowName(
+  flowId: string | null | undefined,
+  snapshotName: unknown,
+  statisticsName: unknown,
+): string | undefined {
+  const candidate = [snapshotName, statisticsName]
+    .find((value): value is string => typeof value === 'string' && value.trim().length > 0);
+  if (candidate) return candidate.trim().slice(0, 160);
+  return flowId?.startsWith('quickchat-') ? 'Quick Chat' : undefined;
 }
 
 function conversationsDir(): string {
@@ -84,6 +97,12 @@ function conversationsDir(): string {
  */
 function resolveConversation(summary: ConversationSummary): ResolvedConversation {
   const live = FlowExecutor.conversationStates.get(summary.id);
+  const flowId = live?.flowId ?? summary.flowId ?? null;
+  const flowName = projectedFlowName(
+    flowId,
+    live?.flowSnapshot?.name,
+    live?.statisticsFlowName,
+  );
   let status = (live?.status ?? summary.status) as ConversationChainNodeStatus | undefined;
   if (!live && status === 'running' && executionEventBus.currentSeq(summary.id) === 0) {
     status = 'error';
@@ -91,6 +110,8 @@ function resolveConversation(summary: ConversationSummary): ResolvedConversation
   return {
     id: summary.id,
     title: live?.title ?? summary.title,
+    flowId,
+    ...(flowName ? { flowName } : {}),
     ...(status ? { status } : {}),
     active: isActiveConversationStatus(status),
     createdAt: summary.createdAt,
@@ -133,14 +154,33 @@ function resolveChainRootId(
 
 /** Resolve one node's bounded preview, preferring live state over a disk read. */
 async function resolvePreview(
-  id: string
-): Promise<{ lastMessage: ConversationChainNode['lastMessage']; previewUnavailable?: boolean }> {
+  conversation: Pick<ResolvedConversation, 'id' | 'flowId' | 'flowName'>,
+): Promise<{
+  lastMessage: ConversationChainNode['lastMessage'];
+  flowName?: string;
+  previewUnavailable?: boolean;
+}> {
+  const { id } = conversation;
   const live = FlowExecutor.conversationStates.get(id);
   if (live && Array.isArray(live.messages)) {
-    return { lastMessage: extractLatestDisplayableMessage(live.messages, CHAIN_MESSAGE_PREVIEW_MAX_CHARS) };
+    const flowName = projectedFlowName(
+      live.flowId ?? conversation.flowId,
+      live.flowSnapshot?.name,
+      live.statisticsFlowName,
+    ) ?? conversation.flowName;
+    return {
+      lastMessage: extractLatestDisplayableMessage(live.messages, CHAIN_MESSAGE_PREVIEW_MAX_CHARS),
+      ...(flowName ? { flowName } : {}),
+    };
   }
 
-  if (!CONVERSATION_ID_PATTERN.test(id)) return { lastMessage: null, previewUnavailable: true };
+  if (!CONVERSATION_ID_PATTERN.test(id)) {
+    return {
+      lastMessage: null,
+      ...(conversation.flowName ? { flowName: conversation.flowName } : {}),
+      previewUnavailable: true,
+    };
+  }
 
   const filePath = path.join(conversationsDir(), `${id}.json`);
   try {
@@ -148,15 +188,74 @@ async function resolvePreview(
     if (stats.size > MAX_SNAPSHOT_SCAN_BYTES) {
       // Never spend an unbounded parse on a preview; the page shows a neutral
       // "preview unavailable" chip instead.
-      return { lastMessage: null, previewUnavailable: true };
+      return {
+        lastMessage: null,
+        ...(conversation.flowName ? { flowName: conversation.flowName } : {}),
+        previewUnavailable: true,
+      };
     }
     const state = JSON.parse(await fs.readFile(filePath, 'utf8')) as SharedState;
-    return { lastMessage: extractLatestDisplayableMessage(state?.messages, CHAIN_MESSAGE_PREVIEW_MAX_CHARS) };
+    const flowName = projectedFlowName(
+      state?.flowId ?? conversation.flowId,
+      state?.flowSnapshot?.name,
+      state?.statisticsFlowName,
+    ) ?? conversation.flowName;
+    return {
+      lastMessage: extractLatestDisplayableMessage(state?.messages, CHAIN_MESSAGE_PREVIEW_MAX_CHARS),
+      ...(flowName ? { flowName } : {}),
+    };
   } catch (error) {
     // Never log message text or payloads — just the id and the failure.
     log.warn('Could not resolve a chain message preview', { conversationId: id, error });
-    return { lastMessage: null, previewUnavailable: true };
+    return {
+      lastMessage: null,
+      ...(conversation.flowName ? { flowName: conversation.flowName } : {}),
+      previewUnavailable: true,
+    };
   }
+}
+
+/**
+ * Keep a capped chain structurally useful: the true root is always present and
+ * every selected descendant brings its loaded ancestor path with it. Ranking
+ * still favours recently updated work, but never creates a forest merely
+ * because an older parent fell outside the cap.
+ */
+function selectTreeStableMembers(
+  rootId: string,
+  members: ResolvedConversation[],
+  limit: number,
+): ResolvedConversation[] {
+  if (members.length <= limit) return [...members];
+
+  const memberById = new Map(members.map((member) => [member.id, member]));
+  const selected = new Map<string, ResolvedConversation>();
+  const root = memberById.get(rootId);
+  if (root) selected.set(root.id, root);
+
+  const ranked = [...members].sort(
+    (a, b) => b.updatedAt - a.updatedAt || a.createdAt - b.createdAt || a.id.localeCompare(b.id),
+  );
+
+  for (const candidate of ranked) {
+    if (selected.has(candidate.id)) continue;
+    const path: ResolvedConversation[] = [];
+    const seen = new Set<string>();
+    let current: ResolvedConversation | undefined = candidate;
+    while (current && !selected.has(current.id) && !seen.has(current.id)) {
+      seen.add(current.id);
+      path.push(current);
+      const currentId: string = current.id;
+      const parentId: string | null = current.parentConversationId;
+      current = parentId && parentId !== currentId ? memberById.get(parentId) : undefined;
+    }
+    path.reverse();
+    if (selected.size + path.length > limit) continue;
+    for (const member of path) selected.set(member.id, member);
+    if (selected.size >= limit) break;
+  }
+
+  return [...selected.values()];
 }
 
 async function GET_handler(request: NextRequest) {
@@ -215,10 +314,7 @@ async function GET_handler(request: NextRequest) {
     // 3. Project each group into a capped, deterministically ordered chain.
     let chains: ConversationChainGraph[] = [...groups.entries()].map(([rootId, members]) => {
       const totalNodeCount = members.length;
-      const ranked = [...members].sort(
-        (a, b) => b.updatedAt - a.updatedAt || a.createdAt - b.createdAt || a.id.localeCompare(b.id)
-      );
-      const kept = ranked.slice(0, MAX_NODES_PER_CHAIN);
+      const kept = selectTreeStableMembers(rootId, members, MAX_NODES_PER_CHAIN);
       const ordered = [...kept].sort(
         (a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)
       );
@@ -233,6 +329,7 @@ async function GET_handler(request: NextRequest) {
         nodes: ordered.map((item): ConversationChainNode => ({
           id: item.id,
           title: item.title,
+          ...(item.flowName ? { flowName: item.flowName } : {}),
           ...(item.status ? { status: item.status } : {}),
           active: item.active,
           createdAt: item.createdAt,
@@ -255,8 +352,8 @@ async function GET_handler(request: NextRequest) {
     const previewTargets: ConversationChainNode[] = [];
     for (const chain of visibleChains) {
       for (const node of chain.nodes) {
-        if (previewTargets.length >= MAX_PREVIEW_READS) break;
-        previewTargets.push(node);
+        if (previewTargets.length < MAX_PREVIEW_READS) previewTargets.push(node);
+        else node.previewUnavailable = true;
       }
     }
 
@@ -266,8 +363,11 @@ async function GET_handler(request: NextRequest) {
         const index = cursor++;
         if (index >= previewTargets.length) return;
         const node = previewTargets[index];
-        const preview = await resolvePreview(node.id);
+        const source = byId.get(node.id);
+        if (!source) continue;
+        const preview = await resolvePreview(source);
         node.lastMessage = preview.lastMessage;
+        if (!node.flowName && preview.flowName) node.flowName = preview.flowName;
         if (preview.previewUnavailable) node.previewUnavailable = true;
       }
     };
