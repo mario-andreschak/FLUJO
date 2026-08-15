@@ -36,7 +36,10 @@ import {
   ACTIVE_CONVERSATION_STATUSES,
   isActiveConversationStatus,
 } from '@/utils/shared/conversationActivity';
-import { extractLatestDisplayableMessage } from '@/utils/shared/conversationPreview';
+import {
+  countDisplayableConversationSteps,
+  extractLatestDisplayableMessage,
+} from '@/utils/shared/conversationPreview';
 import {
   CHAIN_MESSAGE_PREVIEW_MAX_CHARS,
   type ConversationChainGraph,
@@ -157,6 +160,7 @@ async function resolvePreview(
   conversation: Pick<ResolvedConversation, 'id' | 'flowId' | 'flowName'>,
 ): Promise<{
   lastMessage: ConversationChainNode['lastMessage'];
+  messageCount?: number;
   flowName?: string;
   previewUnavailable?: boolean;
 }> {
@@ -170,6 +174,7 @@ async function resolvePreview(
     ) ?? conversation.flowName;
     return {
       lastMessage: extractLatestDisplayableMessage(live.messages, CHAIN_MESSAGE_PREVIEW_MAX_CHARS),
+      messageCount: countDisplayableConversationSteps(live.messages),
       ...(flowName ? { flowName } : {}),
     };
   }
@@ -202,6 +207,7 @@ async function resolvePreview(
     ) ?? conversation.flowName;
     return {
       lastMessage: extractLatestDisplayableMessage(state?.messages, CHAIN_MESSAGE_PREVIEW_MAX_CHARS),
+      messageCount: countDisplayableConversationSteps(state?.messages),
       ...(flowName ? { flowName } : {}),
     };
   } catch (error) {
@@ -367,6 +373,7 @@ async function GET_handler(request: NextRequest) {
         if (!source) continue;
         const preview = await resolvePreview(source);
         node.lastMessage = preview.lastMessage;
+        if (preview.messageCount !== undefined) node.messageCount = preview.messageCount;
         if (!node.flowName && preview.flowName) node.flowName = preview.flowName;
         if (preview.previewUnavailable) node.previewUnavailable = true;
       }

@@ -179,6 +179,7 @@ describe('GET /v1/chat/conversation-chains (issue #405)', () => {
       toolKind: 'result',
       truncated: false,
     });
+    expect(node.messageCount).toBe(4);
     expect('messages' in node).toBe(false);
     const serialized = JSON.stringify(body);
     expect(serialized).not.toContain('secret system prompt');

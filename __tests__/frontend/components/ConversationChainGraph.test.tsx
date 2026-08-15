@@ -49,6 +49,7 @@ const chainResponse = (overrides: Record<string, unknown> = {}) => ({
           updatedAt: 10,
           parentConversationId: null,
           rootConversationId: null,
+          messageCount: 2,
           lastMessage: { role: 'user', text: 'hello there', timestamp: 10, truncated: false },
         },
         {
@@ -119,6 +120,7 @@ describe('Chain Chat page container (#405)', () => {
     expect(child?.parentElement?.parentElement).toBe(root);
     expect(screen.getByTestId('chain-node-root 1')).toHaveTextContent('Root');
     expect(screen.getByTestId('chain-message-root 1')).toHaveTextContent('hello there');
+    expect(screen.getByLabelText('2 messages')).toBeInTheDocument();
     expect(screen.getByTestId('chain-message-child-1')).toHaveTextContent('Tool result ready');
     expect(screen.queryByRole('application')).toBeNull();
 

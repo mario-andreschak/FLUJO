@@ -277,7 +277,7 @@ export function ConversationChainGraph() {
     );
   } else {
     body = (
-      <Box sx={{ display: 'flex', minHeight: 0, flex: 1, flexDirection: 'column', px: { xs: 1, sm: 2.5 }, py: 2 }}>
+      <Box sx={{ display: 'flex', minHeight: 0, flex: 1, flexDirection: 'column', overflow: 'hidden', px: { xs: 1, sm: 2.5 }, py: 2 }}>
         {(data?.truncated || selectedChain.truncated) && (
           <Stack spacing={1} sx={{ mx: 'auto', mb: 1.5, width: 'min(100%, 920px)' }}>
             {data?.truncated && (
@@ -330,7 +330,7 @@ export function ConversationChainGraph() {
   }
 
   return (
-    <Box sx={{ minHeight: '100%', display: 'flex', flexDirection: 'column' }}>
+    <Box sx={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <PageHeader
         titleKey="chainChat.title"
         descriptionKey="chainChat.subtitle"

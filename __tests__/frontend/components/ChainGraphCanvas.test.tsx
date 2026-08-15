@@ -41,6 +41,10 @@ jest.mock('@/frontend/contexts/I18nContext', () => ({
         'chainChat.toolResult': 'Tool result',
         'chainChat.toolActivity': 'Tool result ready',
         'chainChat.detachedNotice': 'Some conversations are detached',
+        'chainChat.zoomControls': 'Map zoom',
+        'chainChat.zoomOut': 'Zoom out',
+        'chainChat.zoomIn': 'Zoom in',
+        'chainChat.resetZoom': 'Reset zoom',
       };
       if (key === 'chainChat.messageCount') return `${values?.count ?? 0} messages`;
       return labels[key] ?? key;
@@ -70,7 +74,7 @@ const chainNode = (
 });
 
 const nodes = [
-  chainNode('root', { title: 'Root chat' }),
+  chainNode('root', { title: 'Root chat', messageCount: 7 }),
   chainNode('child-a', {
     title: 'Child A',
     parentConversationId: 'root',
@@ -166,6 +170,45 @@ describe('semantic Chain Flow tree', () => {
     expect(screen.getByTestId('chain-message-root')).toHaveTextContent('Latest from root');
     expect(screen.getByTestId('chain-message-child-b')).toHaveTextContent('Tool');
     expect(screen.getByTestId('chain-message-child-b')).toHaveTextContent('Tool result ready');
+    expect(screen.getByLabelText('7 messages')).toBeInTheDocument();
+  });
+
+  it('zooms with visible controls and resets to 100%', () => {
+    const { container } = render(
+      <ChainFlowTree rootId="root" nodes={nodes} onOpenConversation={jest.fn()} reducedMotion />,
+    );
+
+    const scene = container.querySelector('.chain-tree-scene');
+    expect(scene).toHaveAttribute('data-zoom', '1.00');
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+    expect(scene).toHaveAttribute('data-zoom', '1.10');
+    fireEvent.click(screen.getByRole('button', { name: 'Reset zoom' }));
+    expect(scene).toHaveAttribute('data-zoom', '1.00');
+    fireEvent.wheel(screen.getByTestId('chain-flow-viewport'), {
+      ctrlKey: true,
+      deltaY: -50,
+      clientX: 100,
+      clientY: 100,
+    });
+    expect(scene).toHaveAttribute('data-zoom', '1.10');
+  });
+
+  it('auto-hides a completed message preview after ten seconds', () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-08-15T12:00:00Z'));
+    const justCompleted = chainNode('done', {
+      title: 'Done',
+      updatedAt: Date.now(),
+    });
+    const { container } = render(
+      <ChainFlowTree rootId="done" nodes={[justCompleted]} onOpenConversation={jest.fn()} reducedMotion />,
+    );
+
+    const composite = container.querySelector('.chain-node-composite');
+    expect(composite).toHaveAttribute('data-completed-preview-hidden', 'false');
+    act(() => jest.advanceTimersByTime(10_001));
+    expect(composite).toHaveAttribute('data-completed-preview-hidden', 'true');
+    jest.useRealTimers();
   });
 
   it('lazily loads, renders, closes, and caches an expanded inline transcript', async () => {

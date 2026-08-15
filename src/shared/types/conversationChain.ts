@@ -30,6 +30,8 @@ export interface ConversationChainMessagePreview {
   toolName?: string;
   /** Distinguishes a pending/invoked tool from its collapsed result marker. */
   toolKind?: 'call' | 'result';
+  /** Consecutive invocations of the same tool represented by this preview. */
+  repeatCount?: number;
   /** Message timestamp, 0 when the stored message has none. */
   timestamp: number;
   /** True when `text` was cut at the cap. */
@@ -48,6 +50,8 @@ export interface ConversationChainNode {
   updatedAt: number;
   parentConversationId: string | null;
   rootConversationId: string | null;
+  /** Number of displayable transcript steps, including tool calls/results. */
+  messageCount?: number;
   /** Null when the conversation has no displayable message yet. */
   lastMessage: ConversationChainMessagePreview | null;
   /** True when the preview could not be resolved (oversized/unreadable snapshot). */
