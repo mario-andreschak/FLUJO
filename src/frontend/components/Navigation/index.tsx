@@ -99,15 +99,6 @@ const navItems: NavItem[] = [
       },
       {
         type: 'link',
-        label: 'waves.title',
-        path: '/automation/waves',
-        aliases: ['/waves'],
-        tour: 'nav-waves',
-        icon: WavesRounded,
-        experimental: true,
-      },
-      {
-        type: 'link',
         label: 'nav.meetings',
         path: '/meetings',
         tour: 'nav-meetings',
@@ -127,6 +118,7 @@ const navItems: NavItem[] = [
         path: '/roles',
         tour: 'nav-roles',
         icon: AutoStoriesRounded,
+        experimental: true,        
       },
       {
         type: 'link',
@@ -134,6 +126,7 @@ const navItems: NavItem[] = [
         path: '/packages',
         tour: 'nav-packages',
         icon: Inventory2Rounded,
+        experimental: true,        
       },
       {
         type: 'link',
@@ -141,10 +134,9 @@ const navItems: NavItem[] = [
         path: '/statistics',
         tour: 'nav-statistics',
         icon: InsightsRounded,
+        experimental: true,        
       },
       {
-        // Chain Chat (issue #405): experimental, so it only appears once the
-        // experimental flag is on — the page itself redirects otherwise.
         type: 'link',
         label: 'nav.chainChat',
         path: '/chain-chat',
@@ -152,6 +144,15 @@ const navItems: NavItem[] = [
         icon: BubbleChartRounded,
         experimental: true,
       },
+      {
+        type: 'link',
+        label: 'waves.title',
+        path: '/automation/waves',
+        aliases: ['/waves'],
+        tour: 'nav-waves',
+        icon: WavesRounded,
+        experimental: true,
+      },      
       { type: 'link', label: 'nav.help', path: '/docs', tour: 'nav-docs', icon: MenuBookRounded },
       { type: 'link', label: 'nav.settings', path: '/settings', tour: 'nav-settings', icon: SettingsRounded },
     ],
