@@ -23,6 +23,7 @@ import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const statusKeys: Record<MeetingParticipantStatus, TranslationKey> = {
   idle: 'meetings.participant.idle',
+  waiting: 'meetings.participant.waiting',
   running: 'meetings.participant.running',
   breakout: 'meetings.participant.breakout',
   left: 'meetings.participant.left',
@@ -31,6 +32,7 @@ const statusKeys: Record<MeetingParticipantStatus, TranslationKey> = {
 
 const statusColors: Record<MeetingParticipantStatus, 'default' | 'primary' | 'secondary' | 'warning' | 'error'> = {
   idle: 'default',
+  waiting: 'secondary',
   running: 'primary',
   breakout: 'secondary',
   left: 'warning',
@@ -42,9 +44,10 @@ interface ParticipantStatusProps {
   compact?: boolean;
   onClick?: () => void;
   selected?: boolean;
+  waitingForNames?: string[];
 }
 
-export default function ParticipantStatus({ participant, compact = false, onClick, selected = false }: ParticipantStatusProps) {
+export default function ParticipantStatus({ participant, compact = false, onClick, selected = false, waitingForNames = [] }: ParticipantStatusProps) {
   const { t } = useI18n();
   const theme = useTheme();
   const initials = participant.name
@@ -121,7 +124,11 @@ export default function ParticipantStatus({ participant, compact = false, onClic
             </Tooltip>
           ) : (
             <Typography variant="caption" color="text.secondary" noWrap>
-              {participant.status === 'running' ? t('meetings.participant.thinking') : t(statusKeys[participant.status])}
+              {participant.status === 'running'
+                ? t('meetings.participant.thinking')
+                : participant.status === 'waiting' && waitingForNames.length
+                  ? t('meetings.participant.waitingFor', { names: waitingForNames.join(', ') })
+                  : t(statusKeys[participant.status])}
             </Typography>
           )}
         </Box>

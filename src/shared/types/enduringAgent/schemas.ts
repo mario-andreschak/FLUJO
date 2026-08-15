@@ -443,7 +443,7 @@ export const CreatePersonaInputSchema = z.object({
   id: EnduringAgentIdSchema.optional(),
   name: NonEmptyText(160),
   coreFlowRef: WorkspaceFlowRefSchema.optional(),
-  roleVersionId: EnduringAgentIdSchema.optional(),
+  roleVersionId: EnduringAgentIdSchema,
   appRefs: z.array(PersonaAppRefSchema).max(128)
     .refine((refs) => new Set(refs).size === refs.length, 'App references must be unique.')
     .optional(),

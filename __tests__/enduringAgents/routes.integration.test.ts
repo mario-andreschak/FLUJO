@@ -12,6 +12,7 @@ import { GET as listRoles } from '@/app/v1/roles/route';
 import { StorageKey } from '@/shared/types/storage';
 import { saveItem } from '@/utils/storage/backend';
 import { ensureWorkspaceDirs, runWithWorkspace } from '@/utils/workspace';
+import { ensureTestRole, TEST_ROLE_VERSION_ID } from './fixtures/personaFactory';
 
 const workspaceA = `enduring-route-a-${process.pid}`;
 const workspaceB = `enduring-route-b-${process.pid}`;
@@ -38,12 +39,15 @@ describe('enduring-agent production routes', () => {
       ensureWorkspaceDirs(workspaceB),
     ]);
     await Promise.all([workspaceA, workspaceB].map((workspace) => (
-      runWithWorkspace(workspace, () => saveItem(StorageKey.MODELS, [{
-        id: 'model-test',
-        name: 'test-model',
-        displayName: 'Test model',
-        provider: 'openai',
-      }]))
+      runWithWorkspace(workspace, async () => {
+        await saveItem(StorageKey.MODELS, [{
+          id: 'model-test',
+          name: 'test-model',
+          displayName: 'Test model',
+          provider: 'openai',
+        }]);
+        await ensureTestRole();
+      })
     )));
   });
 
@@ -51,7 +55,11 @@ describe('enduring-agent production routes', () => {
     const response = await createPersona(request('/v1/personas', workspaceA, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'Jim', idempotencyKey: 'route-create-jim' }),
+      body: JSON.stringify({
+        name: 'Jim',
+        roleVersionId: TEST_ROLE_VERSION_ID,
+        idempotencyKey: 'route-create-jim',
+      }),
     }) as never);
 
     expect(response.status).toBe(201);
@@ -84,6 +92,7 @@ describe('enduring-agent production routes', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         name: 'Memory Jim',
+        roleVersionId: TEST_ROLE_VERSION_ID,
         idempotencyKey: 'route-create-memory-jim',
         initialMemories: [{ content: 'Jim prefers concise updates.' }],
       }),
@@ -102,16 +111,16 @@ describe('enduring-agent production routes', () => {
     expect(bundle.persona.composition.memoryRefs).toEqual([bundle.memoryItems[0].id]);
   });
 
-  it('lists the built-in Role through the real workspace store', async () => {
+  it('lists the explicitly created workspace Role through the real store', async () => {
     const response = await listRoles(request('/v1/roles', workspaceA) as never);
 
     expect(response.status).toBe(200);
     const result = await response.json();
     expect(result.roleDefinitions).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'role_builtin_developer', name: 'Developer' }),
+      expect.objectContaining({ id: 'role_test_general', name: 'Test general Role' }),
     ]));
     expect(result.roleVersions).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'rolever_builtin_developer_v2', version: 2 }),
+      expect.objectContaining({ id: TEST_ROLE_VERSION_ID, version: 1 }),
     ]));
   });
 
@@ -119,7 +128,11 @@ describe('enduring-agent production routes', () => {
     const created = await createPersona(request('/v1/personas', workspaceA, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'Phase Four Jim', idempotencyKey: 'route-phase-four-jim' }),
+      body: JSON.stringify({
+        name: 'Phase Four Jim',
+        roleVersionId: TEST_ROLE_VERSION_ID,
+        idempotencyKey: 'route-phase-four-jim',
+      }),
     }) as never);
     const personaId = (await created.json()).persona.id as string;
     const personaContext = { params: Promise.resolve({ personaId }) } as never;
@@ -209,7 +222,11 @@ describe('enduring-agent production routes', () => {
     const created = await createPersona(request('/v1/personas', workspaceA, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ id: 'persona_route_delete', name: 'Delete Me' }),
+      body: JSON.stringify({
+        id: 'persona_route_delete',
+        name: 'Delete Me',
+        roleVersionId: TEST_ROLE_VERSION_ID,
+      }),
     }) as never);
     const personaId = (await created.json()).persona.id as string;
     const previewResponse = await previewPersonaDeletion(

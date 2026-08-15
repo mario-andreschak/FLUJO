@@ -65,6 +65,10 @@ const { flowService } = require(path.join(repositoryRoot, 'src/backend/services/
 const { StorageKey } = require(path.join(repositoryRoot, 'src/shared/types/storage/index.ts'));
 const { saveItem } = require(path.join(repositoryRoot, 'src/utils/storage/backend.ts'));
 const { runWithWorkspace } = require(path.join(repositoryRoot, 'src/utils/workspace.ts'));
+const {
+  ensureTestRole,
+  TEST_ROLE_VERSION_ID,
+} = require(path.join(repositoryRoot, '__tests__/enduringAgents/fixtures/personaFactory.ts'));
 
 function leaseFence(claim) {
   return {
@@ -87,6 +91,7 @@ async function execute(command) {
           displayName: 'Test model',
           provider: 'openai',
         }]);
+        await ensureTestRole();
         if (!await flowService.getFlow(command.coreFlowRef)) {
           await flowService.saveFlow({
             id: command.coreFlowRef,
@@ -134,6 +139,7 @@ async function execute(command) {
         }
         return enduringAgents.createPersonaFromRole({
           name: command.name,
+          roleVersionId: TEST_ROLE_VERSION_ID,
           coreFlowRef: command.coreFlowRef,
           idempotencyKey: command.idempotencyKey,
           ...(command.interruptionPolicy

@@ -26,6 +26,7 @@ export type MeetingParticipantRole = 'participant' | 'moderator';
 
 export type MeetingParticipantStatus =
   | 'idle'
+  | 'waiting'
   | 'running'
   | 'breakout'
   | 'left'
@@ -259,6 +260,7 @@ export type MeetingEventAudience = 'public' | string[];
 export type MeetingEventType =
   | 'meeting:created'
   | 'meeting:started'
+  | 'meeting:resumed'
   | 'meeting:paused'
   | 'meeting:closing'
   | 'meeting:completed'
@@ -302,6 +304,12 @@ export interface MeetingCreatedEvent extends MeetingEventBase {
 export interface MeetingStartedEvent extends MeetingEventBase {
   type: 'meeting:started';
   openingPrompt: string;
+}
+
+export interface MeetingResumedEvent extends MeetingEventBase {
+  type: 'meeting:resumed';
+  /** Optional human direction that starts the next continuation segment. */
+  direction?: string;
 }
 
 export interface MeetingPausedEvent extends MeetingEventBase {
@@ -440,6 +448,7 @@ export interface MeetingBreakoutCompletedEvent extends MeetingEventBase {
 export type MeetingEvent =
   | MeetingCreatedEvent
   | MeetingStartedEvent
+  | MeetingResumedEvent
   | MeetingPausedEvent
   | MeetingClosingEvent
   | MeetingCompletedEvent

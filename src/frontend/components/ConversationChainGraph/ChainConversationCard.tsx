@@ -1,10 +1,11 @@
 'use client';
 
-import React, { memo } from 'react';
+import React, { memo, useEffect, useState } from 'react';
 import { Box, ButtonBase, Stack, Typography } from '@mui/material';
 import { alpha, useTheme } from '@mui/material/styles';
 import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
 import BuildRoundedIcon from '@mui/icons-material/BuildRounded';
+import ChatBubbleOutlineRoundedIcon from '@mui/icons-material/ChatBubbleOutlineRounded';
 import ExpandMoreRoundedIcon from '@mui/icons-material/ExpandMoreRounded';
 import HubRoundedIcon from '@mui/icons-material/HubRounded';
 import OpenInNewRoundedIcon from '@mui/icons-material/OpenInNewRounded';
@@ -37,6 +38,8 @@ const STATUS_TONES: Record<ConversationChainNodeStatus, StatusTone> = {
   error: 'error',
   capped: 'warning',
 };
+
+const COMPLETED_PREVIEW_GRACE_MS = 10_000;
 
 export interface ChainConversationCardProps {
   conversation: ConversationChainNode;
@@ -74,7 +77,7 @@ function ChainConversationCardComponent({
   const previewText = preview
     ? preview.role === 'tool'
       ? preview.toolKind === 'result'
-        ? t('chainChat.toolActivity')
+        ? `${preview.text} · ${t('chainChat.toolActivity')}`
         : preview.text
       : preview.text
     : conversation.previewUnavailable
@@ -82,13 +85,10 @@ function ChainConversationCardComponent({
       : t('chainChat.noMessages');
   const previewRole = preview?.role;
   const roleLabel = previewRole
-    ? t(
-        previewRole === 'user'
-          ? 'chainChat.roleUser'
-          : previewRole === 'assistant'
-            ? 'chainChat.roleAssistant'
-            : 'chainChat.roleTool',
-      ) + (previewRole === 'tool' && preview?.toolName ? ` · ${formatChainToolName(preview.toolName)}` : '')
+    ? (previewRole === 'tool'
+        ? t(preview.toolKind === 'call' ? 'chainChat.toolCall' : 'chainChat.toolResult')
+        : t(previewRole === 'user' ? 'chainChat.roleUser' : 'chainChat.roleAssistant'))
+      + (previewRole === 'tool' && preview?.toolName ? ` · ${formatChainToolName(preview.toolName)}` : '')
     : t('chainChat.latestMessage');
   const roleColor = previewRole === 'tool'
     ? theme.palette.info.main
@@ -100,10 +100,34 @@ function ChainConversationCardComponent({
     : previewRole === 'user'
       ? PersonRoundedIcon
       : AutoAwesomeRoundedIcon;
+  const [completedPreviewHidden, setCompletedPreviewHidden] = useState(() => (
+    conversation.status === 'completed'
+    && conversation.updatedAt > 0
+    && Date.now() >= conversation.updatedAt + COMPLETED_PREVIEW_GRACE_MS
+  ));
+
+  useEffect(() => {
+    if (conversation.status !== 'completed') {
+      setCompletedPreviewHidden(false);
+      return;
+    }
+    const remaining = Math.max(
+      0,
+      conversation.updatedAt + COMPLETED_PREVIEW_GRACE_MS - Date.now(),
+    );
+    if (remaining === 0) {
+      setCompletedPreviewHidden(true);
+      return;
+    }
+    setCompletedPreviewHidden(false);
+    const timer = window.setTimeout(() => setCompletedPreviewHidden(true), remaining);
+    return () => window.clearTimeout(timer);
+  }, [conversation.status, conversation.updatedAt]);
 
   return (
     <Stack
       className="chain-node-composite"
+      data-completed-preview-hidden={completedPreviewHidden ? 'true' : 'false'}
       direction={compact ? 'column' : 'row'}
       spacing={compact ? 1 : 1.4}
       alignItems="center"
@@ -122,6 +146,18 @@ function ChainConversationCardComponent({
         // The tree axis runs through the identity node. The message remains a
         // true adjacent sidecar without pulling connectors between the two.
         left: compact ? 0 : 114,
+        ...(completedPreviewHidden ? {
+          '& .chain-message-preview': {
+            opacity: 0,
+            pointerEvents: 'none',
+            transform: compact ? 'translateY(-5px) scale(.98)' : 'translateX(-7px) scale(.98)',
+          },
+          '&:hover .chain-message-preview, &:focus-within .chain-message-preview': {
+            opacity: 1,
+            pointerEvents: 'auto',
+            transform: 'none',
+          },
+        } : {}),
       }}
     >
       <ButtonBase
@@ -247,7 +283,29 @@ function ChainConversationCardComponent({
               <Typography component="span" sx={{ color: 'text.secondary', fontSize: '0.61rem', lineHeight: 1 }}>
                 {statusLabel}
               </Typography>
-              <OpenInNewRoundedIcon sx={{ ml: 'auto !important', color: 'text.disabled', fontSize: '0.72rem' }} />
+              {conversation.messageCount !== undefined && (
+                <Stack
+                  component="span"
+                  direction="row"
+                  spacing={0.25}
+                  alignItems="center"
+                  title={t('chainChat.messageCount', { count: conversation.messageCount })}
+                  aria-label={t('chainChat.messageCount', { count: conversation.messageCount })}
+                  sx={{ ml: 'auto !important', color: 'text.secondary' }}
+                >
+                  <ChatBubbleOutlineRoundedIcon sx={{ fontSize: '0.7rem' }} />
+                  <Typography component="span" sx={{ fontSize: '0.59rem', fontWeight: 730, lineHeight: 1 }}>
+                    {conversation.messageCount}
+                  </Typography>
+                </Stack>
+              )}
+              <OpenInNewRoundedIcon
+                sx={{
+                  ml: conversation.messageCount === undefined ? 'auto !important' : '0 !important',
+                  color: 'text.disabled',
+                  fontSize: '0.72rem',
+                }}
+              />
             </Stack>
           </Box>
         </Stack>
@@ -291,7 +349,7 @@ function ChainConversationCardComponent({
             ? `0 12px 34px ${alpha(roleColor, 0.17)}`
             : `0 7px 22px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.14 : 0.055)}`,
           backdropFilter: 'blur(12px)',
-          transition: reducedMotion ? 'none' : 'transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease',
+          transition: reducedMotion ? 'none' : 'opacity 180ms ease, transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease',
           '&::before': compact
             ? {
                 content: '""',
@@ -370,9 +428,7 @@ function ChainConversationCardComponent({
               WebkitLineClamp: 2,
             }}
           >
-            {previewRole === 'tool' && preview?.toolKind === 'call'
-              ? formatChainToolName(previewText)
-              : previewText}
+            {previewText}
           </Typography>
         </Stack>
       </ButtonBase>

@@ -1,6 +1,14 @@
 import { NextResponse } from 'next/server';
 import { createLogger } from '@/utils/logger';
-import { DEFAULT_WORKSPACE, listWorkspaces } from '@/utils/workspace';
+import {
+  DEFAULT_WORKSPACE,
+  InvalidWorkspaceNameError,
+  WorkspaceMutationError,
+  createWorkspace,
+  deleteWorkspace,
+  listWorkspaces,
+  renameWorkspace,
+} from '@/utils/workspace';
 import {
   getWorkspaceLayoutStatus,
   waitForWorkspaceLayoutReady,
@@ -10,23 +18,7 @@ import {
 
 const log = createLogger('app/api/workspaces');
 
-/**
- * Read-only workspace discovery (#406).
- *
- * The navbar tabs are backed by what actually exists on disk, which keeps the UI
- * honest: there is no separate workspace registry that can drift from the
- * filesystem, and there is nothing to keep in sync when a directory is added or
- * removed out of band. Creation/rename/deletion are deliberately NOT exposed —
- * issue #406 asks only for the namespace, the migration and the tabs.
- *
- * `default-workspace` is always reported, even on a brand-new install where the
- * directory has not been created yet, so the client always has a valid initial
- * selection and never has to render an empty tab strip.
- *
- * Colors are derived from the name (see `workspaceColor`) rather than stored, so
- * a workspace keeps the same tab color on every machine and across restarts.
- */
-export async function GET() {
+function layoutUnavailableResponse(): NextResponse | null {
   const layoutStatus = getWorkspaceLayoutStatus();
   if (layoutStatus !== 'ready') {
     const preparing = layoutStatus === 'preparing';
@@ -40,9 +32,66 @@ export async function GET() {
       { status: 503, headers: { 'Retry-After': preparing ? '2' : '5' } },
     );
   }
+  return null;
+}
 
+async function waitForLayout(): Promise<NextResponse | null> {
+  const unavailable = layoutUnavailableResponse();
+  if (unavailable) return unavailable;
   try {
     await waitForWorkspaceLayoutReady();
+    return null;
+  } catch (error) {
+    log.error('Workspace layout is unavailable', error);
+    return NextResponse.json(
+      { error: 'Workspace storage is temporarily unavailable.' },
+      { status: 503, headers: { 'Retry-After': '5' } },
+    );
+  }
+}
+
+function mutationErrorResponse(error: unknown, action: string): NextResponse {
+  if (error instanceof InvalidWorkspaceNameError) {
+    return NextResponse.json(
+      {
+        error: 'Workspace names must be 1–64 characters and use only letters, numbers, hyphens, or underscores.',
+        code: error.code,
+      },
+      { status: 400 },
+    );
+  }
+  if (error instanceof WorkspaceMutationError) {
+    const status = error.code === 'WORKSPACE_NOT_FOUND'
+      ? 404
+      : error.code === 'DEFAULT_WORKSPACE_PROTECTED'
+        ? 403
+        : 409;
+    return NextResponse.json({ error: error.message, code: error.code }, { status });
+  }
+  log.error(`Failed to ${action} workspace`, error);
+  return NextResponse.json(
+    { error: `Could not ${action} the workspace.` },
+    { status: 500 },
+  );
+}
+
+async function requestBody(request: Request): Promise<Record<string, unknown> | null> {
+  try {
+    const body = await request.json();
+    return body && typeof body === 'object' && !Array.isArray(body)
+      ? body as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Installation-wide discovery; the filesystem remains the source of truth. */
+export async function GET() {
+  const unavailable = await waitForLayout();
+  if (unavailable) return unavailable;
+
+  try {
     const workspaces = await listWorkspaces();
     return NextResponse.json({
       workspaces,
@@ -56,5 +105,57 @@ export async function GET() {
       { error: 'Workspace storage is temporarily unavailable.' },
       { status: 503, headers: { 'Retry-After': '5' } },
     );
+  }
+}
+
+export async function POST(request: Request) {
+  const unavailable = await waitForLayout();
+  if (unavailable) return unavailable;
+  const body = await requestBody(request);
+  if (!body) {
+    return NextResponse.json({ error: 'A workspace name is required.' }, { status: 400 });
+  }
+  try {
+    const workspace = await createWorkspace(body.name as string);
+    return NextResponse.json(
+      { workspace, workspaces: await listWorkspaces() },
+      { status: 201 },
+    );
+  } catch (error) {
+    return mutationErrorResponse(error, 'create');
+  }
+}
+
+export async function PATCH(request: Request) {
+  const unavailable = await waitForLayout();
+  if (unavailable) return unavailable;
+  const body = await requestBody(request);
+  if (!body) {
+    return NextResponse.json(
+      { error: 'The current and new workspace names are required.' },
+      { status: 400 },
+    );
+  }
+  try {
+    const workspace = await renameWorkspace(body.name as string, body.newName as string);
+    return NextResponse.json({ workspace, workspaces: await listWorkspaces() });
+  } catch (error) {
+    return mutationErrorResponse(error, 'rename');
+  }
+}
+
+export async function DELETE(request: Request) {
+  const unavailable = await waitForLayout();
+  if (unavailable) return unavailable;
+  const body = await requestBody(request);
+  if (!body) {
+    return NextResponse.json({ error: 'A workspace name is required.' }, { status: 400 });
+  }
+  try {
+    const name = body.name as string;
+    await deleteWorkspace(name);
+    return NextResponse.json({ deleted: name, workspaces: await listWorkspaces() });
+  } catch (error) {
+    return mutationErrorResponse(error, 'delete');
   }
 }

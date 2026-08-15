@@ -1,7 +1,3 @@
-import {
-  buildBuiltInDeveloperRoleDefinition,
-  buildBuiltInDeveloperRoleVersion,
-} from '@/backend/services/enduringAgents';
 import { buildAgentConfigurationExport } from '@/backend/services/enduringAgents/portability';
 import type { Persona, RoleVersion } from '@/shared/types/enduringAgent';
 import {
@@ -10,16 +6,20 @@ import {
   type PackagedPersonaTemplate,
   type PackagedRoleTemplate,
 } from '@/shared/types/package';
+import {
+  buildTestRoleDefinition,
+  buildTestRoleVersion,
+} from './fixtures/personaFactory';
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
 function roleVersion3(): RoleVersion {
-  const version = clone(buildBuiltInDeveloperRoleVersion());
-  version.id = 'rolever_developer_v3_portable';
+  const version = clone(buildTestRoleVersion());
+  version.id = 'rolever_portable_v3';
   version.version = 3;
-  version.name = 'Developer v3';
+  version.name = 'Portable Role v3';
   version.migrationNotes = 'Review and explicitly repin each Persona.';
   version.createdAt += 1;
   return version;
@@ -37,15 +37,15 @@ function personaTemplate(roleVersionId: string): PackagedPersonaTemplate {
 
 function portableRole(): PackagedRoleTemplate {
   return {
-    definition: clone(buildBuiltInDeveloperRoleDefinition()),
+    definition: clone(buildTestRoleDefinition()),
     versions: [roleVersion3()],
   };
 }
 
 describe('Persona configuration-only export', () => {
   it('exports reusable setup without private life, account, or runtime data', () => {
-    const definition = buildBuiltInDeveloperRoleDefinition();
-    const version = buildBuiltInDeveloperRoleVersion();
+    const definition = buildTestRoleDefinition();
+    const version = buildTestRoleVersion();
     const persona = {
       schemaVersion: 1,
       id: 'persona_jim',

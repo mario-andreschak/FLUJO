@@ -5,7 +5,6 @@ import {
   type PersonaSettingsOptions,
 } from '@/shared/types/enduringAgent';
 
-import { ensureBuiltInDeveloperRole } from './builtInRoleStore';
 import { listRoleDefinitions, listRoleVersions } from './store';
 
 const LANGUAGE_OPTIONS = [
@@ -23,7 +22,6 @@ const LANGUAGE_OPTIONS = [
  * until a provider exposes a stable catalog and a working end-to-end action.
  */
 export async function getPersonaSettingsOptions(): Promise<PersonaSettingsOptions> {
-  await ensureBuiltInDeveloperRole();
   const [definitions, versions] = await Promise.all([
     listRoleDefinitions(),
     listRoleVersions(),

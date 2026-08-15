@@ -43,6 +43,64 @@ export function extractMessageText(content: unknown): string {
   return parts.join(' ').trim();
 }
 
+/**
+ * Count the steps the inline Chain Chat transcript will render. Assistant
+ * prose and each tool invocation are separate steps, as are tool results.
+ */
+export function countDisplayableConversationSteps(messages: unknown): number {
+  if (!Array.isArray(messages)) return 0;
+
+  const toolNames = new Map<string, string>();
+  for (const rawMessage of messages) {
+    if (!rawMessage || typeof rawMessage !== 'object') continue;
+    const message = rawMessage as { role?: unknown; tool_calls?: unknown };
+    if (message.role !== 'assistant' || !Array.isArray(message.tool_calls)) continue;
+    for (const rawCall of message.tool_calls) {
+      if (!rawCall || typeof rawCall !== 'object') continue;
+      const call = rawCall as { id?: unknown; function?: { name?: unknown } };
+      const name = normalizeToolName(call.function?.name);
+      if (typeof call.id === 'string' && name) toolNames.set(call.id, name);
+    }
+  }
+
+  let count = 0;
+  for (const rawMessage of messages) {
+    if (!rawMessage || typeof rawMessage !== 'object') continue;
+    const message = rawMessage as {
+      role?: unknown;
+      content?: unknown;
+      disabled?: unknown;
+      name?: unknown;
+      tool_call_id?: unknown;
+      tool_calls?: unknown;
+    };
+    if (message.disabled === true) continue;
+
+    if (message.role === 'user' || message.role === 'assistant') {
+      if (extractMessageText(message.content)) count += 1;
+      if (message.role === 'assistant' && Array.isArray(message.tool_calls)) {
+        count += message.tool_calls.filter((rawCall) => {
+          if (!rawCall || typeof rawCall !== 'object') return false;
+          return Boolean(normalizeToolName((rawCall as { function?: { name?: unknown } }).function?.name));
+        }).length;
+      }
+      continue;
+    }
+
+    if (message.role === 'tool') {
+      const callId = typeof message.tool_call_id === 'string' ? message.tool_call_id : '';
+      if (
+        extractMessageText(message.content)
+        || normalizeToolName(message.name)
+        || (callId && toolNames.has(callId))
+      ) {
+        count += 1;
+      }
+    }
+  }
+  return count;
+}
+
 /** Return the newest visible user/assistant/tool activity, safely bounded. */
 export function extractLatestDisplayableMessage(
   messages: unknown,
@@ -77,6 +135,7 @@ export function extractLatestDisplayableMessage(
     timestamp: unknown,
     toolName?: string,
     toolKind?: 'call' | 'result',
+    repeatCount?: number,
   ): ConversationChainMessagePreview | null => {
     const collapsed = rawText.replace(/\s+/g, ' ').trim();
     if (!collapsed) return null;
@@ -91,7 +150,58 @@ export function extractLatestDisplayableMessage(
       truncated,
       ...(toolName ? { toolName } : {}),
       ...(toolKind ? { toolKind } : {}),
+      ...(repeatCount && repeatCount > 1 ? { repeatCount } : {}),
     };
+  };
+
+  /** Count the uninterrupted tail of calls to one tool, ignoring their paired results. */
+  const consecutiveCallCount = (toolName: string, throughIndex: number): number => {
+    let count = 0;
+    for (let index = throughIndex; index >= 0; index--) {
+      const rawMessage = messages[index];
+      if (!rawMessage || typeof rawMessage !== 'object') continue;
+      const message = rawMessage as {
+        role?: unknown;
+        content?: unknown;
+        disabled?: unknown;
+        name?: unknown;
+        tool_call_id?: unknown;
+        tool_calls?: unknown;
+      };
+      if (message.disabled === true) continue;
+
+      if (message.role === 'tool') {
+        const callId = typeof message.tool_call_id === 'string' ? message.tool_call_id : '';
+        const resultName = normalizeToolName(message.name)
+          || (callId ? toolNameFor(callId, index - 1) : undefined);
+        if (resultName && resultName !== toolName) break;
+        continue;
+      }
+
+      if (message.role === 'assistant' && Array.isArray(message.tool_calls)) {
+        const names = message.tool_calls
+          .map((rawCall) => {
+            if (!rawCall || typeof rawCall !== 'object') return '';
+            return normalizeToolName((rawCall as { function?: { name?: unknown } }).function?.name);
+          })
+          .filter(Boolean);
+        for (let callIndex = names.length - 1; callIndex >= 0; callIndex--) {
+          if (names[callIndex] !== toolName) return count;
+          count += 1;
+        }
+        // Tool calls are the final action in this assistant message. Its
+        // optional narration does not split an otherwise consecutive run.
+        continue;
+      }
+
+      if (
+        (message.role === 'user' || message.role === 'assistant')
+        && extractMessageText(message.content)
+      ) {
+        break;
+      }
+    }
+    return count;
   };
 
   for (let index = messages.length - 1; index >= 0; index--) {
@@ -111,9 +221,6 @@ export function extractLatestDisplayableMessage(
 
     const role = message.role;
     if (role === 'user' || role === 'assistant') {
-      const visible = project(role, extractMessageText(message.content), message.timestamp);
-      if (visible) return visible;
-
       if (role === 'assistant' && Array.isArray(message.tool_calls)) {
         const names = message.tool_calls
           .map((rawCall) => {
@@ -123,15 +230,20 @@ export function extractLatestDisplayableMessage(
           })
           .filter(Boolean);
         if (names.length > 0) {
+          const repeatedName = names.every((name) => name === names[0]) ? names[0] : undefined;
+          const repeatCount = repeatedName ? consecutiveCallCount(repeatedName, index) : 0;
           return project(
             'tool',
-            names.join(' · '),
+            repeatCount > 1 ? `${repeatCount}x ${repeatedName}` : names.join(' · '),
             message.timestamp,
-            names.length === 1 ? names[0] : undefined,
+            repeatedName,
             'call',
+            repeatCount,
           );
         }
       }
+      const visible = project(role, extractMessageText(message.content), message.timestamp);
+      if (visible) return visible;
       continue;
     }
 
@@ -139,12 +251,14 @@ export function extractLatestDisplayableMessage(
       const callId = typeof message.tool_call_id === 'string' ? message.tool_call_id : '';
       const namedTool = normalizeToolName(message.name);
       const toolName = namedTool || (callId ? toolNameFor(callId, index - 1) : undefined);
+      const repeatCount = toolName ? consecutiveCallCount(toolName, index) : 0;
       const visible = project(
         'tool',
-        toolName || 'tool',
+        repeatCount > 1 ? `${repeatCount}x ${toolName}` : toolName || 'tool',
         message.timestamp,
         toolName,
         'result',
+        repeatCount,
       );
       if (visible) return visible;
     }

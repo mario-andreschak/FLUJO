@@ -11,7 +11,7 @@ import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import { Flow } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
 import CardPickerDialog from '@/frontend/components/shared/CardPickerDialog';
-import { CardPickerItem } from '@/frontend/components/shared/CardPickerGrid';
+import CardPickerGrid, { CardPickerItem } from '@/frontend/components/shared/CardPickerGrid';
 import FlowCard, { FlowCardSkeleton } from '@/frontend/components/Flow/FlowDashboard/FlowCard';
 import { useCardPicker } from '@/frontend/hooks/useCardPicker';
 import { CardGroup } from '@/utils/shared/cardGrouping';
@@ -28,6 +28,12 @@ interface FlowSelectorProps {
   compact?: boolean;
   /** Override whether the picker dialog fills the viewport. */
   fullScreenPicker?: boolean;
+  /** Render only the picker body so a parent can host it in a shared dialog. */
+  embedded?: boolean;
+  /** Search supplied by an external launcher, such as the guided tour. */
+  externalSearchTerm?: string;
+  /** Report the selected Agent's display name to an external trigger. */
+  onSelectedFlowNameChange?: (name: string) => void;
 }
 
 const FlowSelector: React.FC<FlowSelectorProps> = ({
@@ -37,6 +43,9 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
   hideLabel = false,
   compact = false,
   fullScreenPicker,
+  embedded = false,
+  externalSearchTerm,
+  onSelectedFlowNameChange,
 }) => {
   const { t } = useI18n();
   const [flows, setFlows] = useState<Flow[]>([]);
@@ -107,6 +116,10 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
     window.addEventListener(BIG_TUTORIAL_EVENT, listener);
     return () => window.removeEventListener(BIG_TUTORIAL_EVENT, listener);
   }, [flowPicker]);
+
+  useEffect(() => {
+    if (externalSearchTerm !== undefined) flowPicker.setSearchTerm(externalSearchTerm);
+  }, [externalSearchTerm, flowPicker.setSearchTerm]);
   const renderFlowCard = (flow: Flow) => (
     <FlowCard
       flow={flow}
@@ -123,6 +136,30 @@ const FlowSelector: React.FC<FlowSelectorProps> = ({
     : null;
 
   const selectedFlowName = getSelectedFlowName();
+
+  useEffect(() => {
+    onSelectedFlowNameChange?.(selectedFlowName);
+  }, [onSelectedFlowNameChange, selectedFlowName]);
+
+  if (embedded) {
+    return (
+      <CardPickerGrid
+        isLoading={isLoading}
+        error={error}
+        loadingMessage={t('chat.selector.loading')}
+        skeleton={<FlowCardSkeleton />}
+        emptyMessage={t('chat.selector.empty')}
+        searchable
+        searchPlaceholder={t('flows.dashboard.search')}
+        searchTerm={flowPicker.searchTerm}
+        onSearchChange={flowPicker.setSearchTerm}
+        items={flowPickerItems}
+        groups={flowPickerGroups}
+        collapsedKeys={flowPicker.collapsedKeys}
+        onToggleGroup={flowPicker.toggleGroup}
+      />
+    );
+  }
 
   return (
     <Box sx={{ minWidth: 0 }} data-tour="chat-flow-picker">

@@ -21,6 +21,10 @@ import { buildHandoffToolNameMap, type HandoffTargetRef } from '@/shared/utils/h
 import { EdgeCondition, isValidConditionKind, isRegexCompilable } from './edgeConditions';
 import { referencedRunVars, isValidRunVarName } from './resolveRunVars';
 import { referencedKvKeys, isValidKvName, parseKvRef } from './resolveKvRefs';
+import {
+  PERSONA_MEMORY_GATEWAY_SERVER,
+  PERSONA_MEMORY_MAINTENANCE_COMMIT_TOOL,
+} from '@/shared/types/enduringAgent/personaMemoryGateway';
 
 export type FlowIssueSeverity = 'error' | 'warning';
 
@@ -620,7 +624,10 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
             `Static node "${getNodeLabel(node)}": real tool-call entry #${index + 1} has no MCP server.`,
             node,
           );
-        } else {
+        } else if (
+          serverName !== PERSONA_MEMORY_GATEWAY_SERVER
+          || toolName !== PERSONA_MEMORY_MAINTENANCE_COMMIT_TOOL
+        ) {
           const matchingMcp = edges.flatMap((edge) => {
             if (!isMcpEdge(edge)) return [];
             const otherId = edge.source === node.id ? edge.target : edge.target === node.id ? edge.source : null;

@@ -32,10 +32,8 @@ const ADVANCED_SUBFLOW_PROPERTIES = new Set([
   'concurrencyLimit',
   'joinSeparator',
   'errorStrategy',
-  'resultPresentation',
   'allowCallerPrompt',
   'saveConversation',
-  'sessionScope',
   'sessionKey',
   'captureVariable',
   'captureResource',
@@ -76,6 +74,11 @@ export function flowUsesAdvancedFeatures(flow: Pick<Flow, 'nodes' | 'edges'>): b
     if (
       node.type === 'subflow' &&
       (
+        // Newly created Guided sub-agents persist these two defaults even
+        // though the simple UI does not expose their advanced alternatives.
+        // Legacy absence is also safe; any non-default explicit choice is not.
+        (properties.resultPresentation !== undefined && properties.resultPresentation !== 'separate') ||
+        (properties.sessionScope !== undefined && properties.sessionScope !== 'per-key') ||
         (properties.inputMode !== undefined && properties.inputMode !== (
           guidedSubagentNodeIds.has(node.id) ? 'isolated' : 'full-history'
         )) ||

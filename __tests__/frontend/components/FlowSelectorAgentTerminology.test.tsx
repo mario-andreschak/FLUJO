@@ -145,4 +145,22 @@ describe('Talk agent picker terminology', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Research Agent' }));
     expect(screen.getByRole('dialog', { name: 'Select an agent' })).toHaveAttribute('data-full-screen', 'false');
   });
+
+  it('renders as an embedded picker and reports the selected Agent name to a shared trigger', async () => {
+    mockLoadFlows.mockResolvedValue(agents);
+    const onSelectedFlowNameChange = jest.fn();
+
+    render(
+      <FlowSelector
+        embedded
+        selectedFlowId="flow-research"
+        onSelectFlow={() => undefined}
+        onSelectedFlowNameChange={onSelectedFlowNameChange}
+      />,
+    );
+
+    expect(await screen.findByRole('button', { name: 'Research Agent' })).toBeInTheDocument();
+    await waitFor(() => expect(onSelectedFlowNameChange).toHaveBeenCalledWith('Research Agent'));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
 });

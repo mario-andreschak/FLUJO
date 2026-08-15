@@ -17,6 +17,10 @@ import {
   type VEdge,
 } from '@/utils/shared/flowValidation';
 import { encodeBindingPill } from '@/utils/shared/mcpBinding';
+import {
+  PERSONA_MEMORY_GATEWAY_SERVER,
+  PERSONA_MEMORY_MAINTENANCE_COMMIT_TOOL,
+} from '@/shared/types/enduringAgent/personaMemoryGateway';
 
 const startNode = (id = 'start', over: Partial<VNode> = {}): VNode => ({
   id,
@@ -1100,6 +1104,30 @@ describe('validateFlow — static node re-entry & placeholders (#381)', () => {
     };
     const r = validateFlow(flow);
     expect(codes(r)).not.toContain('static-real-toolcall-missing-server');
+    expect(codes(r)).not.toContain('static-real-toolcall-not-wired');
+    expect(r.isRunnable).toBe(true);
+  });
+
+  it('accepts the reserved in-process Persona memory gateway without an MCP edge', () => {
+    const flow: VFlow = {
+      nodes: [
+        startNode(),
+        staticNode('st', {
+          entries: [{
+            kind: 'toolCall',
+            executionMode: 'real',
+            serverName: PERSONA_MEMORY_GATEWAY_SERVER,
+            toolName: PERSONA_MEMORY_MAINTENANCE_COMMIT_TOOL,
+            argumentsJson: '{"candidate_variable":"persona_memory_candidates"}',
+            result: '',
+          }],
+        }),
+        finishNode(),
+      ],
+      edges: [edge('start', 'st'), edge('st', 'finish')],
+    };
+
+    const r = validateFlow(flow);
     expect(codes(r)).not.toContain('static-real-toolcall-not-wired');
     expect(r.isRunnable).toBe(true);
   });

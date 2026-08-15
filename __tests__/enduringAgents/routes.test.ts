@@ -1,5 +1,6 @@
 const listPersonasMock = jest.fn();
 const createPersonaFromRoleMock = jest.fn();
+const listPersonaFlowDispatchesMock = jest.fn();
 const readPersonaRuntimeSnapshotMock = jest.fn();
 const listPersonaFlowDispatchesMock = jest.fn();
 const pumpPersonaFlowDispatchesMock = jest.fn();
@@ -10,7 +11,6 @@ const previewPersonaDeletionMock = jest.fn();
 const deletePersonaMock = jest.fn();
 const updatePersonaSettingsMock = jest.fn();
 const activatePersonaBehaviorRevisionMock = jest.fn();
-const ensureBuiltInDeveloperRoleMock = jest.fn();
 const listRoleDefinitionsMock = jest.fn();
 const listRoleVersionsMock = jest.fn();
 const listPublicRolesMock = jest.fn();
@@ -46,6 +46,7 @@ jest.mock('@/backend/services/enduringAgents', () => {
     RoleAdminConflictError,
     listPersonas: (...args: unknown[]) => listPersonasMock(...args),
     createPersonaFromRole: (...args: unknown[]) => createPersonaFromRoleMock(...args),
+    listPersonaFlowDispatches: (...args: unknown[]) => listPersonaFlowDispatchesMock(...args),
     readPersonaRuntimeSnapshot: (...args: unknown[]) => readPersonaRuntimeSnapshotMock(...args),
     listPersonaFlowDispatches: (...args: unknown[]) => listPersonaFlowDispatchesMock(...args),
     pumpPersonaFlowDispatches: (...args: unknown[]) => pumpPersonaFlowDispatchesMock(...args),
@@ -56,7 +57,6 @@ jest.mock('@/backend/services/enduringAgents', () => {
     deletePersona: (...args: unknown[]) => deletePersonaMock(...args),
     updatePersonaSettings: (...args: unknown[]) => updatePersonaSettingsMock(...args),
     activatePersonaBehaviorRevision: (...args: unknown[]) => activatePersonaBehaviorRevisionMock(...args),
-    ensureBuiltInDeveloperRole: (...args: unknown[]) => ensureBuiltInDeveloperRoleMock(...args),
     listRoleDefinitions: (...args: unknown[]) => listRoleDefinitionsMock(...args),
     listRoleVersions: (...args: unknown[]) => listRoleVersionsMock(...args),
     listPublicRoles: (...args: unknown[]) => listPublicRolesMock(...args),
@@ -99,8 +99,8 @@ beforeEach(() => {
   jest.clearAllMocks();
   assertLocalRequestMock.mockReturnValue(null);
   assertUnlockedMock.mockResolvedValue(null);
-  ensureBuiltInDeveloperRoleMock.mockResolvedValue({});
   listPersonasMock.mockResolvedValue([]);
+  listPersonaFlowDispatchesMock.mockResolvedValue([]);
   listRoleDefinitionsMock.mockResolvedValue([]);
   listRoleVersionsMock.mockResolvedValue([]);
   listPublicRolesMock.mockResolvedValue([]);
@@ -132,7 +132,11 @@ describe('/v1/personas', () => {
   it('creates through the deterministic production factory', async () => {
     const bundle = { persona: { id: 'jim', name: 'Jim' }, behaviorBindings: [] };
     createPersonaFromRoleMock.mockResolvedValue(bundle);
-    const body = { name: 'Jim', idempotencyKey: 'create-jim' };
+    const body = {
+      name: 'Jim',
+      roleVersionId: 'rolever_researcher_v1',
+      idempotencyKey: 'create-jim',
+    };
     const response = await createPersona(request('/v1/personas', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -344,23 +348,23 @@ describe('/v1/personas/[personaId]/deletion-preview', () => {
 });
 
 describe('/v1/roles', () => {
-  it('seeds Developer v1 before listing workspace Role records', async () => {
+  it('lists only the Role records already present in the workspace', async () => {
     listRoleDefinitionsMock.mockResolvedValue([{
-      id: 'role_builtin_developer',
-      currentVersionId: 'rolever_builtin_developer_v1',
+      id: 'role_researcher',
+      currentVersionId: 'rolever_researcher_v1',
     }]);
     listRoleVersionsMock.mockResolvedValue([{
-      id: 'rolever_builtin_developer_v1',
-      roleDefinitionId: 'role_builtin_developer',
+      id: 'rolever_researcher_v1',
+      roleDefinitionId: 'role_researcher',
       version: 1,
     }]);
     listPublicRolesMock.mockResolvedValue([{
-      id: 'role_builtin_developer',
-      name: 'Developer',
-      prompt: 'Build software.',
+      id: 'role_researcher',
+      name: 'Researcher',
+      prompt: 'Investigate carefully.',
       suggestedApps: [],
       archived: false,
-      currentVersionId: 'rolever_builtin_developer_v1',
+      currentVersionId: 'rolever_researcher_v1',
       createdAt: 1,
       updatedAt: 1,
     }]);
@@ -369,24 +373,23 @@ describe('/v1/roles', () => {
 
     expect(response.status).toBe(200);
     expect(assertLocalRequestMock).toHaveBeenCalledWith(roleRequest);
-    expect(ensureBuiltInDeveloperRoleMock).toHaveBeenCalledTimes(1);
     expect(await response.json()).toEqual({
       roleDefinitions: [{
-        id: 'role_builtin_developer',
-        currentVersionId: 'rolever_builtin_developer_v1',
+        id: 'role_researcher',
+        currentVersionId: 'rolever_researcher_v1',
       }],
       roleVersions: [{
-        id: 'rolever_builtin_developer_v1',
-        roleDefinitionId: 'role_builtin_developer',
+        id: 'rolever_researcher_v1',
+        roleDefinitionId: 'role_researcher',
         version: 1,
       }],
       roles: [{
-        id: 'role_builtin_developer',
-        name: 'Developer',
-        prompt: 'Build software.',
+        id: 'role_researcher',
+        name: 'Researcher',
+        prompt: 'Investigate carefully.',
         suggestedApps: [],
         archived: false,
-        currentVersionId: 'rolever_builtin_developer_v1',
+        currentVersionId: 'rolever_researcher_v1',
         createdAt: 1,
         updatedAt: 1,
       }],

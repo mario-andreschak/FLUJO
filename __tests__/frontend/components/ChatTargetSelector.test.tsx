@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 
 jest.mock('@/frontend/components/Chat/FlowSelector', () => ({
   __esModule: true,
-  default: ({ onSelectFlow }: { onSelectFlow: (id: string) => void }) => (
+  default: ({ onSelectFlow }: { onSelectFlow: (id: string) => void; embedded?: boolean }) => (
     <button type="button" onClick={() => onSelectFlow('flow-one')}>Flow target</button>
   ),
 }));
@@ -81,7 +81,7 @@ describe('ChatTargetSelector', () => {
     }));
   });
 
-  it('offers active Personas alongside Flows and selects the recommended Main role', async () => {
+  it('uses one trigger with Agents as the default tab and offers Personas in the second tab', async () => {
     const onSelectPersona = jest.fn();
     const onSelectFlow = jest.fn();
     render(
@@ -92,11 +92,15 @@ describe('ChatTargetSelector', () => {
       />,
     );
 
-    const personaButton = await screen.findByRole('button', { name: 'Persona' });
-    await waitFor(() => expect(personaButton).toBeEnabled());
-    fireEvent.click(personaButton);
+    const targetButton = screen.getByRole('button', { name: 'Select an agent or Persona' });
+    expect(screen.queryByRole('button', { name: 'Persona' })).not.toBeInTheDocument();
+    fireEvent.click(targetButton);
     const dialog = screen.getByRole('dialog');
-    expect(within(dialog).getByText('Ada')).toBeInTheDocument();
+    expect(within(dialog).getByRole('tab', { name: 'Agents' })).toHaveAttribute('aria-selected', 'true');
+    expect(within(dialog).getByRole('button', { name: 'Flow target' })).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('tab', { name: 'Personas' }));
+    expect(await within(dialog).findByText('Ada')).toBeInTheDocument();
     expect(within(dialog).queryByText('Disabled Persona')).not.toBeInTheDocument();
 
     fireEvent.click(within(dialog).getByText('Ada'));
@@ -106,6 +110,27 @@ describe('ChatTargetSelector', () => {
     fireEvent.click(mainRole);
     expect(onSelectPersona).toHaveBeenCalledWith('persona_active', 'primary');
     expect(onSelectFlow).not.toHaveBeenCalled();
+  });
+
+  it('selects an Agent and closes the unified picker', async () => {
+    const onSelectFlow = jest.fn();
+    render(
+      <ChatTargetSelector
+        selectedFlowId={null}
+        onSelectFlow={onSelectFlow}
+        onSelectPersona={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select an agent or Persona' }));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('tab', { name: 'Personas' }));
+    await within(dialog).findByText('Ada');
+    fireEvent.click(within(dialog).getByRole('tab', { name: 'Agents' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Flow target' }));
+
+    expect(onSelectFlow).toHaveBeenCalledWith('flow-one');
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
   it('lets people choose a named specialist Behavior without exposing its slot key', async () => {
@@ -118,11 +143,11 @@ describe('ChatTargetSelector', () => {
       />,
     );
 
-    const personaButton = await screen.findByRole('button', { name: 'Persona' });
-    await waitFor(() => expect(personaButton).toBeEnabled());
-    fireEvent.click(personaButton);
+    const targetButton = screen.getByRole('button', { name: 'Select an agent or Persona' });
+    fireEvent.click(targetButton);
     const dialog = screen.getByRole('dialog');
-    fireEvent.click(within(dialog).getByText('Ada'));
+    fireEvent.click(within(dialog).getByRole('tab', { name: 'Personas' }));
+    fireEvent.click(await within(dialog).findByText('Ada'));
 
     const specialist = await within(dialog).findByText('Research specialist');
     expect(within(dialog).queryByText('research', { exact: true })).not.toBeInTheDocument();

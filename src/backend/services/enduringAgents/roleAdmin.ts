@@ -28,7 +28,6 @@ import {
   type UpdatePublicRoleInput,
 } from '@/shared/types/enduringAgent';
 
-import { BUILT_IN_DEVELOPER_ROLE_ID } from './builtInDeveloperRole';
 import { randomEnduringAgentId } from './ids';
 import { buildDefaultRoleBehaviorSlots } from './roleBehaviorDefaults';
 import { withRoleDefinitionRuntimeLock } from './runtimeLock';
@@ -53,7 +52,7 @@ export class RoleAdminNotFoundError extends Error {
 }
 
 export interface RoleAdminConflictDetails {
-  reason?: 'STALE_CURRENT_VERSION' | 'BUILT_IN_ROLE' | 'PERSONA_REFERENCES' | 'ARCHIVED_ROLE';
+  reason?: 'STALE_CURRENT_VERSION' | 'PERSONA_REFERENCES' | 'ARCHIVED_ROLE';
   personaCount?: number;
   personaIds?: string[];
 }
@@ -78,15 +77,6 @@ interface RoleState {
 
 function roleLock<T>(roleId: string, task: () => Promise<T>): Promise<T> {
   return withRoleDefinitionRuntimeLock(roleId, task);
-}
-
-function assertMutableRole(roleId: string): void {
-  if (roleId === BUILT_IN_DEVELOPER_ROLE_ID) {
-    throw new RoleAdminConflictError(
-      'The built-in Developer Role cannot be changed, archived, or deleted.',
-      { reason: 'BUILT_IN_ROLE' },
-    );
-  }
 }
 
 function staleVersionConflict(): RoleAdminConflictError {
@@ -265,7 +255,6 @@ export async function updatePublicRole(
   value: unknown,
 ): Promise<PublicRole> {
   const input = UpdatePublicRoleInputSchema.parse(value) as UpdatePublicRoleInput;
-  assertMutableRole(roleId);
   return roleLock(roleId, async () => {
     const state = await requireRoleState(roleId);
     if (state.definition.archivedAt !== undefined) {
@@ -354,7 +343,6 @@ export async function rollbackPublicRole(
   value: unknown,
 ): Promise<PublicRole> {
   const input = RollbackPublicRoleInputSchema.parse(value) as RollbackPublicRoleInput;
-  assertMutableRole(roleId);
   return roleLock(roleId, async () => {
     const state = await requireRoleState(roleId);
     if (state.definition.archivedAt !== undefined) {
@@ -385,7 +373,6 @@ export async function rollbackPublicRole(
 
 export async function restorePublicRole(roleId: string, value: unknown): Promise<PublicRole> {
   const input = RestorePublicRoleInputSchema.parse(value) as RestorePublicRoleInput;
-  assertMutableRole(roleId);
   return roleLock(roleId, async () => {
     const state = await requireRoleState(roleId);
     if (state.current.id !== input.expectedCurrentVersionId) throw staleVersionConflict();
@@ -449,7 +436,6 @@ export async function archivePublicRole(
   const input = RoleLifecycleInputSchema.parse(value) as RoleLifecycleInput & {
     action: 'archive' | 'delete';
   };
-  assertMutableRole(roleId);
   if (input.action !== 'archive') {
     throw new RoleAdminConflictError('Archive operation requires action "archive".');
   }
@@ -478,7 +464,6 @@ export async function hardDeletePublicRole(
   if (input.action !== 'delete') {
     throw new RoleAdminConflictError('Hard deletion requires action "delete".');
   }
-  assertMutableRole(roleId);
   return roleLock(roleId, async () => {
     const state = await readRoleState(roleId);
     if (!state) return;

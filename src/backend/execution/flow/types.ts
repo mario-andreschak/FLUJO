@@ -934,6 +934,12 @@ export interface FlowExecutionAuthority {
     commitPersonaMutation?: <T>(
       task: (context: PersonaActivityMutationContext) => Promise<T>,
     ) => Promise<T>;
+    /**
+     * One-shot, maintenance-only gateway supplied by the Persona dispatcher.
+     * The extractor passes only its output text; identity, evidence, policy and
+     * the write fence remain captured in the host-owned closure.
+     */
+    commitPersonaMemoryMaintenance?: (outputText: string) => Promise<unknown>;
     /** Fetch durable related input only at a transcript-safe runFlow boundary. */
     pollRelatedInputs?: () => Promise<void>;
     /** ACK stable ids only after their messages are durably folded once. */

@@ -2,10 +2,14 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  DEFAULT_WORKSPACE,
   WORKSPACE_SUBTREES,
+  createWorkspace,
+  deleteWorkspace,
   ensureWorkspaceDirs,
   isValidWorkspaceName,
   listWorkspaces,
+  renameWorkspace,
   workspaceExists,
 } from '@/utils/workspace';
 
@@ -96,5 +100,50 @@ describe('workspace path safety', () => {
     );
 
     await expect(ensureWorkspaceDirs('research')).rejects.toThrow(/real directory|symlink|junction/i);
+  });
+
+  it('creates, renames, and deletes a workspace without losing data during the rename', async () => {
+    const created = await createWorkspace('research');
+    expect(created).toMatchObject({ name: 'research', isDefault: false });
+    await fs.writeFile(path.join(dataRoot, 'workspaces', 'research', 'userdata', 'note.txt'), 'kept');
+
+    const renamed = await renameWorkspace('research', 'planning');
+    expect(renamed).toMatchObject({ name: 'planning', isDefault: false });
+    await expect(
+      fs.readFile(path.join(dataRoot, 'workspaces', 'planning', 'userdata', 'note.txt'), 'utf8'),
+    ).resolves.toBe('kept');
+    await expect(workspaceExists('research')).resolves.toBe(false);
+    await expect(workspaceExists('planning')).resolves.toBe(true);
+
+    await deleteWorkspace('planning');
+    await expect(workspaceExists('planning')).resolves.toBe(false);
+  });
+
+  it('never renames, replaces, or deletes the default workspace', async () => {
+    await ensureWorkspaceDirs(DEFAULT_WORKSPACE);
+    await ensureWorkspaceDirs('research');
+
+    await expect(renameWorkspace(DEFAULT_WORKSPACE, 'renamed-default')).rejects.toMatchObject({
+      code: 'DEFAULT_WORKSPACE_PROTECTED',
+    });
+    await expect(renameWorkspace('research', DEFAULT_WORKSPACE)).rejects.toMatchObject({
+      code: 'DEFAULT_WORKSPACE_PROTECTED',
+    });
+    await expect(deleteWorkspace(DEFAULT_WORKSPACE)).rejects.toMatchObject({
+      code: 'DEFAULT_WORKSPACE_PROTECTED',
+    });
+    await expect(workspaceExists(DEFAULT_WORKSPACE)).resolves.toBe(true);
+  });
+
+  it('rejects case-insensitive collisions in create and rename operations', async () => {
+    await createWorkspace('Research');
+    await createWorkspace('planning');
+
+    await expect(createWorkspace('research')).rejects.toMatchObject({
+      code: 'WORKSPACE_ALREADY_EXISTS',
+    });
+    await expect(renameWorkspace('planning', 'RESEARCH')).rejects.toMatchObject({
+      code: 'WORKSPACE_ALREADY_EXISTS',
+    });
   });
 });

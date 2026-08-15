@@ -1,4 +1,5 @@
 const startMeetingMock = jest.fn();
+const resumeMeetingMock = jest.fn();
 const cancelMeetingMock = jest.fn();
 const reconcileMeetingMock = jest.fn();
 const getMeetingMock = jest.fn();
@@ -12,6 +13,7 @@ const assertUnlockedMock = jest.fn();
 jest.mock('@/backend/execution/meeting', () => ({
   meetingEngine: {
     start: (...args: unknown[]) => startMeetingMock(...args),
+    resume: (...args: unknown[]) => resumeMeetingMock(...args),
     cancel: (...args: unknown[]) => cancelMeetingMock(...args),
     reconcileInterrupted: (...args: unknown[]) => reconcileMeetingMock(...args),
   },
@@ -64,6 +66,7 @@ jest.mock('@/utils/logger', () => ({
 import { NextRequest } from 'next/server';
 import { GET as getMeetingRoute } from '@/app/v1/meetings/[meetingId]/route';
 import { POST as startMeetingRoute } from '@/app/v1/meetings/[meetingId]/start/route';
+import { POST as resumeMeetingRoute } from '@/app/v1/meetings/[meetingId]/resume/route';
 import { POST as cancelMeetingRoute } from '@/app/v1/meetings/[meetingId]/cancel/route';
 import { GET as meetingEventsRoute } from '@/app/v1/meetings/[meetingId]/events/route';
 
@@ -93,6 +96,7 @@ describe('Persona meeting action routes', () => {
     assertLocalRequestMock.mockReturnValue(null);
     getMeetingMock.mockResolvedValue(personaMeeting);
     startMeetingMock.mockResolvedValue(personaMeeting);
+    resumeMeetingMock.mockResolvedValue(personaMeeting);
     cancelMeetingMock.mockResolvedValue(personaMeeting);
     reconcileMeetingMock.mockResolvedValue(personaMeeting);
     readMeetingEventsMock.mockResolvedValue([]);
@@ -107,6 +111,9 @@ describe('Persona meeting action routes', () => {
       startMeetingRoute(new Request('http://localhost/v1/meetings/meeting_1/start', {
         method: 'POST',
       }), context),
+      resumeMeetingRoute(new NextRequest('http://localhost/v1/meetings/meeting_1/resume', {
+        method: 'POST',
+      }), context),
       cancelMeetingRoute(new NextRequest('http://localhost/v1/meetings/meeting_1/cancel', {
         method: 'POST',
       }), context),
@@ -114,8 +121,9 @@ describe('Persona meeting action routes', () => {
       meetingEventsRoute(new NextRequest('http://localhost/v1/meetings/meeting_1/events'), context),
     ]);
 
-    expect(responses.map(({ status }) => status)).toEqual([403, 403, 403, 403]);
+    expect(responses.map(({ status }) => status)).toEqual([403, 403, 403, 403, 403]);
     expect(startMeetingMock).not.toHaveBeenCalled();
+    expect(resumeMeetingMock).not.toHaveBeenCalled();
     expect(cancelMeetingMock).not.toHaveBeenCalled();
     expect(reconcileMeetingMock).not.toHaveBeenCalled();
     expect(subscribeMock).not.toHaveBeenCalled();
@@ -130,6 +138,9 @@ describe('Persona meeting action routes', () => {
       startMeetingRoute(new Request('http://localhost/v1/meetings/meeting_1/start', {
         method: 'POST',
       }), context),
+      resumeMeetingRoute(new NextRequest('http://localhost/v1/meetings/meeting_1/resume', {
+        method: 'POST',
+      }), context),
       cancelMeetingRoute(new NextRequest('http://localhost/v1/meetings/meeting_1/cancel', {
         method: 'POST',
       }), context),
@@ -137,8 +148,9 @@ describe('Persona meeting action routes', () => {
       meetingEventsRoute(new NextRequest('http://localhost/v1/meetings/meeting_1/events'), context),
     ]);
 
-    expect(responses.map(({ status }) => status)).toEqual([403, 403, 403, 403]);
+    expect(responses.map(({ status }) => status)).toEqual([403, 403, 403, 403, 403]);
     expect(startMeetingMock).not.toHaveBeenCalled();
+    expect(resumeMeetingMock).not.toHaveBeenCalled();
     expect(cancelMeetingMock).not.toHaveBeenCalled();
     expect(reconcileMeetingMock).not.toHaveBeenCalled();
     expect(subscribeMock).not.toHaveBeenCalled();
@@ -158,11 +170,21 @@ describe('Persona meeting action routes', () => {
       new NextRequest('http://localhost/v1/meetings/meeting_1/cancel', { method: 'POST' }),
       context,
     );
+    const resumed = await resumeMeetingRoute(
+      new NextRequest('http://localhost/v1/meetings/meeting_1/resume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ direction: 'Revisit the render decision.' }),
+      }),
+      context,
+    );
 
     expect(started.status).toBe(200);
     expect(cancelled.status).toBe(200);
+    expect(resumed.status).toBe(200);
     expect(assertLocalRequestMock).not.toHaveBeenCalled();
     expect(startMeetingMock).toHaveBeenCalledWith('meeting_1');
+    expect(resumeMeetingMock).toHaveBeenCalledWith('meeting_1', 'Revisit the render decision.');
     expect(cancelMeetingMock).toHaveBeenCalledWith('meeting_1', undefined);
   });
 

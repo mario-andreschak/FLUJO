@@ -8,6 +8,7 @@ import {
 import { isSecretEnvVar } from '@/utils/shared/common';
 import { createLogger } from '@/utils/logger';
 import { Settings } from '@/shared/types/storage/storage';
+import { createDefaultSettings } from '@/shared/config/defaultSettings';
 import {
   ENCRYPTION_UNLOCKED_EVENT,
   encryptionSessionStorageKey,
@@ -52,14 +53,7 @@ const StorageContext = createContext<StorageContextType>({
   decryptValue: async () => null,
   isUserEncryptionEnabled: async () => false,
   isLoading: true,
-  settings: {
-    speech: {
-      enabled: true
-    },
-    update: {
-      checkOnStartup: false
-    }
-  },
+  settings: createDefaultSettings(),
   settingsHydrated: false,
   updateSettings: async () => {},
 });
@@ -73,14 +67,7 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   // 423 fallback to defaults). See StorageContextType.settingsHydrated.
   const [settingsHydrated, setSettingsHydrated] = useState(false);
   const [globalEnvVars, setGlobalEnvVarsState] = useState<Record<string, { value: string, metadata: { isSecret: boolean } }>>({});
-  const [settings, setSettings] = useState<Settings>({
-    speech: {
-      enabled: true
-    },
-    update: {
-      checkOnStartup: false
-    }
-  });
+  const [settings, setSettings] = useState<Settings>(createDefaultSettings);
 
   // Define encryption-related functions first
   const isEncryptionInitialized = useCallback(async (): Promise<boolean> => {
@@ -229,21 +216,25 @@ export const StorageProvider: React.FC<{ children: React.ReactNode }> = ({ child
   // is locked) we keep the defaults and leave settingsHydrated false so the
   // guided tour won't auto-start on fallback data.
   const loadSettings = useCallback(async () => {
-    const defaultSettings: Settings = {
-      speech: { enabled: true },
-      update: { checkOnStartup: false }
-    };
+    const defaultSettings = createDefaultSettings();
     try {
       const response = await fetch(
-        `/api/storage?key=${encodeURIComponent(StorageKey.SPEECH_SETTINGS)}&defaultValue=${encodeURIComponent(JSON.stringify(defaultSettings))}`
+        `/api/storage?key=${encodeURIComponent(StorageKey.SPEECH_SETTINGS)}&defaultValue=${encodeURIComponent(JSON.stringify(null))}`
       );
       if (!response.ok) {
         log.debug('loadSettings: settings read not ok, keeping defaults', { status: response.status });
         return;
       }
       const data = await response.json();
-      log.debug('Loaded settings from storage', { settings: data.value });
-      setSettings(data.value ?? defaultSettings);
+      const loadedSettings = data.value ?? defaultSettings;
+      if (data.value == null) {
+        // Persist fresh-install defaults so backend-only feature checks see the
+        // same values as the settings UI. Existing settings are never merged or
+        // rewritten here, preserving every prior explicit choice.
+        await saveItem(StorageKey.SPEECH_SETTINGS, defaultSettings);
+      }
+      log.debug('Loaded settings from storage', { settings: loadedSettings });
+      setSettings(loadedSettings);
       setSettingsHydrated(true);
     } catch (error) {
       log.warn('loadSettings: failed to load settings:', error);

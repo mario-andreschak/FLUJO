@@ -245,10 +245,9 @@ export interface ExperimentalSettings {
    * When true, the Claude Subscription adapter REUSES its Agent SDK session
    * across turns of the same single-node Flow — resuming the persisted session
    * (`resume`) and sending only the per-turn delta instead of re-flattening the
-   * whole conversation each turn (issue #154). Off by default: it changes how
-   * conversation context reaches the model, so it stays opt-in until verified on
-   * real token curves. Independent of `enabled` (a backend behaviour, not a UI
-   * reveal). A missing value is treated as disabled.
+   * whole conversation each turn (issue #154). Enabled for new installations;
+   * a missing value in existing persisted settings remains disabled. Independent
+   * of `enabled` (a backend behaviour, not a UI reveal).
    */
   claudeSessionResume?: boolean;
   /**
@@ -275,16 +274,19 @@ export interface ExperimentalSettings {
    * disabled.
    */
   subflowToolInvocation?: boolean;
-  /** Enable durable, detached subflow task handles (issue #386). Off by default. */
+  /**
+   * Enable durable, detached subflow task handles (issue #386). Enabled for new
+   * installations; a missing value in existing settings remains disabled.
+   */
   subflowDetachedInvocation?: boolean;
   /**
    * When true, a Subflow node honours its `sessionScope` configuration and may
    * RESUME the same child conversation across repeat visits inside one parent
    * run, instead of starting a fresh child run every visit (issue #363 Phase
-   * 1, gated by #391). Off by default: resumed children inherit their own
-   * prior transcript, which changes what the child model sees each visit, so
-   * this stays opt-in until verified on real flows. Both `sessionScope:
-   * 'per-run'` and `'per-key'` are functional; per-key sessions reuse one child
+   * 1, gated by #391). Enabled for new installations; a missing value in
+   * existing settings remains disabled. Resumed children inherit their own
+   * prior transcript, which changes what the child model sees each visit. Both
+   * `sessionScope: 'per-run'` and `'per-key'` are functional; per-key sessions reuse one child
    * conversation for equal resolved keys and serialise same-key execution while
    * allowing different keys to proceed concurrently (#388). `sessionInputMode: 'summary'` compacts completed child turns before the next task; an optional positive `sessionTurnCap` enforces deterministic retention.
    * When off, reusable scopes silently fall back to `'per-visit'`, so flipping
@@ -309,8 +311,8 @@ export interface ExperimentalSettings {
    * from VRAM before sending a completion request for a different model on the
    * same Ollama server URL. This frees GPU memory on constrained hardware.
    * Requests to the same Ollama URL are serialised while this is on, so it adds
-   * a small latency in parallel fan-out scenarios. Off by default: zero impact
-   * on existing behaviour.
+   * a small latency in parallel fan-out scenarios. Enabled for new
+   * installations; a missing value in existing settings remains disabled.
    */
   autoUnloadOllamaModels?: boolean;
   /**
@@ -352,9 +354,10 @@ export interface ExperimentalSettings {
    * (issue #248): before a request that would overflow the model's context
    * window — and after a context-length error — it summarizes the older part of
    * the oldest provider-facing wire history into an anchored summary head and
-   * continues. The canonical persisted conversation is never replaced. Off by
-   * default because AI summarization is lossy even though the exact source is
-   * retained in a run-resource anchor. A missing value is treated as disabled.
+   * continues. The canonical persisted conversation is never replaced. Enabled
+   * for new installations; a missing value in existing settings remains
+   * disabled. AI summarization is lossy even though the exact source is retained
+   * in a run-resource anchor.
    */
   compactionEnabled?: boolean;
   /**

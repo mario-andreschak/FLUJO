@@ -9,6 +9,7 @@ import {
   isActiveConversationStatus,
 } from '@/utils/shared/conversationActivity';
 import {
+  countDisplayableConversationSteps,
   extractLatestDisplayableMessage,
   extractMessageText,
 } from '@/utils/shared/conversationPreview';
@@ -97,6 +98,37 @@ describe('latest displayable activity extraction', () => {
       toolName: 'read_file',
       toolKind: 'result',
       timestamp: 2,
+      truncated: false,
+    });
+  });
+
+  it('counts visible transcript steps and summarizes consecutive calls to one tool', () => {
+    const messages = [
+      { role: 'system', content: 'hidden' },
+      { role: 'user', content: 'inspect these files' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: 'call-1', function: { name: 'file_read' } }],
+      },
+      { role: 'tool', tool_call_id: 'call-1', content: 'one' },
+      {
+        role: 'assistant',
+        content: 'Continuing.',
+        tool_calls: [{ id: 'call-2', function: { name: 'file_read' } }],
+      },
+      { role: 'tool', tool_call_id: 'call-2', content: 'two', timestamp: 8 },
+      { role: 'assistant', content: 'disabled', disabled: true },
+    ];
+
+    expect(countDisplayableConversationSteps(messages)).toBe(6);
+    expect(extractLatestDisplayableMessage(messages)).toEqual({
+      role: 'tool',
+      text: '2x file_read',
+      toolName: 'file_read',
+      toolKind: 'result',
+      repeatCount: 2,
+      timestamp: 8,
       truncated: false,
     });
   });

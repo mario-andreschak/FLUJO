@@ -338,6 +338,30 @@ export interface WorkspaceInfo {
   isDefault: boolean;
 }
 
+export type WorkspaceMutationErrorCode =
+  | 'WORKSPACE_ALREADY_EXISTS'
+  | 'WORKSPACE_NOT_FOUND'
+  | 'DEFAULT_WORKSPACE_PROTECTED';
+
+/** A user-actionable conflict raised by workspace management operations. */
+export class WorkspaceMutationError extends Error {
+  constructor(
+    readonly code: WorkspaceMutationErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'WorkspaceMutationError';
+  }
+}
+
+function workspaceInfo(name: string): WorkspaceInfo {
+  return {
+    name,
+    color: workspaceColor(name),
+    isDefault: name === DEFAULT_WORKSPACE,
+  };
+}
+
 /**
  * Enumerate the workspaces that actually exist on disk.
  *
@@ -393,11 +417,7 @@ export async function listWorkspaces(): Promise<WorkspaceInfo[]> {
       if (b === DEFAULT_WORKSPACE) return 1;
       return a.localeCompare(b);
     })
-    .map(name => ({
-      name,
-      color: workspaceColor(name),
-      isDefault: name === DEFAULT_WORKSPACE,
-    }));
+    .map(workspaceInfo);
 }
 
 /** Whether a (syntactically valid) workspace exists on disk. */
@@ -425,15 +445,185 @@ async function assertRealDirectory(candidate: string, label: string): Promise<vo
   }
 }
 
-/** Create the complete workspace-owned directory set if missing. Idempotent. */
-export async function ensureWorkspaceDirs(workspace?: string): Promise<string> {
-  const dir = getWorkspaceDir(workspace);
+async function ensureWorkspacesRoot(): Promise<string> {
   const dataRoot = getDataDir();
   const workspacesRoot = getWorkspacesDir();
   await fs.mkdir(dataRoot, { recursive: true });
   await assertRealDirectory(dataRoot, 'FLUJO data root');
   await fs.mkdir(workspacesRoot, { recursive: true });
   await assertRealDirectory(workspacesRoot, 'Workspaces root');
+  return workspacesRoot;
+}
+
+async function resolveManagedWorkspace(workspace: string): Promise<string> {
+  const name = assertValidWorkspaceName(workspace);
+  const root = getWorkspacesDir();
+  let siblings: string[];
+  try {
+    siblings = await fs.readdir(root);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new WorkspaceMutationError(
+        'WORKSPACE_NOT_FOUND',
+        `Workspace ${JSON.stringify(name)} does not exist.`,
+      );
+    }
+    throw error;
+  }
+
+  const aliases = siblings.filter(sibling =>
+    isValidWorkspaceName(sibling) && sibling.toLowerCase() === name.toLowerCase(),
+  );
+  if (aliases.length !== 1 || aliases[0] !== name) {
+    throw new WorkspaceMutationError(
+      'WORKSPACE_NOT_FOUND',
+      `Workspace ${JSON.stringify(name)} does not exist or is ambiguous on disk.`,
+    );
+  }
+
+  const dir = getWorkspaceDir(name);
+  let stat;
+  try {
+    stat = await fs.lstat(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new WorkspaceMutationError(
+        'WORKSPACE_NOT_FOUND',
+        `Workspace ${JSON.stringify(name)} does not exist.`,
+      );
+    }
+    throw error;
+  }
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new WorkspaceMutationError(
+      'WORKSPACE_NOT_FOUND',
+      `Workspace ${JSON.stringify(name)} is not a managed directory.`,
+    );
+  }
+
+  const [canonicalRoot, canonicalWorkspace] = await Promise.all([
+    fs.realpath(root),
+    fs.realpath(dir),
+  ]);
+  const relative = path.relative(canonicalRoot, canonicalWorkspace);
+  if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new WorkspaceMutationError(
+      'WORKSPACE_NOT_FOUND',
+      `Workspace ${JSON.stringify(name)} is outside the managed workspace root.`,
+    );
+  }
+  return dir;
+}
+
+/** Create a new, empty workspace namespace. */
+export async function createWorkspace(workspace: string): Promise<WorkspaceInfo> {
+  const name = assertValidWorkspaceName(workspace);
+  if (name === DEFAULT_WORKSPACE) {
+    throw new WorkspaceMutationError(
+      'WORKSPACE_ALREADY_EXISTS',
+      `Workspace ${JSON.stringify(DEFAULT_WORKSPACE)} already exists.`,
+    );
+  }
+
+  const root = await ensureWorkspacesRoot();
+  const aliases = (await fs.readdir(root)).filter(sibling =>
+    isValidWorkspaceName(sibling) && sibling.toLowerCase() === name.toLowerCase(),
+  );
+  if (aliases.length > 0) {
+    throw new WorkspaceMutationError(
+      'WORKSPACE_ALREADY_EXISTS',
+      `A workspace named ${JSON.stringify(name)} already exists.`,
+    );
+  }
+
+  const dir = getWorkspaceDir(name);
+  try {
+    await fs.mkdir(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      throw new WorkspaceMutationError(
+        'WORKSPACE_ALREADY_EXISTS',
+        `A workspace named ${JSON.stringify(name)} already exists.`,
+      );
+    }
+    throw error;
+  }
+
+  try {
+    await ensureWorkspaceDirs(name);
+  } catch (error) {
+    // This call created `dir`, so a failed layout initialization can safely
+    // roll it back without touching any pre-existing workspace.
+    await fs.rm(dir, { recursive: true, force: true });
+    throw error;
+  }
+  return workspaceInfo(name);
+}
+
+/** Rename a non-default workspace without moving it outside the namespace root. */
+export async function renameWorkspace(
+  workspace: string,
+  newName: string,
+): Promise<WorkspaceInfo> {
+  const current = assertValidWorkspaceName(workspace);
+  const next = assertValidWorkspaceName(newName);
+  if (current === DEFAULT_WORKSPACE || next === DEFAULT_WORKSPACE) {
+    throw new WorkspaceMutationError(
+      'DEFAULT_WORKSPACE_PROTECTED',
+      'default-workspace cannot be renamed or replaced.',
+    );
+  }
+  if (current === next) return workspaceInfo(current);
+  if (current.toLowerCase() === next.toLowerCase()) {
+    throw new WorkspaceMutationError(
+      'WORKSPACE_ALREADY_EXISTS',
+      'Case-only workspace renames are not supported.',
+    );
+  }
+
+  const source = await resolveManagedWorkspace(current);
+  const root = getWorkspacesDir();
+  const aliases = (await fs.readdir(root)).filter(sibling =>
+    isValidWorkspaceName(sibling) && sibling.toLowerCase() === next.toLowerCase(),
+  );
+  if (aliases.length > 0) {
+    throw new WorkspaceMutationError(
+      'WORKSPACE_ALREADY_EXISTS',
+      `A workspace named ${JSON.stringify(next)} already exists.`,
+    );
+  }
+
+  try {
+    await fs.rename(source, getWorkspaceDir(next));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      throw new WorkspaceMutationError(
+        'WORKSPACE_ALREADY_EXISTS',
+        `A workspace named ${JSON.stringify(next)} already exists.`,
+      );
+    }
+    throw error;
+  }
+  return workspaceInfo(next);
+}
+
+/** Permanently delete a non-default workspace and all of its owned data. */
+export async function deleteWorkspace(workspace: string): Promise<void> {
+  const name = assertValidWorkspaceName(workspace);
+  if (name === DEFAULT_WORKSPACE) {
+    throw new WorkspaceMutationError(
+      'DEFAULT_WORKSPACE_PROTECTED',
+      'default-workspace cannot be deleted.',
+    );
+  }
+  const dir = await resolveManagedWorkspace(name);
+  await fs.rm(dir, { recursive: true, force: false });
+}
+
+/** Create the complete workspace-owned directory set if missing. Idempotent. */
+export async function ensureWorkspaceDirs(workspace?: string): Promise<string> {
+  const dir = getWorkspaceDir(workspace);
+  const workspacesRoot = await ensureWorkspacesRoot();
 
   const expectedName = path.basename(dir);
   const siblings = await fs.readdir(workspacesRoot);

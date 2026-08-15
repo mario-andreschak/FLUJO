@@ -10,6 +10,10 @@ import { FEATURES } from '@/config/features';
 import { mcpService } from '@/backend/services/mcp';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import type { ModelMediaPart } from '@/shared/types/model/media';
+import {
+  PERSONA_MEMORY_GATEWAY_SERVER,
+  executePersonaMemoryMaintenanceCommit,
+} from '../handlers/personaMemoryGateway';
 
 const log = createLogger('backend/flow/execution/nodes/StaticNode');
 
@@ -165,23 +169,32 @@ export class StaticNode extends BaseNode {
             if (!serverName) {
               throw new Error(`Static node ${nodeId}: real tool call "${toolName}" requires an MCP server.`);
             }
-            const binding = node_params?.properties?.mcpNodes?.find(
-              (candidate) => candidate.properties?.boundServer === serverName,
-            );
-            if (!binding || !binding.properties.enabledTools?.includes(toolName)) {
-              throw new Error(
-                `Static node ${nodeId}: real tool call "${toolName}" is not enabled on its connected MCP server "${serverName}".`,
-              );
-            }
             const args = JSON.parse(argumentsJson) as Record<string, unknown>;
-            const callResult = await mcpService.callTool(
-              serverName,
-              toolName,
-              args,
-              binding.properties.toolTimeout ?? DEFAULT_TOOL_CALL_TIMEOUT_SECONDS,
-              undefined,
-              nodeId,
-            );
+            const callResult = serverName === PERSONA_MEMORY_GATEWAY_SERVER
+              ? await executePersonaMemoryMaintenanceCommit(toolName, args, {
+                  variables: sharedState.variables,
+                  conversationId: sharedState.conversationId,
+                  executionAuthority: sharedState.executionAuthority,
+                  personaAttribution: sharedState.personaAttribution,
+                })
+              : await (async () => {
+                  const binding = node_params?.properties?.mcpNodes?.find(
+                    (candidate) => candidate.properties?.boundServer === serverName,
+                  );
+                  if (!binding || !binding.properties.enabledTools?.includes(toolName)) {
+                    throw new Error(
+                      `Static node ${nodeId}: real tool call "${toolName}" is not enabled on its connected MCP server "${serverName}".`,
+                    );
+                  }
+                  return mcpService.callTool(
+                    serverName,
+                    toolName,
+                    args,
+                    binding.properties.toolTimeout ?? DEFAULT_TOOL_CALL_TIMEOUT_SECONDS,
+                    undefined,
+                    nodeId,
+                  );
+                })();
             resultContent = callResult.success
               ? JSON.stringify(callResult.data ?? null)
               : `Error: ${callResult.error || `Tool ${toolName} failed`}`;

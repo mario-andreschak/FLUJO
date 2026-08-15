@@ -1,6 +1,6 @@
 "use client";
 
-import { Avatar, Badge, Box, Chip, Paper, Stack, Tooltip, Typography } from '@mui/material';
+import { Avatar, Badge, Box, Chip, CircularProgress, Paper, Stack, Tooltip, Typography } from '@mui/material';
 import { alpha, useTheme } from '@mui/material/styles';
 import { AutoAwesomeRounded } from '@mui/icons-material';
 import type { MeetingParticipant } from '@/shared/types/meeting';
@@ -8,13 +8,13 @@ import { useI18n } from '@/frontend/contexts/I18nContext';
 import { meetingParticipantSourceLabel } from './meetingParticipantPresentation';
 
 const seats = [
-  { left: '50%', top: '2%', transform: 'translate(-50%, 0)' },
-  { left: '82%', top: '18%', transform: 'translate(-50%, 0)' },
-  { left: '92%', top: '61%', transform: 'translate(-50%, -50%)' },
-  { left: '69%', top: '91%', transform: 'translate(-50%, -100%)' },
-  { left: '31%', top: '91%', transform: 'translate(-50%, -100%)' },
-  { left: '8%', top: '61%', transform: 'translate(-50%, -50%)' },
-  { left: '18%', top: '18%', transform: 'translate(-50%, 0)' },
+  { left: '50%', top: '14%', transform: 'translate(-50%, -50%)' },
+  { left: '82%', top: '28%', transform: 'translate(-50%, -50%)' },
+  { left: '91%', top: '64%', transform: 'translate(-50%, -50%)' },
+  { left: '69%', top: '84%', transform: 'translate(-50%, -50%)' },
+  { left: '31%', top: '84%', transform: 'translate(-50%, -50%)' },
+  { left: '9%', top: '64%', transform: 'translate(-50%, -50%)' },
+  { left: '18%', top: '28%', transform: 'translate(-50%, -50%)' },
 ] as const;
 
 interface MeetingTableProps {
@@ -25,32 +25,41 @@ interface MeetingTableProps {
 export default function MeetingTable({ participants, onParticipantClick }: MeetingTableProps) {
   const { t } = useI18n();
   const theme = useTheme();
+  const roomSurface = theme.palette.mode === 'dark' ? '#151a2b' : '#f3f6fb';
+  const tableSurface = theme.palette.mode === 'dark' ? '#222a42' : '#e7edf7';
   const visible = participants.slice(0, 7);
   const overflow = participants.slice(7);
+  const thinkingNames = participants
+    .filter((participant) => participant.status === 'running')
+    .map((participant) => participant.name);
 
   return (
     <Paper
       variant="outlined"
       sx={{
         mb: 2,
-        height: { xs: 285, sm: 340 },
+        height: { xs: 310, sm: 360 },
         position: 'relative',
         overflow: 'hidden',
-        background: `radial-gradient(circle at 50% 50%, ${alpha(theme.palette.primary.main, 0.08)}, transparent 62%)`,
+        borderColor: alpha(theme.palette.primary.main, 0.3),
+        bgcolor: roomSurface,
+        backgroundImage: `radial-gradient(circle at 50% 48%, ${alpha(theme.palette.primary.main, 0.16)}, transparent 62%)`,
+        boxShadow: `0 16px 48px ${alpha(theme.palette.common.black, 0.16)}`,
       }}
     >
       <Box
         aria-label={t('meetings.table.label')}
         sx={{
           position: 'absolute',
-          left: '24%',
-          right: '24%',
-          top: '24%',
-          bottom: '24%',
+          left: '20%',
+          right: '20%',
+          top: '27%',
+          bottom: '22%',
           borderRadius: '48%',
-          border: `1px solid ${alpha(theme.palette.primary.main, 0.28)}`,
-          background: `linear-gradient(145deg, ${alpha(theme.palette.background.paper, 0.95)}, ${alpha(theme.palette.primary.dark, 0.12)})`,
-          boxShadow: `inset 0 0 0 8px ${alpha(theme.palette.primary.main, 0.025)}, 0 18px 60px ${alpha(theme.palette.common.black, 0.13)}`,
+          border: `2px solid ${alpha(theme.palette.primary.main, 0.38)}`,
+          bgcolor: tableSurface,
+          backgroundImage: `linear-gradient(145deg, ${alpha(theme.palette.common.white, theme.palette.mode === 'dark' ? 0.04 : 0.45)}, ${alpha(theme.palette.primary.dark, 0.14)})`,
+          boxShadow: `inset 0 0 0 8px ${alpha(theme.palette.primary.main, 0.045)}, 0 18px 60px ${alpha(theme.palette.common.black, 0.2)}`,
           display: 'grid',
           placeItems: 'center',
           textAlign: 'center',
@@ -73,6 +82,13 @@ export default function MeetingTable({ participants, onParticipantClick }: Meeti
         const sourceLabel = participant
           ? meetingParticipantSourceLabel(participant, t)
           : null;
+        const statusLabel = participant?.status === 'running'
+          ? t('meetings.participant.thinking')
+          : participant?.status === 'waiting'
+            ? thinkingNames.length
+              ? t('meetings.participant.waitingFor', { names: thinkingNames.join(', ') })
+              : t('meetings.participant.waiting')
+            : null;
         const title = participant
           ? `${participant.name} · ${sourceLabel}${overflow.length && index === 6 ? ` · ${overflow.map((item) => item.name).join(', ')}` : ''}`
           : t('meetings.table.emptySeat');
@@ -87,7 +103,8 @@ export default function MeetingTable({ participants, onParticipantClick }: Meeti
               sx={{
                 position: 'absolute',
                 ...position,
-                width: { xs: 78, sm: 112 },
+                width: { xs: 82, sm: 132 },
+                minHeight: { xs: 76, sm: 92 },
                 p: 0,
                 border: 0,
                 color: 'inherit',
@@ -97,7 +114,7 @@ export default function MeetingTable({ participants, onParticipantClick }: Meeti
               }}
             >
               <Badge
-                color={participant?.status === 'error' ? 'error' : participant?.status === 'running' ? 'success' : 'default'}
+                color={participant?.status === 'error' ? 'error' : participant?.status === 'running' ? 'success' : participant?.status === 'waiting' ? 'secondary' : 'default'}
                 variant="dot"
                 overlap="circular"
                 invisible={!participant}
@@ -110,7 +127,7 @@ export default function MeetingTable({ participants, onParticipantClick }: Meeti
                     fontWeight: 800,
                     bgcolor: participant ? (participant.role === 'moderator' ? 'secondary.main' : 'primary.main') : alpha(theme.palette.text.primary, 0.06),
                     color: participant ? undefined : 'text.disabled',
-                    border: `3px solid ${theme.palette.background.paper}`,
+                    border: `3px solid ${roomSurface}`,
                     boxShadow: `0 6px 18px ${alpha(theme.palette.common.black, 0.2)}`,
                   }}
                 >
@@ -127,7 +144,7 @@ export default function MeetingTable({ participants, onParticipantClick }: Meeti
                     sx={{
                       maxWidth: '100%',
                       height: 23,
-                      bgcolor: alpha(theme.palette.background.paper, 0.92),
+                      bgcolor: roomSurface,
                       '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis' },
                     }}
                   />
@@ -139,6 +156,19 @@ export default function MeetingTable({ participants, onParticipantClick }: Meeti
                   >
                     {sourceLabel}
                   </Typography>
+                  {statusLabel && (
+                    <Stack direction="row" spacing={0.45} alignItems="center" sx={{ maxWidth: '100%' }}>
+                      {participant.status === 'running' && <CircularProgress size={10} thickness={5} />}
+                      <Typography
+                        variant="caption"
+                        color={participant.status === 'running' ? 'primary.main' : 'secondary.main'}
+                        noWrap
+                        sx={{ maxWidth: '100%', fontWeight: 700, fontSize: { xs: '0.58rem', sm: '0.68rem' } }}
+                      >
+                        {statusLabel}
+                      </Typography>
+                    </Stack>
+                  )}
                 </>
               ) : (
                 <Typography variant="caption" color="text.disabled">{t('meetings.table.chair', { count: index + 1 })}</Typography>

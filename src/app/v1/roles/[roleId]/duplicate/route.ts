@@ -2,10 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { roleAdminErrorResponse } from '@/app/v1/roles/_response';
-import {
-  ensureBuiltInDeveloperRole,
-  duplicatePublicRole,
-} from '@/backend/services/enduringAgents';
+import { duplicatePublicRole } from '@/backend/services/enduringAgents';
 import { EnduringAgentIdSchema } from '@/shared/types/enduringAgent';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
@@ -25,7 +22,6 @@ async function POST_handler(request: NextRequest, { params }: RouteContext) {
   }
   const body = await request.json().catch(() => null);
   try {
-    await ensureBuiltInDeveloperRole();
     return NextResponse.json(await duplicatePublicRole(roleId, body), { status: 201 });
   } catch (error) {
     const response = roleAdminErrorResponse(error); if (response) return response;

@@ -2,10 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { roleAdminErrorResponse } from '@/app/v1/roles/_response';
-import {
-  ensureBuiltInDeveloperRole,
-  previewRoleImpact,
-} from '@/backend/services/enduringAgents';
+import { previewRoleImpact } from '@/backend/services/enduringAgents';
 import { EnduringAgentIdSchema } from '@/shared/types/enduringAgent';
 import { assertUnlocked } from '@/utils/encryption/lockGate';
 import { assertLocalRequest } from '@/utils/http/localRequest';
@@ -24,7 +21,6 @@ async function GET_handler(request: NextRequest, { params }: RouteContext) {
     return NextResponse.json({ error: 'Role not found.' }, { status: 404 });
   }
   try {
-    await ensureBuiltInDeveloperRole();
     return NextResponse.json(await previewRoleImpact(roleId));
   } catch (error) {
     const response = roleAdminErrorResponse(error); if (response) return response;

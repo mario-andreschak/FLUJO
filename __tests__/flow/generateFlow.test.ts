@@ -510,6 +510,10 @@ describe('generateFlow — multi-level (issue #94)', () => {
     const child = result.flows.find((f) => f.flow.id !== result.rootFlowId)!.flow;
     const sub = result.flow.nodes.find((n) => n.type === 'subflow')!;
     expect(sub.data.properties!.subflowId).toBe(child.id);
+    expect(sub.data.properties).toEqual(expect.objectContaining({
+      resultPresentation: 'separate',
+      sessionScope: 'per-key',
+    }));
     expect(result.validation.errorCount).toBe(0);
     // Two model turns: the root, then the child generation.
     expect(createCompletionMock).toHaveBeenCalledTimes(2);

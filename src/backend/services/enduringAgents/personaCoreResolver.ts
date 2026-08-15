@@ -47,9 +47,14 @@ export async function resolvePersonaCoreRevision(
     const primaryBindings = (await listBehaviorBindings(persona.id)).filter(
       (binding) => binding.slotKey === 'primary',
     );
-    if (primaryBindings.length !== 1) {
+    if (primaryBindings.length === 0) {
       throw new PersonaCoreResolutionError(
-        `Persona ${JSON.stringify(persona.id)} must have exactly one primary Core binding.`,
+        `Persona ${JSON.stringify(persona.id)} has no Behavior for the primary Core slot.`,
+      );
+    }
+    if (primaryBindings.length > 1) {
+      throw new PersonaCoreResolutionError(
+        `Persona ${JSON.stringify(persona.id)} has multiple Behaviors for the primary Core slot.`,
       );
     }
     const binding = primaryBindings[0];

@@ -59,6 +59,18 @@ class MeetingsService {
     return result.meeting;
   }
 
+  async resume(id: string, direction?: string): Promise<MeetingRecord> {
+    const result = await parse<{ meeting: MeetingRecord }>(await fetch(
+      withWorkspaceUrl(`${BASE}/${encodeURIComponent(id)}/resume`),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ direction }),
+      },
+    ));
+    return result.meeting;
+  }
+
   async cancel(id: string): Promise<MeetingRecord> {
     const result = await parse<{ meeting: MeetingRecord }>(await fetch(
       withWorkspaceUrl(`${BASE}/${encodeURIComponent(id)}/cancel`),

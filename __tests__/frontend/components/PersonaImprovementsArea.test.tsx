@@ -175,7 +175,7 @@ describe('PersonaImprovementsArea', () => {
     improvementsMock.mockResolvedValue([active]);
     promoteImprovementMock.mockResolvedValue({
       proposal: shared,
-      roleVersion: { id: 'rolever_shared', name: 'Developer v2' },
+      roleVersion: { id: 'rolever_shared', name: 'Shared Role v2' },
     });
 
     render(<PersonaImprovementsArea detail={detail} />);

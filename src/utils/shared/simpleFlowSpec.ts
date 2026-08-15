@@ -301,7 +301,12 @@ export function compileSimpleFlowSpec(
   options: CompileOptions = {},
 ): CompileSimpleFlowResult {
   const lowered = lowerSimpleFlowSpec(simple);
-  const compiled = compileFlowSpec(lowered.spec, context, options);
+  // A SimpleFlowSpec always describes a newly authored flow. Preserve an
+  // explicit caller override, but otherwise use the current Subflow defaults.
+  const compiled = compileFlowSpec(lowered.spec, context, {
+    newSubflowDefaults: true,
+    ...options,
+  });
   const issues = [...lowered.issues, ...compiled.issues];
   return {
     ...compiled,

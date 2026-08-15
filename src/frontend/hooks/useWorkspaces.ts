@@ -29,6 +29,9 @@ export function useWorkspaces(): {
   workspaces: WorkspaceInfo[];
   selected: string;
   select: (workspace: string) => void;
+  create: (workspace: string) => Promise<void>;
+  rename: (workspace: string, newName: string) => Promise<void>;
+  remove: (workspace: string) => Promise<void>;
   loading: boolean;
 } {
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([
@@ -90,5 +93,49 @@ export function useWorkspaces(): {
     }
   }, []);
 
-  return { workspaces, selected, select, loading };
+  const mutate = useCallback(async (
+    method: 'POST' | 'PATCH' | 'DELETE',
+    body: Record<string, string>,
+  ): Promise<{ workspace?: WorkspaceInfo; workspaces: WorkspaceInfo[] }> => {
+    const response = await fetch('/api/workspaces', {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await response.json().catch(() => ({})) as {
+      error?: string;
+      workspace?: WorkspaceInfo;
+      workspaces?: WorkspaceInfo[];
+    };
+    if (!response.ok) {
+      throw new Error(data.error || 'The workspace could not be updated.');
+    }
+    const valid = Array.isArray(data.workspaces)
+      ? data.workspaces.filter(item => isValidWorkspaceName(item?.name))
+      : [];
+    if (valid.length === 0) {
+      throw new Error('The server returned an invalid workspace list.');
+    }
+    setWorkspaces(valid);
+    return { workspace: data.workspace, workspaces: valid };
+  }, []);
+
+  const create = useCallback(async (workspace: string) => {
+    const result = await mutate('POST', { name: workspace });
+    select(result.workspace?.name ?? workspace);
+  }, [mutate, select]);
+
+  const rename = useCallback(async (workspace: string, newName: string) => {
+    const wasSelected = getSelectedWorkspace() === workspace;
+    const result = await mutate('PATCH', { name: workspace, newName });
+    if (wasSelected) select(result.workspace?.name ?? newName);
+  }, [mutate, select]);
+
+  const remove = useCallback(async (workspace: string) => {
+    const wasSelected = getSelectedWorkspace() === workspace;
+    await mutate('DELETE', { name: workspace });
+    if (wasSelected) select(DEFAULT_WORKSPACE);
+  }, [mutate, select]);
+
+  return { workspaces, selected, select, create, rename, remove, loading };
 }

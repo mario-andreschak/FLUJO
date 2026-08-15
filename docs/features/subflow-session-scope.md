@@ -4,10 +4,11 @@
 
 A Subflow node can be visited more than once inside a single parent run — a retry loop
 that re-invokes a "produce" child after a "validate" step reports a failure is the
-canonical example. By default every visit starts the child flow from zero: a brand-new
-conversation with no memory of the previous attempt. For flows that repeat expensive
-work (long tool chains, large media generation, multi-step research), that means every
-retry re-does the whole job even when only a small correction is needed.
+canonical example. Legacy nodes with no saved `sessionScope` start the child flow from
+zero on every visit. Newly created and generated Subflow nodes default to `per-key`, so
+calling Process nodes can reuse a named child conversation. For flows that repeat
+expensive work (long tool chains, large media generation, multi-step research), this
+avoids re-doing the whole job when only a small correction is needed.
 
 Session scope lets a Subflow node **resume the same child conversation** across repeat
 visits inside one parent run, so the second (and later) visit can say "here is what to
@@ -29,7 +30,7 @@ child conversation on every visit), even for nodes that have a resumable scope c
 
 | `sessionScope` | Behaviour | Status |
 |---|---|---|
-| `per-visit` (default) | Every handoff/queue visit starts a brand-new child run with no memory of any prior visit. | Available |
+| `per-visit` (legacy/absent fallback) | Every handoff/queue visit starts a brand-new child run with no memory of any prior visit. | Available |
 | `per-run` | All visits to this Subflow node within one parent run share **one** child conversation; the second and later visits resume it. | Available (behind the `experimental.subflowSessions` flag) |
 | `per-key` | One conversation per `sessionKey`. An incoming Process handoff may choose the key; reusing it sends the new task as a follow-up turn to that finished child conversation. Different keys remain independent. | Available (behind the `experimental.subflowSessions` flag) |
 
@@ -51,9 +52,11 @@ their results are never split.
 
 ## Configuring a node
 
-In the Subflow properties modal, use **Child conversation memory**:
+In the Subflow properties modal, use **Child conversation memory**. New Subflow nodes
+start on **One per session key**; existing nodes with no saved scope keep their historical
+fresh-per-visit behavior.
 
-- **Fresh every visit** is the default and stores no `sessionScope` property.
+- **Fresh every visit** stores no `sessionScope` property.
 - **One per parent run** stores `sessionScope: "per-run"`.
 - **One per session key** stores `sessionScope: "per-key"`. Leave the fixed-key field
   blank when the calling Process should choose `sessionKey` on each handoff.

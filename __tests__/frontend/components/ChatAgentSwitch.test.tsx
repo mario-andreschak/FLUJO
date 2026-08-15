@@ -5,6 +5,8 @@ const mockListConversations = jest.fn();
 const mockGetConversation = jest.fn();
 const mockCreateConversation = jest.fn();
 const mockUpdateConversationPersonaTarget = jest.fn();
+const mockGetModelTurns = jest.fn();
+const mockGetModelTurn = jest.fn();
 
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
@@ -52,7 +54,8 @@ jest.mock('@/frontend/services/chat', () => {
     chatService: {
       listConversations: (...args: unknown[]) => mockListConversations(...args),
       getConversation: (...args: unknown[]) => mockGetConversation(...args),
-      getModelTurns: jest.fn(async () => ({ turns: [] })),
+      getModelTurns: (...args: unknown[]) => mockGetModelTurns(...args),
+      getModelTurn: (...args: unknown[]) => mockGetModelTurn(...args),
       subscribeToSidebarEvents: jest.fn(() => ({ close: jest.fn() })),
       subscribeToEvents: jest.fn(() => ({ close: jest.fn() })),
       updateConversationFlow: jest.fn(),
@@ -196,6 +199,10 @@ describe('Talk conversation Agent switch terminology', () => {
       configurable: true,
       value: jest.fn(),
     });
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: jest.fn(),
+    });
     mockLoadFlows.mockReset().mockResolvedValue([
       { id: 'flow-research', name: 'Research Agent', nodes: [], edges: [] },
       { id: 'flow-writing', name: 'Writing Agent', nodes: [], edges: [] },
@@ -204,6 +211,78 @@ describe('Talk conversation Agent switch terminology', () => {
     mockGetConversation.mockReset().mockResolvedValue(detailedConversation);
     mockCreateConversation.mockReset();
     mockUpdateConversationPersonaTarget.mockReset();
+    mockGetModelTurns.mockReset().mockResolvedValue({ turns: [] });
+    mockGetModelTurn.mockReset();
+  });
+
+  it('keeps the chosen transcript view and renders Chat at the selected model turn', async () => {
+    const turns = [1, 2].map(index => ({
+      id: `dispatch-${index}`,
+      conversationId: conversationSummary.id,
+      node: { nodeId: `node-${index}`, nodeName: `Node ${index}` },
+      modelId: 'model-1',
+      modelName: 'Example Model',
+      adapter: 'openai',
+      operation: 'chat.completions.create',
+      timestamp: index * 1_000,
+      outcome: 'completed' as const,
+      attempt: index,
+      canonicalMessageCount: index + 1,
+      wireMessageCount: index + 1,
+      mediaCount: 0,
+      archiveVersion: 1 as const,
+    }));
+    const historicalMessages = [
+      { id: 'system', role: 'system', content: 'Hidden system prompt', timestamp: 1 },
+      { id: 'user-1', role: 'user', content: 'First question', timestamp: 2 },
+      { id: 'assistant-1', role: 'assistant', content: 'First answer', timestamp: 3 },
+    ];
+    mockGetConversation.mockResolvedValue({
+      ...detailedConversation,
+      messages: [
+        ...historicalMessages.slice(1),
+        { id: 'user-2', role: 'user', content: 'Second question', timestamp: 4 },
+        { id: 'assistant-2', role: 'assistant', content: 'Second answer', timestamp: 5 },
+      ],
+    });
+    mockGetModelTurns.mockResolvedValue({ turns });
+    mockGetModelTurn.mockImplementation(async (_conversationId: string, dispatchId: string) => ({
+      version: 1,
+      entry: turns.find(turn => turn.id === dispatchId),
+      canonicalMessages: dispatchId === 'dispatch-1'
+        ? historicalMessages.slice(0, 2)
+        : historicalMessages,
+      genericWire: [],
+      sdkRequest: { dispatchId },
+      media: [],
+    }));
+
+    render(<Chat />);
+
+    const chatButton = await screen.findByRole('button', { name: 'Chat' });
+    expect(chatButton).toHaveAttribute('aria-pressed', 'true');
+    await waitFor(() => expect(screen.getByTestId('rendered-message-count')).toHaveTextContent('2'));
+
+    fireEvent.click(screen.getByRole('option', { name: /1\. Node 1/ }));
+
+    expect(chatButton).toHaveAttribute('aria-pressed', 'true');
+    await waitFor(() => expect(screen.getByTestId('rendered-message-count')).toHaveTextContent('1'));
+
+    const modelInputButton = screen.getByRole('button', { name: /Model input/i });
+    fireEvent.click(modelInputButton);
+    expect(modelInputButton).toHaveAttribute('aria-pressed', 'true');
+
+    const requestDetailButton = await screen.findByRole('button', { name: 'Request Detail' });
+    fireEvent.click(requestDetailButton);
+    expect(requestDetailButton).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('model-turn-inspector-header')).toHaveStyle({ position: 'sticky' });
+
+    fireEvent.click(screen.getByRole('option', { name: /2\. Node 2/ }));
+
+    expect(modelInputButton).toHaveAttribute('aria-pressed', 'true');
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Request Detail' })).toHaveAttribute('aria-pressed', 'true');
+    });
   });
 
   it('confirms switching an active conversation to another Agent', async () => {

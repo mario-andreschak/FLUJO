@@ -33,7 +33,11 @@ function formatBytes(bytes: number) {
 }
 
 /** Management surface for derived filesystem snapshot history. */
-export default function SnapshotStorageSettings() {
+export default function SnapshotStorageSettings({
+  showCaptureToggle = true,
+}: {
+  showCaptureToggle?: boolean;
+}) {
   const { settings, updateSettings } = useStorage();
   const [status, setStatus] = useState<SnapshotStatus | null>(null);
   const [draft, setDraft] = useState<SnapshotRetentionPolicy | null>(null);
@@ -115,7 +119,7 @@ export default function SnapshotStorageSettings() {
     if (draft && parsed !== null) setDraft({ ...draft, [field]: parsed });
   };
 
-  const captureEnabled = settings.experimental?.snapshotsEnabled !== false;
+  const captureEnabled = settings.experimental?.snapshotsEnabled === true;
   const repositorySummaries = status?.usage.repositories ?? [];
   const captureCount = repositorySummaries.reduce(
     (total, repository) => total + repository.commitCount,
@@ -151,13 +155,17 @@ export default function SnapshotStorageSettings() {
       <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 2 }}>
         Snapshot history supports Diff and Revert. It is derived data: cleanup never deletes project files or your project&apos;s .git directory.
       </Typography>
-      <FormControlLabel
-        control={<Switch checked={captureEnabled} onChange={(event) => setCaptureEnabled(event.target.checked)} />}
-        label="Capture filesystem snapshots"
-      />
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Turning capture off stops new snapshots and does not free disk space.
-      </Typography>
+      {showCaptureToggle && (
+        <>
+          <FormControlLabel
+            control={<Switch checked={captureEnabled} onChange={(event) => setCaptureEnabled(event.target.checked)} />}
+            label="Capture filesystem snapshots"
+          />
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Turning capture off stops new snapshots and does not free disk space.
+          </Typography>
+        </>
+      )}
       {loading && <CircularProgress size={20} />}
       {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
       {message && <Alert severity="success" sx={{ mb: 1 }}>{message}</Alert>}
