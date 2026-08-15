@@ -6,6 +6,7 @@ import {
   Button,
   Chip,
   CircularProgress,
+  Divider,
   FormControl,
   FormControlLabel,
   Stack,
@@ -28,6 +29,76 @@ interface ConsentEntry {
   uri: string;
   decision: ConsentDecision;
   updatedAt: number;
+}
+
+interface ExperimentalSettingsGroupProps {
+  id: string;
+  title: string;
+  children: React.ReactNode;
+}
+
+interface ExperimentalToggleProps {
+  checked: boolean;
+  description: string;
+  disabled?: boolean;
+  indented?: boolean;
+  label: string;
+  name: string;
+  onChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+}
+
+function ExperimentalSettingsGroup({ id, title, children }: ExperimentalSettingsGroupProps) {
+  const titleId = `experimental-${id}-title`;
+  return (
+    <Box
+      component="section"
+      aria-labelledby={titleId}
+      sx={{
+        border: 1,
+        borderColor: 'divider',
+        borderRadius: 2,
+        p: { xs: 2, sm: 2.5 },
+      }}
+    >
+      <Typography id={titleId} component="h2" variant="h6">
+        {title}
+      </Typography>
+      <Divider sx={{ my: 2 }} />
+      <Stack spacing={2.5}>{children}</Stack>
+    </Box>
+  );
+}
+
+function ExperimentalToggle({
+  checked,
+  description,
+  disabled = false,
+  indented = false,
+  label,
+  name,
+  onChange,
+}: ExperimentalToggleProps) {
+  return (
+    <FormControl
+      fullWidth
+      sx={indented ? { pl: 2, borderLeft: 2, borderColor: 'divider' } : undefined}
+    >
+      <FormControlLabel
+        control={(
+          <Switch
+            checked={checked}
+            disabled={disabled}
+            name={name}
+            onChange={onChange}
+          />
+        )}
+        label={label}
+      />
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+        {description}
+      </Typography>
+    </FormControl>
+  );
 }
 
 function McpAppConsentManager() {
@@ -305,6 +376,17 @@ export default function ExperimentalFeaturesSettings() {
     });
   };
 
+  const handleSubflowDetachedInvocationChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    log.debug(`Detached subflow invocation toggled: ${event.target.checked}`);
+    updateSettings({
+      ...settings,
+      experimental: {
+        ...experimental,
+        subflowDetachedInvocation: event.target.checked,
+      },
+    });
+  };
+
   const handleVisualToolResultsOnlyChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     log.debug(`Visual compaction tool-results-only toggled: ${event.target.checked}`);
     updateSettings({
@@ -329,274 +411,178 @@ export default function ExperimentalFeaturesSettings() {
 
   return (
     <Box sx={{ p: 2 }}>
-      <FormControl fullWidth sx={{ mb: 2 }}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={experimental.compactionEnabled ?? false}
-              onChange={handleSummarizingCompactionChange}
-              name="compactionEnabled"
-            />
-          }
-          label={t('settings.experimental.summarizingCompaction')}
-        />
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          {t('settings.experimental.summarizingCompactionDescription')}
-        </Typography>
-      </FormControl>
-
-      <FormControl fullWidth sx={{ mb: 2 }}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={experimental.visualCompactionEnabled ?? false}
-              onChange={handleVisualCompactionChange}
-              name="visualCompactionEnabled"
-            />
-          }
-          label={t('settings.experimental.visualCompaction')}
-        />
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          {t('settings.experimental.visualCompactionDescription')}
-        </Typography>
-      </FormControl>
-
-      <FormControl fullWidth sx={{ mb: 2, ml: 2 }}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={experimental.visualCompactionToolResultsOnly !== false}
-              onChange={handleVisualToolResultsOnlyChange}
-              name="visualCompactionToolResultsOnly"
-              disabled={!experimental.visualCompactionEnabled}
-            />
-          }
-          label={t('settings.experimental.toolResultsOnly')}
-        />
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          {t('settings.experimental.toolResultsOnlyDescription')}
-        </Typography>
-      </FormControl>
-
-      <FormControl fullWidth sx={{ mb: 2, ml: 2 }}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={experimental.visualCompactionEvaluationMode ?? false}
-              onChange={handleVisualEvaluationModeChange}
-              name="visualCompactionEvaluationMode"
-              disabled={!experimental.visualCompactionEnabled}
-            />
-          }
-          label={t('settings.experimental.evaluation')}
-        />
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          {t('settings.experimental.evaluationDescription')}
-        </Typography>
-      </FormControl>
-
-      <FormControl fullWidth sx={{ mb: 2 }}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={experimental.requireMcpAppLaunchClick ?? false}
-              onChange={handleMcpAppLaunchRestrictionChange}
-              name="requireMcpAppLaunchClick"
-            />
-          }
-          label={t('settings.experimental.requireMcpAppLaunchClick')}
-        />
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          {t('settings.experimental.requireMcpAppLaunchClickDescription')}
-        </Typography>
-      </FormControl>
-
-      {experimental.requireMcpAppLaunchClick === true && <McpAppConsentManager />}
-
-      <FormControl fullWidth sx={{ mb: 2 }}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={experimental.restrictMcpFilesystemToRoots ?? false}
-              onChange={handleMcpRootsRestrictionChange}
-              name="restrictMcpFilesystemToRoots"
-            />
-          }
-          label={t('settings.experimental.restrictMcpFilesystemToRoots')}
-        />
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          {t('settings.experimental.restrictMcpFilesystemToRootsDescription')}
-        </Typography>
-      </FormControl>
-
-      <FormControl fullWidth sx={{ mb: 2 }}>
-        <FormControlLabel
-          control={
-            <Switch
+      <Stack spacing={3}>
+        <ExperimentalSettingsGroup
+          id="feature-access"
+          title={t('settings.experimental.group.featureAccess')}
+        >
+          <Box>
+            <ExperimentalToggle
               checked={experimental.enabled}
-              onChange={handleEnableChange}
+              description={t('settings.experimental.enableDescription')}
+              label={t('settings.experimental.enable')}
               name="experimentalEnabled"
+              onChange={handleEnableChange}
             />
-          }
-          label={t('settings.experimental.enable')}
-        />
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          {t('settings.experimental.enableDescription')}
-        </Typography>
-      </FormControl>
+            <Alert severity="info" sx={{ mt: 2 }}>
+              <Typography variant="body2">
+                {t('settings.experimental.disableInfo')}
+              </Typography>
+            </Alert>
+          </Box>
+        </ExperimentalSettingsGroup>
 
-      <FormControl fullWidth sx={{ mb: 2 }}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={experimental.claudeSessionResume ?? false}
-              onChange={handleClaudeSessionResumeChange}
-              name="claudeSessionResume"
+        <ExperimentalSettingsGroup
+          id="model-behavior"
+          title={t('settings.experimental.group.modelBehavior')}
+        >
+          <ExperimentalToggle
+            checked={experimental.showModelsWithoutToolCapabilities ?? false}
+            description={t('settings.experimental.modelsWithoutToolsDescription')}
+            label={t('settings.experimental.modelsWithoutTools')}
+            name="showModelsWithoutToolCapabilities"
+            onChange={handleShowModelsWithoutToolsChange}
+          />
+          <ExperimentalToggle
+            checked={experimental.claudeSessionResume ?? false}
+            description={t('settings.experimental.claudeResumeDescription')}
+            label={t('settings.experimental.claudeResume')}
+            name="claudeSessionResume"
+            onChange={handleClaudeSessionResumeChange}
+          />
+          <ExperimentalToggle
+            checked={experimental.codexModelCatalogCache ?? false}
+            description={t('settings.experimental.codexModelCatalogCacheDescription')}
+            label={t('settings.experimental.codexModelCatalogCache')}
+            name="codexModelCatalogCache"
+            onChange={handleCodexModelCatalogCacheChange}
+          />
+          <ExperimentalToggle
+            checked={experimental.autoUnloadOllamaModels ?? false}
+            description={t('settings.experimental.ollamaDescription')}
+            label={t('settings.experimental.ollama')}
+            name="autoUnloadOllamaModels"
+            onChange={handleAutoUnloadOllamaChange}
+          />
+        </ExperimentalSettingsGroup>
+
+        <ExperimentalSettingsGroup
+          id="context-management"
+          title={t('settings.experimental.group.contextManagement')}
+        >
+          <ExperimentalToggle
+            checked={experimental.compactionEnabled ?? false}
+            description={t('settings.experimental.summarizingCompactionDescription')}
+            label={t('settings.experimental.summarizingCompaction')}
+            name="compactionEnabled"
+            onChange={handleSummarizingCompactionChange}
+          />
+          <ExperimentalToggle
+            checked={experimental.visualCompactionEnabled ?? false}
+            description={t('settings.experimental.visualCompactionDescription')}
+            label={t('settings.experimental.visualCompaction')}
+            name="visualCompactionEnabled"
+            onChange={handleVisualCompactionChange}
+          />
+          <ExperimentalToggle
+            checked={experimental.visualCompactionToolResultsOnly !== false}
+            description={t('settings.experimental.toolResultsOnlyDescription')}
+            disabled={!experimental.visualCompactionEnabled}
+            indented
+            label={t('settings.experimental.toolResultsOnly')}
+            name="visualCompactionToolResultsOnly"
+            onChange={handleVisualToolResultsOnlyChange}
+          />
+          <ExperimentalToggle
+            checked={experimental.visualCompactionEvaluationMode ?? false}
+            description={t('settings.experimental.evaluationDescription')}
+            disabled={!experimental.visualCompactionEnabled}
+            indented
+            label={t('settings.experimental.evaluation')}
+            name="visualCompactionEvaluationMode"
+            onChange={handleVisualEvaluationModeChange}
+          />
+        </ExperimentalSettingsGroup>
+
+        <ExperimentalSettingsGroup
+          id="flow-execution"
+          title={t('settings.experimental.group.flowExecution')}
+        >
+          <ExperimentalToggle
+            checked={experimental.flowBasedGenerator ?? false}
+            description={t('settings.experimental.flowGeneratorDescription')}
+            disabled={!experimental.enabled}
+            label={t('settings.experimental.flowGenerator')}
+            name="flowBasedGenerator"
+            onChange={handleFlowBasedGeneratorChange}
+          />
+          <ExperimentalToggle
+            checked={experimental.subflowToolInvocation ?? false}
+            description={t('settings.experimental.subflowToolInvocationDescription')}
+            label={t('settings.experimental.subflowToolInvocation')}
+            name="subflowToolInvocation"
+            onChange={handleSubflowToolInvocationChange}
+          />
+          <ExperimentalToggle
+            checked={experimental.subflowDetachedInvocation ?? false}
+            description={t('settings.experimental.subflowDetachedInvocationDescription')}
+            label={t('settings.experimental.subflowDetachedInvocation')}
+            name="subflowDetachedInvocation"
+            onChange={handleSubflowDetachedInvocationChange}
+          />
+          <ExperimentalToggle
+            checked={experimental.subflowSessions ?? false}
+            description={t('settings.experimental.subflowSessionsDescriptionV2')}
+            label={t('settings.experimental.subflowSessions')}
+            name="subflowSessions"
+            onChange={handleSubflowSessionsChange}
+          />
+        </ExperimentalSettingsGroup>
+
+        <ExperimentalSettingsGroup
+          id="mcp-and-apps"
+          title={t('settings.experimental.group.mcpAndApps')}
+        >
+          <ExperimentalToggle
+            checked={experimental.mcpBetaProtocol ?? false}
+            description={t('settings.experimental.mcpBetaDescription')}
+            label={t('settings.experimental.mcpBeta')}
+            name="mcpBetaProtocol"
+            onChange={handleMcpBetaProtocolChange}
+          />
+          <ExperimentalToggle
+            checked={experimental.restrictMcpFilesystemToRoots ?? false}
+            description={t('settings.experimental.restrictMcpFilesystemToRootsDescription')}
+            label={t('settings.experimental.restrictMcpFilesystemToRoots')}
+            name="restrictMcpFilesystemToRoots"
+            onChange={handleMcpRootsRestrictionChange}
+          />
+          <Box>
+            <ExperimentalToggle
+              checked={experimental.requireMcpAppLaunchClick ?? false}
+              description={t('settings.experimental.requireMcpAppLaunchClickDescription')}
+              label={t('settings.experimental.requireMcpAppLaunchClick')}
+              name="requireMcpAppLaunchClick"
+              onChange={handleMcpAppLaunchRestrictionChange}
             />
-          }
-          label={t('settings.experimental.claudeResume')}
-        />
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          {t('settings.experimental.claudeResumeDescription')}
-        </Typography>
-      </FormControl>
+            {experimental.requireMcpAppLaunchClick === true && <McpAppConsentManager />}
+          </Box>
+        </ExperimentalSettingsGroup>
 
-      <FormControl fullWidth sx={{ mb: 2 }}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={experimental.codexModelCatalogCache ?? false}
-              onChange={handleCodexModelCatalogCacheChange}
-              name="codexModelCatalogCache"
-            />
-          }
-          label={t('settings.experimental.codexModelCatalogCache')}
-        />
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          {t('settings.experimental.codexModelCatalogCacheDescription')}
-        </Typography>
-      </FormControl>
-
-      <FormControl fullWidth sx={{ mb: 2 }}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={experimental.autoUnloadOllamaModels ?? false}
-              onChange={handleAutoUnloadOllamaChange}
-              name="autoUnloadOllamaModels"
-            />
-          }
-          label={t('settings.experimental.ollama')}
-        />
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          {t('settings.experimental.ollamaDescription')}
-        </Typography>
-      </FormControl>
-
-      <FormControl fullWidth sx={{ mb: 2 }}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={experimental.showModelsWithoutToolCapabilities ?? false}
-              onChange={handleShowModelsWithoutToolsChange}
-              name="showModelsWithoutToolCapabilities"
-            />
-          }
-          label={t('settings.experimental.modelsWithoutTools')}
-        />
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          {t('settings.experimental.modelsWithoutToolsDescription')}
-        </Typography>
-      </FormControl>
-
-      <FormControl fullWidth sx={{ mb: 2 }}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={experimental.mcpBetaProtocol ?? false}
-              onChange={handleMcpBetaProtocolChange}
-              name="mcpBetaProtocol"
-            />
-          }
-          label={t('settings.experimental.mcpBeta')}
-        />
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          {t('settings.experimental.mcpBetaDescription')}
-        </Typography>
-      </FormControl>
-
-      <FormControl fullWidth sx={{ mb: 2 }}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={experimental.flowBasedGenerator ?? false}
-              onChange={handleFlowBasedGeneratorChange}
-              name="flowBasedGenerator"
-              disabled={!experimental.enabled}
-            />
-          }
-          label={t('settings.experimental.flowGenerator')}
-        />
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          {t('settings.experimental.flowGeneratorDescription')}
-        </Typography>
-      </FormControl>
-
-      <FormControl fullWidth sx={{ mb: 2 }}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={experimental.snapshotsEnabled ?? false}
-              onChange={handleSnapshotsChange}
-              name="snapshotsEnabled"
-            />
-          }
-          label={t('settings.experimental.snapshots')}
-        />
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          {t('settings.experimental.snapshotsDescription')}
-        </Typography>
-      </FormControl>
-
-      <SnapshotStorageSettings />
-
-      <FormControl fullWidth sx={{ mb: 2 }}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={experimental.subflowToolInvocation ?? false}
-              onChange={handleSubflowToolInvocationChange}
-              name="subflowToolInvocation"
-            />
-          }
-          label={t('settings.experimental.subflowToolInvocation')}
-        />
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          {t('settings.experimental.subflowToolInvocationDescription')}
-        </Typography>
-      </FormControl>
-
-      <FormControl fullWidth sx={{ mb: 2 }}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={experimental.subflowSessions ?? false}
-              onChange={handleSubflowSessionsChange}
-              name="subflowSessions"
-            />
-          }
-          label={t('settings.experimental.subflowSessions')}
-        />
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          {t('settings.experimental.subflowSessionsDescriptionV2')}
-        </Typography>
-      </FormControl>
-
-      <Alert severity="info">
-        <Typography variant="body2">
-          {t('settings.experimental.disableInfo')}
-        </Typography>
-      </Alert>
+        <ExperimentalSettingsGroup
+          id="snapshots-and-recovery"
+          title={t('settings.experimental.group.snapshotsAndRecovery')}
+        >
+          <ExperimentalToggle
+            checked={experimental.snapshotsEnabled ?? false}
+            description={t('settings.experimental.snapshotsDescription')}
+            label={t('settings.experimental.snapshots')}
+            name="snapshotsEnabled"
+            onChange={handleSnapshotsChange}
+          />
+          <SnapshotStorageSettings showCaptureToggle={false} />
+        </ExperimentalSettingsGroup>
+      </Stack>
     </Box>
   );
 }

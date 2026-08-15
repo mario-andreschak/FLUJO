@@ -287,6 +287,25 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
     expect(toggle).not.toBeChecked();
   });
 
+  it('groups experimental controls in task-oriented order', () => {
+    mockStorageValue = { settings: { speech: { enabled: true } }, settingsHydrated: true, updateSettings: mockUpdateSettings };
+    render(<ExperimentalFeaturesSettings />);
+
+    const headings = [
+      'Feature access',
+      'Models and providers',
+      'Context management',
+      'Flow execution',
+      'MCP and apps',
+      'Snapshots and recovery',
+    ].map((name) => screen.getByRole('heading', { name }));
+
+    headings.slice(1).forEach((heading, index) => {
+      expect(headings[index].compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING)
+        .toBeTruthy();
+    });
+  });
+
   it('calls updateSettings with a merged payload enabling experimental features', () => {
     mockStorageValue = { settings: { speech: { enabled: true } }, settingsHydrated: true, updateSettings: mockUpdateSettings };
     render(<ExperimentalFeaturesSettings />);
@@ -382,6 +401,32 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
         enabled: true,
         visualCompactionEnabled: true,
         visualCompactionEvaluationMode: true,
+      },
+    });
+  });
+
+  it('exposes and persists the detached subflow task feature', () => {
+    mockStorageValue = {
+      settings: {
+        speech: { enabled: true },
+        experimental: { enabled: true, subflowToolInvocation: true },
+      },
+      settingsHydrated: true,
+      updateSettings: mockUpdateSettings,
+    };
+    render(<ExperimentalFeaturesSettings />);
+    const toggle = screen.getByRole('checkbox', {
+      name: /Run detached subflows in the background/i,
+    });
+    expect(toggle).not.toBeChecked();
+
+    fireEvent.click(toggle);
+    expect(mockUpdateSettings).toHaveBeenCalledWith({
+      speech: { enabled: true },
+      experimental: {
+        enabled: true,
+        subflowToolInvocation: true,
+        subflowDetachedInvocation: true,
       },
     });
   });
