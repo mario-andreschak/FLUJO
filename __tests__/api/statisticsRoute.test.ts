@@ -34,7 +34,7 @@ describe('GET /api/statistics', () => {
 
   it('uses local and encryption guards before returning aggregate-only data', async () => {
     const response = await GET(new NextRequest(
-      'http://localhost/api/statistics?from=2026-07-30&to=2026-07-30&flowId=flow-1',
+      'http://localhost/api/statistics?workspace=default-workspace&from=2026-07-30&to=2026-07-30&flowId=flow-1',
     ));
 
     expect(assertLocalRequestMock).toHaveBeenCalledTimes(1);

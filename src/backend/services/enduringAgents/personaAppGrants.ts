@@ -67,7 +67,7 @@ async function syncPersonaSelection(
   }), lock);
 }
 
-async function requireDirectAppConfig(mcpServerName: string): Promise<MCPServerConfig> {
+async function requireSelectableMcpConfig(mcpServerName: string): Promise<MCPServerConfig> {
   const configs = await loadServerConfigs();
   if (!Array.isArray(configs)) {
     throw new PersonaDomainConflictError(
@@ -81,6 +81,11 @@ async function requireDirectAppConfig(mcpServerName: string): Promise<MCPServerC
       `MCP config ${JSON.stringify(mcpServerName)} is disabled.`,
     );
   }
+  return config;
+}
+
+async function requireDirectAppConfig(mcpServerName: string): Promise<MCPServerConfig> {
+  const config = await requireSelectableMcpConfig(mcpServerName);
   if (config.enableMcpApps !== true) {
     throw new PersonaDomainConflictError(
       `MCP Apps are not enabled for config ${JSON.stringify(mcpServerName)}.`,
@@ -90,8 +95,9 @@ async function requireDirectAppConfig(mcpServerName: string): Promise<MCPServerC
 }
 
 /**
- * Grant direct launcher access to one exact named config. The live config is
- * checked before persistence, while Flow snapshots and bindings are untouched.
+ * Select one exact named MCP config for the Persona Core. Configs that publish
+ * an App UI can also be launched, but ordinary tool-only servers are valid
+ * selections. Flow snapshots and bindings remain untouched.
  */
 export async function grantPersonaAppAccess(
   personaId: string,
@@ -99,7 +105,7 @@ export async function grantPersonaAppAccess(
 ): Promise<PersonaAppGrant> {
   EnduringAgentIdSchema.parse(personaId);
   const input = CreatePersonaAppGrantInputSchema.parse(value) as CreatePersonaAppGrantInput;
-  await requireDirectAppConfig(input.mcpServerName);
+  await requireSelectableMcpConfig(input.mcpServerName);
 
   return withPersonaRuntimeLock(personaId, async (lock) => {
     const persona = await requireWritablePersona(personaId);
@@ -159,7 +165,7 @@ export async function replacePersonaAppAccess(
     }
 
     // Revalidate inside the lock so a failed target never removes the working App.
-    await requireDirectAppConfig(input.mcpServerName);
+    await requireSelectableMcpConfig(input.mcpServerName);
     if (grant.mcpServerName === input.mcpServerName) return grant;
 
     const replacementId = personaAppGrantId(personaId, input.mcpServerName);
@@ -272,6 +278,9 @@ export async function authorizePersonaAppLaunch(
       [grant.mcpServerName],
       grant.mcpServerName,
     );
+    // Core tool authorization deliberately accepts any enabled MCP server;
+    // opening a sandboxed App UI remains separately opt-in.
+    await requireDirectAppConfig(grant.mcpServerName);
     return {
       personaId,
       grantId: grant.id,

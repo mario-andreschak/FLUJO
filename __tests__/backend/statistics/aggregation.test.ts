@@ -305,7 +305,9 @@ describe('statistics aggregation', () => {
 
   it('parses canonical filters, defaults to seven UTC days, and rejects unsafe input', () => {
     const parsed = parseStatisticsRequest(
-      new URLSearchParams('providerId=p2&providerId=p1&providerId=p1'),
+      new URLSearchParams(
+        'workspace=default-workspace&providerId=p2&providerId=p1&providerId=p1',
+      ),
       new Date('2026-07-30T23:59:59.000Z'),
     );
     expect(parsed).toEqual({

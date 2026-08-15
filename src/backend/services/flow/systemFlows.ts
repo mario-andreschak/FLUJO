@@ -1,9 +1,10 @@
 /**
  * Editable flows shipped with FLUJO (issue #338).
  *
- * Vendored flows are ordinary saved flows after their first seed. Startup creates
- * a missing flow and performs the one known v1→v2 repair; that save archives the
- * old definition. Other existing/editable definitions are left untouched.
+ * Vendored flows are ordinary saved flows after their first seed. The generator
+ * is created lazily when its experimental authoring mode is first used and
+ * performs known version repairs through the normal archived-save path. Other
+ * existing/editable definitions are left untouched.
  */
 import type { Flow } from '@/shared/types/flow';
 import { compileFlowSpec } from '@/utils/shared/flowSpecCompiler';

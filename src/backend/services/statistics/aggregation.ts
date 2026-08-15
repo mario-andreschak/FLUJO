@@ -95,7 +95,8 @@ const FILTER_QUERY_KEYS = [
   'cacheOutcome', 'contentCategory', 'parentRunId',
 ] as const;
 const AGGREGATE_QUERY_KEYS = new Set<string>([
-  'from', 'to', 'view', 'sort', 'direction', ...FILTER_QUERY_KEYS,
+  // Validated and consumed by withWorkspaceRoute before this parser runs.
+  'workspace', 'from', 'to', 'view', 'sort', 'direction', ...FILTER_QUERY_KEYS,
 ]);
 const DETAIL_QUERY_KEYS = new Set<string>([
   ...AGGREGATE_QUERY_KEYS, 'kind', 'cursor', 'limit',

@@ -27,6 +27,7 @@ jest.mock('@/backend/services/enduringAgents/store', () => ({
 import {
   personaCoreAppNodeId,
   projectPersonaCoreAppsIntoFlow,
+  resolveAvailablePersonaAppRefs,
 } from '@/backend/services/enduringAgents/personaCoreApps';
 import { hashBehaviorFlow } from '@/backend/services/enduringAgents/behaviorRevisions';
 import type { Flow } from '@/shared/types/flow';
@@ -35,14 +36,14 @@ const PERSONA_ID = 'persona_core_apps_test';
 const COMPUTER = 'personal-computer';
 const BROWSER = 'browser';
 
-function appConfig(name: string) {
+function appConfig(name: string, enableMcpApps = true) {
   return {
     name,
     transport: 'stdio',
     command: 'node',
     args: [],
     disabled: false,
-    enableMcpApps: true,
+    enableMcpApps,
     rootPath: '',
     env: {},
     _buildCommand: '',
@@ -133,7 +134,7 @@ describe('Persona Core App flow projection', () => {
     });
     getPersonaDeletionTombstoneMock.mockResolvedValue(null);
     listPersonaAppGrantsMock.mockResolvedValue([]);
-    loadServerConfigsMock.mockResolvedValue([appConfig(COMPUTER), appConfig(BROWSER)]);
+    loadServerConfigsMock.mockResolvedValue([appConfig(COMPUTER, false), appConfig(BROWSER)]);
     connectServerMock.mockResolvedValue({ success: true });
     listServerToolsMock.mockImplementation(async (serverName: string) => ({
       tools: serverName === COMPUTER
@@ -202,5 +203,18 @@ describe('Persona Core App flow projection', () => {
     );
     expect(projectedAgain).toEqual(projected);
     expect(source).toEqual(untouched);
+  });
+
+  it('retains enabled tool-only MCP servers in Persona selections', async () => {
+    loadServerConfigsMock.mockResolvedValue([
+      appConfig('tools-only', false),
+      { ...appConfig('disabled-tools', false), disabled: true },
+    ]);
+
+    await expect(resolveAvailablePersonaAppRefs([
+      'tools-only',
+      'disabled-tools',
+      'missing',
+    ])).resolves.toEqual(['tools-only']);
   });
 });

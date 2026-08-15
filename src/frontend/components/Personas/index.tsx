@@ -1066,7 +1066,10 @@ function AppsArea({ detail, busy, mutate }: {
   const [selectedConfig, setSelectedConfig] = useState('');
   const [launching, setLaunching] = useState<string | null>(null);
   const [launchError, setLaunchError] = useState<string | null>(null);
-  const { servers, loading, refreshing, error, refresh } = useMcpAppsDiscovery({ active: true });
+  const { servers, loading, refreshing, error, refresh } = useMcpAppsDiscovery({
+    active: true,
+    includeAllServers: true,
+  });
   const grantsByServer = new Map(detail.appGrants.map((grant) => [grant.mcpServerName, grant]));
   const availableServers = servers.filter((server) => !grantsByServer.has(server.name));
 

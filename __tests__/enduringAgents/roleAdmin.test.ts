@@ -75,6 +75,13 @@ beforeEach(() => {
       disabled: false,
       enableMcpApps: true,
     },
+    {
+      name: 'tools-only',
+      transport: 'stdio',
+      command: 'tools',
+      disabled: false,
+      enableMcpApps: false,
+    },
   ]);
 });
 
@@ -88,6 +95,7 @@ describe('Role administration', () => {
       prompt: '  Investigate the question and cite evidence.  ',
       suggestedApps: [
         { mcpServerName: 'search' },
+        { mcpServerName: 'tools-only' },
         { mcpServerName: 'not-installed' },
       ],
     });
@@ -98,6 +106,7 @@ describe('Role administration', () => {
       prompt: 'Investigate the question and cite evidence.',
       suggestedApps: [
         { mcpServerName: 'search', status: 'available' },
+        { mcpServerName: 'tools-only', status: 'available' },
         { mcpServerName: 'not-installed', status: 'missing' },
       ],
       behaviors: [

@@ -23,7 +23,7 @@ const refreshSpotlightMock = jest.fn();
 const schedulerStartMock = jest.fn();
 const isEncryptionLockedMock = jest.fn();
 const isUserEncryptionEnabledMock = jest.fn();
-const ensureVendoredFlowGeneratorMock = jest.fn();
+const ensureDefaultFlujoAgentMock = jest.fn();
 const listPersonasMock = jest.fn();
 const reconcilePersonaRoleBehaviorsMock = jest.fn();
 const inspectPersonaRuntimeMock = jest.fn();
@@ -56,8 +56,8 @@ jest.mock('@/utils/encryption/secure', () => ({
   isEncryptionLocked: (...a: unknown[]) => isEncryptionLockedMock(...a),
   isUserEncryptionEnabled: (...a: unknown[]) => isUserEncryptionEnabledMock(...a),
 }));
-jest.mock('@/backend/services/flow/systemFlows', () => ({
-  ensureVendoredFlowGenerator: (...a: unknown[]) => ensureVendoredFlowGeneratorMock(...a),
+jest.mock('@/backend/services/flow/defaultAgent', () => ({
+  ensureDefaultFlujoAgent: (...a: unknown[]) => ensureDefaultFlujoAgentMock(...a),
 }));
 jest.mock('@/backend/services/enduringAgents', () => ({
   listPersonas: (...a: unknown[]) => listPersonasMock(...a),
@@ -86,7 +86,7 @@ describe('backend init startup gating (#78)', () => {
     clearGlobals();
     verifyStorageMock.mockResolvedValue(undefined);
     migrateWorkspaceLayoutMock.mockResolvedValue(undefined);
-    ensureVendoredFlowGeneratorMock.mockResolvedValue(undefined);
+    ensureDefaultFlujoAgentMock.mockResolvedValue(undefined);
     listPersonasMock.mockResolvedValue([{ id: 'persona_startup' }]);
     reconcilePersonaRoleBehaviorsMock.mockResolvedValue(undefined);
     inspectPersonaRuntimeMock.mockResolvedValue(undefined);
@@ -108,7 +108,7 @@ describe('backend init startup gating (#78)', () => {
     expect(migrateWorkspaceLayoutMock.mock.invocationCallOrder[0]).toBeLessThan(
       verifyStorageMock.mock.invocationCallOrder[0]
     );
-    expect(ensureVendoredFlowGeneratorMock).toHaveBeenCalledTimes(1);
+    expect(ensureDefaultFlujoAgentMock).toHaveBeenCalledTimes(1);
     expect(migrateInternalMcpServersMock).toHaveBeenCalledTimes(1);
     expect(startEnabledServersMock).toHaveBeenCalledTimes(1);
     expect(schedulerStartMock).toHaveBeenCalledTimes(1);
@@ -130,7 +130,7 @@ describe('backend init startup gating (#78)', () => {
     await expect(ensureBackendInitialized()).rejects.toThrow('workspace migration failed');
 
     expect(verifyStorageMock).not.toHaveBeenCalled();
-    expect(ensureVendoredFlowGeneratorMock).not.toHaveBeenCalled();
+    expect(ensureDefaultFlujoAgentMock).not.toHaveBeenCalled();
     expect(migrateInternalMcpServersMock).not.toHaveBeenCalled();
     expect(startEnabledServersMock).not.toHaveBeenCalled();
     expect(schedulerStartMock).not.toHaveBeenCalled();

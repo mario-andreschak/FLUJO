@@ -130,9 +130,9 @@ async function requireApps(appRefs: readonly string[]): Promise<void> {
   for (const appRef of appRefs) {
     const config = configs.find((candidate) => candidate.name === appRef);
     if (!config) missing('MCPServerConfig', appRef);
-    if (config.disabled === true || config.enableMcpApps !== true) {
+    if (config.disabled === true) {
       throw new PersonaDomainConflictError(
-        `MCP App ${JSON.stringify(appRef)} is not enabled for direct use.`,
+        `MCP config ${JSON.stringify(appRef)} is disabled.`,
       );
     }
   }
@@ -261,7 +261,9 @@ async function projectBundle(bundle: PersonaBundle): Promise<PersonaComposition>
     ref: roleVersion.roleDefinitionId,
     name: roleVersion.name,
     prompt: roleVersion.mission,
-    suggestedAppRefs: roleVersion.capabilityRequirements?.preferredMcpServers ?? [],
+    suggestedAppRefs: roleVersion.suggestedApps !== undefined
+      ? roleVersion.suggestedApps.map((app) => app.mcpServerName)
+      : roleVersion.capabilityRequirements?.preferredMcpServers ?? [],
   };
   if (preferences?.role) await requireRole(selectedRole);
   else if (!await getRoleDefinition(selectedRole.ref)) missing('RoleDefinition', selectedRole.ref);
