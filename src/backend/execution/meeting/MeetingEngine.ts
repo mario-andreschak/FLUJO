@@ -55,6 +55,7 @@ import {
   getPersonaDeletionTombstone,
   listBehaviorBindings,
 } from '@/backend/services/enduringAgents/store';
+import { resolvePersonaCoreRevision } from '@/backend/services/enduringAgents/personaCoreResolver';
 import { withPersonaRuntimeLock } from '@/backend/services/enduringAgents/runtimeLock';
 import { withMeetingControlLock as withControlLock } from '@/backend/services/meetings/controlLock';
 
@@ -154,6 +155,12 @@ async function resolvePersonaBehaviorRevisionPins(
       throw new Error(`Participant Persona ${participant.personaId} is disabled.`);
     }
     const slotKey = participant.behaviorSlotKey ?? 'primary';
+    // The visible Core Flow is authoritative for the primary slot. Resolve it
+    // before freezing the meeting pin so mailbox admission cannot immediately
+    // advance the binding to a different revision for the same Flow state.
+    if (slotKey === 'primary') {
+      await resolvePersonaCoreRevision(participant.personaId);
+    }
     const matchingBindings = (await listBehaviorBindings(participant.personaId))
       .filter((candidate) => candidate.slotKey === slotKey);
     if (matchingBindings.length === 0) {
@@ -1009,6 +1016,9 @@ async function validateMeetingPersonaBehaviorPins(
     }
 
     const slotKey = participant.behaviorSlotKey ?? 'primary';
+    if (slotKey === 'primary') {
+      await resolvePersonaCoreRevision(participant.personaId);
+    }
     const matchingBindings = (await listBehaviorBindings(participant.personaId))
       .filter((candidate) => candidate.slotKey === slotKey);
     if (matchingBindings.length === 0) {

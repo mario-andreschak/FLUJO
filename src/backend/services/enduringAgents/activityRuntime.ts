@@ -49,6 +49,7 @@ import {
   withPersonaRuntimeLock,
 } from './runtimeLock';
 import {
+  getBehaviorBinding,
   getBehaviorRevision,
   getPersona,
   getPersonaDeletionTombstone,
@@ -790,6 +791,23 @@ async function resolveBehavior(
   personaId: string,
   slotKey: string,
 ) {
+  if (slotKey === 'primary') {
+    const revision = await resolvePersonaCoreRevision(personaId);
+    const binding = await getBehaviorBinding(revision.behaviorId);
+    if (
+      !binding
+      || binding.personaId !== personaId
+      || binding.slotKey !== slotKey
+      || revision.personaId !== personaId
+      || revision.slotKey !== slotKey
+    ) {
+      throw new PersonaRuntimeCorruptionError(
+        personaId,
+        'Resolved Persona Core revision does not match its primary Behavior binding.',
+      );
+    }
+    return { binding, revision };
+  }
   return resolveEffectiveBehaviorRevision(personaId, slotKey);
 }
 

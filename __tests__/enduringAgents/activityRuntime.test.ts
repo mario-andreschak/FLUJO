@@ -1012,7 +1012,7 @@ describe('enduring-agent Activity runtime', () => {
     });
   });
 
-  it('resumes with the Activity-pinned Behavior after the slot binding changes', async () => {
+  it('resumes with the Activity-pinned Core after the primary binding changes', async () => {
     await inFreshWorkspace(async () => {
       const { persona } = await createJim('runtime-pinned-behavior-jim');
       await enqueuePersonaMailboxItem(assignment(persona.id, 'pinned-before-change'));
@@ -1023,13 +1023,12 @@ describe('enduring-agent Activity runtime', () => {
         (candidate) => candidate.slotKey === 'primary',
       )!;
       const original = (await getBehaviorRevision(binding.activeRevisionId))!;
-      const authoredBehavior = persona.composition?.behaviors
-        ?.find((candidate) => candidate.ref === binding.id);
-      if (authoredBehavior?.binding?.mode !== 'persona_copy') {
-        throw new Error('Expected a Persona-owned authored Behavior Flow.');
+      const authoredCore = persona.composition?.coreBinding;
+      if (authoredCore?.mode !== 'persona_copy') {
+        throw new Error('Expected a Persona-owned authored Core Flow.');
       }
       const authoredFlow = await flowService.getFlow(
-        authoredBehavior.binding.personaFlowRef,
+        authoredCore.personaFlowRef,
       );
       expect(authoredFlow).not.toBeNull();
       await expect(flowService.saveFlow({
@@ -1037,7 +1036,7 @@ describe('enduring-agent Activity runtime', () => {
         name: `${authoredFlow!.name} v2`,
       })).resolves.toMatchObject({ success: true });
 
-      // Admission snapshots the updated authored Flow and rebinds the slot for
+      // Admission snapshots the updated authored Core and rebinds the slot for
       // new work. The already-created Activity must retain its immutable pin.
       await enqueuePersonaMailboxItem(assignment(persona.id, 'new-after-change'));
       const rebound = (await listBehaviorBindings(persona.id)).find(
