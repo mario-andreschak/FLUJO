@@ -26,6 +26,7 @@ import { deleteConversationLog } from '@/backend/execution/flow/conversationLog'
 import { reconcileInterruptedRecovery } from '@/backend/execution/flow/recoveryCheckpoint';
 import type { StorageKey } from '@/shared/types/storage';
 import {
+  conversationSidebarTitle,
   deleteConversationSummary,
   listConversationSummaries,
   persistConversationSummary,
@@ -293,7 +294,7 @@ async function GET_handler(request: NextRequest) {
           const { personaOwned: _personaOwned, ...safeSummary } = summary;
           return {
             ...safeSummary,
-            title: live?.title ?? summary.title,
+            title: live ? conversationSidebarTitle(live, summary.title) : summary.title,
             flowId: live?.flowId ?? summary.flowId,
             status,
             updatedAt: live?.updatedAt ?? summary.updatedAt,
@@ -376,7 +377,7 @@ async function GET_handler(request: NextRequest) {
 
           base = {
             id: state.conversationId || conversationIdFromFile, // Prefer state ID, fallback to filename
-            title: state.title || 'Untitled Conversation',
+            title: conversationSidebarTitle(state),
             flowId: state.flowId || null,
             createdAt: state.createdAt || 0,
             updatedAt: state.updatedAt || 0,
@@ -439,7 +440,7 @@ async function GET_handler(request: NextRequest) {
           return null;
         }
         let status = live?.status ?? base.status;
-        const title = live?.title ?? base.title;
+        const title = live ? conversationSidebarTitle(live, base.title) : base.title;
         const updatedAt = live?.updatedAt ?? base.updatedAt;
         const lastUserMessageAt = live?.lastUserMessageAt ?? base.lastUserMessageAt ?? null;
         const source = live?.source ?? base.source ?? null;

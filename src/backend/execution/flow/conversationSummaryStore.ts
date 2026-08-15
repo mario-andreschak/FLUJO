@@ -11,12 +11,13 @@ import type { SharedState } from './types';
 import { deriveLastErrorFromLastResponse } from './normalizeError';
 import type { NormalizedChatError } from '@/shared/types/execution/errors';
 import { isPersonaOwnedConversationState } from './personaConversationOwnership';
+import { buildConversationTitle } from '@/utils/shared/conversationTitle';
 
 const log = createLogger('backend/execution/flow/conversationSummaryStore');
-// Issue #390: session metadata changes the serialized summary projection.
-// Advance the current lineage from v6 to v8 (the issue's v3 reference predates
-// later migrations); mismatched sidecars are rebuilt from authoritative snapshots.
-const SUMMARY_VERSION = 8;
+// Sidebar titles for automation conversations are now derived from their output
+// instead of their trigger prompt. Rebuild older sidecars so existing automation
+// rows stop exposing the appended run-info block too.
+const SUMMARY_VERSION = 9;
 const SUMMARY_READ_CONCURRENCY = 32;
 
 export type ConversationStatus = NonNullable<SharedState['status']>;
@@ -80,10 +81,49 @@ function summaryPath(id: string): string {
   return path.join(summariesDir(), `${id}.json`);
 }
 
+function latestAssistantText(state: SharedState): string | undefined {
+  for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+    const message = state.messages[index];
+    if (message.role === 'assistant' && typeof message.content === 'string' && message.content.trim()) {
+      return message.content;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Resolve the title exposed by the conversation-list API.
+ *
+ * Automation prompts include a fenced trigger-data block for the model. That
+ * content is useful in the transcript, but makes every saved automation look
+ * identical in the sidebar. Successful automation runs therefore use their
+ * returned output as the preview title. While output is unavailable (running,
+ * paused, or failed), use the planned-execution name and never the trigger
+ * prompt. Descendant subflow conversations keep their own authored titles.
+ */
+export function conversationSidebarTitle(
+  state: SharedState,
+  fallbackTitle = 'Untitled Conversation',
+): string {
+  const isAutomation = state.source === 'schedule'
+    || (!state.source && Boolean(state.plannedExecutionId) && !state.parentConversationId);
+  if (!isAutomation) return state.title || fallbackTitle;
+
+  if (state.status === 'completed' || state.status === 'capped') {
+    const outputText = typeof state.lastResponse === 'string' && state.lastResponse.trim()
+      ? state.lastResponse
+      : latestAssistantText(state);
+    if (outputText) return buildConversationTitle(outputText);
+  }
+
+  const executionName = state.statisticsPlannedExecutionName?.trim();
+  return executionName ? buildConversationTitle(executionName) : 'Automation run';
+}
+
 export function summarizeConversation(state: SharedState, fallbackId: string): ConversationSummary {
   return {
     id: state.conversationId || fallbackId,
-    title: state.title || 'Untitled Conversation',
+    title: conversationSidebarTitle(state),
     flowId: state.flowId || null,
     ...(state.status ? { status: state.status } : {}),
     createdAt: state.createdAt || 0,
