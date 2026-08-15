@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import {
   Alert,
   Box,
@@ -15,11 +15,13 @@ import type { FlujoChatMessage } from '@/shared/types/chat';
 import type { ModelTurnSnapshot } from '@/shared/types/modelTurn';
 import { chatService } from '@/frontend/services/chat';
 
-type InspectorTab = 'canonical' | 'wire' | 'request';
+export type ModelTurnInspectorTab = 'canonical' | 'wire' | 'request';
 
 interface ModelTurnInspectorProps {
   snapshot: ModelTurnSnapshot;
   conversationId: string;
+  tab: ModelTurnInspectorTab;
+  onTabChange: (tab: ModelTurnInspectorTab) => void;
 }
 
 const json = (value: unknown): string => {
@@ -101,14 +103,43 @@ function MessageList({
   );
 }
 
-export default function ModelTurnInspector({ snapshot, conversationId }: ModelTurnInspectorProps) {
-  const [tab, setTab] = useState<InspectorTab>('wire');
+export default function ModelTurnInspector({
+  snapshot,
+  conversationId,
+  tab,
+  onTabChange,
+}: ModelTurnInspectorProps) {
   const { entry } = snapshot;
 
   return (
     <Box data-testid="model-turn-inspector" sx={{ maxWidth: 1100, mx: 'auto', pb: 4 }}>
-      <Paper variant="outlined" sx={{ mb: 1.5, p: 1.5 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.75 }}>
+      <Paper
+        data-testid="model-turn-inspector-header"
+        variant="outlined"
+        sx={{
+          position: 'sticky',
+          top: 0,
+          zIndex: 3,
+          mb: 1.5,
+          p: 1.25,
+          bgcolor: 'background.paper',
+          boxShadow: 2,
+        }}
+      >
+        <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
+          <ToggleButtonGroup
+            exclusive
+            size="small"
+            value={tab}
+            onChange={(_event, value: ModelTurnInspectorTab | null) => value && onTabChange(value)}
+            aria-label="Model turn detail"
+            sx={{ flexShrink: 0 }}
+          >
+            <ToggleButton value="canonical">Canonical</ToggleButton>
+            <ToggleButton value="wire">Wired</ToggleButton>
+            <ToggleButton value="request">Request Detail</ToggleButton>
+          </ToggleButtonGroup>
+          <Divider orientation="vertical" flexItem sx={{ display: { xs: 'none', sm: 'block' } }} />
           <Typography variant="subtitle2">
             {entry.node.nodeName || entry.node.nodeId}
           </Typography>
@@ -153,19 +184,6 @@ export default function ModelTurnInspector({ snapshot, conversationId }: ModelTu
           {snapshot.visualCompaction.fallbackReason ? ` · ${snapshot.visualCompaction.fallbackReason}` : ''}
         </Alert>
       )}
-
-      <ToggleButtonGroup
-        exclusive
-        size="small"
-        value={tab}
-        onChange={(_event, value: InspectorTab | null) => value && setTab(value)}
-        aria-label="Model turn detail"
-        sx={{ mb: 1.5 }}
-      >
-        <ToggleButton value="canonical">Canonical</ToggleButton>
-        <ToggleButton value="wire">Wired</ToggleButton>
-        <ToggleButton value="request">Request Detail</ToggleButton>
-      </ToggleButtonGroup>
 
       {tab === 'canonical' && (
         <>

@@ -71,7 +71,7 @@ import DebuggerConversation from './DebuggerConversation';
 import DebuggerPendingPanel from './DebuggerPendingPanel';
 import ExecutedFlowPanel from './ExecutedFlowPanel';
 import ModelTurnTimeline from './ModelTurnTimeline';
-import ModelTurnInspector from './ModelTurnInspector';
+import ModelTurnInspector, { type ModelTurnInspectorTab } from './ModelTurnInspector';
 import { isQuickChatFlowId } from '@/utils/shared/quickChat';
 import type { RecoveryRecord } from '@/shared/types/execution/events';
 import type { NormalizedChatError } from '@/shared/types/execution/errors';
@@ -608,13 +608,16 @@ const Chat: React.FC = () => {
   const wirePreviewAbortRef = useRef<AbortController | null>(null);
   const wirePreviewRequestRef = useRef(0);
   // Durable, exact provider dispatches. The lightweight index drives the rail;
-  // the selected sidecar is loaded lazily only when Wire view is open.
+  // the selected sidecar supplies both its historical Chat render and Model Input.
   const [modelTurns, setModelTurns] = useState<ModelTurnIndexEntry[]>([]);
   const [selectedModelTurnId, setSelectedModelTurnId] = useState<string | null>(null);
   const [modelTurnSnapshot, setModelTurnSnapshot] = useState<ModelTurnSnapshot | null>(null);
   const [modelTurnLoading, setModelTurnLoading] = useState(false);
   const [modelTurnError, setModelTurnError] = useState<string | null>(null);
   const [modelTurnRetry, setModelTurnRetry] = useState(0);
+  // This diagnostic sub-view belongs to the inspector, not an individual dot.
+  // Keeping it here preserves the choice while a different snapshot loads.
+  const [modelTurnInspectorTab, setModelTurnInspectorTab] = useState<ModelTurnInspectorTab>('wire');
   const [modelTurnFollowLive, setModelTurnFollowLive] = useState(true);
   const [unseenModelTurnCount, setUnseenModelTurnCount] = useState(0);
   const modelTurnFollowLiveRef = useRef(true);
@@ -4654,6 +4657,7 @@ const Chat: React.FC = () => {
   );
   const currentPreviewAvailable = !!selectedPreviewNodeId && !!currentConversationId;
   const wireViewAvailable = archivedModelTurnAvailable || historicalWireViewAvailable || currentPreviewAvailable;
+  const showingArchivedChat = transcriptView === 'chat' && archivedModelTurnAvailable;
   const showingArchivedModelTurn = transcriptView === 'wire' && archivedModelTurnAvailable;
   const showingHistoricalWireView =
     transcriptView === 'wire' && !archivedModelTurnAvailable && historicalWireViewAvailable;
@@ -4663,9 +4667,14 @@ const Chat: React.FC = () => {
     && !historicalWireViewAvailable
     && currentPreviewAvailable;
   const showingWireView = showingArchivedModelTurn || showingHistoricalWireView || showingCurrentPreview;
+  const selectedModelTurnChatMessages = useMemo(
+    () => (modelTurnSnapshot?.canonicalMessages ?? [])
+      .filter(message => message.role !== 'system') as ChatMessage[],
+    [modelTurnSnapshot],
+  );
 
   useEffect(() => {
-    if (!showingArchivedModelTurn || !selectedModelTurn) {
+    if (!selectedModelTurn) {
       setModelTurnLoading(false);
       return;
     }
@@ -4697,7 +4706,7 @@ const Chat: React.FC = () => {
       if (!controller.signal.aborted) setModelTurnLoading(false);
     });
     return () => controller.abort();
-  }, [showingArchivedModelTurn, selectedModelTurn, modelTurnRetry]);
+  }, [selectedModelTurn, modelTurnRetry]);
 
   // Fetch only while the user is looking at the predictive wire view. Cleanup
   // aborts view-close, node-change, conversation-change, and unmount requests;
@@ -5232,7 +5241,6 @@ const Chat: React.FC = () => {
                     setModelTurnFollowLive(atEnd);
                     modelTurnFollowLiveRef.current = atEnd;
                     if (atEnd) setUnseenModelTurnCount(0);
-                    setTranscriptView('wire');
                   }}
                 />
               )}
@@ -5405,6 +5413,8 @@ const Chat: React.FC = () => {
                     <ModelTurnInspector
                       snapshot={modelTurnSnapshot}
                       conversationId={selectedModelTurn.conversationId}
+                      tab={modelTurnInspectorTab}
+                      onTabChange={setModelTurnInspectorTab}
                     />
                   ) : showingHistoricalWireView && selectedDebuggerModelInput ? (
                     <DebuggerConversation
@@ -5458,6 +5468,51 @@ const Chat: React.FC = () => {
                         : t('chat.debug.noModelCall')}
                     </Alert>
                   )}
+                </Box>
+              ) : showingArchivedChat ? (
+                <Box data-testid="model-turn-chat" sx={{ minHeight: '100%' }}>
+                  {modelTurnLoading ? (
+                    <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 1, py: 4 }}>
+                      <CircularProgress size={20} />
+                      <Typography variant="body2">Loading historical chat…</Typography>
+                    </Box>
+                  ) : modelTurnError ? (
+                    <Alert
+                      severity="error"
+                      variant="outlined"
+                      sx={{ mx: 'auto', mt: 2, maxWidth: 720 }}
+                      action={
+                        <Button
+                          color="inherit"
+                          size="small"
+                          onClick={() => {
+                            if (selectedModelTurn) {
+                              modelTurnDetailCacheRef.current.delete(`${selectedModelTurn.conversationId}:${selectedModelTurn.id}`);
+                            }
+                            setModelTurnRetry(value => value + 1);
+                          }}
+                        >
+                          Retry
+                        </Button>
+                      }
+                    >
+                      {modelTurnError}
+                    </Alert>
+                  ) : modelTurnSnapshot ? (
+                    selectedModelTurnChatMessages.length > 0 ? (
+                      <ChatMessages
+                        messages={selectedModelTurnChatMessages}
+                        availableNodes={availableNodes}
+                        conversationId={detailedConversation.id}
+                        onToggleDisabled={() => undefined}
+                        onSplitConversation={() => undefined}
+                      />
+                    ) : (
+                      <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>
+                        No chat messages were present at this model turn.
+                      </Typography>
+                    )
+                  ) : null}
                 </Box>
               ) : (
                 <>
