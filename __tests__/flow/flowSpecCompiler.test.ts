@@ -453,6 +453,35 @@ describe('compileFlowSpec — subflow resolution', () => {
       sessionKey: 'writer-${var:topic}',
     });
   });
+
+  it('applies the new Subflow defaults only when the authoring surface opts in', () => {
+    const legacy = compileFlowSpec(subflowSpec('flow-1'), context).flow!
+      .nodes.find((node) => node.type === 'subflow')!.data.properties!;
+    expect(legacy).not.toHaveProperty('resultPresentation');
+    expect(legacy).not.toHaveProperty('sessionScope');
+
+    const authored = compileFlowSpec(subflowSpec('flow-1'), context, {
+      newSubflowDefaults: true,
+    }).flow!.nodes.find((node) => node.type === 'subflow')!.data.properties!;
+    expect(authored).toEqual(expect.objectContaining({
+      resultPresentation: 'separate',
+      sessionScope: 'per-key',
+    }));
+  });
+
+  it('honors explicit legacy-mode opt-outs when new defaults are enabled', () => {
+    const spec = subflowSpec('flow-1');
+    Object.assign(spec.nodes[1], {
+      resultPresentation: 'joined',
+      sessionScope: 'per-visit',
+    });
+
+    const properties = compileFlowSpec(spec, context, {
+      newSubflowDefaults: true,
+    }).flow!.nodes.find((node) => node.type === 'subflow')!.data.properties!;
+    expect(properties).not.toHaveProperty('resultPresentation');
+    expect(properties).not.toHaveProperty('sessionScope');
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -22,6 +22,8 @@ describe('flowUsesAdvancedFeatures', () => {
           subflowId: 'child',
           inputMode: 'full-history',
           outputMode: 'final-only',
+          resultPresentation: 'separate',
+          sessionScope: 'per-key',
         }),
         node('finish'),
       ] as never,
@@ -53,6 +55,8 @@ describe('flowUsesAdvancedFeatures', () => {
             subflowId: 'helper-flow',
             inputMode: 'isolated',
             outputMode: 'final-only',
+            resultPresentation: 'separate',
+            sessionScope: 'per-key',
           }),
           id: 'helper-node',
         },
@@ -88,5 +92,16 @@ describe('flowUsesAdvancedFeatures', () => {
     ['conditional edge', { nodes: [], edges: [{ data: { condition: { kind: 'always' } } }] }],
   ])('detects %s as advanced', (_label, flow) => {
     expect(flowUsesAdvancedFeatures(flow as never)).toBe(true);
+  });
+
+  it.each([
+    ['joined result presentation', { resultPresentation: 'joined' }],
+    ['fresh-per-visit sessions', { sessionScope: 'per-visit' }],
+    ['one session per parent run', { sessionScope: 'per-run' }],
+  ])('keeps explicit %s in Advanced mode', (_label, properties) => {
+    expect(flowUsesAdvancedFeatures({
+      nodes: [node('subflow', properties)],
+      edges: [],
+    } as never)).toBe(true);
   });
 });

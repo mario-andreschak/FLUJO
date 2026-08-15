@@ -79,8 +79,17 @@ export async function compileSpec(
     compileContext = { ...compileContext, flows: flows.filter((f) => f.id !== options.updateFlowId) };
   }
   const compiled = options.profile === 'simple'
-    ? compileSimpleFlowSpec(spec as SimpleFlowSpec, compileContext, { keepPills: options.keepPills })
-    : compileFlowSpec(spec as FlowSpec, compileContext, { keepPills: options.keepPills });
+    ? compileSimpleFlowSpec(spec as SimpleFlowSpec, compileContext, {
+        keepPills: options.keepPills,
+        newSubflowDefaults: !options.updateFlowId,
+      })
+    : compileFlowSpec(spec as FlowSpec, compileContext, {
+        keepPills: options.keepPills,
+        // updateFlowId replaces an existing definition, so omitted legacy
+        // properties must retain their old runtime meaning. All other DSL
+        // operations author a new flow and receive the current defaults.
+        newSubflowDefaults: !options.updateFlowId,
+      });
 
   if (!compiled.flow) {
     return {

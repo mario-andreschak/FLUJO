@@ -46,9 +46,10 @@ NODE TYPES:
     "flow": "<existing flow name or id>",          // reference exactly ONE existing child flow, OR:
     "subflowSpec": { ...a nested FlowSpec... },     // define exactly ONE new child flow inline (compiled and wired automatically)
     "concurrencyLimit": 4,                          // optional; maximum ACTIVE child jobs, default 4. 1 = sequential; queued jobs are never discarded
+    "resultPresentation": "separate" | "joined",  // optional; newly compiled flows default separate (one parent message per lane); joined opts into one combined legacy message
     "inputMode": "full-history" | "latest-message" | "isolated",   // optional, default full-history. DIFFERS from a process node: history modes ALWAYS sanitize the parent transcript first — system messages, tool-result messages, and ANY assistant turn that made tool calls are dropped (only user + prose-only assistant messages survive). full-history = the full sanitized transcript; latest-message = the most recent EXCHANGE of the sanitized transcript (the last user message + the last assistant response after it, intermediate turns dropped); isolated = ignore the parent conversation and send "prompt" as the child's single user message
     "prompt": "default child instruction",         // optional, only with inputMode "isolated"; a handoff's task overrides it for that queued job
-    "sessionScope": "per-visit" | "per-run" | "per-key", // optional/experimental; per-run reuses one child chat in this parent run; per-key lets the caller pass sessionKey and later follow up in that finished child chat
+    "sessionScope": "per-visit" | "per-run" | "per-key", // optional/experimental; newly compiled flows default per-key; per-visit opts into a fresh child; per-run reuses one child in this parent run; per-key lets the caller pass sessionKey and later follow up in that finished child chat
     "sessionKey": "optional-fixed-key",              // optional with per-key; omit it when the calling Process should choose sessionKey on each handoff
     "captureVariable": "NAME",                     // optional; save the subflow's output into a run variable other steps inject with \${var:NAME}
     "captureResource": "NAME",                     // optional; ALSO save the subflow's output as a tracked run resource (\${res:NAME}, rule 9b)

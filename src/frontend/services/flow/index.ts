@@ -625,7 +625,10 @@ class FlowService {
             : type === 'static'
             ? { entries: [] }
             : type === 'subflow'
-            ? { resultPresentation: 'separate' }
+            ? {
+                resultPresentation: 'separate',
+                sessionScope: 'per-key',
+              }
             : {},
       },
     };

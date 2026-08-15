@@ -261,13 +261,16 @@ export interface FlowSpecNode {
    * subflow only (issue #359): result presentation mode for parallel subflows.
    * - 'separate': each lane produces its own framed assistant message in the
    *   parent conversation, carrying structured lane metadata (index, title, status).
-   * - 'joined' (default when absent): one framed message with joined outputs
-   *   and failure summary (back-compat).
-   * Only applies to parallel/spawn/fan-out/map-over-list executions.
+   * - 'joined': one framed message with joined outputs and failure summary.
+   * The low-level runtime keeps 'joined' when absent for backward compatibility;
+   * new-flow authoring surfaces persist 'separate' when this field is omitted.
+   * Only affects runs that actually produce more than one lane.
    */
   resultPresentation?: 'separate' | 'joined';
   /** Subflow child-conversation memory. `per-key` exposes a `sessionKey`
-   *  argument on incoming handoff tools when the experiment is enabled. */
+   *  argument on incoming handoff tools when the experiment is enabled. New-flow
+   *  authoring surfaces persist `per-key` when omitted; the low-level runtime
+   *  still treats absence as `per-visit` for saved-flow compatibility. */
   sessionScope?: 'per-visit' | 'per-run' | 'per-key';
   /** Optional authored key/template for `per-key`; when absent the caller may
    *  choose the key on each handoff. */
@@ -333,6 +336,13 @@ export interface CompileOptions {
    * behaviour used by the LLM flow-generation path).
    */
   keepPills?: boolean;
+  /**
+   * Defaults newly authored Subflow nodes to one message per lane and one child
+   * conversation per session key. Kept opt-in at the low-level compiler so
+   * round-tripping an existing flow with legacy/absent properties cannot change
+   * its behavior. Public new-flow authoring surfaces enable this option.
+   */
+  newSubflowDefaults?: boolean;
 }
 
 export interface CompileIssue {
@@ -817,17 +827,29 @@ export function compileFlowSpec(
         if (typeof specNode.allowCallerFanout === 'boolean') {
           properties.allowCallerFanout = specNode.allowCallerFanout;
         }
+        const sessionScope = specNode.sessionScope
+          ?? (options.newSubflowDefaults ? 'per-key' : undefined);
         if (
-          specNode.sessionScope === 'per-visit'
-          || specNode.sessionScope === 'per-run'
-          || specNode.sessionScope === 'per-key'
+          sessionScope === 'per-visit'
+          || sessionScope === 'per-run'
+          || sessionScope === 'per-key'
         ) {
-          if (specNode.sessionScope !== 'per-visit') properties.sessionScope = specNode.sessionScope;
+          // Keep the legacy runtime default implicit when an author explicitly
+          // opts out with per-visit. The new-flow default is persisted as per-key.
+          if (sessionScope !== 'per-visit') properties.sessionScope = sessionScope;
         } else if (specNode.sessionScope !== undefined) {
           warn('invalid-session-scope', `Node "${key}": sessionScope "${String(specNode.sessionScope)}" is not valid (per-visit | per-run | per-key); omitted.`, key);
         }
         if (typeof specNode.sessionKey === 'string' && specNode.sessionKey.trim()) {
           properties.sessionKey = specNode.sessionKey.trim();
+        }
+        // A single-child Subflow can still produce multiple lanes when its
+        // incoming Process queues repeated handoffs, so presentation belongs
+        // to every Subflow node rather than only legacy fan-out shapes.
+        const resultPresentation = specNode.resultPresentation
+          ?? (options.newSubflowDefaults ? 'separate' : undefined);
+        if (resultPresentation === 'separate') {
+          properties.resultPresentation = 'separate';
         }
         // captureVariable (Tier 2c): save the subflow's folded output into a named run var.
         if (typeof specNode.captureVariable === 'string' && specNode.captureVariable.trim()) {
@@ -1449,11 +1471,6 @@ export function compileFlowSpec(
       } else {
         warn('invalid-error-strategy', `Node "${specNode.key}": errorStrategy "${String(specNode.errorStrategy)}" is not valid (fail-fast | collect-all); using collect-all.`, specNode.key);
       }
-    }
-    // Result presentation mode (issue #359): round-trip only the explicit 'separate'
-    // ('joined' is the default and stays implicit).
-    if (specNode.resultPresentation === 'separate') {
-      properties.resultPresentation = 'separate';
     }
   }
 }

@@ -10,7 +10,10 @@ describe('FlowBuilder node creation', () => {
   it('defaults new subflow nodes to separate parallel result messages', () => {
     const node = flowService.createNode('subflow', { x: 10, y: 20 });
 
-    expect(node.data.properties).toEqual({ resultPresentation: 'separate' });
+    expect(node.data.properties).toEqual({
+      resultPresentation: 'separate',
+      sessionScope: 'per-key',
+    });
   });
 
   it('does not add process input settings to unrelated node types', () => {

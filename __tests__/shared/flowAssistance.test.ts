@@ -91,6 +91,8 @@ describe('flow assistance', () => {
     expect(agentNode?.data.properties).toEqual(expect.objectContaining({
       inputMode: 'isolated',
       outputMode: 'final-only',
+      resultPresentation: 'separate',
+      sessionScope: 'per-key',
     }));
     expect(once.edges.find((edge) => edge.target === agentNode?.id)?.data).toEqual(expect.objectContaining({
       bidirectional: true,

@@ -27,6 +27,8 @@ describe('Guided subagent wiring', () => {
         subflowId: 'agent-research',
         inputMode: 'isolated',
         outputMode: 'final-only',
+        resultPresentation: 'separate',
+        sessionScope: 'per-key',
       }),
     }));
     expect(isCanonicalGuidedSubagent(node)).toBe(true);

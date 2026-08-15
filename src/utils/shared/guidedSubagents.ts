@@ -50,6 +50,11 @@ export function configureGuidedSubagentNode(node: FlowNode, agent: Pick<Flow, 'i
       label: agent.name,
       ...(agent.description ? { description: agent.description } : {}),
       properties: {
+        // Guided and AI-assisted connections create new Subflow nodes. Seed
+        // current defaults before existing properties so callers can still
+        // carry an explicit joined/per-visit opt-out through reconfiguration.
+        resultPresentation: 'separate',
+        sessionScope: 'per-key',
         ...(node.data.properties ?? {}),
         subflowId: agent.id,
         inputMode: 'isolated',
