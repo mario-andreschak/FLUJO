@@ -7,7 +7,7 @@ import { refreshSpotlightServers } from '@/backend/services/spotlight';
 import { getSchedulerService } from '@/backend/services/scheduler';
 import { isEncryptionLocked, isUserEncryptionEnabled } from '@/utils/encryption/secure';
 import { createLogger } from '@/utils/logger';
-import { ensureVendoredFlowGenerator } from '@/backend/services/flow/systemFlows';
+import { ensureDefaultFlujoAgent } from '@/backend/services/flow/defaultAgent';
 import {
   inspectAndReconcilePersonaRuntime,
   listPersonas,
@@ -297,7 +297,7 @@ async function runInitialization(): Promise<void> {
 
   // Verify storage first - if this throws, callers (e.g. the route) surface it.
   await verifyStorage();
-  await ensureVendoredFlowGenerator();
+  await ensureDefaultFlujoAgent();
   // Detached task execution is process-local in v1. Any persisted working task
   // left behind by a prior process is visible as a terminal restart failure.
   reconcileOrphanedTasks().catch(error =>
