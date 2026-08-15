@@ -786,6 +786,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
             globalNames={globalNames}
             suggestions={referenceSuggestions}
             enhancedHitlist
+            hitlistPlacement="top"
             multiline
             minRows={1}
             maxRows={isEditing ? 12 : 4}

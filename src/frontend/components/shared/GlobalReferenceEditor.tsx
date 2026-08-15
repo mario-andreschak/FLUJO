@@ -67,6 +67,8 @@ export interface GlobalReferenceEditorProps {
   onPaste?: (event: React.ClipboardEvent<HTMLDivElement>) => void;
   /** Load the cross-application entity/file hitlist in addition to local refs. */
   enhancedHitlist?: boolean;
+  /** Direction in which the completion hitlist opens relative to the editor. */
+  hitlistPlacement?: 'top' | 'bottom';
   /** Optional roots used by `@@` file search; configured MCP roots are the fallback. */
   workspaceRoots?: string[];
 }
@@ -483,6 +485,7 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
   onKeyDown,
   onPaste,
   enhancedHitlist = false,
+  hitlistPlacement = 'bottom',
   workspaceRoots,
 }, ref) => {
   const { t } = useI18n();
@@ -820,10 +823,11 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
           sx={{
             position: 'absolute',
             zIndex: 1500,
-            top: '100%',
+            ...(hitlistPlacement === 'top'
+              ? { bottom: '100%', mb: 0.5 }
+              : { top: '100%', mt: 0.5 }),
             left: 0,
             right: 0,
-            mt: 0.5,
             maxHeight: 240,
             overflowY: 'auto',
           }}

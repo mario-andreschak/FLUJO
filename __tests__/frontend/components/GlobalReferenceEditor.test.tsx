@@ -1,5 +1,7 @@
-import { render, screen } from '@testing-library/react';
+import { createRef } from 'react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import GlobalReferenceEditor, {
+  GlobalReferenceEditorRef,
   deserializeReferenceValue,
   filterGlobalNames,
   filterReferenceSuggestions,
@@ -67,5 +69,26 @@ describe('GlobalReferenceEditor (#318)', () => {
     expect(screen.getByText('global:API_KEY')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Remove global:API_KEY' })).toBeInTheDocument();
     expect(screen.queryByText('super-secret-value')).not.toBeInTheDocument();
+  });
+
+  it('can open the completion hitlist above the editor', async () => {
+    const editorRef = createRef<GlobalReferenceEditorRef>();
+    render(
+      <GlobalReferenceEditor
+        ref={editorRef}
+        value=""
+        onChange={jest.fn()}
+        globalNames={['API_KEY']}
+        ariaLabel="Test editor"
+        hitlistPlacement="top"
+      />,
+    );
+
+    fireEvent.mouseDown(document.querySelector('.global-reference-editor') as HTMLElement);
+    act(() => editorRef.current?.insertText('@'));
+
+    const hitlist = await waitFor(() => screen.getByRole('listbox'));
+    expect(hitlist).toHaveStyle({ bottom: '100%' });
+    expect(hitlist).not.toHaveStyle({ top: '100%' });
   });
 });
