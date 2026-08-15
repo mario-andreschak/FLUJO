@@ -24,7 +24,11 @@ import PageHeader from '@/frontend/components/shared/PageHeader';
 import MeetingList from './MeetingList';
 import MeetingView from './MeetingView';
 import MeetingWizard from './MeetingWizard';
-import { meetingLogMarkdown } from './meetingTranscriptProjection';
+import {
+  meetingFollowupSummary,
+  meetingLogAttachment,
+  meetingLogMarkdown,
+} from './meetingTranscriptProjection';
 import {
   clearMeetingLaunchIntent,
   parseMeetingLaunchIntent,
@@ -183,44 +187,14 @@ export default function MeetingsManager() {
   };
 
   const runContinuation = async (steeringPrompt?: string) => {
-    if (!selectedMeeting) return;
-    const lastOutcome = [...(detail?.events ?? [])].reverse().find((event) => event.type === 'meeting:completed' || event.type === 'meeting:cancelled');
-    const outcome = lastOutcome && 'reason' in lastOutcome ? lastOutcome.reason : undefined;
-    const direction = steeringPrompt?.trim();
-    const input: CreateMeetingInput = {
-      title: `${selectedMeeting.title} · Continued`,
-      openingPrompt: [
-        `Continue the meeting “${selectedMeeting.title}” as a new session.`,
-        outcome ? `Previous outcome: ${outcome}` : undefined,
-        direction
-          ? `The moderator is continuing the meeting with this direction:\n${direction}`
-          : 'Revisit unresolved points, incorporate the prior outcome, and converge on the next concrete decision.',
-        '',
-        'Original brief:',
-        selectedMeeting.openingPrompt,
-      ].filter((line): line is string => line !== undefined).join('\n'),
-      openingMedia: selectedMeeting.openingMedia,
-      parentMeetingId: selectedMeeting.id,
-      participants: selectedMeeting.participants.map(({
-        id,
-        name,
-        flowId,
-        personaId,
-        behaviorSlotKey,
-        behaviorName,
-        role,
-      }) => ({ id, name, flowId, personaId, behaviorSlotKey, behaviorName, role })),
-      moderatorParticipantId: selectedMeeting.moderatorParticipantId,
-      policy: { ...selectedMeeting.policy },
-    };
+    if (!selectedId || !selectedMeeting) return;
     setBusy(true);
     try {
-      const created = await meetingsService.create(input);
-      selectMeeting(created.id);
-      setDetail({ meeting: created, events: [] });
-      const started = await meetingsService.start(created.id);
-      setDetail((current) => ({ meeting: started, events: current?.events ?? [] }));
-      await loadDetail(created.id);
+      const resumed = await meetingsService.resume(selectedId, steeringPrompt?.trim() || undefined);
+      setDetail((current) => current?.meeting.id === selectedId
+        ? { ...current, meeting: resumed }
+        : { meeting: resumed, events: [] });
+      await loadDetail(selectedId);
       await loadList();
     } finally {
       setBusy(false);
@@ -237,10 +211,19 @@ export default function MeetingsManager() {
 
   const openFollowup = () => {
     if (!selectedMeeting) return;
+    const events = detail?.meeting.id === selectedMeeting.id ? detail.events : [];
+    const fullLog = meetingLogAttachment(selectedMeeting, events);
     setWizardSeed({
       title: `Follow-up: ${selectedMeeting.title}`,
-      openingPrompt: `Define the next decision or action that follows from “${selectedMeeting.title}”.\n\nRelevant context from the original brief:\n${selectedMeeting.openingPrompt}`,
-      openingMedia: selectedMeeting.openingMedia,
+      openingPrompt: [
+        `Define the next decision or action that follows from “${selectedMeeting.title}”.`,
+        '',
+        meetingFollowupSummary(selectedMeeting, events),
+        '',
+        'Original brief:',
+        selectedMeeting.openingPrompt,
+      ].join('\n'),
+      openingMedia: [...(selectedMeeting.openingMedia ?? []), fullLog],
       parentMeetingId: selectedMeeting.id,
       participants: selectedMeeting.participants.map(({
         id,

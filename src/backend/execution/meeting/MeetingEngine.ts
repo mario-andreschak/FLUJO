@@ -14,6 +14,7 @@ import { flowService } from '@/backend/services/flow';
 import {
   copyRunResourceToConversation,
   getRunResourceLocalPath,
+  writeRunResource,
 } from '@/backend/services/runResources';
 import { meetingEventBus } from '@/backend/services/meetings/MeetingEventBus';
 import { latestMeetingSequence, readMeetingEvents } from '@/backend/services/meetings/eventLog';
@@ -399,6 +400,10 @@ function contributionLine(event: MeetingEvent, meeting: MeetingRecord): string |
       return `[Private message from ${meeting.participants.find((item) => item.id === event.fromParticipantId)?.name ?? event.fromParticipantId}]\n${event.content}`;
     case 'moderator:intervention':
       return `[Human steering instruction]\n${event.content}`;
+    case 'meeting:resumed':
+      return event.direction
+        ? `[The moderator continued this meeting]\n${event.direction}`
+        : '[The moderator continued this meeting] Revisit unresolved points and converge on the next concrete decision.';
     case 'participant:left':
       return `[Meeting update] ${event.participantName} left${event.reason ? `: ${event.reason}` : '.'}`;
     case 'participant:error':
@@ -487,19 +492,35 @@ async function copyMediaForParticipant(
 ): Promise<ModelMediaPart[]> {
   if (!media?.length) return [];
   return Promise.all(media.map(async (part) => {
-    if (!part.resourceUri) return { ...part };
     try {
       return await commitFlowDurableMutation({ executionAuthority }, async () => {
-        const copied = await copyRunResourceToConversation({
-          uri: part.resourceUri!,
-          conversationId,
-          name: part.name,
-          producedBy: { source: 'model-output' },
-        });
-        if (!copied || 'skipped' in copied) return { ...part };
+        const inlineDataUrl = part.url?.match(/^data:([^;,]+);base64,([\s\S]*)$/);
+        const inlineData = part.data ?? inlineDataUrl?.[2];
+        const mimeType = part.mimeType ?? inlineDataUrl?.[1] ?? 'application/octet-stream';
+        const copied = part.resourceUri
+          ? await copyRunResourceToConversation({
+              uri: part.resourceUri,
+              conversationId,
+              name: part.name,
+              producedBy: { source: 'user-input' },
+            })
+          : inlineData
+            ? await writeRunResource({
+                conversationId,
+                name: part.name,
+                mimeType,
+                kind: part.type === 'image' ? 'image' : part.type === 'audio' ? 'audio' : 'blob',
+                data: { base64: inlineData },
+                producedBy: { source: 'user-input' },
+              })
+            : null;
+        if (!copied) return { ...part };
+        if ('skipped' in copied) return { ...part };
         const localPath = await getRunResourceLocalPath(copied.uri);
         return {
           ...part,
+          mimeType,
+          data: undefined,
           resourceUri: copied.uri,
           ...(localPath ? { localPath } : {}),
           url:
@@ -909,10 +930,18 @@ type TerminalMeetingEvent = Extract<
 >;
 
 function latestTerminalEvent(events: MeetingEvent[]): TerminalMeetingEvent | undefined {
-  return [...events].reverse().find((event): event is TerminalMeetingEvent =>
-    event.type === 'meeting:completed'
+  const lifecycle = [...events].reverse().find((event) =>
+    event.type === 'meeting:started'
+    || event.type === 'meeting:resumed'
+    || event.type === 'meeting:completed'
     || event.type === 'meeting:cancelled'
     || event.type === 'meeting:error');
+  return lifecycle && (
+    lifecycle.type === 'meeting:completed'
+    || lifecycle.type === 'meeting:cancelled'
+    || lifecycle.type === 'meeting:error')
+    ? lifecycle
+    : undefined;
 }
 
 type MeetingReservationOutcome = 'completed' | 'cancelled' | 'error';
@@ -981,7 +1010,7 @@ function projectTerminalEvent(
     if (terminal.type === 'meeting:error') meeting.activeRound.error = terminal.error;
   }
   for (const participant of meeting.participants) {
-    if (participant.status === 'running') participant.status = 'idle';
+    if (participant.status === 'running' || participant.status === 'waiting') participant.status = 'idle';
   }
 }
 
@@ -1323,7 +1352,7 @@ export class MeetingEngine {
             current.error = reason;
             current.completedAt = Date.now();
             for (const participant of current.participants) {
-              if (participant.status === 'running') participant.status = 'idle';
+              if (participant.status === 'running' || participant.status === 'waiting') participant.status = 'idle';
             }
             const interrupted = await meetingEventBus.emit(current.id, {
               type: 'meeting:error',
@@ -1356,7 +1385,7 @@ export class MeetingEngine {
           current.error = reason;
           current.completedAt = failedAt;
           for (const participant of current.participants) {
-            if (participant.status === 'running') participant.status = 'idle';
+            if (participant.status === 'running' || participant.status === 'waiting') participant.status = 'idle';
           }
           const interrupted = await meetingEventBus.emit(current.id, {
             type: 'meeting:error',
@@ -1398,7 +1427,7 @@ export class MeetingEngine {
           participant.activityId = reservation.claim.activity.id;
         }
         for (const participant of current.participants) {
-          if (participant.status === 'running') participant.status = 'idle';
+          if (participant.status === 'running' || participant.status === 'waiting') participant.status = 'idle';
         }
         const started = await meetingEventBus.emit(current.id, {
           type: 'meeting:started',
@@ -1478,6 +1507,50 @@ export class MeetingEngine {
     return handle.promise;
   }
 
+  /**
+   * Reopen a terminal meeting as a new discussion segment while preserving the
+   * meeting id, event log, participant conversations, and delivery cursors.
+   */
+  async resume(meetingId: string, direction?: string): Promise<MeetingRecord> {
+    const normalizedDirection = direction?.trim();
+    await withControlLock(meetingId, async () => {
+      const meeting = await getMeeting(meetingId);
+      if (!meeting) throw new Error(`Meeting ${meetingId} not found.`);
+      if (!['completed', 'cancelled', 'error'].includes(meeting.status)) {
+        throw new Error(`Meeting ${meetingId} is not finished.`);
+      }
+      if (!meeting.participants.some((participant) =>
+        participant.status !== 'left' && !participant.personaArchived && !participant.personaRetired)) {
+        throw new Error(`Meeting ${meetingId} has no participants available to continue.`);
+      }
+
+      meeting.status = 'paused';
+      meeting.phase = 'discussion';
+      meeting.completedAt = undefined;
+      meeting.error = undefined;
+      meeting.personaReservationIntent = undefined;
+      if (meeting.activeRound?.status === 'running') {
+        meeting.activeRound.status = 'error';
+        meeting.activeRound.completedAt ??= Date.now();
+      }
+      for (const participant of meeting.participants) {
+        if (participant.status === 'running' || participant.status === 'waiting' || participant.status === 'error') {
+          participant.status = 'idle';
+          participant.error = undefined;
+        }
+      }
+      const resumed = await this.emit(meeting, {
+        type: 'meeting:resumed',
+        audience: 'public',
+        ...(normalizedDirection ? { direction: normalizedDirection } : {}),
+        eventId: `${meeting.id}:resumed:${randomUUID()}`,
+      });
+      meeting.lastEventSeq = resumed.seq;
+      await saveMeeting(meeting);
+    });
+    return this.start(meetingId);
+  }
+
   async cancel(meetingId: string, reason = 'Cancelled by user.'): Promise<MeetingRecord> {
     const handle = this.runtimeRegistry.get(runtimeKey(meetingId));
     if (handle) {
@@ -1508,7 +1581,7 @@ export class MeetingEngine {
         const liveState = FlowExecutor.conversationStates.get(participant.conversationId);
         if (liveState) liveState.isCancelled = true;
         cancelAllToolCalls(participant.conversationId);
-        if (participant.status === 'running') participant.status = 'idle';
+        if (participant.status === 'running' || participant.status === 'waiting') participant.status = 'idle';
       }
       meeting.status = 'cancelled';
       meeting.phase = 'completed';
@@ -1520,13 +1593,17 @@ export class MeetingEngine {
       }
       const terminalEvents: RawMeetingEvent[] = [];
       this.stageOpenMotions(meeting, 'cancelled', terminalEvents);
+      const priorCancellationCount = persistedEvents.filter(
+        (event) => event.type === 'meeting:cancelled',
+      ).length;
+      const terminalSuffix = priorCancellationCount ? `:${priorCancellationCount + 1}` : '';
       terminalEvents.push({
         type: 'meeting:cancelled',
         audience: 'public',
         reason,
-        eventId: `${meeting.id}:cancelled`,
+        eventId: `${meeting.id}:cancelled${terminalSuffix}`,
       });
-      await this.emitBatch(meeting, `${meeting.id}:cancel`, terminalEvents);
+      await this.emitBatch(meeting, `${meeting.id}:cancel${terminalSuffix}`, terminalEvents);
       return saveMeeting(meeting);
     });
   }
@@ -1593,7 +1670,7 @@ export class MeetingEngine {
         meeting.activeRound.completedAt = Date.now();
       }
       for (const participant of meeting.participants) {
-        if (participant.status === 'running') participant.status = 'idle';
+        if (participant.status === 'running' || participant.status === 'waiting') participant.status = 'idle';
       }
       meeting.status = 'error';
       meeting.phase = 'completed';
@@ -1637,16 +1714,22 @@ export class MeetingEngine {
       throw new Error('A Persona reservation lease was lost before the meeting began.');
     }
     let terminationReason = 'Maximum rounds reached.';
-    let acceptedMotion = meeting.motions.find((motion) => motion.status === 'accepted');
+    const previousEvents = await readMeetingEvents(meeting.id);
+    const latestResume = [...previousEvents].reverse().find((event) => event.type === 'meeting:resumed');
+    const segmentStartSeq = latestResume?.seq ?? -1;
+    let acceptedMotion = meeting.motions.find((motion) =>
+      motion.status === 'accepted'
+      && (!latestResume || motion.createdAt >= latestResume.timestamp));
     if (acceptedMotion) {
       terminationReason = acceptedMotion.reason
         ?? acceptedMotion.proposal
         ?? `${acceptedMotion.kind} motion accepted.`;
     }
     const moderated = meeting.policy.moderatorMode !== 'none' && Boolean(meeting.moderatorParticipantId);
-    const previousEvents = await readMeetingEvents(meeting.id);
-    const startedRounds = previousEvents.filter((event) => event.type === 'round:started');
-    const openingAlreadyStarted = startedRounds.some((event) => event.round.phase === 'opening');
+    const startedRounds = previousEvents.filter((event): event is Extract<MeetingEvent, { type: 'round:started' }> =>
+      event.type === 'round:started' && event.seq > segmentStartSeq);
+    const openingAlreadyStarted = Boolean(latestResume)
+      || startedRounds.some((event) => event.round.phase === 'opening');
     let discussionRounds = startedRounds.filter((event) =>
       event.round.phase === 'discussion'
       && (
@@ -1818,21 +1901,84 @@ export class MeetingEngine {
       const terminalEvents: RawMeetingEvent[] = [];
       this.stageOpenMotions(latest, 'rejected', terminalEvents);
       latest.usage = await meetingUsage(latest);
+      const priorCompletionCount = (await readMeetingEvents(latest.id)).filter(
+        (event) => event.type === 'meeting:completed',
+      ).length;
+      const completionSuffix = priorCompletionCount ? `:${priorCompletionCount + 1}` : '';
       terminalEvents.push({
         type: 'meeting:completed',
         audience: 'public',
         reason: acceptedMotion?.kind === 'followup'
           ? `Follow-up requested: ${terminationReason}`
           : terminationReason,
-        eventId: `${latest.id}:completed`,
+        eventId: `${latest.id}:completed${completionSuffix}`,
       });
-      await this.emitBatch(latest, `${latest.id}:complete`, terminalEvents);
+      await this.emitBatch(latest, `${latest.id}:complete${completionSuffix}`, terminalEvents);
       return saveMeeting(latest);
     });
     if (handle.cancelRequested && finalized.status !== 'cancelled') {
       return this.cancel(meeting.id, handle.cancelReason ?? 'Cancelled by user.');
     }
     return finalized;
+  }
+
+  private async markParticipantThinking(
+    meeting: MeetingRecord,
+    participant: MeetingParticipant,
+    round: MeetingRound,
+    handle: RuntimeHandle,
+  ): Promise<void> {
+    await withControlLock(meeting.id, async () => {
+      const durable = await getMeeting(meeting.id);
+      if (
+        !durable
+        || handle.cancelRequested
+        || durable.status !== 'running'
+        || durable.activeRound?.id !== round.id
+      ) return;
+      if (handle.personaReservationGeneration !== undefined) {
+        if (!ownsStartIntent(durable, handle)) return;
+      }
+      const durableParticipant = durable.participants.find((item) => item.id === participant.id);
+      if (!durableParticipant || durableParticipant.status === 'left' || durableParticipant.status === 'error') return;
+      durableParticipant.status = 'running';
+      participant.status = 'running';
+      await this.emit(durable, {
+        type: 'participant:started',
+        audience: 'public',
+        roundId: round.id,
+        participantId: participant.id,
+        participantName: participant.name,
+        turnId: round.participantTurnIds[participant.id],
+        eventId: `${round.id}:${participant.id}:started`,
+      });
+      await saveMeeting(durable);
+    });
+  }
+
+  private async markParticipantWaiting(
+    meeting: MeetingRecord,
+    participant: MeetingParticipant,
+    round: MeetingRound,
+    handle: RuntimeHandle,
+  ): Promise<void> {
+    await withControlLock(meeting.id, async () => {
+      const durable = await getMeeting(meeting.id);
+      if (
+        !durable
+        || handle.cancelRequested
+        || durable.status !== 'running'
+        || durable.activeRound?.id !== round.id
+      ) return;
+      if (handle.personaReservationGeneration !== undefined) {
+        if (!ownsStartIntent(durable, handle)) return;
+      }
+      const durableParticipant = durable.participants.find((item) => item.id === participant.id);
+      if (!durableParticipant || durableParticipant.status !== 'running') return;
+      durableParticipant.status = 'waiting';
+      participant.status = 'waiting';
+      await saveMeeting(durable);
+    });
   }
 
   private async executeRound(
@@ -1876,7 +2022,7 @@ export class MeetingEngine {
       meeting.phase = phase;
       meeting.activeRound = round;
       for (const participant of eligible) {
-        participant.status = 'running';
+        participant.status = 'waiting';
         participant.lastTurnId = round.participantTurnIds[participant.id];
       }
       const startEvents: RawMeetingEvent[] = [{
@@ -1887,19 +2033,6 @@ export class MeetingEngine {
         eventId: `${roundId}:started`,
       }];
 
-      // Start events are emitted in roster order. Model execution starts only
-      // after the barrier snapshot is frozen, and may settle in any order.
-      for (const participant of eligible) {
-        startEvents.push({
-          type: 'participant:started',
-          audience: 'public',
-          roundId,
-          participantId: participant.id,
-          participantName: participant.name,
-          turnId: round.participantTurnIds[participant.id],
-          eventId: `${roundId}:${participant.id}:started`,
-        });
-      }
       await this.emitBatch(meeting, `${roundId}:start`, startEvents);
       await saveMeeting(meeting);
       return true;
@@ -1914,7 +2047,12 @@ export class MeetingEngine {
     const outcomes = await mapWithConcurrency(
       eligible,
       meeting.policy.concurrencyLimit,
-      (participant) => runParticipantTurn(meeting, participant, round, allEvents, handle),
+      async (participant) => {
+        await this.markParticipantThinking(meeting, participant, round, handle);
+        const outcome = await runParticipantTurn(meeting, participant, round, allEvents, handle);
+        await this.markParticipantWaiting(meeting, participant, round, handle);
+        return outcome;
+      },
     );
 
     // Cancellation may complete through the API while provider calls are
@@ -2225,7 +2363,7 @@ export class MeetingEngine {
         meeting.activeRound.completedAt = Date.now();
       }
       for (const participant of meeting.participants) {
-        if (participant.status === 'running') participant.status = 'idle';
+        if (participant.status === 'running' || participant.status === 'waiting') participant.status = 'idle';
       }
       const event = await this.emit(meeting, {
         type: 'meeting:error',

@@ -48,12 +48,17 @@ async function GET_handler(
       // repair the snapshot when needed.
       const lifecycle = [...events].reverse().find((event) =>
         event.type === 'meeting:started'
+        || event.type === 'meeting:resumed'
         || event.type === 'meeting:completed'
         || event.type === 'meeting:cancelled'
         || event.type === 'meeting:error');
       if (
         lifecycle
-        && lifecycle.type !== 'meeting:started'
+        && (
+          lifecycle.type === 'meeting:completed'
+          || lifecycle.type === 'meeting:cancelled'
+          || lifecycle.type === 'meeting:error'
+        )
         && meeting.lastEventSeq < lifecycle.seq
       ) {
         meeting.status = lifecycle.type === 'meeting:completed'
@@ -66,7 +71,7 @@ async function GET_handler(
         meeting.lastEventSeq = lifecycle.seq;
         if (lifecycle.type === 'meeting:error') meeting.error = lifecycle.error;
         for (const participant of meeting.participants) {
-          if (participant.status === 'running') participant.status = 'idle';
+          if (participant.status === 'running' || participant.status === 'waiting') participant.status = 'idle';
         }
         meeting = await saveMeeting(meeting);
       }

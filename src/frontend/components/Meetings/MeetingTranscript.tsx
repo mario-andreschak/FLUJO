@@ -28,6 +28,7 @@ import {
   LockRounded,
   PauseCircleOutlineRounded,
   RecordVoiceOverRounded,
+  ReplayRounded,
   TuneRounded,
 } from '@mui/icons-material';
 import { VariableSizeList, type ListChildComponentProps } from 'react-window';
@@ -79,6 +80,7 @@ function eventAnnouncement(event: MeetingEvent): string {
     case 'participant:error': return `${event.participantName}: ${event.error}`;
     case 'private-note': return `Private note: ${event.content}`;
     case 'moderator:intervention': return `Steering prompt: ${event.content}`;
+    case 'meeting:resumed': return `Meeting continued: ${event.direction ?? ''}`;
     case 'motion:opened': return `Motion: ${event.motion.proposal ?? event.motion.kind}`;
     case 'meeting:error': return event.error;
     default: return event.type.replaceAll(':', ' ');
@@ -93,6 +95,7 @@ function SystemEvent({ event }: { event: MeetingEvent }) {
 
   switch (event.type) {
     case 'meeting:started': text = t('meetings.transcript.started'); icon = <RecordVoiceOverRounded fontSize="small" />; break;
+    case 'meeting:resumed': text = event.direction || t('meetings.transcript.resumed'); icon = <ReplayRounded fontSize="small" />; color = 'primary'; break;
     case 'meeting:completed': text = event.reason || t('meetings.transcript.completed'); icon = <CheckCircleRounded fontSize="small" />; color = 'success'; break;
     case 'meeting:cancelled': text = event.reason || t('meetings.transcript.cancelled'); icon = <PauseCircleOutlineRounded fontSize="small" />; color = 'warning'; break;
     case 'meeting:error': text = event.error; icon = <ErrorOutlineRounded fontSize="small" />; color = 'error'; break;

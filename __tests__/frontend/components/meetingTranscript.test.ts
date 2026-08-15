@@ -2,6 +2,8 @@ import type { MeetingEvent, MeetingRecord } from '@/shared/types/meeting';
 import {
   countDiscussionRounds,
   isTranscriptVisibleEvent,
+  meetingFollowupSummary,
+  meetingLogAttachment,
   meetingLogMarkdown,
 } from '@/frontend/components/Meetings/meetingTranscriptProjection';
 
@@ -64,7 +66,7 @@ describe('meeting transcript projection', () => {
     const meeting = {
       moderatorParticipantId: 'moderator',
       policy: { moderatorMode: 'facilitated', maxRounds: 6 },
-    } as MeetingRecord;
+    } as unknown as MeetingRecord;
     const events: MeetingEvent[] = [
       {
         ...base,
@@ -115,5 +117,34 @@ describe('meeting transcript projection', () => {
     expect(markdown).toContain('### Strategist');
     expect(markdown).toContain('Private note');
     expect(markdown).toContain('Vote · Strategist: yes');
+  });
+
+  it('builds follow-up context with an outcome summary and a full transcript attachment', () => {
+    const meeting = {
+      title: 'Launch council', status: 'completed', phase: 'completed', createdAt: 1,
+      openingPrompt: 'Choose a launch date.',
+      motions: [],
+      participants: [
+        { id: 'agent-1', name: 'Strategist' },
+        { id: 'agent-2', name: 'Operator' },
+      ],
+    } as unknown as MeetingRecord;
+    const events: MeetingEvent[] = [
+      { ...base, type: 'participant:spoke', participantId: 'agent-1', participantName: 'Strategist', turnId: 'turn-1', content: 'Launch on Tuesday after the smoke test.' },
+      { ...base, eventId: 'speech-2', seq: 1, type: 'participant:spoke', participantId: 'agent-2', participantName: 'Operator', turnId: 'turn-2', content: 'The smoke test is the remaining gate.' },
+      { ...base, eventId: 'completed', seq: 2, type: 'meeting:completed', reason: 'Tuesday launch, gated by smoke tests.' },
+      { ...base, eventId: 'private-note', seq: 3, type: 'private-note', audience: [], content: 'Moderator-only note.' },
+    ];
+
+    const summary = meetingFollowupSummary(meeting, events);
+    const attachment = meetingLogAttachment(meeting, events);
+
+    expect(summary).toContain('Previous outcome: Tuesday launch, gated by smoke tests.');
+    expect(summary).toContain('Strategist: Launch on Tuesday');
+    expect(summary).toContain('Operator: The smoke test');
+    expect(attachment.name).toBe('launch-council-full-log.md');
+    const attachedLog = Buffer.from(attachment.data!, 'base64').toString('utf8');
+    expect(attachedLog).toContain('### Strategist');
+    expect(attachedLog).not.toContain('Moderator-only note.');
   });
 });

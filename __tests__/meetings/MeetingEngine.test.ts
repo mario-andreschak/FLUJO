@@ -16,6 +16,8 @@ import type { MeetingToolAction } from '@/shared/types/meeting';
 const runFlowMock = jest.fn<Promise<FlowRunResult>, [FlowRunInput]>();
 const loadConversationStateMock = jest.fn<Promise<SharedState | undefined>, [string]>();
 const getFlowMock = jest.fn();
+const writeRunResourceMock = jest.fn();
+const getRunResourceLocalPathMock = jest.fn();
 
 jest.mock('@/backend/execution/flow/runFlow', () => ({
   runFlow: (input: FlowRunInput) => runFlowMock(input),
@@ -35,7 +37,8 @@ jest.mock('@/backend/services/flow', () => ({
 
 jest.mock('@/backend/services/runResources', () => ({
   copyRunResourceToConversation: jest.fn(),
-  getRunResourceLocalPath: jest.fn(),
+  getRunResourceLocalPath: (...args: unknown[]) => getRunResourceLocalPathMock(...args),
+  writeRunResource: (...args: unknown[]) => writeRunResourceMock(...args),
 }));
 
 const meetingIds: string[] = [];
@@ -120,6 +123,15 @@ describe('MeetingEngine', () => {
     runFlowMock.mockReset();
     loadConversationStateMock.mockReset();
     getFlowMock.mockReset();
+    writeRunResourceMock.mockReset();
+    getRunResourceLocalPathMock.mockReset();
+    writeRunResourceMock.mockImplementation(async ({ conversationId, name }: { conversationId: string; name?: string }) => ({
+      id: `resource-${conversationId}`,
+      uri: `flujo://run/${conversationId}/opening-file`,
+      conversationId,
+      name,
+    }));
+    getRunResourceLocalPathMock.mockResolvedValue('C:\\meeting-files\\opening.md');
     installFlowRuntime();
   });
 
@@ -169,6 +181,53 @@ describe('MeetingEngine', () => {
     expect(betaInbox).toContain('[Alpha]');
     expect(betaInbox).not.toContain('[Beta]');
     expect((alpha.messages as FlujoChatMessage[]).at(-1)?.role).toBe('user');
+  });
+
+  it('persists opening files into every participant conversation before the first turn', async () => {
+    const meeting = await createMeeting(1);
+    meeting.openingMedia = [{
+      type: 'file',
+      mimeType: 'text/markdown',
+      name: 'opening.md',
+      data: Buffer.from('# Opening evidence').toString('base64'),
+    }];
+    await saveMeeting(meeting);
+
+    await meetingEngine.runToCompletion(meeting.id);
+
+    expect(writeRunResourceMock).toHaveBeenCalledTimes(2);
+    for (const [input] of runFlowMock.mock.calls) {
+      const media = (input.messages as FlujoChatMessage[]).at(-1)?.media;
+      expect(media).toEqual([expect.objectContaining({
+        name: 'opening.md',
+        resourceUri: `flujo://run/${input.conversationId}/opening-file`,
+        data: undefined,
+      })]);
+    }
+  });
+
+  it('continues a completed meeting in the same participant conversations', async () => {
+    const meeting = await createMeeting(1);
+    const conversationIds = meeting.participants.map((participant) => participant.conversationId);
+    await meetingEngine.runToCompletion(meeting.id);
+
+    await meetingEngine.resume(meeting.id, 'Challenge the renderer decision.');
+    const continued = await meetingEngine.runToCompletion(meeting.id);
+    const events = await readMeetingEvents(meeting.id);
+
+    expect(continued.id).toBe(meeting.id);
+    expect(continued.participants.map((participant) => participant.conversationId)).toEqual(conversationIds);
+    expect(runFlowMock).toHaveBeenCalledTimes(4);
+    expect(events.filter((event) => event.type === 'meeting:completed')).toHaveLength(2);
+    expect(events.some((event) =>
+      event.type === 'meeting:resumed'
+      && event.direction === 'Challenge the renderer decision.')).toBe(true);
+    const continuedInputs = runFlowMock.mock.calls.slice(2).map(([input]) => input);
+    for (const input of continuedInputs) {
+      const latest = (input.messages as FlujoChatMessage[]).at(-1);
+      expect(String(latest?.content)).toContain('Challenge the renderer decision.');
+      expect(input.conversationId).toBe(conversationIds.find((id) => id === input.conversationId));
+    }
   });
 
   it('aggregates matching finish proposals into an accepted majority motion', async () => {

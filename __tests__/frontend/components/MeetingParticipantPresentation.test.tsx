@@ -15,6 +15,8 @@ const mockT: Translator = (key, values) => {
   if (key === 'meetings.participant.personaBehavior') return `Persona · ${values?.behavior}`;
   if (key === 'meetings.participant.formerPersona') return 'Former Persona';
   if (key === 'meetings.participant.flow') return 'Flow';
+  if (key === 'meetings.participant.thinking') return 'Thinking now…';
+  if (key === 'meetings.participant.waitingFor') return `Waiting for ${values?.names}…`;
   return key;
 };
 
@@ -63,5 +65,15 @@ describe('meeting participant presentation', () => {
 
     expect(screen.getByText('Persona · Evidence investigator')).toBeInTheDocument();
     expect(screen.getByText('Flow')).toBeInTheDocument();
+  });
+
+  it('distinguishes actively thinking participants from participants waiting on them', () => {
+    render(<MeetingTable participants={[
+      { ...participant({ id: 'thinking', name: 'Opus', flowId: 'flow_opus' }), status: 'running' },
+      { ...participant({ id: 'waiting', name: 'Terra', flowId: 'flow_terra' }), status: 'waiting' },
+    ]} />);
+
+    expect(screen.getByText('Thinking now…')).toBeInTheDocument();
+    expect(screen.getByText('Waiting for Opus…')).toBeInTheDocument();
   });
 });

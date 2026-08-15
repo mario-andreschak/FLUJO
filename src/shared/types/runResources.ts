@@ -30,6 +30,7 @@ export type RunResourceKind = 'text' | 'image' | 'audio' | 'blob' | 'link';
  *    (issue #168), keyed by the producing `toolCallId`.
  *  - 'snapshot': a bounded before/after filesystem change artifact.
  *  - 'model-output': binary media returned directly by a model.
+ *  - 'user-input': a file attached by a human to a chat or meeting turn.
  *  - 'compaction-artifact': immutable projected-source/summary wire artifact.
  */
 export type RunResourceSource =
@@ -39,6 +40,7 @@ export type RunResourceSource =
   | 'tool-args'
   | 'snapshot'
   | 'model-output'
+  | 'user-input'
   | 'visual-archive'
   | 'compaction-artifact';
 
