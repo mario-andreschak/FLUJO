@@ -325,6 +325,45 @@ describe('createPersonaFromRole', () => {
     });
   });
 
+  it('uses a simple Role Primary behavior as Core and keeps its tool-only MCP suggestions', async () => {
+    await inFreshWorkspace(async () => {
+      const base = buildTestRoleVersion();
+      const simpleRole = RoleVersionSchema.parse({
+        ...base,
+        id: 'rolever_simple_tools_v1',
+        version: 50,
+        name: 'Simple tools Role',
+        coreFlowTemplate: undefined,
+        suggestedApps: [{ mcpServerName: 'tools-only' }],
+        capabilityRequirements: undefined,
+        createdAt: base.createdAt + 50,
+      });
+      await createRoleVersion(simpleRole);
+      await saveItem(StorageKey.MCP_SERVERS, {
+        'tools-only': {
+          transport: 'stdio',
+          command: 'node',
+          args: [],
+          disabled: false,
+          enableMcpApps: false,
+        },
+      });
+
+      const bundle = await createPersonaFromRoleProduction({
+        name: 'Mina',
+        roleVersionId: simpleRole.id,
+        idempotencyKey: 'simple-tools-mina',
+      });
+
+      expect(bundle.persona.provisioningState).toBe('ready');
+      expect(bundle.appGrants.map((grant) => grant.mcpServerName)).toEqual(['tools-only']);
+      const coreFlow = await flowService.getFlow(bundle.persona.composition!.coreFlowRef!);
+      expect(coreFlow?.personaOwnership?.kind).toBe('core');
+      expect(coreFlow?.personaOwnership?.sourceFlowId)
+        .toBe(simpleRole.behaviorSlots.find((slot) => slot.key === 'primary')!.flowTemplate.id);
+    });
+  });
+
   it('rejects a changed payload that reuses an idempotency key', async () => {
     await inFreshWorkspace(async () => {
       const first = await createPersonaFromRole({

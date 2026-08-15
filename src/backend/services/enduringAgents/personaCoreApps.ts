@@ -40,7 +40,7 @@ async function loadConfigs(): Promise<MCPServerConfig[]> {
   return configs;
 }
 
-export function requireEnabledPersonaAppConfig(
+export function requireEnabledPersonaMcpConfig(
   configs: readonly MCPServerConfig[],
   mcpServerName: string,
 ): MCPServerConfig {
@@ -51,17 +51,13 @@ export function requireEnabledPersonaAppConfig(
       `MCP config ${JSON.stringify(mcpServerName)} is disabled.`,
     );
   }
-  if (config.enableMcpApps !== true) {
-    throw new PersonaDomainConflictError(
-      `MCP Apps are not enabled for config ${JSON.stringify(mcpServerName)}.`,
-    );
-  }
   return config;
 }
 
 /**
- * Creation-time Role suggestions are hints only. Missing, disabled, and
- * non-App configs are omitted instead of blocking Persona provisioning.
+ * Creation-time Role suggestions are hints only. Missing and disabled configs
+ * are omitted instead of blocking Persona provisioning. MCP App UI support is
+ * not required: Persona Core projection consumes ordinary MCP tools too.
  */
 export async function resolveAvailablePersonaAppRefs(
   references: readonly string[],
@@ -70,7 +66,7 @@ export async function resolveAvailablePersonaAppRefs(
   const configs = await loadConfigs();
   const available = new Set(
     configs
-      .filter((config) => config.disabled !== true && config.enableMcpApps === true)
+      .filter((config) => config.disabled !== true)
       .map((config) => config.name),
   );
   return unique(references).filter((reference) => available.has(reference));
@@ -125,7 +121,7 @@ export async function authorizePersonaCoreAppAccess(
       `Persona App ${JSON.stringify(mcpServerName)} is no longer selected.`,
     );
   }
-  requireEnabledPersonaAppConfig(await loadConfigs(), mcpServerName);
+  requireEnabledPersonaMcpConfig(await loadConfigs(), mcpServerName);
 }
 
 function authoredMcpServersByProcess(source: Flow): Map<string, Set<string>> {

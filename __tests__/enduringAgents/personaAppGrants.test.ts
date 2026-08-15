@@ -99,7 +99,7 @@ describe('issue #415 phase 6 Persona direct-app grants', () => {
     });
   });
 
-  it('fails closed for foreign grants, stale configs, disabled Apps, and invalid resources', async () => {
+  it('allows tool-only selections but fails closed for their App UI and other invalid access', async () => {
     await inFreshWorkspace(async () => {
       const jim = await createPersonaFromRole({ name: 'Jim', idempotencyKey: 'phase6-owner-jim' });
       const sarah = await createPersonaFromRole({ name: 'Sarah', idempotencyKey: 'phase6-owner-sarah' });
@@ -115,7 +115,13 @@ describe('issue #415 phase 6 Persona direct-app grants', () => {
 
       await expect(grantPersonaAppAccess(jim.persona.id, { mcpServerName: 'disabled-app' }))
         .rejects.toBeInstanceOf(PersonaDomainConflictError);
-      await expect(grantPersonaAppAccess(jim.persona.id, { mcpServerName: 'tools-only' }))
+      const toolsOnlyGrant = await grantPersonaAppAccess(jim.persona.id, {
+        mcpServerName: 'tools-only',
+      });
+      expect(toolsOnlyGrant).toMatchObject({ mcpServerName: 'tools-only' });
+      await expect(authorizePersonaAppLaunch(jim.persona.id, toolsOnlyGrant.id, {
+        uri: 'ui://tools-only/dashboard',
+      }))
         .rejects.toBeInstanceOf(PersonaDomainConflictError);
       await expect(grantPersonaAppAccess(jim.persona.id, { mcpServerName: 'github-jim-copy' }))
         .rejects.toBeInstanceOf(PersonaDomainNotFoundError);

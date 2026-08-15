@@ -442,7 +442,12 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
       );
     }
     const roleVersion = await resolveRoleVersion(input.roleVersionId);
-    const coreTemplate = selectedCoreFlow ?? roleVersion.coreFlowTemplate;
+    // Simple Roles intentionally do not persist a separate Core template. In
+    // that case the immutable Primary behavior is the deterministic Core
+    // source promised by the creation contract.
+    const coreTemplate = selectedCoreFlow
+      ?? roleVersion.coreFlowTemplate
+      ?? roleVersion.behaviorSlots.find((slot) => slot.key === 'primary')?.flowTemplate;
     if (!coreTemplate) {
       log.warn('Persona provisioning rejected: no Core template', {
         roleVersionId: roleVersion.id,
@@ -450,7 +455,7 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
         failureCategory: 'missing_core_template',
       });
       throw new PersonaFactoryConflictError(
-        'The selected Role has no Core template. Choose a ready Core Flow and try again.',
+        'The selected Role has no Core or Primary template. Update the Role and try again.',
       );
     }
     if (roleVersion.behaviorSlots.length === 0) {
@@ -571,8 +576,11 @@ export async function createPersonaFromRole(value: unknown): Promise<PersonaBund
     });
 
     if (persona.provisioningState !== 'ready') {
+      const roleSuggestedAppRefs = roleVersion.suggestedApps !== undefined
+        ? roleVersion.suggestedApps.map((app) => app.mcpServerName)
+        : roleVersion.capabilityRequirements?.preferredMcpServers ?? [];
       const initialAppRefs = await resolveAvailablePersonaAppRefs(
-        input.appRefs ?? roleVersion.capabilityRequirements?.preferredMcpServers ?? [],
+        input.appRefs ?? roleSuggestedAppRefs,
       );
       await Promise.all(initialAppRefs.map((mcpServerName) => createPersonaAppGrant(
         PersonaAppGrantSchema.parse({

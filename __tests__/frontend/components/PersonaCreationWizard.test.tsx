@@ -16,6 +16,8 @@ const deleteDraftMock = jest.fn();
 const rolesMock = jest.fn();
 const readinessMock = jest.fn();
 const loadFlowsMock = jest.fn();
+const discoveryOptionsMock = jest.fn();
+const refreshAppsMock = jest.fn();
 
 jest.mock('@/frontend/services/personas', () => {
   class PersonasApiError extends Error {
@@ -46,16 +48,27 @@ jest.mock('@/frontend/services/flow', () => ({
 }));
 
 jest.mock('@/frontend/components/mcp/useMcpAppsDiscovery', () => {
-  const servers = [{
-    name: 'calendar',
-    config: { rootPath: '/calendar', transport: 'stdio' },
-  }];
+  const servers = [
+    {
+      name: 'calendar',
+      config: { rootPath: '/calendar', transport: 'stdio', enableMcpApps: true },
+    },
+    {
+      name: 'tools-only',
+      config: { rootPath: '/tools', transport: 'stdio', enableMcpApps: false },
+    },
+  ];
   return {
-    useMcpAppsDiscovery: () => ({
-      servers,
-      loading: false,
-      error: null,
-    }),
+    useMcpAppsDiscovery: (options: unknown) => {
+      discoveryOptionsMock(options);
+      return {
+        servers,
+        loading: false,
+        refreshing: false,
+        error: null,
+        refresh: refreshAppsMock,
+      };
+    },
   };
 });
 
@@ -77,6 +90,9 @@ jest.mock('@/frontend/contexts/I18nContext', () => {
       'personas.create.next': 'Next',
       'personas.create.finish': 'Create Persona',
     };
+    if (key === 'personas.create.appsSelected') {
+      return `Selected Apps (${values?.count ?? 0})`;
+    }
     return copy[key] ?? key.replace('{number}', String(values?.number ?? ''));
   };
 
@@ -242,10 +258,10 @@ describe('PersonaCreationWizard', () => {
     expect(createMock.mock.calls[0][0]).toMatchObject({
       name: 'Mina',
       roleVersionId: 'role_version',
-      coreFlowRef: 'core_flow',
       behaviorFlowRefs: [],
       appRefs: [],
     });
+    expect(createMock.mock.calls[0][0]).not.toHaveProperty('coreFlowRef');
     expect(createMock.mock.calls[0][0].idempotencyKey).toEqual(expect.any(String));
     expect(onCreated).toHaveBeenCalled();
   });
@@ -277,7 +293,7 @@ describe('PersonaCreationWizard', () => {
       roleDefinitions: [],
       roleVersions: [{
         ...role,
-        capabilityRequirements: { preferredMcpServers: ['calendar'] },
+        suggestedApps: [{ mcpServerName: 'calendar' }],
       }],
     });
     render(wizard());
@@ -371,8 +387,74 @@ describe('PersonaCreationWizard', () => {
       mission: 'Keep projects moving.',
       avatarUrl: 'https://example.test/mina.png',
       roleVersionId: 'role_version',
-      coreFlowRef: 'core_flow',
+      coreFlowRef: '',
     });
+  });
+
+  it('uses every enabled MCP server picker and makes selections prominent', async () => {
+    render(wizard());
+
+    expect(discoveryOptionsMock).toHaveBeenCalledWith({
+      active: true,
+      includeAllServers: true,
+    });
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Name' }), {
+      target: { value: 'Mina' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await screen.findByText('Helper');
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+
+    expect(await screen.findByRole('checkbox', { name: 'tools-only' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'calendar' }));
+    expect(screen.getByText('Selected Apps (1)')).toBeInTheDocument();
+    expect(screen.getAllByText('calendar').length).toBeGreaterThan(1);
+    expect(refreshAppsMock).toHaveBeenCalled();
+  });
+
+  it('shows only one revision per Role and selects its current revision', async () => {
+    const previousRole = { ...role, id: 'role_version_v1', version: 1, name: 'Software Dev' };
+    const currentRole = { ...role, id: 'role_version_v2', version: 2, name: 'Software Dev' };
+    rolesMock.mockResolvedValue({
+      roleDefinitions: [{
+        schemaVersion: 2,
+        id: 'role_definition',
+        name: 'Software Dev',
+        currentVersionId: currentRole.id,
+        createdAt: 1,
+        updatedAt: 2,
+      }],
+      roleVersions: [previousRole, currentRole],
+    });
+    render(wizard());
+
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Name' }), {
+      target: { value: 'Mina' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+
+    await screen.findByText('Software Dev');
+    expect(screen.getAllByRole('radio')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'personas.create.saveDraft' }));
+    await waitFor(() => expect(createDraftMock).toHaveBeenCalledTimes(1));
+    expect(createDraftMock.mock.calls[0][0].payload.roleVersionId).toBe(currentRole.id);
+  });
+
+  it('creates from the Role Primary behavior when no hidden Core Flow is selected', async () => {
+    render(wizard({
+      draft: draftRecord({
+        ...fullPayload,
+        step: 4,
+        coreFlowRef: '',
+        behaviorFlowRefs: [],
+      }),
+    }));
+
+    const finish = await screen.findByRole('button', { name: 'Create Persona' });
+    await waitFor(() => expect(finish).toBeEnabled());
+    fireEvent.click(finish);
+    await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
+    expect(createMock.mock.calls[0][0]).not.toHaveProperty('coreFlowRef');
   });
 
   it('coalesces return events and ignores an older overlapping Role response', async () => {
@@ -389,8 +471,18 @@ describe('PersonaCreationWizard', () => {
 
     const older = deferred<{ roleDefinitions: never[]; roleVersions: Array<typeof role> }>();
     const newer = deferred<{ roleDefinitions: never[]; roleVersions: Array<typeof role> }>();
-    const staleRole = { ...role, id: 'role_stale', name: 'Stale Role' };
-    const newestRole = { ...role, id: 'role_newest', name: 'Newest Role' };
+    const staleRole = {
+      ...role,
+      id: 'role_stale',
+      roleDefinitionId: 'role_definition_stale',
+      name: 'Stale Role',
+    };
+    const newestRole = {
+      ...role,
+      id: 'role_newest',
+      roleDefinitionId: 'role_definition_newest',
+      name: 'Newest Role',
+    };
     rolesMock
       .mockImplementationOnce(() => older.promise)
       .mockImplementationOnce(() => newer.promise);

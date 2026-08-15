@@ -47,6 +47,12 @@ export interface McpServerDiscovery {
 export interface UseMcpAppsDiscoveryOptions {
   /** Discover only while the consuming surface is open. */
   active: boolean;
+  /**
+   * Retain every enabled MCP server, including servers that do not publish an
+   * MCP App UI. Persona and Role pickers use this because a server's tools are
+   * useful even when `enableMcpApps` is off.
+   */
+  includeAllServers?: boolean;
   /** #396: the quick-actions menu lists FAVORITED servers only. */
   favoritesOnly?: boolean;
   /** #396: drop servers that did not actually yield a discoverable app. */
@@ -94,6 +100,7 @@ export const readableError = (error: unknown, fallback: string): string => {
 
 export function useMcpAppsDiscovery({
   active,
+  includeAllServers = false,
   favoritesOnly = false,
   requireApps = false,
 }: UseMcpAppsDiscoveryOptions): McpAppsDiscoveryState {
@@ -104,6 +111,7 @@ export function useMcpAppsDiscovery({
   const [error, setError] = useState<string | null>(null);
   const [discoveryId, setDiscoveryId] = useState(0);
   const requestIdRef = useRef(0);
+  const lastReturnRefreshAtRef = useRef(0);
 
   const discover = useCallback(async (refresh = false) => {
     const requestId = ++requestIdRef.current;
@@ -126,11 +134,17 @@ export function useMcpAppsDiscovery({
 
       const eligible = (configsResult as MCPServerConfig[]).filter((server) => (
         server.disabled !== true
-        && server.enableMcpApps === true
+        && (includeAllServers || server.enableMcpApps === true)
         && (!favoritesOnly || server.favorite === true)
       ));
 
       const discoveries = await Promise.all(eligible.map(async (server): Promise<McpServerDiscovery> => {
+        // Ordinary MCP servers are valid Persona/Role choices. They have no App
+        // UI to discover, so keep their config without making unsupported
+        // resources/list calls or describing that absence as an error.
+        if (server.enableMcpApps !== true) {
+          return { name: server.name, config: server, apps: [] };
+        }
         if (refresh) {
           mcpService.clearCapabilitiesCache(server.name);
           mcpService.clearToolsCache(server.name);
@@ -224,7 +238,7 @@ export function useMcpAppsDiscovery({
         setRefreshing(false);
       }
     }
-  }, [favoritesOnly, requireApps, t]);
+  }, [favoritesOnly, includeAllServers, requireApps, t]);
 
   useEffect(() => {
     if (!active) {
@@ -247,6 +261,28 @@ export function useMcpAppsDiscovery({
     };
     window.addEventListener('flujo:mcp-server-config-changed', onServerConfigChanged);
     return () => window.removeEventListener('flujo:mcp-server-config-changed', onServerConfigChanged);
+  }, [active, discover]);
+
+  useEffect(() => {
+    if (!active) return;
+    const refreshOnReturn = () => {
+      const now = Date.now();
+      // Browsers commonly emit focus and visibilitychange together. Treat
+      // them as one return event while still refreshing after another window
+      // may have installed or changed an MCP server.
+      if (now - lastReturnRefreshAtRef.current < 250) return;
+      lastReturnRefreshAtRef.current = now;
+      void discover(true);
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') refreshOnReturn();
+    };
+    window.addEventListener('focus', refreshOnReturn);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => {
+      window.removeEventListener('focus', refreshOnReturn);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
   }, [active, discover]);
 
   const apps = useMemo(() => servers.flatMap((server) => server.apps), [servers]);

@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import { mockUseAskFlujo, mockUseAskFlujoPage } from '@/frontend/__tests__/mocks/askFlujoContext';
 
@@ -9,6 +9,7 @@ jest.mock('@/frontend/contexts/AskFlujoContext', () => ({
 }));
 
 import McpAppsDashboard from '@/frontend/components/mcp/McpAppsDashboard';
+import { useMcpAppsDiscovery } from '@/frontend/components/mcp/useMcpAppsDiscovery';
 import { mcpService } from '@/frontend/services/mcp';
 
 jest.mock('@/frontend/services/mcp', () => ({
@@ -80,6 +81,44 @@ describe('McpAppsDashboard', () => {
     const frame = await screen.findByTestId('mcp-app-frame');
     expect(frame).toHaveAttribute('data-server', 'enabled-apps');
     expect(frame).toHaveAttribute('data-uri', 'ui://valid');
+  });
+
+  it('can retain ordinary enabled MCP servers without probing them for App resources', async () => {
+    service.loadServerConfigs.mockResolvedValue([
+      { name: 'enabled-apps', disabled: false, enableMcpApps: true },
+      { name: 'tools-only', disabled: false, enableMcpApps: false },
+      { name: 'disabled-tools', disabled: true, enableMcpApps: false },
+    ] as any);
+
+    const { result } = renderHook(() => useMcpAppsDiscovery({
+      active: true,
+      includeAllServers: true,
+    }));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.servers.map((server) => server.name))
+      .toEqual(['enabled-apps', 'tools-only']);
+    expect(service.listServerResources).toHaveBeenCalledTimes(1);
+    expect(service.listServerResources).toHaveBeenCalledWith('enabled-apps');
+  });
+
+  it('refreshes discovery when the user returns to the window', async () => {
+    service.loadServerConfigs
+      .mockResolvedValueOnce([
+        { name: 'first-app', disabled: false, enableMcpApps: true },
+      ] as any)
+      .mockResolvedValueOnce([
+        { name: 'first-app', disabled: false, enableMcpApps: true },
+        { name: 'new-app', disabled: false, enableMcpApps: true },
+      ] as any);
+
+    const { result } = renderHook(() => useMcpAppsDiscovery({ active: true }));
+    await waitFor(() => expect(result.current.servers).toHaveLength(1));
+
+    fireEvent.focus(window);
+
+    await waitFor(() => expect(result.current.servers).toHaveLength(2));
+    expect(service.loadServerConfigs).toHaveBeenCalledTimes(2);
   });
 
   it('keeps per-server discovery errors while showing empty states for other servers', async () => {

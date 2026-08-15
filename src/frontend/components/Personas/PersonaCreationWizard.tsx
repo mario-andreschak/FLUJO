@@ -63,6 +63,42 @@ interface PersonaCreationWizardProps {
 
 const EMPTY_READINESS: PersonaFlowReadiness = { state: 'missing', issues: [] };
 
+function rolePickerVersions(
+  response: RolesResponse | null,
+  selectedRoleVersionId = '',
+): RolesResponse['roleVersions'] {
+  if (!response) return [];
+  const currentVersionByDefinition = new Map(
+    response.roleDefinitions.map((definition) => [definition.id, definition.currentVersionId]),
+  );
+  const versionsByDefinition = new Map<string, RolesResponse['roleVersions']>();
+  for (const version of response.roleVersions) {
+    const versions = versionsByDefinition.get(version.roleDefinitionId) ?? [];
+    versions.push(version);
+    versionsByDefinition.set(version.roleDefinitionId, versions);
+  }
+  return [...versionsByDefinition.values()].flatMap((versions) => {
+    const selected = versions.find((version) => version.id === selectedRoleVersionId);
+    if (selected) return [selected];
+    const currentId = currentVersionByDefinition.get(versions[0].roleDefinitionId);
+    const current = versions.find((version) => version.id === currentId);
+    if (current) return [current];
+    return [[...versions].sort(
+      (left, right) => right.version - left.version || right.createdAt - left.createdAt,
+    )[0]];
+  });
+}
+
+function suggestedMcpServerRefs(
+  role: RolesResponse['roleVersions'][number] | undefined,
+): string[] {
+  if (!role) return [];
+  const refs = role.suggestedApps !== undefined
+    ? role.suggestedApps.map((app) => app.mcpServerName)
+    : role.capabilityRequirements?.preferredMcpServers ?? [];
+  return Array.from(new Set(refs));
+}
+
 function validOptionalUrl(value: string): boolean {
   if (!value.trim()) return true;
   try {
@@ -122,8 +158,10 @@ export default function PersonaCreationWizard({
   const {
     servers: appServers,
     loading: appsLoading,
+    refreshing: appsRefreshing,
     error: appsError,
-  } = useMcpAppsDiscovery({ active: open });
+    refresh: refreshApps,
+  } = useMcpAppsDiscovery({ active: open, includeAllServers: true });
 
   const steps = useMemo(() => [
     t('personas.create.step.identity'),
@@ -134,10 +172,19 @@ export default function PersonaCreationWizard({
   ], [t]);
 
   const selectedRole = roles?.roleVersions.find((role) => role.id === roleVersionId);
+  const draftPinnedRoleVersionId = draft?.payload.roleVersionId === roleVersionId
+    ? roleVersionId
+    : '';
+  const selectableRoles = useMemo(
+    () => rolePickerVersions(roles, draftPinnedRoleVersionId),
+    [draftPinnedRoleVersionId, roles],
+  );
   const selectedRoleUnavailable = Boolean(roleVersionId && roles && !selectedRole);
   const selectedCore = flows.find((flow) => flow.id === coreFlowRef);
+  const primaryRoleBehavior = selectedRole?.behaviorSlots.find((slot) => slot.key === 'primary');
+  const roleDefaultCore = selectedRole?.coreFlowTemplate ?? primaryRoleBehavior?.flowTemplate;
+  const effectiveCore = selectedCore ?? roleDefaultCore;
   const selectedBehaviors = flows.filter((flow) => behaviorFlowRefs.includes(flow.id));
-  const selectedApps = appServers.filter((server) => appRefs.includes(server.name));
   const requiredBehaviorCount = selectedRole?.behaviorSlots.length ?? 0;
   const initialMemories = memories.map((value) => value.trim()).filter(Boolean);
   const avatarValid = validOptionalUrl(avatarUrl);
@@ -213,7 +260,7 @@ export default function PersonaCreationWizard({
       ) return;
       setRoles(nextRoles);
       if (initialize) {
-        setRoleVersionId((current) => current || nextRoles.roleVersions[0]?.id || '');
+        setRoleVersionId((current) => current || rolePickerVersions(nextRoles)[0]?.id || '');
       }
     } catch (cause) {
       if (controller.signal.aborted) return;
@@ -242,7 +289,6 @@ export default function PersonaCreationWizard({
         if (cancelled) return;
         const sharedFlows = nextFlows.filter((flow) => !flow.personaOwnership);
         setFlows(sharedFlows);
-        setCoreFlowRef((current) => current || sharedFlows[0]?.id || '');
       })
       .catch((cause) => {
         if (cancelled || roleRequestRef.current.controller?.signal.aborted) return;
@@ -283,9 +329,7 @@ export default function PersonaCreationWizard({
       return;
     }
     if (appsEdited) return;
-    const preferred = new Set(
-      selectedRole?.capabilityRequirements?.preferredMcpServers ?? [],
-    );
+    const preferred = new Set(suggestedMcpServerRefs(selectedRole));
     const eligible = new Set(appServers.map((server) => server.name));
     const next = [...preferred].filter((ref) => eligible.has(ref));
     setAppRefs((current) => (
@@ -295,6 +339,13 @@ export default function PersonaCreationWizard({
         : next
     ));
   }, [appServers, appsEdited, draft, open, selectedRole]);
+
+  const wasOnAppsStepRef = useRef(false);
+  useEffect(() => {
+    const enteringApps = open && step === 2 && !wasOnAppsStepRef.current;
+    wasOnAppsStepRef.current = open && step === 2;
+    if (enteringApps) refreshApps();
+  }, [open, refreshApps, step]);
 
   const refsToCheck = useMemo(
     () => [coreFlowRef, ...behaviorFlowRefs].filter(Boolean),
@@ -354,8 +405,8 @@ export default function PersonaCreationWizard({
     Boolean(selectedRole),
     true,
     behaviorFlowRefs.every(flowReady),
-    Boolean(name.trim() && selectedRole && coreFlowRef)
-      && flowReady(coreFlowRef)
+    Boolean(name.trim() && selectedRole && effectiveCore)
+      && (!coreFlowRef || flowReady(coreFlowRef))
       && behaviorFlowRefs.every(flowReady),
   ][step];
 
@@ -442,16 +493,16 @@ export default function PersonaCreationWizard({
   };
 
   const submit = async () => {
-    if (!stepValid || !selectedRole || !selectedCore) return;
+    if (!stepValid || !selectedRole || !effectiveCore) return;
     setSaving(true);
     setError(null);
     try {
       const detail = await personasService.create({
         name: name.trim(),
-        coreFlowRef,
         roleVersionId,
         appRefs,
         behaviorFlowRefs,
+        ...(coreFlowRef ? { coreFlowRef } : {}),
         ...(mission.trim() ? { mission: mission.trim() } : {}),
         ...(avatarUrl.trim() ? { presentation: { avatarUrl: avatarUrl.trim() } } : {}),
         idempotencyKey,
@@ -548,7 +599,7 @@ export default function PersonaCreationWizard({
                   selectionMode="single"
                   ariaLabel={t('personas.create.roleTitle')}
                   isLoading={!roles && loading}
-                  items={(roles?.roleVersions ?? []).map((role) => ({
+                  items={selectableRoles.map((role) => ({
                     key: role.id,
                     label: role.name,
                     selected: roleVersionId === role.id,
@@ -596,11 +647,48 @@ export default function PersonaCreationWizard({
                   <Typography color="text.secondary">{t('personas.create.appsHelp')}</Typography>
                 </Box>
                 {appsError && <Alert severity="warning">{appsError}</Alert>}
+                <Box
+                  sx={{
+                    border: 1,
+                    borderColor: appRefs.length ? 'primary.main' : 'divider',
+                    bgcolor: appRefs.length ? 'primary.main' : 'transparent',
+                    color: appRefs.length ? 'primary.contrastText' : 'text.secondary',
+                    borderRadius: 2.5,
+                    px: 2,
+                    py: 1.5,
+                  }}
+                  aria-live="polite"
+                >
+                  <Typography variant="subtitle2" fontWeight={750}>
+                    {t('personas.create.appsSelected', { count: appRefs.length })}
+                  </Typography>
+                  {appRefs.length > 0 && (
+                    <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
+                      {appRefs.map((ref) => (
+                        <Chip
+                          key={ref}
+                          label={ref}
+                          color="default"
+                          onDelete={() => toggleApp(ref)}
+                          sx={{ bgcolor: 'background.paper', color: 'text.primary', fontWeight: 650 }}
+                        />
+                      ))}
+                    </Stack>
+                  )}
+                </Box>
+                <Button
+                  sx={{ alignSelf: 'flex-start' }}
+                  startIcon={<RefreshRounded />}
+                  disabled={appsLoading || appsRefreshing}
+                  onClick={refreshApps}
+                >
+                  {t('personas.create.refreshApps')}
+                </Button>
                 <CardPickerGrid
                   searchable
                   selectionMode="multiple"
                   ariaLabel={t('personas.create.appsTitle')}
-                  isLoading={appsLoading}
+                  isLoading={appsLoading || appsRefreshing}
                   emptyMessage={t('personas.apps.noEligible')}
                   items={appServers.map((server) => ({
                     key: server.name,
@@ -622,7 +710,16 @@ export default function PersonaCreationWizard({
                 </Box>
                 <Typography>{t('personas.create.reviewIdentity', { name: name.trim(), purpose: mission.trim() || t('personas.create.noPurpose') })}</Typography>
                 <Typography>{t('personas.create.reviewRole', { role: selectedRole?.name ?? '' })}</Typography>
-                <Typography>{t('personas.create.reviewCoreOwned', { flow: selectedCore?.name ?? '' })}</Typography>
+                <Typography>
+                  {selectedCore
+                    ? t('personas.create.reviewCoreOwned', { flow: selectedCore.name })
+                    : t('personas.create.reviewCoreFromRole', {
+                        flow: selectedRole?.coreFlowTemplate?.name
+                          ?? primaryRoleBehavior?.name
+                          ?? roleDefaultCore?.name
+                          ?? '',
+                      })}
+                </Typography>
                 {coreFlowRef && readiness[coreFlowRef]?.state !== 'ready' && (
                   <ReadinessNotice
                     readiness={readiness[coreFlowRef] ?? EMPTY_READINESS}
@@ -639,7 +736,7 @@ export default function PersonaCreationWizard({
                 </Typography>
                 <Typography>{selectedBehaviors.length ? t('personas.create.reviewSupplementalBehaviors', { count: selectedBehaviors.length, flows: selectedBehaviors.map((flow) => flow.name).join(', ') }) : t('personas.create.reviewNoSupplementalBehaviors')}</Typography>
                 <Typography>{t('personas.create.reviewBehaviorTotal', { count: requiredBehaviorCount + selectedBehaviors.length })}</Typography>
-                <Typography>{selectedApps.length ? t('personas.create.reviewApps', { apps: selectedApps.map((server) => server.name).join(', ') }) : t('personas.create.reviewNoApps')}</Typography>
+                <Typography>{appRefs.length ? t('personas.create.reviewApps', { apps: appRefs.join(', ') }) : t('personas.create.reviewNoApps')}</Typography>
                 <Typography color="text.secondary">{t('personas.create.memoryPostCreate')}</Typography>
                 <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
                   {avatarUrl && <Chip avatar={<Avatar src={avatarUrl} />} label={t('personas.create.pictureChosen')} />}

@@ -140,9 +140,7 @@ async function installedAppStatuses(): Promise<Map<string, PublicRoleSuggestedAp
       config.name,
       config.disabled === true
         ? 'disabled'
-        : config.enableMcpApps === true
-          ? 'available'
-          : 'apps_disabled',
+        : 'available',
     );
   }
   return statuses;

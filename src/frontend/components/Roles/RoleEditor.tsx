@@ -23,7 +23,7 @@ export default function RoleEditor({ mode, roleId }: { mode: 'create' | 'edit'; 
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const discovery = useMcpAppsDiscovery({ active: pickerOpen });
+  const discovery = useMcpAppsDiscovery({ active: pickerOpen, includeAllServers: true });
 
   useEffect(() => {
     if (mode !== 'edit' || !roleId) return;
@@ -63,7 +63,9 @@ export default function RoleEditor({ mode, roleId }: { mode: 'create' | 'edit'; 
           <CardContent>
             <Typography variant="subtitle1" fontWeight={600}>{server.name}</Typography>
             <Typography variant="body2" color="text.secondary">
-              {server.error ?? t('roles.apps.available', { count: server.apps.length })}
+              {server.error ?? (server.apps.length > 0
+                ? t('roles.apps.available', { count: server.apps.length })
+                : t('roles.mcpServerAvailable'))}
             </Typography>
           </CardContent>
         </Card>
