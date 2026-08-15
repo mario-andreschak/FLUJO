@@ -8,14 +8,18 @@ import {
   Chip,
   CircularProgress,
   Dialog,
+  DialogActions,
   DialogContent,
   DialogTitle,
   List,
   ListItemButton,
   ListItemText,
+  Tab,
+  Tabs,
   Tooltip,
   Typography,
 } from '@mui/material';
+import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import PersonOutlineRoundedIcon from '@mui/icons-material/PersonOutlineRounded';
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 
@@ -24,6 +28,7 @@ import { useI18n } from '@/frontend/contexts/I18nContext';
 import { personasService } from '@/frontend/services/personas';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import type { Persona, PersonaComposition } from '@/shared/types/enduringAgent';
+import { BIG_TUTORIAL_EVENT, isBigTutorialEvent } from '@/frontend/components/Tour/bigTutorialEvents';
 
 interface ChatTargetSelectorProps {
   selectedFlowId: string | null;
@@ -62,6 +67,9 @@ const ChatTargetSelector: React.FC<ChatTargetSelectorProps> = ({
   const [compositionError, setCompositionError] = useState<string | null>(null);
   const [compositionAttempt, setCompositionAttempt] = useState(0);
   const [selectedBehaviorName, setSelectedBehaviorName] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'agents' | 'personas'>('agents');
+  const [selectedFlowName, setSelectedFlowName] = useState('');
+  const [externalAgentSearch, setExternalAgentSearch] = useState<string | undefined>();
 
   useEffect(() => {
     const controller = new AbortController();
@@ -141,6 +149,17 @@ const ChatTargetSelector: React.FC<ChatTargetSelectorProps> = ({
     };
   }, [selectedPersonaBehaviorSlotKey, selectedPersonaId]);
 
+  useEffect(() => {
+    const listener = (event: Event) => {
+      if (!isBigTutorialEvent(event) || event.detail.type !== 'open-chat-flow-picker') return;
+      setActiveTab('agents');
+      setExternalAgentSearch(event.detail.query);
+      setOpen(true);
+    };
+    window.addEventListener(BIG_TUTORIAL_EVENT, listener);
+    return () => window.removeEventListener(BIG_TUTORIAL_EVENT, listener);
+  }, []);
+
   const availablePersonas = useMemo(
     () => personas.filter(personaCanReceiveChat),
     [personas],
@@ -150,6 +169,18 @@ const ChatTargetSelector: React.FC<ChatTargetSelectorProps> = ({
   const closePicker = () => {
     setOpen(false);
     setCandidatePersona(null);
+  };
+
+  const openPicker = () => {
+    setCandidatePersona(null);
+    setActiveTab('agents');
+    setExternalAgentSearch(undefined);
+    setOpen(true);
+  };
+
+  const chooseFlow = (flowId: string) => {
+    onSelectFlow(flowId);
+    closePicker();
   };
 
   const choosePersonaBehavior = (behaviorSlotKey: string) => {
@@ -187,42 +218,68 @@ const ChatTargetSelector: React.FC<ChatTargetSelectorProps> = ({
   }
 
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap', minWidth: 0 }}>
-      <FlowSelector
-        selectedFlowId={selectedFlowId}
-        onSelectFlow={onSelectFlow}
-        disabled={disabled}
-        hideLabel
-        compact={compact}
-        fullScreenPicker={fullScreenPicker}
-      />
-      <Tooltip title={error ?? t('chat.target.choosePersona')}>
+    <Box sx={{ minWidth: 0 }}>
+      <Tooltip title={t('chat.target.chooseTarget')}>
         <span>
           <Button
+            data-tour="chat-flow-picker-button"
             variant="outlined"
             size={compact ? 'small' : 'medium'}
-            startIcon={loading ? <CircularProgress size={16} /> : <PersonOutlineRoundedIcon />}
-            disabled={disabled || loading || Boolean(error)}
-            onClick={() => {
-              setCandidatePersona(null);
-              setOpen(true);
+            startIcon={<AccountTreeOutlinedIcon />}
+            disabled={disabled}
+            onClick={openPicker}
+            sx={{
+              textTransform: 'none',
+              maxWidth: '100%',
+              minWidth: 0,
+              ...(compact && { minHeight: 36, px: 1.25 }),
             }}
-            sx={{ textTransform: 'none', minHeight: compact ? 36 : undefined }}
           >
-            {t('chat.target.persona')}
+            <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {selectedFlowId ? selectedFlowName || t('chat.selector.title') : t('chat.target.chooseTarget')}
+            </Box>
           </Button>
         </span>
       </Tooltip>
 
-      <Dialog open={open} onClose={closePicker} fullScreen={fullScreenPicker} fullWidth maxWidth="sm">
-        <DialogTitle>
-          {candidatePersona
-            ? t('chat.target.chooseHow', { persona: candidatePersona.name })
-            : t('chat.target.choosePersona')}
-        </DialogTitle>
-        <DialogContent dividers>
-          {candidatePersona ? (
+      <Dialog
+        open={open}
+        onClose={closePicker}
+        fullScreen={fullScreenPicker}
+        fullWidth
+        maxWidth="md"
+        keepMounted
+      >
+        <DialogTitle>{t('chat.target.chooseTarget')}</DialogTitle>
+        <Box sx={{ borderBottom: 1, borderColor: 'divider', px: { xs: 1, sm: 3 } }}>
+          <Tabs
+            value={activeTab}
+            onChange={(_event, value: 'agents' | 'personas') => setActiveTab(value)}
+            aria-label={t('chat.target.tabs')}
+          >
+            <Tab value="agents" label={t('chat.target.agents')} />
+            <Tab value="personas" label={t('chat.target.personas')} />
+          </Tabs>
+        </Box>
+        <DialogContent dividers sx={{ p: { xs: 2, sm: 3 } }}>
+          {activeTab === 'agents' ? (
             <Box>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                {t('chat.selector.dialogHelp')}
+              </Typography>
+              <FlowSelector
+                embedded
+                selectedFlowId={selectedFlowId}
+                onSelectFlow={chooseFlow}
+                externalSearchTerm={externalAgentSearch}
+                onSelectedFlowNameChange={setSelectedFlowName}
+              />
+            </Box>
+          ) : candidatePersona ? (
+            <Box>
+              <Typography variant="h6" sx={{ mb: 1 }}>
+                {t('chat.target.chooseHow', { persona: candidatePersona.name })}
+              </Typography>
               <Button
                 size="small"
                 onClick={() => setCandidatePersona(null)}
@@ -293,25 +350,38 @@ const ChatTargetSelector: React.FC<ChatTargetSelectorProps> = ({
                 </>
               ) : null}
             </Box>
+          ) : loading ? (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 3 }}>
+              <CircularProgress size={20} />
+              <Typography color="text.secondary">{t('chat.target.loading')}</Typography>
+            </Box>
           ) : error ? (
             <Alert severity="error">{error}</Alert>
           ) : availablePersonas.length === 0 ? (
             <Typography color="text.secondary">{t('chat.target.empty')}</Typography>
           ) : (
-            <List disablePadding>
-              {availablePersonas.map((persona) => (
-                <ListItemButton
-                  key={persona.id}
-                  onClick={() => setCandidatePersona(persona)}
-                  selected={persona.id === selectedPersonaId}
-                >
-                  <PersonOutlineRoundedIcon sx={{ mr: 1.5, color: 'primary.main' }} />
-                  <ListItemText primary={persona.name} secondary={persona.mission || undefined} />
-                </ListItemButton>
-              ))}
-            </List>
+            <Box>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                {t('chat.target.choosePersona')}
+              </Typography>
+              <List disablePadding>
+                {availablePersonas.map((persona) => (
+                  <ListItemButton
+                    key={persona.id}
+                    onClick={() => setCandidatePersona(persona)}
+                    selected={persona.id === selectedPersonaId}
+                  >
+                    <PersonOutlineRoundedIcon sx={{ mr: 1.5, color: 'primary.main' }} />
+                    <ListItemText primary={persona.name} secondary={persona.mission || undefined} />
+                  </ListItemButton>
+                ))}
+              </List>
+            </Box>
           )}
         </DialogContent>
+        <DialogActions>
+          <Button onClick={closePicker}>{t('common.cancel')}</Button>
+        </DialogActions>
       </Dialog>
     </Box>
   );
