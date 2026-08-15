@@ -565,9 +565,8 @@ export default function Navigation() {
         {isCompact && <Box sx={{ flex: 1 }} />}
 
         <Stack direction="row" spacing={0.7} alignItems="center">
-          {/* Workspaces (#406): colored tabs for the workspace namespaces that
-              exist on disk. Renders nothing on a single-workspace install, so
-              the navbar is unchanged for everyone who doesn't use them. */}
+          {/* The workspace menu owns namespace selection and management. It is
+              always visible so a single-workspace install can create another. */}
           {!isCompact && <WorkspaceTabs />}
 
           {/* Rendered in this shared action cluster so it is present in both the
@@ -735,8 +734,7 @@ export default function Navigation() {
           </Stack>
         </Box>
 
-        {/* Workspaces (#406): the compact layout gets the same selection as a
-            wrapping chip row, since a scrollable tab strip doesn't fit here. */}
+        {/* Compact navigation gets the same workspace management menu. */}
         <WorkspaceTabs variant="drawer" onSwitch={() => setDrawerOpen(false)} />
 
         <List disablePadding sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
