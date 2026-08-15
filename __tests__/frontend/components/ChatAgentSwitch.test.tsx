@@ -215,7 +215,7 @@ describe('Talk conversation Agent switch terminology', () => {
     mockGetModelTurn.mockReset();
   });
 
-  it('keeps the chosen transcript view and renders Chat at the selected model turn', async () => {
+  it('renders the current transcript in Live and the archived snapshot in History', async () => {
     const turns = [1, 2].map(index => ({
       id: `dispatch-${index}`,
       conversationId: conversationSummary.id,
@@ -261,7 +261,10 @@ describe('Talk conversation Agent switch terminology', () => {
 
     const chatButton = await screen.findByRole('button', { name: 'Chat' });
     expect(chatButton).toHaveAttribute('aria-pressed', 'true');
-    await waitFor(() => expect(screen.getByTestId('rendered-message-count')).toHaveTextContent('2'));
+    // The newest model-turn snapshot is a pre-dispatch input and therefore
+    // lacks the assistant response it produced. Live must use the current
+    // conversation, which contains both completed exchanges.
+    await waitFor(() => expect(screen.getByTestId('rendered-message-count')).toHaveTextContent('4'));
 
     fireEvent.click(screen.getByRole('option', { name: /1\. Node 1/ }));
 
