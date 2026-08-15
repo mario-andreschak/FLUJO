@@ -1,5 +1,10 @@
 import type { Flow } from '@/shared/types/flow';
-import type { RoleBehaviorSlot } from '@/shared/types/enduringAgent';
+import type { PersonaNativeAbilityId, RoleBehaviorSlot } from '@/shared/types/enduringAgent';
+import {
+  PERSONA_MEMORY_GATEWAY_SERVER,
+  PERSONA_MEMORY_MAINTENANCE_COMMIT_TOOL,
+  PERSONA_MEMORY_MAINTENANCE_OUTPUT_VARIABLE,
+} from '@/shared/types/enduringAgent/personaMemoryGateway';
 
 const PRIMARY_START_PROMPT = `You are running the primary behavior for an enduring Persona.
 Treat the latest user request as the task and use only the identity, context, and capabilities explicitly supplied for this Activity. Do not assume access to tools, accounts, memories, or facts that are not present.`;
@@ -23,11 +28,21 @@ function linearFlow(input: {
   processDescription?: string;
   startPrompt: string;
   processPrompt: string;
+  processPersonaTools?: PersonaNativeAbilityId[];
+  processCaptureVariable?: string;
+  terminalStatic?: {
+    id: string;
+    label: string;
+    toolName: string;
+    serverName: string;
+    argumentsJson: string;
+  };
 }): Flow {
   const nodePrefix = input.nodePrefix ?? input.id;
   const startId = `${nodePrefix}_start`;
   const processId = `${nodePrefix}_process`;
   const finishId = `${nodePrefix}_finish`;
+  const terminalStaticId = input.terminalStatic?.id;
   return {
     id: input.id,
     name: input.name,
@@ -52,13 +67,42 @@ function linearFlow(input: {
           label: input.processLabel,
           type: 'process',
           ...(input.processDescription ? { description: input.processDescription } : {}),
-          properties: { promptTemplate: input.processPrompt },
+          properties: {
+            promptTemplate: input.processPrompt,
+            ...(input.processPersonaTools !== undefined
+              ? { personaTools: input.processPersonaTools }
+              : {}),
+            ...(input.processCaptureVariable
+              ? { captureVariable: input.processCaptureVariable }
+              : {}),
+          },
         },
       },
+      ...(input.terminalStatic ? [{
+        id: input.terminalStatic.id,
+        type: 'static',
+        position: { x: 560, y: 0 },
+        data: {
+          label: input.terminalStatic.label,
+          type: 'static',
+          description: 'Deterministically validates and commits bounded memory candidates.',
+          properties: {
+            injectOnce: true,
+            entries: [{
+              kind: 'toolCall',
+              executionMode: 'real',
+              serverName: input.terminalStatic.serverName,
+              toolName: input.terminalStatic.toolName,
+              argumentsJson: input.terminalStatic.argumentsJson,
+              result: '',
+            }],
+          },
+        },
+      }] : []),
       {
         id: finishId,
         type: 'finish',
-        position: { x: 560, y: 0 },
+        position: { x: input.terminalStatic ? 840 : 560, y: 0 },
         data: { label: 'Finish', type: 'finish' },
       },
     ],
@@ -71,12 +115,19 @@ function linearFlow(input: {
         targetHandle: 'process-top',
       },
       {
-        id: `${nodePrefix}_process_finish`,
+        id: `${nodePrefix}_process_${terminalStaticId ?? 'finish'}`,
         source: processId,
-        target: finishId,
+        target: terminalStaticId ?? finishId,
         sourceHandle: 'process-bottom',
-        targetHandle: 'finish-top',
+        targetHandle: input.terminalStatic ? 'static-top' : 'finish-top',
       },
+      ...(terminalStaticId ? [{
+        id: `${nodePrefix}_${terminalStaticId}_finish`,
+        source: terminalStaticId,
+        target: finishId,
+        sourceHandle: 'static-bottom',
+        targetHandle: 'finish-top',
+      }] : []),
     ],
   };
 }
@@ -125,6 +176,20 @@ export function buildMaintainMemoryRoleBehaviorSlot(
       processDescription: 'Extracts a bounded set of provenance-bearing memory candidates.',
       startPrompt: MEMORY_START_PROMPT,
       processPrompt: MEMORY_PROCESS_PROMPT,
+      // Maintenance proposes a bounded JSON envelope. The dispatcher validates
+      // and persists it once, preserving evidence and idempotency; model-issued
+      // mutation tools would make that boundary ambiguous and could double-write.
+      processPersonaTools: [],
+      processCaptureVariable: PERSONA_MEMORY_MAINTENANCE_OUTPUT_VARIABLE,
+      terminalStatic: {
+        id: `${options.nodePrefix ?? flowId}_validate_commit`,
+        label: 'Validate and commit memory',
+        serverName: PERSONA_MEMORY_GATEWAY_SERVER,
+        toolName: PERSONA_MEMORY_MAINTENANCE_COMMIT_TOOL,
+        argumentsJson: JSON.stringify({
+          candidate_variable: PERSONA_MEMORY_MAINTENANCE_OUTPUT_VARIABLE,
+        }),
+      },
     }),
   };
 }

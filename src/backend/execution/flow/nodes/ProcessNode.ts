@@ -22,6 +22,7 @@ import { buildHandoffToolNameMap, buildSubflowToolNameMap, SUBFLOW_TOOL_PREFIX }
 import { buildSubflowTool } from '../handlers/subflowToolInvocation';
 import { buildBehaviorToolDefinitions } from '../handlers/behaviorToolInvocation';
 import { buildDetachedSubflowTool, SUBFLOW_DETACHED_TOOL_PREFIX } from '../handlers/subflowDetachedInvocation';
+import { buildPersonaTools, isPersonaToolName } from '../handlers/personaTools';
 import { flowService } from '@/backend/services/flow/index';
 import { modelService } from '@/backend/services/model';
 import { FlowNode } from '@/shared/types/flow';
@@ -614,6 +615,22 @@ export class ProcessNode extends BaseNode {
     if (node_params?.properties?.enableTodoTool === true &&
         !availableTools.some((t) => t.name === TODO_TOOL_NAME)) {
       availableTools = [...availableTools, buildTodoTool()];
+    }
+
+    // Persona-native abilities are local, fenced function tools rather than MCP
+    // tools. Advertise only the abilities authored on this Process and only when
+    // the run carries both trusted Persona attribution and mutation authority.
+    // Replace colliding definitions so an external tool cannot impersonate a
+    // native Persona capability.
+    const personaTools = sharedState.personaAttribution
+      && sharedState.executionAuthority?.commitPersonaMutation
+      ? buildPersonaTools(node_params?.properties?.personaTools)
+      : [];
+    if (personaTools.length > 0) {
+      availableTools = [
+        ...availableTools.filter((tool) => !isPersonaToolName(tool.name)),
+        ...personaTools,
+      ];
     }
 
     // Meeting tools are coordinator-owned capabilities. Replace any colliding

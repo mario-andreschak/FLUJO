@@ -19,6 +19,12 @@ import {
   type SharedState,
 } from '@/backend/execution/flow/types';
 import type { FlujoChatMessage } from '@/shared/types/chat';
+import type { Flow } from '@/shared/types/flow';
+import {
+  PERSONA_MEMORY_GATEWAY_SERVER,
+  PERSONA_MEMORY_MAINTENANCE_COMMIT_TOOL,
+  PERSONA_MEMORY_MAINTENANCE_OUTPUT_VARIABLE,
+} from '@/shared/types/enduringAgent/personaMemoryGateway';
 import {
   EnduringAgentIdSchema,
   PERSONA_ACTIVITY_KINDS,
@@ -97,10 +103,12 @@ import { buildPersonaInstructionContext } from './personaInstructionContext';
 import { getCoreMemory } from './memoryKernel';
 import {
   MemoryMaintenancePlanSchema,
+  MemoryMaintenanceResultSchema,
   buildMemoryMaintenancePlan,
   persistMemoryMaintenanceOutput,
   renderMemoryMaintenancePrompt,
   type MemoryMaintenancePlan,
+  type MemoryMaintenanceResult,
 } from './memoryMaintenance';
 import {
   withPersonaRuntimeLock,
@@ -225,6 +233,8 @@ export interface PersonaFlowDispatchRecord {
   instructionContext?: PersonaInstructionContext;
   /** Private, bounded evidence plan for a restricted maintenance Activity. */
   maintenancePlan?: MemoryMaintenancePlan;
+  /** Durable, inspectable validation and persistence outcome for maintenance output. */
+  maintenanceResult?: MemoryMaintenanceResult;
   /** Frozen from the first-activation Role; zero means no authored maintenance Flow. */
   memoryCandidateLimit?: number;
   waitingReason?: 'delivery' | 'approval' | 'debug' | 'running' | 'interrupted';
@@ -555,6 +565,7 @@ const PersonaFlowDispatchRecordSchema = z.object({
   behaviorRevisionId: EnduringAgentIdSchema.optional(),
   instructionContext: PersonaInstructionContextSchema.optional(),
   maintenancePlan: MemoryMaintenancePlanSchema.optional(),
+  maintenanceResult: MemoryMaintenanceResultSchema.optional(),
   memoryCandidateLimit: z.number().int().min(0).max(3).optional(),
   waitingReason: z.enum(['delivery', 'approval', 'debug', 'running', 'interrupted']).optional(),
   cancellationRequestedAt: z.number().int().nonnegative().optional(),
@@ -598,6 +609,13 @@ const PersonaFlowDispatchRecordSchema = z.object({
       code: 'custom',
       message: 'A maintenance evidence plan must match its maintenance Activity source.',
       path: ['maintenancePlan'],
+    });
+  }
+  if (record.maintenanceResult && record.admission.kind !== 'maintenance') {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Only a maintenance dispatch may carry a maintenance result.',
+      path: ['maintenanceResult'],
     });
   }
   if (record.state === 'waiting' && !record.waitingReason) {
@@ -917,7 +935,90 @@ interface PendingResumePreparation {
 interface TerminalDispatchRequest {
   status: 'completed' | 'cancelled' | 'error';
   outcome?: PersonaFlowDispatchOutcome;
+  maintenanceResult?: MemoryMaintenanceResult;
   error?: PersonaFlowDispatchError;
+}
+
+function isMemoryMaintenanceCommitNode(node: Flow['nodes'][number]): boolean {
+  if (node.type !== 'static') return false;
+  const entries = node.data.properties?.entries;
+  return Array.isArray(entries) && entries.some((entry) => (
+    entry
+    && typeof entry === 'object'
+    && entry.kind === 'toolCall'
+    && entry.executionMode === 'real'
+    && entry.serverName === PERSONA_MEMORY_GATEWAY_SERVER
+    && entry.toolName === PERSONA_MEMORY_MAINTENANCE_COMMIT_TOOL
+  ));
+}
+
+/**
+ * Apply the platform-owned maintenance boundary to any frozen replacement Flow.
+ * Old revisions gain the deterministic commit step in-memory; the immutable
+ * authored snapshot is never rewritten.
+ */
+export function restrictedMaintenanceFlow(source: Flow): Flow {
+  const flow = structuredClone(source);
+  for (const node of flow.nodes) {
+    if (node.type !== 'process') continue;
+    const data = node.data as typeof node.data & {
+      properties?: Record<string, unknown> & {
+        personaTools?: unknown;
+        captureVariable?: unknown;
+      };
+    };
+    data.properties = {
+      ...(data.properties ?? {}),
+      personaTools: [],
+      captureVariable: PERSONA_MEMORY_MAINTENANCE_OUTPUT_VARIABLE,
+    };
+  }
+
+  if (flow.nodes.some(isMemoryMaintenanceCommitNode)) return flow;
+
+  const finishNodes = flow.nodes.filter((node) => node.type === 'finish');
+  for (const [index, finish] of finishNodes.entries()) {
+    const commitNodeId = `persona_memory_validate_commit_${index}`;
+    const incoming = flow.edges.filter((edge) => edge.target === finish.id);
+    for (const edge of incoming) {
+      edge.target = commitNodeId;
+      edge.targetHandle = 'static-top';
+    }
+    flow.nodes.push({
+      id: commitNodeId,
+      type: 'static',
+      position: {
+        x: Math.max(0, finish.position.x - 280),
+        y: finish.position.y,
+      },
+      data: {
+        label: 'Validate and commit memory',
+        type: 'static',
+        description: 'Platform-owned deterministic validation and candidate-memory commit.',
+        properties: {
+          injectOnce: true,
+          entries: [{
+            kind: 'toolCall',
+            executionMode: 'real',
+            serverName: PERSONA_MEMORY_GATEWAY_SERVER,
+            toolName: PERSONA_MEMORY_MAINTENANCE_COMMIT_TOOL,
+            argumentsJson: JSON.stringify({
+              candidate_variable: PERSONA_MEMORY_MAINTENANCE_OUTPUT_VARIABLE,
+            }),
+            result: '',
+          }],
+        },
+      },
+    });
+    flow.edges.push({
+      id: `${commitNodeId}_${finish.id}`,
+      source: commitNodeId,
+      target: finish.id,
+      sourceHandle: 'static-bottom',
+      targetHandle: 'finish-top',
+    });
+  }
+  return flow;
 }
 
 interface RunningDispatchTransition {
@@ -2026,6 +2127,9 @@ export class PersonaFlowDispatcher {
         );
         const common = {
           ...latest,
+          ...(requested.maintenanceResult
+            ? { maintenanceResult: requested.maintenanceResult }
+            : {}),
           waitingReason: undefined,
           resumePreparationRequired: false,
           resumeSettledAt: latest.resumeRequestedAt ? now : latest.resumeSettledAt,
@@ -2431,6 +2535,8 @@ export class PersonaFlowDispatcher {
     }
     if (control.cancelRequested) abortController.abort();
     const heartbeat = this.beginHeartbeat(fence, record.id, abortController);
+    let maintenanceCommitResult: MemoryMaintenanceResult | undefined;
+    let maintenanceCommitPromise: Promise<MemoryMaintenanceResult> | undefined;
     try {
     if (await this.interruptionRequested(fence)) {
       abortController.abort();
@@ -2459,6 +2565,20 @@ export class PersonaFlowDispatcher {
       commitPersonaMutation: <T>(task: Parameters<typeof commitPersonaActivityMutation<T>>[1]) => (
         this.inWorkspace(() => commitPersonaActivityMutation(fence, task))
       ),
+      ...(record.maintenancePlan && claim.activity.kind === 'maintenance' ? {
+        commitPersonaMemoryMaintenance: (outputText: string) => {
+          maintenanceCommitPromise ??= this.inWorkspace(() => persistMemoryMaintenanceOutput({
+            personaId: record.personaId,
+            plan: record.maintenancePlan!,
+            outputText,
+            executionAuthority: authority,
+          })).then((committed) => {
+            maintenanceCommitResult = committed;
+            return committed;
+          });
+          return maintenanceCommitPromise;
+        },
+      } : {}),
       pollRelatedInputs: () => this.pollRelatedInputs(fence, conversationId),
       acknowledgeRelatedInputs: (messageIds) => this.acknowledgeRelatedInputs(
         fence,
@@ -2660,6 +2780,7 @@ export class PersonaFlowDispatcher {
     }
 
     let result: FlowRunResult;
+    let maintenanceResult: MemoryMaintenanceResult | undefined;
     try {
       await authority.assertCurrent();
       const behaviorPersona = await this.inWorkspace(
@@ -2672,7 +2793,7 @@ export class PersonaFlowDispatcher {
         excludeBehaviorId: revision.behaviorId,
       });
       const coreFlowDefinition = claim.activity.kind === 'maintenance'
-        ? structuredClone(revision.flowSnapshot)
+        ? restrictedMaintenanceFlow(revision.flowSnapshot)
         : await this.inWorkspace(() => this.dependencies.projectPersonaCoreAppsIntoFlow(
             record.personaId,
             coreAppRefs,
@@ -2703,12 +2824,36 @@ export class PersonaFlowDispatcher {
         && claim.activity.kind === 'maintenance'
         && (result.status === 'completed' || result.status === 'capped')
       ) {
-        await this.inWorkspace(() => persistMemoryMaintenanceOutput({
-          personaId: record.personaId,
-          plan: record.maintenancePlan!,
-          outputText: result.outputText,
-          executionAuthority: authority,
-        }));
+        // Current maintenance Flows commit through the visible deterministic
+        // Static node. The fallback preserves recovery for an old/incomplete
+        // snapshot or a mocked runner that never traversed the injected node.
+        maintenanceResult = maintenanceCommitResult
+          ?? await this.inWorkspace(() => persistMemoryMaintenanceOutput({
+            personaId: record.personaId,
+            plan: record.maintenancePlan!,
+            outputText: result.outputText,
+            executionAuthority: authority,
+          }));
+        const maintenanceLog = {
+          dispatchId: record.id,
+          activityId: record.activityId,
+          status: maintenanceResult.status,
+          proposedCount: maintenanceResult.proposedCount,
+          createdCount: maintenanceResult.createdCount,
+          rejectedCount: maintenanceResult.rejectedCount,
+          issues: maintenanceResult.issues.map((issue) => ({
+            code: issue.code,
+            path: issue.path,
+          })),
+        };
+        if (
+          maintenanceResult.status === 'invalid_output'
+          || maintenanceResult.status === 'rejected'
+        ) {
+          log.warn('Memory maintenance completed without saving its proposals.', maintenanceLog);
+        } else {
+          log.info('Memory maintenance persistence completed.', maintenanceLog);
+        }
       }
       await heartbeat.stop();
       control.activeAbort = undefined;
@@ -2827,6 +2972,7 @@ export class PersonaFlowDispatcher {
       const terminal = await this.commitTerminal(record, fence, {
         status: 'completed',
         outcome,
+        ...(maintenanceResult ? { maintenanceResult } : {}),
       });
       try {
         await this.ensurePostActivityMaintenance(terminal);

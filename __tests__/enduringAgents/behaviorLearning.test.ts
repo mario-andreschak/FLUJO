@@ -440,13 +440,13 @@ describe('automatic approval and deliberate Role promotion', () => {
       const promoted = await promoteBehaviorProposalToRoleVersion(activated.id, {
         confirmation: 'PROMOTE',
         actor: 'role-maintainer:alice',
-        name: 'Developer verification v2',
+        name: 'Verification Role v2',
         migrationNotes: 'Deliberately promote the verified focused-test behavior.',
       });
       expect(promoted).toMatchObject({
         roleDefinitionId: originalRoleVersion!.roleDefinitionId,
         version: originalRoleVersion!.version + 1,
-        name: 'Developer verification v2',
+        name: 'Verification Role v2',
         migrationNotes: 'Deliberately promote the verified focused-test behavior.',
       });
       expect(processNode(

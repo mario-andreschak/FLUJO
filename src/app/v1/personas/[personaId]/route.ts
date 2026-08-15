@@ -11,6 +11,7 @@ import {
   pumpPersonaFlowDispatches,
   projectPersonaPresentation,
   readPersonaRuntimeSnapshot,
+  type MemoryMaintenanceResult,
   updatePersonaSettings,
 } from '@/backend/services/enduringAgents';
 import { EnduringAgentIdSchema } from '@/shared/types/enduringAgent';
@@ -32,6 +33,27 @@ function boundedResultSummary(value: string | undefined): string | undefined {
   return `${compact.slice(0, PERSONA_RESULT_SUMMARY_LIMIT - 3).trimEnd()}...`;
 }
 
+function maintenanceResultSummary(result: MemoryMaintenanceResult): string {
+  switch (result.status) {
+    case 'saved':
+      return `Saved ${result.createdCount} of ${result.proposedCount} proposed memory candidate${result.proposedCount === 1 ? '' : 's'}.`;
+    case 'no_proposals':
+      return 'No durable memory candidates were proposed.';
+    case 'invalid_output': {
+      const first = result.issues[0];
+      const location = first?.path ? ` at ${first.path}` : '';
+      const count = result.proposedCount;
+      return count > 0
+        ? `Rejected ${count} proposed memory candidate${count === 1 ? '' : 's'}: maintenance output failed validation${location}.`
+        : `Saved 0 memory candidates: maintenance output failed validation${location}.`;
+    }
+    case 'rejected':
+      return `Saved 0 of ${result.proposedCount} proposed memory candidate${result.proposedCount === 1 ? '' : 's'} because the proposals did not reference supplied evidence.`;
+    case 'disabled':
+      return 'Memory candidate creation was disabled for this Activity.';
+  }
+}
+
 async function GET_handler(request: NextRequest, { params }: RouteContext) {
   const notLocal = assertLocalRequest(request); if (notLocal) return notLocal;
   const locked = await assertUnlocked({ openai: true }); if (locked) return locked;
@@ -46,9 +68,15 @@ async function GET_handler(request: NextRequest, { params }: RouteContext) {
     ]);
     const resultByActivityId = new Map<string, string>();
     for (const dispatch of dispatches) {
+      if (dispatch.state === 'completed' && dispatch.admission.kind === 'maintenance') {
+        const activityId = dispatch.activityId ?? dispatch.outcome?.activityId;
+        if (activityId && dispatch.maintenanceResult) {
+          resultByActivityId.set(activityId, maintenanceResultSummary(dispatch.maintenanceResult));
+        }
+        continue;
+      }
       if (
         dispatch.state !== 'completed'
-        || dispatch.admission.kind === 'maintenance'
         || dispatch.outcome?.status !== 'completed'
       ) continue;
       const activityId = dispatch.activityId ?? dispatch.outcome?.activityId;
@@ -61,7 +89,7 @@ async function GET_handler(request: NextRequest, { params }: RouteContext) {
           runtime: snapshot.runtime,
           presentation: projectPersonaPresentation(snapshot.bundle, {
             activeActivityId: snapshot.runtime.projection.active?.activityId,
-            resultByActivityId,
+            ...(resultByActivityId.size > 0 ? { resultByActivityId } : {}),
           }),
         })
       : NextResponse.json({ error: 'Persona not found.' }, { status: 404 });

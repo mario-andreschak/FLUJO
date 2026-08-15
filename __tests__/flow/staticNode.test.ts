@@ -13,6 +13,10 @@
 import { StaticNode } from '@/backend/execution/flow/nodes/StaticNode';
 import type { SharedState, StaticNodeParams } from '@/backend/execution/flow/types';
 import { mcpService } from '@/backend/services/mcp';
+import {
+  PERSONA_MEMORY_GATEWAY_SERVER,
+  PERSONA_MEMORY_MAINTENANCE_COMMIT_TOOL,
+} from '@/shared/types/enduringAgent/personaMemoryGateway';
 
 jest.mock('@/backend/execution/flow/resolveRunResourceRefs', () => ({
   resolveRunResourceRefs: jest.fn(async (value: string) => value),
@@ -130,6 +134,57 @@ describe('StaticNode', () => {
       [(state.messages[0] as any).tool_calls[0].id]: { serverName: 'files', toolName: 'read_file' },
     });
     expect(state.messages[1].content).toBe(JSON.stringify({ content: [{ type: 'text', text: 'live result' }] }));
+  });
+
+  it('executes the internal maintenance gateway without an authored MCP binding', async () => {
+    (mcpService.callTool as jest.Mock).mockClear();
+    const commitPersonaMemoryMaintenance = jest.fn(async () => ({
+      status: 'saved',
+      proposedCount: 1,
+      createdCount: 1,
+      rejectedCount: 0,
+      created: [{ id: 'memory_1', status: 'candidate', trust: 'model_inference' }],
+      issues: [],
+    }));
+    const assertCurrent = jest.fn(async () => undefined);
+    const node = nodeWithSuccessor();
+    const p = params({
+      entries: [{
+        kind: 'toolCall',
+        executionMode: 'real',
+        serverName: PERSONA_MEMORY_GATEWAY_SERVER,
+        toolName: PERSONA_MEMORY_MAINTENANCE_COMMIT_TOOL,
+        argumentsJson: '{"candidate_variable":"persona_memory_candidates"}',
+        result: '',
+      }],
+    });
+    const output = '{"memories":[]}';
+    const state = makeState({
+      variables: { persona_memory_candidates: output },
+      personaAttribution: {
+        personaId: 'persona_test',
+        activityId: 'activity_maintenance',
+        behaviorRevisionId: 'revision_maintenance',
+      },
+      executionAuthority: {
+        signal: new AbortController().signal,
+        assertCurrent,
+        commitPersonaMemoryMaintenance,
+      },
+    });
+
+    await run(node, state, p);
+
+    expect(mcpService.callTool).not.toHaveBeenCalled();
+    expect(commitPersonaMemoryMaintenance).toHaveBeenCalledWith(output);
+    expect(assertCurrent).toHaveBeenCalledTimes(2);
+    expect(state.messages[1].content).toContain('"status":"saved"');
+    expect((state.messages[0] as any).mcpToolCalls).toEqual({
+      [(state.messages[0] as any).tool_calls[0].id]: {
+        serverName: PERSONA_MEMORY_GATEWAY_SERVER,
+        toolName: PERSONA_MEMORY_MAINTENANCE_COMMIT_TOOL,
+      },
+    });
   });
 
   it('keeps legacy and explicit mock calls deterministic without executing MCP', async () => {

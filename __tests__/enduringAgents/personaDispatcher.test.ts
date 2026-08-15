@@ -733,6 +733,13 @@ describe('Persona Flow dispatcher', () => {
     const harness = makeHarness(workspace('memory-maintenance'), {
       enableMemoryMaintenance: true,
     });
+    const authoredProcess = harness.snapshot.nodes.find((node) => node.type === 'process');
+    if (authoredProcess?.type === 'process') {
+      authoredProcess.data.properties = {
+        ...authoredProcess.data.properties,
+        personaTools: ['remember'],
+      };
+    }
     const submission = await harness.dispatcher.submit(
       dispatchInput('persona_test', 'memory-maintenance'),
       { waitForCompletion: true, timeoutMs: 2_000 },
@@ -759,8 +766,71 @@ describe('Persona Flow dispatcher', () => {
         sourceActivityId: submission.dispatch.activityId,
         candidateLimit: 3,
       }),
+      maintenanceResult: expect.objectContaining({
+        status: 'invalid_output',
+        proposedCount: 0,
+        createdCount: 0,
+        rejectedCount: 0,
+        issues: [expect.objectContaining({ code: 'invalid_json' })],
+      }),
     });
+    const primaryFlow = (harness.dependencies.runFlow as jest.Mock).mock.calls[0][0]
+      .flowDefinition as BehaviorRevision['flowSnapshot'];
+    const maintenanceFlow = (harness.dependencies.runFlow as jest.Mock).mock.calls[1][0]
+      .flowDefinition as BehaviorRevision['flowSnapshot'];
+    expect(primaryFlow.nodes.find((node) => node.type === 'process')?.data.properties?.personaTools)
+      .toEqual(['remember']);
+    expect(maintenanceFlow.nodes.find((node) => node.type === 'process')?.data.properties?.personaTools)
+      .toEqual([]);
+    expect(maintenanceFlow.nodes.find((node) => node.type === 'process')?.data.properties?.captureVariable)
+      .toBe('persona_memory_candidates');
+    expect(maintenanceFlow.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'static',
+        data: expect.objectContaining({ label: 'Validate and commit memory' }),
+      }),
+    ]));
     expect(records.filter((record) => record.admission.kind === 'maintenance')).toHaveLength(1);
+  });
+
+  it('lets the deterministic maintenance node commit through the dispatcher gateway exactly once', async () => {
+    const harness = makeHarness(workspace('memory-maintenance-gateway'), {
+      enableMemoryMaintenance: true,
+    });
+    const commitCalls: string[] = [];
+    (harness.dependencies.runFlow as jest.Mock).mockImplementation(async (input: FlowRunInput) => {
+      if (input.personaAttribution?.behaviorRevisionId === 'revision_maintenance') {
+        const output = '{"memories":[]}';
+        const commit = input.executionAuthority?.commitPersonaMemoryMaintenance;
+        if (!commit) throw new Error('Expected the maintenance gateway callback.');
+        commitCalls.push(output);
+        await commit(output);
+        return successfulResult(input, output);
+      }
+      return successfulResult(input);
+    });
+
+    await harness.dispatcher.submit(
+      dispatchInput('persona_test', 'memory-maintenance-gateway'),
+      { waitForCompletion: true, timeoutMs: 2_000 },
+    );
+    await waitUntil(() => (harness.dependencies.runFlow as jest.Mock).mock.calls.length === 2);
+    const maintenance = (await harness.dispatcher.list('persona_test')).find(
+      (record) => record.admission.kind === 'maintenance',
+    );
+    const completed = await waitForDispatch(
+      harness.dispatcher,
+      maintenance!.id,
+      (record) => record?.state === 'completed',
+    );
+
+    expect(commitCalls).toEqual(['{"memories":[]}']);
+    expect(completed?.maintenanceResult).toMatchObject({
+      status: 'no_proposals',
+      proposedCount: 0,
+      createdCount: 0,
+      rejectedCount: 0,
+    });
   });
 
   it('does not learn automatically when the Persona learning control is off', async () => {

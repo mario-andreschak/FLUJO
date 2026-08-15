@@ -110,6 +110,18 @@ describe('Persona Settings wake behavior', () => {
         status: 'completed',
         outputText: '{"internal":"memory evidence"}',
       },
+      maintenanceResult: {
+        status: 'invalid_output',
+        proposedCount: 1,
+        createdCount: 0,
+        rejectedCount: 1,
+        created: [],
+        issues: [{
+          code: 'invalid_schema',
+          path: 'memories.0.kind',
+          message: 'Invalid option: expected one of the supported memory kinds.',
+        }],
+      },
     }, {
       id: 'private_error_id',
       state: 'error',
@@ -147,7 +159,13 @@ describe('Persona Settings wake behavior', () => {
     expect(result).toHaveLength(600);
     expect(result).toMatch(/^Result with readable spacing/);
     expect(result).toMatch(/\.\.\.$/);
-    expect([...options.resultByActivityId.keys()]).toEqual(['activity_result']);
+    expect(options.resultByActivityId.get('activity_maintenance')).toBe(
+      'Rejected 1 proposed memory candidate: maintenance output failed validation at memories.0.kind.',
+    );
+    expect([...options.resultByActivityId.keys()]).toEqual([
+      'activity_result',
+      'activity_maintenance',
+    ]);
     expect(JSON.stringify(await response.json())).not.toContain('private_dispatch_id');
   });
 });

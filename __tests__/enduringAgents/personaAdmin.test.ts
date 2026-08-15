@@ -4,14 +4,13 @@ import {
   PersonaDomainNotFoundError,
   activatePersonaBehaviorRevision,
   behaviorRevisionId,
-  buildBuiltInDeveloperRoleVersion,
   claimNextPersonaActivity,
   hashBehaviorFlow,
   readPersonaComposition,
   routePersonaMailboxItem,
   updatePersonaSettings,
 } from '@/backend/services/enduringAgents';
-import { createPersonaFromRole } from './fixtures/personaFactory';
+import { buildTestRoleVersion, createPersonaFromRole } from './fixtures/personaFactory';
 import {
   createBehaviorRevision,
   createRoleVersion,
@@ -68,7 +67,7 @@ describe('issue #415 phase 5 Persona administration', () => {
         name: 'Jim',
         idempotencyKey: 'phase5-settings',
       });
-      const baseRole = buildBuiltInDeveloperRoleVersion();
+      const baseRole = buildTestRoleVersion();
       const nextRole = RoleVersionSchema.parse({
         ...baseRole,
         id: 'rolever_developer_future_work',

@@ -4,7 +4,6 @@ import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { roleAdminErrorResponse } from '@/app/v1/roles/_response';
 import {
   applyRoleLifecycle,
-  ensureBuiltInDeveloperRole,
   getPublicRole,
   updatePublicRole,
 } from '@/backend/services/enduringAgents';
@@ -30,7 +29,6 @@ async function GET_handler(request: NextRequest, { params }: RouteContext) {
   const { roleId } = await params;
   const invalid = invalidRoleId(roleId); if (invalid) return invalid;
   try {
-    await ensureBuiltInDeveloperRole();
     return NextResponse.json(await getPublicRole(roleId));
   } catch (error) {
     const response = roleAdminErrorResponse(error); if (response) return response;
@@ -46,7 +44,6 @@ async function PATCH_handler(request: NextRequest, { params }: RouteContext) {
   const invalid = invalidRoleId(roleId); if (invalid) return invalid;
   const body = await request.json().catch(() => null);
   try {
-    await ensureBuiltInDeveloperRole();
     return NextResponse.json(await updatePublicRole(roleId, body));
   } catch (error) {
     const response = roleAdminErrorResponse(error); if (response) return response;
@@ -62,7 +59,6 @@ async function DELETE_handler(request: NextRequest, { params }: RouteContext) {
   const invalid = invalidRoleId(roleId); if (invalid) return invalid;
   const body = await request.json().catch(() => null);
   try {
-    await ensureBuiltInDeveloperRole();
     const role = await applyRoleLifecycle(roleId, body);
     return role ? NextResponse.json(role) : new NextResponse(null, { status: 204 });
   } catch (error) {

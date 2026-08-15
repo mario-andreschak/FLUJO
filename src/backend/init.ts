@@ -9,7 +9,6 @@ import { isEncryptionLocked, isUserEncryptionEnabled } from '@/utils/encryption/
 import { createLogger } from '@/utils/logger';
 import { ensureVendoredFlowGenerator } from '@/backend/services/flow/systemFlows';
 import {
-  ensureBuiltInDeveloperRole,
   inspectAndReconcilePersonaRuntime,
   listPersonas,
   reconcilePersonaRoleBehaviors,
@@ -299,17 +298,6 @@ async function runInitialization(): Promise<void> {
   // Verify storage first - if this throws, callers (e.g. the route) surface it.
   await verifyStorage();
   await ensureVendoredFlowGenerator();
-  // Issue #415: seed the immutable Developer Role contract in every workspace.
-  // No Persona is fabricated at startup; actors are created only through the
-  // deterministic factory/API with explicit user-provided identity.
-  try {
-    await ensureBuiltInDeveloperRole();
-  } catch (error) {
-    // Enduring agents are additive. A corrupt/conflicting seed must remain
-    // visible, but cannot take legacy Persona-less Flow, MCP, or scheduler
-    // startup down with it. Persona APIs retry the seed and surface the error.
-    log.error('Failed to seed the built-in Developer Role:', error);
-  }
   // Detached task execution is process-local in v1. Any persisted working task
   // left behind by a prior process is visible as a terminal restart failure.
   reconcileOrphanedTasks().catch(error =>

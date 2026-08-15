@@ -3,8 +3,6 @@ export * from './behaviorLearning';
 export * from './behaviorFlowResolver';
 export * from './behaviorCallPins';
 export * from './activityRuntime';
-export * from './builtInDeveloperRole';
-export * from './builtInRoleStore';
 export * from './collections';
 export * from './factory';
 export * from './memoryKernel';

@@ -18,6 +18,15 @@ jest.mock('@/backend/services/enduringAgents', () => ({
   updatePersonaWorkItem: jest.fn(),
 }));
 
+jest.mock('@/backend/services/enduringAgents/memoryKernel', () => ({
+  correctMemory: jest.fn(),
+  forgetMemory: jest.fn(),
+  pinMemoryToCore: jest.fn(),
+  rememberMemory: (...args: unknown[]) => rememberMemoryMock(...args),
+  searchPersonaMemory: (...args: unknown[]) => searchPersonaMemoryMock(...args),
+  unpinMemoryFromCore: (...args: unknown[]) => unpinMemoryFromCoreMock(...args),
+}));
+
 import {
   PERSONA_TOOL_NAMES,
   buildPersonaTools,

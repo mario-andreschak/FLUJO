@@ -220,7 +220,7 @@ describe('Role administration', () => {
     expect(versions.has(role.currentVersionId)).toBe(true);
   });
 
-  it('hard-deletes an unreferenced custom Role but protects Developer', async () => {
+  it('hard-deletes an unreferenced Role without reserving product-defined identities', async () => {
     generatedIds = ['rolever_temporary_v1'];
     const role = await createPublicRole({
       id: 'role_temporary',
@@ -234,12 +234,5 @@ describe('Role administration', () => {
     });
     expect(definitions.has('role_temporary')).toBe(false);
     expect(versions.size).toBe(0);
-
-    await expect(updatePublicRole('role_builtin_developer', {
-      expectedCurrentVersionId: 'rolever_builtin_developer_v1',
-      prompt: 'Rewrite Developer.',
-    })).rejects.toMatchObject({
-      details: { reason: 'BUILT_IN_ROLE' },
-    });
   });
 });

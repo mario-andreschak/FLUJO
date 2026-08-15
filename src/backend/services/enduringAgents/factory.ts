@@ -35,8 +35,6 @@ import {
   hashBehaviorFlow,
   snapshotBehaviorFlow,
 } from './behaviorRevisions';
-import { BUILT_IN_DEVELOPER_ROLE_VERSION_ID } from './builtInDeveloperRole';
-import { ensureBuiltInDeveloperRole } from './builtInRoleStore';
 import {
   personaAppGrantId,
   randomEnduringAgentId,
@@ -114,11 +112,7 @@ function resolvePersonaId(input: CreatePersonaInput): string {
   return randomEnduringAgentId('persona');
 }
 
-async function resolveRoleVersion(roleVersionId?: string): Promise<RoleVersion> {
-  const builtIn = await ensureBuiltInDeveloperRole();
-  if (!roleVersionId || roleVersionId === BUILT_IN_DEVELOPER_ROLE_VERSION_ID) {
-    return builtIn.roleVersion;
-  }
+async function resolveRoleVersion(roleVersionId: string): Promise<RoleVersion> {
   const selected = await getRoleVersion(roleVersionId);
   if (!selected) throw new RoleVersionNotFoundError(roleVersionId);
   return selected;

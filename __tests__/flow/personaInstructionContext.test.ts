@@ -154,6 +154,24 @@ describe('trusted Persona instruction context', () => {
     expect(prep.availableTools).toEqual([]);
   });
 
+  it('advertises authored native Persona tools only with trusted mutation authority', async () => {
+    const prep = await new ProcessNode().prep(state({
+      executionAuthority: {
+        signal: new AbortController().signal,
+        assertCurrent: jest.fn(async () => undefined),
+        commitPersonaMutation: jest.fn(),
+      },
+    }), {
+      ...params(),
+      properties: {
+        ...params().properties,
+        personaTools: ['recall', 'remember'],
+      },
+    });
+
+    expect(prep.availableTools?.map((tool) => tool.name)).toEqual(['remember', 'recall']);
+  });
+
   it('does not apply root Persona identity instructions to an attributed structural child', async () => {
     const prep = await new ProcessNode().prep(state({ flowId: 'child-flow' }), params());
 

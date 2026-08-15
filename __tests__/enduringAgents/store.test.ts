@@ -1,10 +1,12 @@
 import {
   behaviorRevisionId,
-  createPersonaFromRole,
-  ensureBuiltInDeveloperRole,
   hashBehaviorFlow,
   UnsupportedEnduringAgentSchemaError,
 } from '@/backend/services/enduringAgents';
+import {
+  createPersonaFromRole,
+  ensureTestRole,
+} from './fixtures/personaFactory';
 import { ENDURING_AGENT_COLLECTIONS } from '@/backend/services/enduringAgents/collections';
 import {
   createBehaviorBindingIfAbsent,
@@ -382,13 +384,13 @@ describe('enduring-agent referential integrity', () => {
 
   it('enforces one RoleVersion id per RoleDefinition ordinal under concurrency', async () => {
     await inFreshWorkspace(async () => {
-      const { roleVersion } = await ensureBuiltInDeveloperRole();
+      const { roleVersion } = await ensureTestRole();
       const candidates = ['rolever_concurrent_a', 'rolever_concurrent_b'].map((id, index) => (
         RoleVersionSchema.parse({
           ...roleVersion,
           id,
           version: 99,
-          name: `Concurrent Developer ${index}`,
+          name: `Concurrent Role ${index}`,
           mission: `Concurrent immutable RoleVersion candidate ${index}.`,
           createdAt: roleVersion.createdAt + index + 1,
         })

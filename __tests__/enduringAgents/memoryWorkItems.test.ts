@@ -19,6 +19,7 @@ import {
   promoteRunTodoToWorkItem,
   queryPersonaWorkItems,
   rememberMemory,
+  renderMemoryMaintenancePrompt,
   routePersonaMailboxItem,
   searchPersonaMemory,
   synchronizeAssignedWorkItemFromActivity,
@@ -387,6 +388,12 @@ describe('issue #415 phase 4 MemoryKernel', () => {
           sourceRefs: [expect.objectContaining({ kind: 'compaction' })],
         }),
       ]);
+      expect(renderMemoryMaintenancePrompt(plan)).toContain(
+        'kind must be exactly one of: "episodic", "semantic", "reflection", "procedural_hint".',
+      );
+      expect(renderMemoryMaintenancePrompt(plan)).toContain(
+        'scope must be exactly one of: "persona", "activity", "workspace", "relationship".',
+      );
 
       const claim = await claimAssignment(persona.id, 'maintenance-output-activity');
       const fence = fenceForClaim(claim);
@@ -400,18 +407,77 @@ describe('issue #415 phase 4 MemoryKernel', () => {
           evidence_ids: [plan.evidence[0].id],
         })),
       });
-      const created = await persistMemoryMaintenanceOutput({
+      const result = await persistMemoryMaintenanceOutput({
         personaId: persona.id,
         plan: plan as MemoryMaintenancePlan,
         outputText: output,
         executionAuthority: authorityFor(fence),
       });
-      expect(created).toHaveLength(3);
+      expect(result).toMatchObject({
+        status: 'saved',
+        proposedCount: 3,
+        createdCount: 3,
+        rejectedCount: 0,
+        created: expect.arrayContaining([
+          expect.objectContaining({ status: 'candidate', trust: 'model_inference' }),
+        ]),
+        issues: [],
+      });
       expect(await listMemoryItems(persona.id)).toEqual(expect.arrayContaining([
         expect.objectContaining({ status: 'candidate', trust: 'model_inference' }),
       ]));
       expect(await getPersona(persona.id)).toMatchObject({ coreMemoryItemIds: [] });
       await completePersonaActivity({ ...fence, status: 'completed' });
+    });
+  });
+
+  it('records invalid maintenance output instead of silently treating it as zero proposals', async () => {
+    await inFreshWorkspace(async () => {
+      const { persona } = await createPersonaFromRole({
+        name: 'Jim',
+        idempotencyKey: 'invalid-maintenance-jim',
+      });
+      const claim = await claimAssignment(persona.id, 'invalid-maintenance-output');
+      const result = await persistMemoryMaintenanceOutput({
+        personaId: persona.id,
+        plan: {
+          version: 1,
+          sourceDispatchId: 'dispatch_invalid_maintenance',
+          sourceActivityId: 'activity_invalid_maintenance',
+          candidateLimit: 3,
+          evidence: [{
+            id: 'e1',
+            content: 'The relevant repository is mario-andreschak/FLUJO.',
+            trust: 'explicit_user',
+            sourceRefs: [{ kind: 'user_statement', id: 'source-invalid-maintenance' }],
+          }],
+        },
+        outputText: JSON.stringify({
+          memories: [{
+            content: 'The relevant repository is mario-andreschak/FLUJO.',
+            kind: 'fact',
+            scope: 'workspace',
+            confidence: 0.99,
+            importance: 0.6,
+            evidence_ids: ['e1'],
+          }],
+        }),
+        executionAuthority: authorityFor(fenceForClaim(claim)),
+      });
+
+      expect(result).toMatchObject({
+        status: 'invalid_output',
+        proposedCount: 1,
+        createdCount: 0,
+        rejectedCount: 1,
+        created: [],
+        issues: [expect.objectContaining({
+          code: 'invalid_schema',
+          path: 'memories.0.kind',
+        })],
+      });
+      expect(await listMemoryItems(persona.id)).toEqual([]);
+      await completePersonaActivity({ ...fenceForClaim(claim), status: 'completed' });
     });
   });
 });

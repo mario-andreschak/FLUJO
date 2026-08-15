@@ -276,7 +276,8 @@ export interface CreatePersonaInput {
   name: string;
   /** Mutable authoring Core Flow; omitted keeps the deterministic primary Role binding. */
   coreFlowRef?: string;
-  roleVersionId?: string;
+  /** Explicit workspace Role version; Persona creation never selects one implicitly. */
+  roleVersionId: string;
   /** Human-confirmed exact MCP configuration names; omitted uses Role suggestions. */
   appRefs?: string[];
   /** Existing workspace Flows selected as optional callable Behaviors, in display order. */

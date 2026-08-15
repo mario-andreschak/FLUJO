@@ -42,7 +42,13 @@ export function buildBehaviorToolRegistry(input: {
 }): BehaviorToolRegistry {
   const registry: BehaviorToolRegistry = {};
   const ordered = [...input.behaviors]
-    .filter((behavior) => behavior.ref !== input.excludeBehaviorId)
+    .filter((behavior) => (
+      behavior.ref !== input.excludeBehaviorId
+      // Platform maintenance has dispatcher-owned evidence and commit semantics.
+      // Advertising it as an ordinary nested Behavior bypasses that boundary and
+      // falsely suggests the parent orchestrator will persist its prose result.
+      && behavior.slotKey !== 'maintain_memory'
+    ))
     .sort((left, right) => left.ref.localeCompare(right.ref));
 
   for (const behavior of ordered) {
