@@ -4657,7 +4657,12 @@ const Chat: React.FC = () => {
   );
   const currentPreviewAvailable = !!selectedPreviewNodeId && !!currentConversationId;
   const wireViewAvailable = archivedModelTurnAvailable || historicalWireViewAvailable || currentPreviewAvailable;
-  const showingArchivedChat = transcriptView === 'chat' && archivedModelTurnAvailable;
+  // The newest timeline position is a live cursor, not an archived boundary.
+  // Model-turn snapshots are captured before dispatch, so rendering one here
+  // would hide the assistant response produced by that dispatch. Only use the
+  // archived canonical transcript after the user has moved into History.
+  const showingArchivedChat =
+    transcriptView === 'chat' && archivedModelTurnAvailable && !modelTurnFollowLive;
   const showingArchivedModelTurn = transcriptView === 'wire' && archivedModelTurnAvailable;
   const showingHistoricalWireView =
     transcriptView === 'wire' && !archivedModelTurnAvailable && historicalWireViewAvailable;
