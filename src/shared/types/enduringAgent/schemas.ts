@@ -1567,6 +1567,7 @@ export const PersonaDeletionCountsSchema = z.object({
   behaviorMaintenanceRuns: z.number().int().nonnegative().default(0),
   appGrants: z.number().int().nonnegative().default(0),
   memoryItems: z.number().int().nonnegative(),
+  memoryEmbeddings: z.number().int().nonnegative().default(0),
   workItems: z.number().int().nonnegative(),
   liveActivities: z.number().int().nonnegative(),
   archivedActivities: z.number().int().nonnegative(),

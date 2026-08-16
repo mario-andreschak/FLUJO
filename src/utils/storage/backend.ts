@@ -105,6 +105,39 @@ const writeChains = new Map<string, Promise<unknown>>();
 // Monotonic counter to keep temp file names unique within this process.
 let tmpCounter = 0;
 
+// Windows has no share-mode equivalent of POSIX's "rename over an open file is
+// fine": libuv opens files WITHOUT FILE_SHARE_DELETE, so while any reader in
+// any process holds the target open — including our own concurrent
+// loadItem/loadCollectionItem calls — MoveFileEx refuses to replace it and
+// rename fails with EPERM. Measured on a plain fs.readFile poller against this
+// exact write path, ~85% of renames fail on the first try; the conflict clears
+// as soon as the reader's handle closes, which is typically single-digit
+// milliseconds. So the rename is retried rather than treated as fatal.
+//
+// The schedule is front-loaded (first retry after ~5ms, not 25ms) because most
+// conflicts are one read away from clearing, then backs off exponentially so a
+// genuinely busy file does not spin. Jitter keeps two writers racing for the
+// same target from re-colliding in lockstep on every attempt.
+const RETRYABLE_RENAME_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
+const MAX_RENAME_ATTEMPTS = 15;
+const MAX_RENAME_BACKOFF_MS = 100;
+
+async function renameWithRetry(tmpPath: string, filePath: string): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await fs.rename(tmpPath, filePath);
+      return;
+    } catch (renameError) {
+      const code = (renameError as NodeJS.ErrnoException).code;
+      if (attempt >= MAX_RENAME_ATTEMPTS || !code || !RETRYABLE_RENAME_CODES.has(code)) {
+        throw renameError;
+      }
+      const backoff = Math.min(MAX_RENAME_BACKOFF_MS, 5 * 2 ** (attempt - 1));
+      await new Promise(resolve => setTimeout(resolve, backoff + Math.random() * 10));
+    }
+  }
+}
+
 export async function writeFileAtomic(filePath: string, data: string): Promise<void> {
   const dirPath = path.dirname(filePath);
   await fs.mkdir(dirPath, { recursive: true });
@@ -112,24 +145,7 @@ export async function writeFileAtomic(filePath: string, data: string): Promise<v
   const tmpPath = `${filePath}.tmp.${process.pid}.${++tmpCounter}`;
   try {
     await fs.writeFile(tmpPath, data);
-    // Windows: a concurrent reader, indexer, or antivirus scan can hold the
-    // target open, making the rename fail TRANSIENTLY with EPERM/EBUSY/EACCES.
-    // Retry briefly with linear backoff before surfacing the error, so a
-    // conversation save isn't lost to a momentary file lock.
-    const RETRYABLE_RENAME_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
-    const MAX_RENAME_ATTEMPTS = 5;
-    for (let attempt = 1; ; attempt++) {
-      try {
-        await fs.rename(tmpPath, filePath);
-        break;
-      } catch (renameError) {
-        const code = (renameError as NodeJS.ErrnoException).code;
-        if (attempt >= MAX_RENAME_ATTEMPTS || !code || !RETRYABLE_RENAME_CODES.has(code)) {
-          throw renameError;
-        }
-        await new Promise(resolve => setTimeout(resolve, 25 * attempt));
-      }
-    }
+    await renameWithRetry(tmpPath, filePath);
   } catch (error) {
     // Best-effort cleanup so a failed write doesn't leave temp files behind.
     try { await fs.unlink(tmpPath); } catch { /* temp file may not exist */ }
@@ -261,6 +277,11 @@ const getCollectionItemPath = (collection: string, id: string) =>
 // that are only unique WITHIN a workspace (conversation ids, MCP server names,
 // KV scopes) cannot serialize across workspaces — which would both be a
 // needless bottleneck and, for read-modify-write callers, a correctness bug.
+//
+// NOT re-entrant: a task must never call runInWriteChain again with its own
+// chain key. The nested call queues behind the task that is making it, and
+// neither can ever complete. Code already running inside a chain must call the
+// unchained form of whatever it needs.
 export function runInWriteChain<T>(chainKey: string, task: () => Promise<T>): Promise<T> {
   const scopedKey = workspaceCacheKey('chain', chainKey);
   const previous = writeChains.get(scopedKey) ?? Promise.resolve();

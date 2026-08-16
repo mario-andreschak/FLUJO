@@ -141,9 +141,20 @@ async function rebuildIndex<T extends IndexEntry>(
       entries: entries.sort((a, b) => a.id.localeCompare(b.id)),
     };
 
-    await saveIndex(indexPath, index, chainKey);
+    // Write directly: this already runs inside the chain for `chainKey`, and
+    // runInWriteChain is NOT re-entrant — going through saveIndex here would
+    // queue behind the very task making the call and deadlock it forever.
+    await writeIndex(indexPath, index);
     return index;
   });
+}
+
+/** Persist index to disk atomically. Callers must hold the index write chain. */
+async function writeIndex<T extends IndexEntry>(
+  indexPath: string,
+  index: IndexFile<T>,
+): Promise<void> {
+  await writeFileAtomic(indexPath, JSON.stringify(index, null, 2));
 }
 
 /**
@@ -155,9 +166,7 @@ async function saveIndex<T extends IndexEntry>(
   index: IndexFile<T>,
   chainKey: string,
 ): Promise<void> {
-  return runInWriteChain(chainKey, async () => {
-    await writeFileAtomic(indexPath, JSON.stringify(index, null, 2));
-  });
+  return runInWriteChain(chainKey, () => writeIndex(indexPath, index));
 }
 
 /**

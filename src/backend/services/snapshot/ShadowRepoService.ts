@@ -84,6 +84,16 @@ export async function snapshotsEnabled(): Promise<boolean> {
   }
 }
 
+/**
+ * Resolve a path to its canonical on-disk form (long name, real target, real
+ * casing). Falls back to the plain resolved path when the target cannot be
+ * canonicalized, so a missing path is still comparable rather than throwing.
+ */
+async function canonicalPath(target: string): Promise<string> {
+  const resolved = path.resolve(target);
+  return fs.realpath(resolved).catch(() => resolved);
+}
+
 /** Deterministic shadow gitdir for a confinement root. */
 function gitDirFor(root: string): string {
   const abs = path.resolve(root);
@@ -113,7 +123,12 @@ class ShadowRepoService {
       const git = simpleGit(abs);
       if (!(await git.checkIsRepo())) return false;
       const topLevel = (await git.raw(['rev-parse', '--show-toplevel'])).trim();
-      return path.resolve(topLevel) === abs;
+      // git always reports the canonical path, so a caller-supplied root that
+      // merely SPELLS the same directory differently — a Windows 8.3 short name
+      // like C:\Users\MARIO~1\..., a symlink, or a junction — would fail a raw
+      // string comparison and silently disable snapshots for that repository.
+      // Canonicalize both sides before deciding they differ.
+      return await canonicalPath(topLevel) === await canonicalPath(abs);
     } catch {
       return false;
     }

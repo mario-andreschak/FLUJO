@@ -9,6 +9,8 @@ import {
   _setSnapshotStoreDirForTests,
 } from '@/backend/services/snapshot/SnapshotStore';
 import { DEFAULT_SNAPSHOT_RETENTION_POLICY } from '@/shared/types/snapshot';
+import { StorageKey } from '@/shared/types/storage';
+import { clearItem } from '@/utils/storage/backend';
 
 describe('SnapshotStore', () => {
   let testDir: string;
@@ -18,6 +20,10 @@ describe('SnapshotStore', () => {
     testDir = path.join(tmpdir(), `flujo-snapshot-test-${uuid()}`);
     await fs.mkdir(testDir, { recursive: true });
     _setSnapshotStoreDirForTests(testDir);
+    // The retention policy is persisted in workspace storage, which testDir does
+    // not cover — without this, a test that saves a custom policy leaks it into
+    // every later test that expects the default.
+    await clearItem(StorageKey.SNAPSHOT_RETENTION_POLICY);
     store = new SnapshotStore();
   });
 

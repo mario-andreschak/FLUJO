@@ -125,15 +125,18 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
     );
     expect(within(moreSections).getByRole('tab', { name: 'Help' })).toHaveAttribute('href', '/docs');
     expect(within(moreSections).getByRole('tab', { name: 'Settings' })).toHaveAttribute('href', '/settings');
-    expect(within(moreSections).getByRole('tab', { name: 'Extensions' })).toHaveAttribute('href', '/packages');
-    expect(within(moreSections).getByRole('tab', { name: 'Activity' })).toHaveAttribute('href', '/statistics');
-    expect(within(moreSections).getByRole('tab', { name: 'Roles' })).toHaveAttribute('href', '/roles');
+    expect(within(moreSections).getByRole('tab', { name: 'Meetings' })).toHaveAttribute('href', '/meetings');
+    // Roles, Extensions, and Activity are experimental too, so they stay hidden
+    // until settings hydrate and confirm experiments are on.
+    expect(within(moreSections).queryByRole('tab', { name: 'Roles' })).toBeNull();
+    expect(within(moreSections).queryByRole('tab', { name: 'Extensions' })).toBeNull();
+    expect(within(moreSections).queryByRole('tab', { name: 'Activity' })).toBeNull();
     expect(within(moreSections).queryByRole('tab', { name: 'Personas' })).toBeNull();
     expect(within(moreSections).queryByRole('tab', { name: 'Waves' })).toBeNull();
     expect(within(moreSections).queryByRole('tab', { name: 'Chain Chat' })).toBeNull();
   });
 
-  it('keeps Roles available and hides experimental Personas, Waves, and Chain Chat while experiments are off', () => {
+  it('leaves only non-experimental More destinations while experiments are off', () => {
     mockPathname = '/automation/triggers';
     mockStorageValue = { settings: {}, settingsHydrated: true, updateSettings: mockUpdateSettings };
     render(<Navigation />);
@@ -143,13 +146,13 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
     expect(tabs.map((tab) => tab.getAttribute('href'))).toEqual([
       '/automation/triggers',
       '/meetings',
-      '/roles',
-      '/packages',
-      '/statistics',
       '/docs',
       '/settings',
     ]);
     expect(within(moreSections).queryByRole('tab', { name: 'Personas' })).toBeNull();
+    expect(within(moreSections).queryByRole('tab', { name: 'Roles' })).toBeNull();
+    expect(within(moreSections).queryByRole('tab', { name: 'Extensions' })).toBeNull();
+    expect(within(moreSections).queryByRole('tab', { name: 'Activity' })).toBeNull();
     expect(within(moreSections).queryByRole('tab', { name: 'Waves' })).toBeNull();
     expect(within(moreSections).queryByRole('tab', { name: 'Chain Chat' })).toBeNull();
   });
@@ -219,25 +222,25 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
     const tabs = within(moreSections).getAllByRole('tab');
     expect(tabs.map((tab) => tab.textContent?.trim())).toEqual([
       'Automations',
-      'Waves',
       'Meetings',
       'Personas',
       'Roles',
       'Extensions',
       'Activity',
       'Chain Chat',
+      'Waves',
       'Help',
       'Settings',
     ]);
     expect(tabs.map((tab) => tab.getAttribute('href'))).toEqual([
       '/automation/triggers',
-      '/automation/waves',
       '/meetings',
       '/personas',
       '/roles',
       '/packages',
       '/statistics',
       '/chain-chat',
+      '/automation/waves',
       '/docs',
       '/settings',
     ]);

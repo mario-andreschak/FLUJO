@@ -1,1 +1,193 @@
-/**\n * Memory candidate lifecycle tests: expiry, auto-promotion, and conflict repair.\n * Issue #452: Candidate lifecycle, auto-consolidation, and conflict surfacing.\n * PR A: Candidate lifecycle (expiry + auto-promotion)\n */\n\nimport { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';\nimport {\n  storeMemoryCandidate,\n  activateMemory,\n  forgetMemory,\n  getPersonaMemory,\n  searchPersonaMemory,\n} from '@/backend/services/enduringAgents/memoryKernel';\nimport { sweepMemoryCandidates, promoteMemoryCandidate } from '@/backend/services/enduringAgents/memoryLifecycle';\nimport { ensurePersona, createPersona } from '@/backend/services/enduringAgents/factory';\nimport { FEATURES } from '@/config/features';\nimport { getMemorySettings } from '@/backend/services/enduringAgents/memorySettings';\nimport type { MemoryItem } from '@/shared/types/enduringAgent';\nimport { inFreshWorkspace } from '../helpers';\n\ndescribe('Memory Candidate Lifecycle (Issue #452)', () => {\n  let personaId: string;\n  let baseTime: number;\n\n  beforeEach(async () => {\n    await inFreshWorkspace(async () => {\n      const persona = await createPersona({ name: 'Test Persona' });\n      personaId = persona.id;\n      baseTime = Date.now();\n    });\n  });\n\n  describe('Candidate Expiry (D1)', () => {\n    it('should set expiresAt on candidates based on settings', async () => {\n      await inFreshWorkspace(async () => {\n        const now = Date.now();\n        const settings = await getMemorySettings();\n        const candidate = await storeMemoryCandidate(\n          {\n            personaId,\n            kind: 'fact',\n            scope: 'universal',\n            content: 'Test fact',\n            confidence: 0.8,\n            importance: 0.7,\n            sourceRefs: [{ kind: 'activity', id: 'test-activity', observedAt: now }],\n            trust: 'explicit_user',\n          },\n          { },\n        );\n\n        expect(candidate.status).toBe('candidate');\n        expect(candidate.expiresAt).toBeDefined();\n        const expectedExpiry = now + settings.candidateExpiryDays * 24 * 60 * 60 * 1000;\n        expect(candidate.expiresAt).toBeCloseTo(expectedExpiry, -3); // Within 1000ms\n      });\n    });\n\n    it('should skip expiry for reviewed candidates', async () => {\n      await inFreshWorkspace(async () => {\n        const now = Date.now();\n        const expiredTime = now + 1000 * 24 * 60 * 60 * 1000; // Well in future initially\n        \n        const candidate = await storeMemoryCandidate(\n          {\n            personaId,\n            kind: 'fact',\n            scope: 'universal',\n            content: 'Reviewed fact',\n            confidence: 0.8,\n            importance: 0.7,\n            sourceRefs: [{ kind: 'user_statement', id: 'user', observedAt: now }],\n            trust: 'explicit_user',\n          },\n          { },\n        );\n\n        // Review the candidate\n        await activateMemory(personaId, candidate.id, {});\n        const activated = await getPersonaMemory(personaId, candidate.id);\n\n        expect(activated.status).toBe('active');\n        expect(activated.reviewedAt).toBeDefined();\n        // Active items should not have expiresAt\n        expect(activated.expiresAt).toBeUndefined();\n      });\n    });\n\n    it('should expire untouched candidates via sweep', async () => {\n      await inFreshWorkspace(async () => {\n        const now = Date.now();\n        const expiryDays = 7;\n        const candidate = await storeMemoryCandidate(\n          {\n            personaId,\n            kind: 'fact',\n            scope: 'universal',\n            content: 'Expiring fact',\n            confidence: 0.5,\n            importance: 0.5,\n            sourceRefs: [{ kind: 'activity', id: 'test-activity', observedAt: now }],\n            trust: 'model_inference',\n          },\n          { executionAuthority: 'test-flow' }, // Force to candidate\n        );\n\n        expect(candidate.status).toBe('candidate');\n        \n        // Simulate sweep at expiry time + 1 hour\n        const sweepTime = (candidate.expiresAt ?? now) + 60 * 60 * 1000;\n        const stats = await sweepMemoryCandidates(personaId, sweepTime);\n\n        expect(stats.expired).toBe(1);\n        const expired = await getPersonaMemory(personaId, candidate.id);\n        expect(expired.status).toBe('forgotten');\n        expect(expired.lifecycleReason).toBe('expired');\n      });\n    });\n  });\n\n  describe('Auto-Promotion (D3)', () => {\n    beforeEach(() => {\n      // Ensure auto-promotion is enabled for these tests\n      vi.stubGlobal('ENABLE_MEMORY_AUTO_PROMOTION', true);\n    });\n\n    afterEach(() => {\n      vi.unstubAllGlobals();\n    });\n\n    it('should not promote external_untrusted candidates (exhaustive switch)', async () => {\n      await inFreshWorkspace(async () => {\n        const now = Date.now();\n        // Create an external_untrusted candidate (would be rejected at write time normally,\n        // so we simulate a hypothetical by checking promotion eligibility)\n        const candidate = await storeMemoryCandidate(\n          {\n            personaId,\n            kind: 'fact',\n            scope: 'universal',\n            content: 'External fact',\n            confidence: 0.5,\n            importance: 0.5,\n            sourceRefs: [{ kind: 'tool_result', id: 'untrusted-tool', observedAt: now }],\n            trust: 'verified_tool',\n          },\n          { },\n        );\n\n        // Manually set to external_untrusted for test (would normally be prevented)\n        // This tests the exhaustive switch gate\n        // Actually, the gate happens at write time, so we can't create external_untrusted\n        // candidates. The test verifies the design intention.\n      });\n    });\n\n    it('should promote corroborated candidates after min age', async () => {\n      await inFreshWorkspace(async () => {\n        const now = Date.now();\n        const settings = await getMemorySettings();\n        const minAgeMs = settings.autoPromoteMinAgeHours * 60 * 60 * 1000;\n        \n        const candidate = await storeMemoryCandidate(\n          {\n            personaId,\n            kind: 'fact',\n            scope: 'universal',\n            content: 'Corroborated fact',\n            confidence: 0.8,\n            importance: 0.8,\n            sourceRefs: [\n              { kind: 'activity', id: 'activity-1', observedAt: now },\n              { kind: 'activity', id: 'activity-2', observedAt: now + 1000 },\n            ],\n            trust: 'model_inference',\n          },\n          { executionAuthority: 'test-flow' }, // Force to candidate/model_inference\n        );\n\n        expect(candidate.status).toBe('candidate');\n        expect(candidate.trust).toBe('model_inference');\n        expect(candidate.corroborationCount ?? 0).toBe(0);\n\n        // Without corroborationCount, should not promote\n        let promoted = await promoteMemoryCandidate(personaId, candidate.id, {});\n        expect(promoted).toBeNull();\n\n        // Simulate time passage and corroboration\n        const candidateAfter = await getPersonaMemory(personaId, candidate.id);\n        // In a real scenario, corroborationCount would be incremented on each recall\n        // For this test, we'd need to manually update it (not implemented yet)\n      });\n    });\n  });\n\n  describe('Activation Tracking (D2)', () => {\n    it('should record reviewedAt when human activates a candidate', async () => {\n      await inFreshWorkspace(async () => {\n        const now = Date.now();\n        const candidate = await storeMemoryCandidate(\n          {\n            personaId,\n            kind: 'fact',\n            scope: 'universal',\n            content: 'Candidate for review',\n            confidence: 0.7,\n            importance: 0.7,\n            sourceRefs: [{ kind: 'activity', id: 'test-activity', observedAt: now }],\n            trust: 'model_inference',\n          },\n          { executionAuthority: 'test-flow' }, // Force to candidate\n        );\n\n        expect(candidate.reviewedAt).toBeUndefined();\n\n        const activated = await activateMemory(personaId, candidate.id, {});\n\n        expect(activated.status).toBe('active');\n        expect(activated.reviewedAt).toBeDefined();\n        expect(activated.reviewedAt).toBeGreaterThanOrEqual(now);\n      });\n    });\n  });\n\n  describe('Settings Integration', () => {\n    it('should respect candidateExpiryDays = 0 to disable expiry', async () => {\n      await inFreshWorkspace(async () => {\n        // This would require mocking getMemorySettings to return candidateExpiryDays: 0\n        // For now, we verify the setting exists\n        const settings = await getMemorySettings();\n        expect(settings).toHaveProperty('candidateExpiryDays');\n        expect(typeof settings.candidateExpiryDays).toBe('number');\n      });\n    });\n  });\n});\n
+/**
+ * Memory candidate lifecycle: expiry stamping, sweep expiry, review protection,
+ * and the auto-promotion feature gate.
+ * Issue 452, PR A (candidate lifecycle).
+ */
+
+import {
+  activateMemory,
+  getPersonaMemory,
+  storeMemoryCandidate,
+} from '@/backend/services/enduringAgents/memoryKernel';
+import {
+  promoteMemoryCandidate,
+  sweepMemoryCandidates,
+} from '@/backend/services/enduringAgents/memoryLifecycle';
+import {
+  getMemorySettings,
+  setMemorySettings,
+} from '@/backend/services/enduringAgents/memorySettings';
+import { FEATURES } from '@/config/features';
+import type { CreateMemoryItemInput } from '@/shared/types/enduringAgent';
+import { runWithWorkspace } from '@/utils/workspace';
+
+import { createPersonaFromRole } from './fixtures/personaFactory';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+let workspaceSequence = 0;
+
+/**
+ * Each test gets its own workspace AND its own Persona created inside it.
+ * The Persona must be created within the same workspace the test runs in:
+ * Persona records are workspace-scoped, so a Persona seeded in a different
+ * workspace is simply absent here.
+ */
+function inFreshWorkspace<T>(
+  task: (personaId: string) => Promise<T>,
+): Promise<T> {
+  workspaceSequence += 1;
+  return runWithWorkspace(
+    `memory-lifecycle-${process.pid}-${workspaceSequence}`,
+    async () => {
+      const { persona } = await createPersonaFromRole({
+        name: 'Mnemo',
+        idempotencyKey: 'memory-lifecycle',
+      });
+      return task(persona.id);
+    },
+  );
+}
+
+/** A user-attested candidate: activatable without a model-review exception. */
+function userCandidate(
+  personaId: string,
+  overrides: Partial<CreateMemoryItemInput> = {},
+): CreateMemoryItemInput {
+  return {
+    personaId,
+    kind: 'semantic',
+    scope: 'persona',
+    content: 'The release branch is stable.',
+    confidence: 0.8,
+    importance: 0.7,
+    sourceRefs: [{ kind: 'user_statement', id: 'user-1', observedAt: Date.now() }],
+    trust: 'explicit_user',
+    ...overrides,
+  } as CreateMemoryItemInput;
+}
+
+describe('memory candidate lifecycle', () => {
+  describe('candidate expiry stamping', () => {
+    it('stamps an expiry derived from the workspace candidate-expiry setting', async () => {
+      await inFreshWorkspace(async (personaId) => {
+        const before = Date.now();
+        const candidate = await storeMemoryCandidate(userCandidate(personaId));
+        const after = Date.now();
+        const settings = await getMemorySettings();
+
+        expect(candidate.status).toBe('candidate');
+        expect(candidate.expiresAt).toBeDefined();
+        // The stamp is taken from the clock inside the write, so bound it by the
+        // window the write actually ran in rather than a single sampled `now`.
+        expect(candidate.expiresAt!).toBeGreaterThanOrEqual(
+          before + settings.candidateExpiryDays * DAY_MS,
+        );
+        expect(candidate.expiresAt!).toBeLessThanOrEqual(
+          after + settings.candidateExpiryDays * DAY_MS,
+        );
+      });
+    });
+
+    it('stamps no expiry when candidateExpiryDays is 0', async () => {
+      await inFreshWorkspace(async (personaId) => {
+        await setMemorySettings({ candidateExpiryDays: 0 });
+
+        const candidate = await storeMemoryCandidate(userCandidate(personaId));
+
+        expect(candidate.status).toBe('candidate');
+        expect(candidate.expiresAt).toBeUndefined();
+      });
+    });
+  });
+
+  describe('sweep', () => {
+    it('expires an untouched candidate once its stamp has passed', async () => {
+      await inFreshWorkspace(async (personaId) => {
+        const candidate = await storeMemoryCandidate(userCandidate(personaId));
+        expect(candidate.expiresAt).toBeDefined();
+
+        const stats = await sweepMemoryCandidates(
+          personaId,
+          candidate.expiresAt! + 60 * 60 * 1000,
+        );
+
+        expect(stats.expired).toBe(1);
+        const swept = await getPersonaMemory(personaId, candidate.id);
+        expect(swept.status).toBe('forgotten');
+        expect(swept.lifecycleReason).toBe('expired');
+      });
+    });
+
+    it('leaves a candidate alone while its stamp is still in the future', async () => {
+      await inFreshWorkspace(async (personaId) => {
+        const candidate = await storeMemoryCandidate(userCandidate(personaId));
+
+        const stats = await sweepMemoryCandidates(
+          personaId,
+          candidate.expiresAt! - 60 * 60 * 1000,
+        );
+
+        expect(stats.expired).toBe(0);
+        const untouched = await getPersonaMemory(personaId, candidate.id);
+        expect(untouched.status).toBe('candidate');
+      });
+    });
+
+    it('never expires a candidate a human already reviewed', async () => {
+      await inFreshWorkspace(async (personaId) => {
+        const candidate = await storeMemoryCandidate(userCandidate(personaId));
+        const expiresAt = candidate.expiresAt!;
+        await activateMemory(personaId, candidate.id);
+
+        const stats = await sweepMemoryCandidates(personaId, expiresAt + 365 * DAY_MS);
+
+        expect(stats.expired).toBe(0);
+        const reviewed = await getPersonaMemory(personaId, candidate.id);
+        expect(reviewed.status).toBe('active');
+      });
+    });
+  });
+
+  describe('review tracking', () => {
+    it('records reviewedAt when a human activates a candidate', async () => {
+      await inFreshWorkspace(async (personaId) => {
+        const before = Date.now();
+        const candidate = await storeMemoryCandidate(userCandidate(personaId));
+        expect(candidate.reviewedAt).toBeUndefined();
+
+        const activated = await activateMemory(personaId, candidate.id);
+
+        expect(activated.status).toBe('active');
+        expect(activated.reviewedAt).toBeDefined();
+        expect(activated.reviewedAt!).toBeGreaterThanOrEqual(before);
+      });
+    });
+  });
+
+  describe('auto-promotion gate', () => {
+    it('is inert while the ENABLE_MEMORY_AUTO_PROMOTION feature is off', async () => {
+      // Guards the shipped default: promotion must be unreachable until the
+      // feature is deliberately enabled, whatever the per-workspace settings say.
+      expect(FEATURES.ENABLE_MEMORY_AUTO_PROMOTION).toBe(false);
+
+      await inFreshWorkspace(async (personaId) => {
+        await setMemorySettings({
+          autoPromoteEnabled: true,
+          autoPromoteMinAgeHours: 0,
+          autoPromoteMinCorroborations: 1,
+        });
+        const candidate = await storeMemoryCandidate(userCandidate(personaId));
+
+        await expect(
+          promoteMemoryCandidate(personaId, candidate.id),
+        ).resolves.toBeNull();
+
+        const stats = await sweepMemoryCandidates(personaId, Date.now());
+        expect(stats.promoted).toBe(0);
+        const stillCandidate = await getPersonaMemory(personaId, candidate.id);
+        expect(stillCandidate.status).toBe('candidate');
+      });
+    });
+  });
+});

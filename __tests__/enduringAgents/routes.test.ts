@@ -2,7 +2,6 @@ const listPersonasMock = jest.fn();
 const createPersonaFromRoleMock = jest.fn();
 const listPersonaFlowDispatchesMock = jest.fn();
 const readPersonaRuntimeSnapshotMock = jest.fn();
-const listPersonaFlowDispatchesMock = jest.fn();
 const pumpPersonaFlowDispatchesMock = jest.fn();
 const projectPersonaPresentationMock = jest.fn();
 const inspectPersonaRuntimeMock = jest.fn();
@@ -48,7 +47,6 @@ jest.mock('@/backend/services/enduringAgents', () => {
     createPersonaFromRole: (...args: unknown[]) => createPersonaFromRoleMock(...args),
     listPersonaFlowDispatches: (...args: unknown[]) => listPersonaFlowDispatchesMock(...args),
     readPersonaRuntimeSnapshot: (...args: unknown[]) => readPersonaRuntimeSnapshotMock(...args),
-    listPersonaFlowDispatches: (...args: unknown[]) => listPersonaFlowDispatchesMock(...args),
     pumpPersonaFlowDispatches: (...args: unknown[]) => pumpPersonaFlowDispatchesMock(...args),
     projectPersonaPresentation: (...args: unknown[]) => projectPersonaPresentationMock(...args),
     inspectAndReconcilePersonaRuntime: (...args: unknown[]) => inspectPersonaRuntimeMock(...args),
@@ -105,7 +103,6 @@ beforeEach(() => {
   listRoleVersionsMock.mockResolvedValue([]);
   listPublicRolesMock.mockResolvedValue([]);
   readPersonaRuntimeSnapshotMock.mockResolvedValue(null);
-  listPersonaFlowDispatchesMock.mockResolvedValue([]);
   pumpPersonaFlowDispatchesMock.mockResolvedValue(undefined);
   projectPersonaPresentationMock.mockReturnValue(null);
   inspectPersonaRuntimeMock.mockResolvedValue({ projection: { stuck: false }, recentEvents: [] });
@@ -204,9 +201,10 @@ describe('/v1/personas/[personaId]', () => {
     expect(await response.json()).toEqual({ ...bundle, runtime, presentation });
     expect(readPersonaRuntimeSnapshotMock).toHaveBeenCalledWith('jim');
     expect(listPersonaFlowDispatchesMock).toHaveBeenCalledWith('jim');
+    // With no dispatches there are no per-Activity results, and the route omits
+    // the key entirely rather than passing an empty Map.
     expect(projectPersonaPresentationMock).toHaveBeenCalledWith(bundle, {
       activeActivityId: undefined,
-      resultByActivityId: new Map(),
     });
 
     readPersonaRuntimeSnapshotMock.mockResolvedValueOnce(null);

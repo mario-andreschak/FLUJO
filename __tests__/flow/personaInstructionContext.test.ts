@@ -154,9 +154,15 @@ describe('trusted Persona instruction context', () => {
     expect(prep.availableTools).toEqual([]);
   });
 
-it('advertises configured Persona tools canonically and filters denied abilities', async () => {
+  it('advertises configured Persona tools canonically and filters denied abilities', async () => {
     const prep = await new ProcessNode().prep(state({
       permissionRules: [{ effect: 'deny', action: 'suggest_improvement', resource: '*' }],
+      // Persona abilities are only advertised under trusted mutation authority.
+      executionAuthority: {
+        signal: new AbortController().signal,
+        assertCurrent: jest.fn(async () => undefined),
+        commitPersonaMutation: jest.fn(),
+      },
     }), params({
       personaTools: ['suggest_improvement', 'remember', 'remember'],
     }));
@@ -180,7 +186,6 @@ it('advertises configured Persona tools canonically and filters denied abilities
     });
 
     expect(prep.availableTools?.map((tool) => tool.name)).toEqual(['remember', 'recall']);
-  });
   });
 
   it('does not apply root Persona identity instructions to an attributed structural child', async () => {

@@ -158,7 +158,10 @@ describe('GET /v1/chat/conversations content search (issue #182)', () => {
       'utf-8',
     );
     await writeConv('invoice-run', {
-      title: 'Quarterly reconciliation',
+      // An automation's sidebar title is derived from its OUTPUT, never its
+      // stored trigger title, so the searchable title has to come from there.
+      title: 'Trigger prompt that is never shown',
+      lastResponse: 'Quarterly reconciliation finished',
       flowId: 'invoice-agent',
       source: 'schedule',
       updatedAt: 30,

@@ -1411,8 +1411,8 @@ export async function listMemoryItems(personaId: string): Promise<MemoryItem[]> 
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
-export function createMemoryItem(record: MemoryItem): Promise<MemoryItem> {
-  return createOrReturnIdenticalRecord({
+export async function createMemoryItem(record: MemoryItem): Promise<MemoryItem> {
+  const created = await createOrReturnIdenticalRecord({
     collection: ENDURING_AGENT_COLLECTIONS.memoryItems,
     recordKind: 'MemoryItem',
     schema: MemoryItemSchema,
@@ -1425,6 +1425,13 @@ export function createMemoryItem(record: MemoryItem): Promise<MemoryItem> {
       );
     },
   });
+  // The index sidecar (#449) is what listMemoryItems reads, and it is only
+  // rebuilt from the collection while it is still empty. A create that skipped
+  // this left its record permanently invisible to every listing as soon as any
+  // other memory had populated the index — e.g. a Persona's factory-seeded
+  // memories vanishing because an earlier Persona's memory built the index first.
+  await updateMemoryIndex(created);
+  return created;
 }
 
 async function assertValidMemoryReferences(record: MemoryItem): Promise<void> {
@@ -1445,7 +1452,16 @@ async function assertValidMemoryReferences(record: MemoryItem): Promise<void> {
 
 /** Mutable lifecycle persistence; semantic corrections still create a successor item. */
 export function saveMemoryItem(value: MemoryItem): Promise<MemoryItem> {
-  const record = parseRecord('MemoryItem', MemoryItemSchema, value);
+  // expiresAt is the candidate-review deadline, and the schema rejects it on any
+  // other status. Every lifecycle transition spreads the prior record
+  // (`{ ...item, status: 'active' }`), so the stamp would otherwise ride along
+  // and make activating, promoting, forgetting, or superseding an expiring
+  // candidate fail validation. Retire the deadline with the candidacy it belongs
+  // to, here at the one choke point every transition passes through.
+  const normalized = value.status !== 'candidate' && value.expiresAt !== undefined
+    ? (() => { const { expiresAt: _retired, ...rest } = value; return rest as MemoryItem; })()
+    : value;
+  const record = parseRecord('MemoryItem', MemoryItemSchema, normalized);
   return recordMutation(ENDURING_AGENT_COLLECTIONS.memoryItems, record.id, async () => {
     const existing = await getMemoryItem(record.id);
     if (existing) {
