@@ -1,5 +1,6 @@
 /**
  * Ranking + near-duplicate weights for the persona memory kernel (issue #450).
+ * Hybrid embedding + lexical scoring for semantic recall (issue #451).
  * Single source of truth: A/B experiments should fork THIS block, not scatter magic numbers.
  * All functions here are pure (no side effects, no time inside — time is a parameter).
  */
@@ -35,6 +36,11 @@ export const MEMORY_RANKING_WEIGHTS = {
   /** Core-pinned handling. */
   coreBonus: 2,
   coreExemptFromDecay: true,
+  // NEW: Hybrid embedding + lexical scoring (issue #451)
+  // These weights control the balance between lexical and semantic ranking.
+  // When embeddings are not configured, wSem = 0 and the formula collapses to pure lexical.
+  lexicalWeight: 0.6,  // wLex in the formula
+  semanticWeight: 0.4, // wSem in the formula
 } as const;
 
 /**
@@ -142,6 +148,18 @@ export function trustWeight(trust: MemoryTrust): number {
 }
 
 /**
+ * Hybrid score: blend lexical and semantic (embedding) similarity.
+ * Both inputs should be in [0, 1] range (normalized).
+ * Formula: score = wLex * lexical + wSem * semantic
+ * When embeddings are unavailable, pass semantic=0 to degrade to pure lexical.
+ */
+export function hybridScore(lexical: number, semantic: number): number {
+  const wLex = MEMORY_RANKING_WEIGHTS.lexicalWeight;
+  const wSem = MEMORY_RANKING_WEIGHTS.semanticWeight;
+  return wLex * lexical + wSem * semantic;
+}
+
+/**
  * Compute the composite ranking score for a candidate memory.
  * Formula:
  *   lexical = importance*wI + confidence*wC
@@ -151,11 +169,18 @@ export function trustWeight(trust: MemoryTrust): number {
  *   score = lexical
  *         * contentLengthFactor(item.content.length)
  *         * trustWeight(item.trust)
- *         * recencyMultiplier(item.updatedAt, asOf, { core })
- *         + (core ? coreBonus : 0)
+ *         * recencyMultiplier(item.updatedAt, asOf, { core })\n *         + (core ? coreBonus : 0)
+ *
+ * When semantic embedding score is provided, combines with lexical via hybridScore().
  */
-export function scoreMemoryCandidate(opts: { item: MemoryItem; terms: readonly string[]; core: boolean; asOf: number }): number {
-  const { item, terms, core, asOf } = opts;
+export function scoreMemoryCandidate(opts: {
+  item: MemoryItem;
+  terms: readonly string[];
+  core: boolean;
+  asOf: number;
+  semanticScore?: number;
+}): number {
+  const { item, terms, core, asOf, semanticScore = 0 } = opts;
 
   // Lexical score
   const contentLC = item.content.toLocaleLowerCase();
@@ -177,31 +202,16 @@ export function scoreMemoryCandidate(opts: { item: MemoryItem; terms: readonly s
     lexical += MEMORY_RANKING_WEIGHTS.termCoverageBonus * (matchedTerms / terms.length);
   }
 
+  // Normalize lexical to [0, 1] for hybrid scoring
+  // Cap at reasonable max (e.g., 10) and scale
+  const normalizedLexical = Math.min(1, lexical / 10);
+
+  // Hybrid blend of lexical and semantic scores
+  const blended = hybridScore(normalizedLexical, semanticScore);
+
   // Apply multipliers
   const lengthFactor = contentLengthFactor(item.content.length);
   const trust = trustWeight(item.trust);
   const recency = recencyMultiplier(item.updatedAt, asOf, { core });
 
-  let score = lexical * lengthFactor * trust * recency;
-
-  // Core bonus (additive, so pinned items cannot be multiplied away)
-  if (core) {
-    score += MEMORY_RANKING_WEIGHTS.coreBonus;
-  }
-
-  return score;
-}
-
-/**
- * @deprecated Use `scoreMemoryCandidate` instead. Kept for backwards compatibility.
- * Computes the pre-#450 lexical score without recency decay, trust weighting, or length normalisation.
- */
-export function lexicalScore(item: MemoryItem, terms: readonly string[]): number {
-  const contentLC = item.content.toLocaleLowerCase();
-  let score = item.importance * MEMORY_RANKING_WEIGHTS.importanceWeight + item.confidence * MEMORY_RANKING_WEIGHTS.confidenceWeight;
-  for (const term of terms) {
-    if (contentLC === term) score += MEMORY_RANKING_WEIGHTS.exactContentMatchBonus;
-    else if (contentLC.includes(term)) score += MEMORY_RANKING_WEIGHTS.termHitBonus;
-  }
-  return score;
-}
+  let score = bl

@@ -71,7 +71,9 @@ export enum StorageKey {
   // current day's rotating random id; never a permanent installation id.
   TELEMETRY_STATE = 'telemetry_state',
   /** Workspace-scoped retention policy for derived filesystem snapshots (#414). */
-  SNAPSHOT_RETENTION_POLICY = 'snapshot_retention_policy'
+  SNAPSHOT_RETENTION_POLICY = 'snapshot_retention_policy',
+  /** Memory embeddings sidecar collection (issue #451). Per-persona embeddings keyed as MEMORY_EMBEDDINGS:personaId. */
+  MEMORY_EMBEDDINGS = 'memory_embeddings'
 }
 
 export const StorageKeys = {
@@ -111,6 +113,7 @@ export const StorageKeys = {
   REGISTRY_SETTINGS: StorageKey.REGISTRY_SETTINGS,
   TELEMETRY_STATE: StorageKey.TELEMETRY_STATE,
   SNAPSHOT_RETENTION_POLICY: StorageKey.SNAPSHOT_RETENTION_POLICY,
+  MEMORY_EMBEDDINGS: StorageKey.MEMORY_EMBEDDINGS,
 } as const;
 
 /**

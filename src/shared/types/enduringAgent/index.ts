@@ -5,3 +5,4 @@ export * from './voice';
 export * from './settings';
 export * from './personaCapabilityManifest';
 export * from './personaMemoryGateway';
+export * from './memoryEmbedding';
