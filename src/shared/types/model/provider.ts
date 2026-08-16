@@ -498,7 +498,14 @@ export const PROVIDER_PROFILES: ProviderProfile[] = [
     adapter: 'anthropic',
     sdkLabel: 'Anthropic SDK',
     baseUrl: '',
-    showBaseUrl: false,
+    // The native SDK defaults to api.anthropic.com when this is blank, but it
+    // also supports Anthropic-compatible endpoints such as Microsoft Foundry.
+    // Keep the field editable so a custom URL loaded from models.json is not a
+    // runtime-only setting that the connection modal cannot maintain.
+    showBaseUrl: true,
+    // Native Anthropic endpoints do not expose the OpenAI-compatible /models
+    // discovery route used by the modal. Foundry also omits the Models API.
+    supportsModelDiscovery: false,
     defaultModels: [
       'claude-opus-4-8',
       'claude-sonnet-4-6',

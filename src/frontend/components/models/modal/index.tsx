@@ -335,7 +335,7 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
   );
 
   // Apply a provider profile: pins the vendor (provider) and SDK (adapter) and
-  // prefills the default base URL (empty for native SDK / CLI providers).
+  // prefills its base URL. A blank native-SDK URL delegates to the SDK default.
   const handleSelectProfile = (profileId: string) => {
     const profile = PROVIDER_PROFILES.find(p => p.id === profileId);
     if (!profile) return;
@@ -610,7 +610,9 @@ export const ModelModal = ({ open, model, onSave, onClose }: ModelModalProps) =>
                     error={!!errors.baseUrl}
                     helperText={errors.baseUrl || (currentProfile.adapter === 'azure'
                       ? t('models.modal.azureEndpointHelp')
-                      : t('models.modal.baseUrlHelp'))}
+                      : currentProfile.adapter === 'anthropic'
+                        ? t('models.modal.anthropicBaseUrlHelp')
+                        : t('models.modal.baseUrlHelp'))}
                   />
                 )}
 

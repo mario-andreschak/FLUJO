@@ -65,7 +65,12 @@ describe('provider profiles', () => {
       sdkLabel: 'AzureOpenAI SDK',
     });
     expect(getProviderProfileById('gemini-native')?.showBaseUrl).toBe(false);
-    expect(getProviderProfileById('anthropic-native')?.showBaseUrl).toBe(false);
+    expect(getProviderProfileById('anthropic-native')).toMatchObject({
+      showBaseUrl: true,
+      supportsModelDiscovery: false,
+      baseUrl: '',
+      sdkLabel: 'Anthropic SDK',
+    });
     expect(getProviderProfileById('claude-subscription')?.showBaseUrl).toBe(false);
     expect(getProviderProfileById('claude-subscription')?.sdkLabel).toBe('Claude CLI');
     expect(getProviderProfileById('gemini-native')?.sdkLabel).toBe('GenAI SDK');
