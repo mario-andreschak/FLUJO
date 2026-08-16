@@ -1020,6 +1020,18 @@ export interface MemoryItem {
   supersedes?: string[];
   /** Explicitly retained contradictory evidence; conflicts are never overwritten. */
   conflictsWith?: string[];
+  /** Timestamp when a human reviewed/activated this item via UI/API. */
+  reviewedAt?: number;
+  /** Timestamp of the most recent recall (lexical search result). Throttled to 1/hour to avoid write amplification. */
+  lastRecalledAt?: number;
+  /** Count of independent corroborating observations from distinct sources. Used for auto-promotion gating. */
+  corroborationCount?: number;
+  /** Timestamp of the most recent corroboration event. */
+  lastCorroboratedAt?: number;
+  /** Computed expiry timestamp for candidate items only. Set at creation, never modified. */
+  expiresAt?: number;
+  /** Lifecycle reason for status transitions (e.g., 'expired', 'auto_promoted'). */
+  lifecycleReason?: 'expired' | 'auto_promoted';
   createdAt: number;
   updatedAt: number;
 }

@@ -27,6 +27,7 @@ export enum StorageKey {
   /** Per-app decisions used while the optional click-to-display policy is enabled. */
   MCP_APP_CONSENT = 'mcp_app_consent',
   RUN_RESOURCE_SETTINGS = 'run_resource_settings',
+  MEMORY_SETTINGS = 'memory_settings',
   SUBFLOW_TASK_SETTINGS = 'subflow_task_settings',
   // Bounds for the remote MCP Tasks lifecycle (issue #404): poll interval
   // clamps, requested TTL, retention and poll-concurrency limits. No secrets.
@@ -96,6 +97,7 @@ export const StorageKeys = {
   MCP_QUALITY_SETTINGS: StorageKey.MCP_QUALITY_SETTINGS,
   MCP_APP_CONSENT: StorageKey.MCP_APP_CONSENT,
   RUN_RESOURCE_SETTINGS: StorageKey.RUN_RESOURCE_SETTINGS,
+  MEMORY_SETTINGS: StorageKey.MEMORY_SETTINGS,
   SUBFLOW_TASK_SETTINGS: StorageKey.SUBFLOW_TASK_SETTINGS,
   MCP_REMOTE_TASK_SETTINGS: StorageKey.MCP_REMOTE_TASK_SETTINGS,
   KV_STORE_SETTINGS: StorageKey.KV_STORE_SETTINGS,

@@ -62,4 +62,13 @@ export const FEATURES = {
    * See docs/mcp-tasks.md ("Server-side status").
    */
   ENABLE_MCP_TASKS_SERVER: false,
+
+  /** Enable automatic expiry of untouched memory candidates (issue #452). */
+  ENABLE_MEMORY_CANDIDATE_EXPIRY: true,
+
+  /** Enable automatic promotion of corroborated memory candidates to active status (issue #452). Default OFF for safety. */
+  ENABLE_MEMORY_AUTO_PROMOTION: false,
+
+  /** Enable conflict detection and linking of contradictory memory facts (issue #452). */
+  ENABLE_MEMORY_CONFLICT_SURFACING: true,
 };

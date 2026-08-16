@@ -1184,6 +1184,12 @@ export const MemoryItemSchema = z.object({
   validUntil: TimestampSchema.optional(),
   supersedes: UniqueIdsSchema.optional(),
   conflictsWith: UniqueIdsSchema.optional(),
+  reviewedAt: TimestampSchema.optional(),
+  lastRecalledAt: TimestampSchema.optional(),
+  corroborationCount: z.number().int().min(0).max(10_000).optional(),
+  lastCorroboratedAt: TimestampSchema.optional(),
+  expiresAt: TimestampSchema.optional(),
+  lifecycleReason: z.enum(['expired', 'auto_promoted']).optional(),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
 }).strict().superRefine((record, ctx) => {
@@ -1217,6 +1223,20 @@ export const MemoryItemSchema = z.object({
       code: 'custom',
       message: 'A MemoryItem cannot conflict with itself.',
       path: ['conflictsWith'],
+    });
+  }
+  if (record.expiresAt !== undefined && record.status !== 'candidate') {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'expiresAt can only be set on candidate items.',
+      path: ['expiresAt'],
+    });
+  }
+  if (record.expiresAt !== undefined && record.expiresAt <= record.createdAt) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'expiresAt must be after createdAt.',
+      path: ['expiresAt'],
     });
   }
 });

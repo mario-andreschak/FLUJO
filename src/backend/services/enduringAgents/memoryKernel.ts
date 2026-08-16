@@ -27,6 +27,7 @@ import {
   withPersonaDomainMutation,
 } from './domainMutation';
 import { randomEnduringAgentId } from './ids';
+import { getMemorySettings } from './memorySettings';
 import {
   contentShingles,
   jaccardSimilarity,
@@ -252,6 +253,15 @@ async function createMemoryWithinMutation(
   const trust: MemoryTrust = invokedByFlow ? 'model_inference' : input.trust;
   const status: 'candidate' | 'active' = invokedByFlow ? 'candidate' : input.status ?? 'candidate';
   const refs = [...input.sourceRefs];
+  
+  // Calculate expiresAt for candidates only (D1, A5)
+  let expiresAt: number | undefined;
+  if (status === 'candidate') {
+    const settings = await getMemorySettings();
+    if (settings.candidateExpiryDays > 0) {
+      expiresAt = now + (settings.candidateExpiryDays * 24 * 60 * 60 * 1000);
+    }
+  }
   if (activityId && !refs.some((ref) => ref.kind === 'activity' && ref.id === activityId)) {
     refs.push({ kind: 'activity', id: activityId, observedAt: now });
   }
@@ -276,6 +286,7 @@ async function createMemoryWithinMutation(
     ...(input.validUntil !== undefined ? { validUntil: input.validUntil } : {}),
     ...(input.supersedes?.length ? { supersedes: input.supersedes } : {}),
     ...(input.conflictsWith?.length ? { conflictsWith: input.conflictsWith } : {}),
+    ...(expiresAt !== undefined ? { expiresAt } : {}),
     createdAt: now,
     updatedAt: now,
   }) as MemoryItem;
@@ -475,10 +486,12 @@ export async function activateMemory(
       throw new PersonaDomainConflictError('Only a candidate MemoryItem can be activated.');
     }
     assertActivationPolicy(item.trust, 'active', { ...options, reviewed: true }, item.sourceRefs.map((ref) => ref.kind));
+    const now = Date.now();
     const activated = await saveMemoryItem({
       ...item,
       status: 'active',
-      updatedAt: Math.max(Date.now(), item.updatedAt + 1),
+      reviewedAt: now,
+      updatedAt: Math.max(now, item.updatedAt + 1),
     });
     const supersededIds = new Set(item.supersedes ?? []);
     if (supersededIds.size > 0) {

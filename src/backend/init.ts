@@ -14,6 +14,7 @@ import {
   listPersonas,
   reconcilePersonaRoleBehaviors,
   startPersonaFlowDispatcher,
+  sweepMemoryCandidates,
 } from '@/backend/services/enduringAgents';
 import { migrateShippedMcpServers } from '@/backend/services/mcp/shippedServerMigration';
 import { sweepOldMcpRemoteTasks } from '@/backend/services/mcp/remoteTaskStore';
@@ -52,6 +53,8 @@ declare global {
   // Next.js hot-reload / duplicate module instantiation can't arm it twice.
   // The cleanup respects the retention policy and automatically compacts git history.
   var __flujo_snapshot_cleanup_cron: Cron | undefined;
+  // Hourly memory candidate lifecycle sweep (issue #452): expiry, auto-promotion, and conflict repair.
+  var __flujo_memory_lifecycle_cron: Cron | undefined;
   // Workspaces (#406): per-workspace copies of the two memos above, for every
   // workspace OTHER than the default. The default workspace keeps using the
   // original globals, so existing callers and tests are untouched.
@@ -212,6 +215,13 @@ function armRetentionSweep(): void {
       void sweepEveryWorkspace('snapshot storage', () => snapshotStore.cleanup());
     });
     log.info('Armed snapshot storage cleanup sweep (hourly)');
+  }
+  // Memory candidate lifecycle sweep (issue #452): hourly expiry, auto-promotion, and conflict repair.
+  if (!global.__flujo_memory_lifecycle_cron) {
+    global.__flujo_memory_lifecycle_cron = new Cron('0 * * * *', { unref: true }, () => {
+      void sweepEveryWorkspace('memory candidate lifecycle', () => sweepMemoryCandidates());
+    });
+    log.info('Armed memory candidate lifecycle sweep (hourly)');
   }
 }
 
