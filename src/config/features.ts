@@ -71,4 +71,7 @@ export const FEATURES = {
 
   /** Enable conflict detection and linking of contradictory memory facts (issue #452). */
   ENABLE_MEMORY_CONFLICT_SURFACING: true,
+
+  /** Enable retention/compaction of Persona mailbox, activities, dispatches, and lease history (issue #453). */
+  ENABLE_PERSONA_RUNTIME_RETENTION: false,
 };

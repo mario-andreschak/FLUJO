@@ -791,6 +791,7 @@ export const PersonaActivitySchema = z.object({
   updatedAt: TimestampSchema,
   startedAt: TimestampSchema.optional(),
   completedAt: TimestampSchema.optional(),
+  compactedAt: TimestampSchema.optional(),
 }).strict().superRefine((record, ctx) => {
   const terminal = record.status === 'completed'
     || record.status === 'cancelled'
@@ -999,6 +1000,18 @@ export const PersonaActivitySchema = z.object({
       message: 'interruptionRequestedAt cannot follow updatedAt.',
       path: ['interruptionRequestedAt'],
     });
+  }
+  // Compaction invariants (issue #453).
+  if (record.compactedAt !== undefined) {
+    if (!terminal) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Only terminal Activities may be compacted.',
+        path: ['compactedAt'],
+      });
+    }
+    // For compacted activities, bulky fields should be blanked/truncated.
+    // The activity needs to retain instructionContextDigest, id, status, timestamps, leaseId, conversationId.
   }
 });
 
@@ -1310,6 +1323,8 @@ export const PersonaMailboxItemSchema = z.object({
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
   completedAt: TimestampSchema.optional(),
+  compactedAt: TimestampSchema.optional(),
+  admissionDigest: z.string().regex(SHA256_PATTERN).optional(),
 }).strict().superRefine((record, ctx) => {
   const terminal = record.status === 'coalesced'
     || record.status === 'completed'
@@ -1476,6 +1491,30 @@ export const PersonaMailboxItemSchema = z.object({
       message: 'Only an interrupt-routed mailbox item may identify an interrupted Activity.',
       path: ['interruptedActivityId'],
     });
+  }
+  // Compaction invariants (issue #453).
+  if (record.compactedAt !== undefined) {
+    if (!terminal) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Only terminal mailbox items may be compacted.',
+        path: ['compactedAt'],
+      });
+    }
+    if (record.summary !== undefined || record.payloadRef !== undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'A compacted mailbox item must have blanked summary and payloadRef.',
+        path: ['compactedAt'],
+      });
+    }
+    if (record.admissionDigest === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'A compacted mailbox item must have admissionDigest set.',
+        path: ['compactedAt'],
+      });
+    }
   }
 });
 
