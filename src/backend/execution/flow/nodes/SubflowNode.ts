@@ -97,6 +97,25 @@ function followupText(content: unknown): string {
 }
 
 /**
+ * Resolve the human-readable name of a finished sub-agent for transcript framing (#403).
+ * Uses explicit precedence to avoid falling back to placeholder strings.
+ * Returns undefined (not a placeholder) when nothing resolves, so callers can choose
+ * a name-less header form.
+ */
+export function resolveSubAgentDisplayName(args: {
+  laneName?: string;        // lane.subflowName ?? lane.laneTitle (per-lane only)
+  nodeLabel?: string;       // node_params?.label
+  subflowName?: string;     // prepResult.subflowName
+  legacyName?: string;      // node_params?.properties?.name
+}): string | undefined {
+  const pick = (v?: string) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+  return pick(args.laneName)
+    ?? pick(args.nodeLabel)
+    ?? pick(args.subflowName)
+    ?? pick(args.legacyName);
+}
+
+/**
  * Build the message list handed to a subflow from the parent conversation.
  *
  * A subflow runs another flow as a continuation of this conversation, so it
@@ -884,6 +903,7 @@ export class SubflowNode extends BaseNode {
           ...(callerSessionKey ? { callerSessionKey } : {}),
         };
       });
+      prepResult.subflowName = subflowName;
       prepResult.concurrencyLimit = Math.max(1, callerConcurrency ?? node_params?.properties?.concurrencyLimit ?? 4);
       // Model-created queues always drain completely. Legacy author-defined
       // briefs keep their saved join/error settings for backwards compatibility.
@@ -918,6 +938,10 @@ export class SubflowNode extends BaseNode {
         if (dynamicFanout && missing.size > 0) {
           log.warn('Dropping unknown dynamic fan-out target id(s)', { dropped: [...missing] });
           lanes = lanes.filter((lane) => !missing.has(lane.subflowId));
+        }
+        // Assign top-level subflowName if all lanes target the same flow
+        if (lanes.length > 0 && lanes.every(lane => lane.subflowId === lanes[0].subflowId)) {
+          prepResult.subflowName = lanes[0].subflowName;
         }
       } catch {
         /* attribution only */
@@ -967,6 +991,7 @@ export class SubflowNode extends BaseNode {
         itemCount: items.length,
         laneTitle: buildConversationTitle(item),
       }));
+      prepResult.subflowName = subflowName;
       prepResult.mapOverList = true; // let execCore treat an EMPTY list as "nothing to map"
       // `sequential` pins the pool to 1 (in-order, one item at a time) rather than
       // adding a second execution path.
@@ -1222,12 +1247,19 @@ export class SubflowNode extends BaseNode {
 
         // Frame each lane with attribution to preserve the finished sub-task signal.
         const laneName = lane.laneTitle || `Lane ${laneIndex + 1}`;
-        const subAgentName =
-          node_params?.properties?.name || prepResult.subflowName || 'the sub-agent';
+        const subAgentName = resolveSubAgentDisplayName({
+          laneName: lane?.subflowName || lane?.laneTitle,
+          nodeLabel: node_params?.label,
+          subflowName: prepResult.subflowName,
+          legacyName: node_params?.properties?.name,
+        });
+        // Suppress duplicate lane suffix if the resolved name equals the lane name
+        const laneSuffix = subAgentName === laneName ? '' : ` (${laneName})`;
+        const who = subAgentName ? `sub-agent "${subAgentName}"` : 'the sub-agent';
         const framedLaneContent =
           laneResultText.trim().length > 0
-            ? `[↩ Returned result from sub-agent "${subAgentName}" (${laneName}) — this is a FINISHED sub-task result handed back to you, not your own message. Use it to continue your task; do not wait for further output from it.]\n\n${laneResultText}`
-            : `[↩ Sub-agent "${subAgentName}" (${laneName}) finished and returned control to you with no output. Continue your task; do not wait for further output from it.]`;
+            ? `[↩ Returned result from ${who}${laneSuffix} — this is a FINISHED sub-task result handed back to you, not your own message. Use it to continue your task; do not wait for further output from it.]\n\n${laneResultText}`
+            : `[↩ ${who}${laneSuffix} finished and returned control to you with no output. Continue your task; do not wait for further output from it.]`;
 
         const laneMessage: FlujoChatMessage = {
           role: 'assistant',
@@ -1263,12 +1295,16 @@ export class SubflowNode extends BaseNode {
       // `resultText` is kept for lastResponse and every capture path below so the
       // frame never leaks into programmatic outputs (captureVariable/Resource/kv)
       // or the run's returned outputText.
-      const subAgentName =
-        node_params?.properties?.name || prepResult.subflowName || 'the sub-agent';
+      const subAgentName = resolveSubAgentDisplayName({
+        nodeLabel: node_params?.label,
+        subflowName: prepResult.subflowName,
+        legacyName: node_params?.properties?.name,
+      });
+      const who = subAgentName ? `sub-agent "${subAgentName}"` : 'the sub-agent';
       const framedContent =
         resultText.trim().length > 0
-          ? `[↩ Returned result from sub-agent "${subAgentName}" — this is a FINISHED sub-task result handed back to you, not your own message. Use it to continue your task; do not wait for further output from it.]\n\n${resultText}`
-          : `[↩ Sub-agent "${subAgentName}" finished and returned control to you with no output. Continue your task; do not wait for further output from it.]`;
+          ? `[↩ Returned result from ${who} — this is a FINISHED sub-task result handed back to you, not your own message. Use it to continue your task; do not wait for further output from it.]\n\n${resultText}`
+          : `[↩ ${who} finished and returned control to you with no output. Continue your task; do not wait for further output from it.]`;
       const assistantMessage: FlujoChatMessage = {
         role: 'assistant',
         content: framedContent,
