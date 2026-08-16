@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { createLogger } from '@/utils/logger';
 import {
   CreateMemoryItemInputSchema,
   ENDURING_AGENT_SCHEMA_VERSION,
@@ -26,6 +27,14 @@ import {
   withPersonaDomainMutation,
 } from './domainMutation';
 import { randomEnduringAgentId } from './ids';
+import {
+  contentShingles,
+  jaccardSimilarity,
+  MEMORY_DEDUP_SETTINGS,
+  MEMORY_RANKING_WEIGHTS,
+  normaliseMemoryContent,
+  scoreMemoryCandidate,
+} from './memoryRanking';
 import { normalizeMemorySourceRefs } from './provenance';
 import {
   getMemoryItem,
@@ -34,6 +43,8 @@ import {
   listMemoryItems,
   saveMemoryItem,
 } from './store';
+
+const log = createLogger('backend/services/enduringAgents/memoryKernel');
 
 const MemorySearchQuerySchema = z.object({
   query: z.string().trim().max(2_000).optional(),
@@ -59,6 +70,8 @@ const CorrectMemoryInputSchema = z.object({
 export interface MemoryMutationOptions extends PersonaDomainMutationOptions {
   /** Explicit local review gate for activating model-inferred candidates. */
   reviewed?: boolean;
+  /** Skip near-duplicate merge check (used by correctMemory which has explicit supersede semantics). */
+  skipNearDuplicateMerge?: boolean;
 }
 
 export interface MemorySearchQuery {
@@ -103,6 +116,102 @@ function assertPersonaMayChangeMemory(
 
 function stableSourceRefValue(memory: MemoryItem): string {
   return JSON.stringify(memory.sourceRefs.map(({ observedAt: _observedAt, ...sourceRef }) => sourceRef));
+}
+
+/**
+ * Find a near-duplicate candidate via trigram Jaccard similarity (issue #450).
+ * Returns the candidate with the highest similarity >= threshold, or null.
+ */
+async function findNearDuplicateCandidate(
+  personaId: string,
+  kind: MemoryKind,
+  scope: MemoryScope,
+  content: string,
+): Promise<{ candidate: MemoryItem; similarity: number } | null> {
+  const candidates = (await listMemoryItems(personaId))
+    .filter((item) => item.status === 'active' && item.kind === kind && item.scope === scope)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, MEMORY_DEDUP_SETTINGS.comparisonWindow);
+
+  const incomingNormalised = normaliseMemoryContent(content);
+  const incomingShingles = contentShingles(incomingNormalised);
+
+  let bestCandidate: MemoryItem | null = null;
+  let bestSimilarity = 0;
+
+  for (const candidate of candidates) {
+    const candidateNormalised = normaliseMemoryContent(candidate.content);
+    const candidateShingles = contentShingles(candidateNormalised);
+    const similarity = jaccardSimilarity(incomingShingles, candidateShingles);
+
+    if (similarity >= MEMORY_DEDUP_SETTINGS.nearDuplicateThreshold) {
+      if (similarity > bestSimilarity) {
+        bestSimilarity = similarity;
+        bestCandidate = candidate;
+      }
+    }
+  }
+
+  return bestCandidate ? { candidate: bestCandidate, similarity: bestSimilarity } : null;
+}
+
+/**
+ * Reinforce an existing memory item with new evidence (issue #450).
+ * Bumps confidence/importance, upgrades trust if policy allows, extends sourceRefs.
+ */
+async function reinforceMemoryItem(
+  survivor: MemoryItem,
+  incomingTrust: MemoryTrust,
+  incomingSourceRefs: MemoryItem['sourceRefs'],
+  now: number,
+  options: MemoryMutationOptions,
+): Promise<MemoryItem> {
+  // Determine upgraded trust: prefer higher trust if it passes policy
+  let upgradedTrust = survivor.trust;
+  const trustOrder: Record<MemoryTrust, number> = {
+    explicit_user: 4,
+    verified_tool: 3,
+    model_inference: 2,
+    external_untrusted: 1,
+  };
+  if (trustOrder[incomingTrust] > trustOrder[survivor.trust]) {
+    // Check if the survivor can hold the higher trust
+    try {
+      assertActivationPolicy(incomingTrust, survivor.status, options, []);
+      upgradedTrust = incomingTrust;
+    } catch {
+      // Keep existing trust if policy forbids the upgrade
+    }
+  }
+
+  // Monotonically bump confidence and importance
+  const confidence = Math.min(
+    1,
+    Math.max(survivor.confidence, incomingSourceRefs[0]?.confidence ?? survivor.confidence) +
+      MEMORY_DEDUP_SETTINGS.confidenceReinforcementStep,
+  );
+  const importance = Math.min(
+    1,
+    Math.max(survivor.importance, incomingSourceRefs[0]?.importance ?? survivor.importance) +
+      MEMORY_DEDUP_SETTINGS.importanceReinforcementStep,
+  );
+
+  // Union sourceRefs, deduplicated, capped at maxSourceRefsPerItem (preserving oldest)
+  const allRefs = [...survivor.sourceRefs, ...incomingSourceRefs];
+  const mergedRefs = normalizeMemorySourceRefs(allRefs, { now });
+  const cappedRefs = mergedRefs.slice(0, MEMORY_DEDUP_SETTINGS.maxSourceRefsPerItem);
+
+  // Mutate in place
+  const reinforced: MemoryItem = {
+    ...survivor,
+    confidence,
+    importance,
+    trust: upgradedTrust,
+    sourceRefs: cappedRefs,
+    updatedAt: Math.max(now, survivor.updatedAt + 1),
+  };
+
+  return saveMemoryItem(reinforced);
 }
 
 function requireOwnedMemory(item: MemoryItem | null, personaId: string, requestedId: string): MemoryItem {
@@ -188,6 +297,29 @@ async function createMemoryWithinMutation(
     if (sameSemanticValue) return existing;
     throw new PersonaDomainConflictError(`MemoryItem ${JSON.stringify(record.id)} already exists.`);
   }
+
+  // Issue #450: Dedup on write via near-duplicate detection
+  if (
+    MEMORY_DEDUP_SETTINGS.enabled
+    && !options.skipNearDuplicateMerge
+    && !record.supersedes?.length
+    && !record.conflictsWith?.length
+  ) {
+    const nearDup = await findNearDuplicateCandidate(record.personaId, record.kind, record.scope, record.content);
+    if (nearDup) {
+      const { candidate: survivor, similarity } = nearDup;
+      // Reinforce the survivor instead of persisting a sibling
+      const reinforced = await reinforceMemoryItem(survivor, record.trust, record.sourceRefs, now, options);
+      log.debug('Dedup merged near-duplicate', {
+        survivorId: survivor.id,
+        similarity: similarity.toFixed(3),
+        kind: record.kind,
+        scope: record.scope,
+      });
+      return reinforced;
+    }
+  }
+
   return saveMemoryItem(record);
 }
 
@@ -262,7 +394,7 @@ export async function searchPersonaMemory(
   )).map((item) => ({
     item,
     core: coreIds.has(item.id),
-    score: lexicalScore(item, terms) + (coreIds.has(item.id) ? 2 : 0),
+    score: scoreMemoryCandidate({ item, terms, core: coreIds.has(item.id), asOf }),
   })).sort((left, right) => (
     right.score - left.score
     || right.item.updatedAt - left.item.updatedAt
