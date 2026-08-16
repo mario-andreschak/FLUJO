@@ -78,7 +78,7 @@ describe('SnapshotStore', () => {
     it('reports initial empty status', async () => {
       const status = await store.status();
       expect(status.policy).toEqual(DEFAULT_SNAPSHOT_RETENTION_POLICY);
-      expect(status.repositories).toEqual([]);
+      expect(status.usage.repositories).toEqual([]);
       expect(status.usage.onDiskBytes).toBe(0);
       expect(status.usage.logicalBytes).toBe(0);
       expect(status.activity.operatorDisabled).toBe(false);
@@ -149,10 +149,10 @@ describe('SnapshotStore', () => {
     it('safely deletes all snapshot repositories', async () => {
       const before = await store.status();
       const result = await store.deleteAll();
-      expect(result.deletedRepositoryIds).toBeDefined();
+      expect(result.deleted).toBeDefined();
       expect(result.reclaimedBytes).toBeDefined();
       const after = await store.status();
-      expect(after.repositories.length).toBeLessThanOrEqual(before.repositories.length);
+      expect(after.usage.repositories.length).toBeLessThanOrEqual(before.usage.repositories.length);
     });
   });
 
