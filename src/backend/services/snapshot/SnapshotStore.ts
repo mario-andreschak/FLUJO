@@ -271,6 +271,8 @@ export class SnapshotStore {
       migration: operationWasActive('migration'),
       operatorDisabled,
       captureSuspended: overBudget,
+      // TODO(#414): Implement "open folder" UI action and set localFolderAccess dynamically
+      // when a local folder access operation is in progress. Currently a placeholder.
       localFolderAccess: false,
     };
     return { policy, usage, activity, overBudget };

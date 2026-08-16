@@ -2,6 +2,7 @@ import { Cron } from 'croner';
 import { verifyStorage } from '@/utils/storage/backend';
 import { mcpService } from '@/backend/services/mcp';
 import { sweepOldRunResources } from '@/backend/services/runResources';
+import { snapshotStore } from '@/backend/services/snapshot/SnapshotStore';
 import { reconcileOrphanedTasks, sweepOldSubflowTasks } from '@/backend/services/subflowTasks';
 import { refreshSpotlightServers } from '@/backend/services/spotlight';
 import { getSchedulerService } from '@/backend/services/scheduler';
@@ -47,6 +48,10 @@ declare global {
   var __flujo_subflow_task_retention_cron: Cron | undefined;
   // Hourly retention/expiry sweep for durable REMOTE MCP task records (#404).
   var __flujo_mcp_remote_task_retention_cron: Cron | undefined;
+  // Hourly snapshot storage cleanup cron (issue #414). Global-guarded so
+  // Next.js hot-reload / duplicate module instantiation can't arm it twice.
+  // The cleanup respects the retention policy and automatically compacts git history.
+  var __flujo_snapshot_cleanup_cron: Cron | undefined;
   // Workspaces (#406): per-workspace copies of the two memos above, for every
   // workspace OTHER than the default. The default workspace keeps using the
   // original globals, so existing callers and tests are untouched.
@@ -198,6 +203,15 @@ function armRetentionSweep(): void {
     global.__flujo_mcp_remote_task_retention_cron = new Cron('0 * * * *', { unref: true }, () => {
       void sweepEveryWorkspace('remote MCP task', () => sweepOldMcpRemoteTasks());
     });
+  }
+  // Snapshot storage cleanup (issue #414): an hourly cron that respects the
+  // retention policy, expires old captures, and compacts git history for idle
+  // workspaces that have stopped capturing but still retain snapshots.
+  if (!global.__flujo_snapshot_cleanup_cron) {
+    global.__flujo_snapshot_cleanup_cron = new Cron('0 * * * *', { unref: true }, () => {
+      void sweepEveryWorkspace('snapshot storage', () => snapshotStore.cleanup());
+    });
+    log.info('Armed snapshot storage cleanup sweep (hourly)');
   }
 }
 

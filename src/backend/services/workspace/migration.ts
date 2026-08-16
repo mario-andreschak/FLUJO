@@ -12,6 +12,7 @@ import {
 } from '@/utils/workspace';
 import { createLogger } from '@/utils/logger';
 import { writeFileAtomic } from '@/utils/storage/backend';
+import { snapshotStore } from '@/backend/services/snapshot/SnapshotStore';
 import {
   failWorkspaceLayoutPreparation,
   getWorkspaceLayoutPreparation,
@@ -592,7 +593,12 @@ async function runDirectMigration(): Promise<WorkspaceLayoutMarker> {
   await fs.mkdir(getWorkspacesDir(), { recursive: true });
   const release = await acquireLock();
   migrationConsole('exclusive lock acquired', { pid: process.pid, lock: lockPath() });
-  try {
+  // Acquire snapshot store lease to coordinate with capture/cleanup operations
+  // that may be in progress. This prevents concurrent mutations of the snapshot
+  // store during migration (issue #414).
+  const snapshotRoots = [path.join(getDataDir(), 'snapshots')];
+  return snapshotStore.withMigrationAccess(snapshotRoots, async () => {
+    try {
     const errors: string[] = [];
     const narration: MigrationNarration[] = [];
     lastNarration = narration;
@@ -766,10 +772,11 @@ async function runDirectMigration(): Promise<WorkspaceLayoutMarker> {
     if (errors.length > 0) log.warn('Workspace move completed with skipped errors', errors);
     else log.info('Workspace folders moved directly', { workspace: getWorkspaceDir(DEFAULT_WORKSPACE) });
     return marker;
-  } finally {
-    await release();
-    migrationConsole('exclusive lock released', { lock: lockPath() });
-  }
+    } finally {
+      await release();
+      migrationConsole('exclusive lock released', { lock: lockPath() });
+    }
+  });
 }
 
 export function migrateWorkspaceLayout(): Promise<WorkspaceLayoutMarker> {
