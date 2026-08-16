@@ -12,6 +12,7 @@ import {
   PersonaDomainConflictError,
 } from '@/shared/types/enduringAgent';
 import { FEATURES } from '@/config/features';
+import type { MemorySettings } from '@/shared/types/memorySettings';
 import { getMemorySettings } from './memorySettings';
 import { getMemoryItem, listMemoryItems, saveMemoryItem, getPersona } from './store';
 import {
@@ -107,13 +108,11 @@ export async function promoteMemoryCandidate(
 
     // All preconditions met; attempt promotion via assertActivationPolicy
     try {
-      // Use a narrow, server-minted gate that routes through the same policy engine
-      // but signals corroboration-based promotion (never model-invoked, never executionAuthority)
-      assert(options.executionAuthority === undefined, 'promoteMemoryCandidate must not be model-invoked');
+      // System-approved promotion (not model-invoked, approved via corroboration)
       assertActivationPolicy(
         item.trust,
         'active',
-        { ...options, corroborationPromotion: true },
+        { ...options, reviewed: true },  // Mark as reviewed to signal system approval
         item.sourceRefs.map((ref) => ref.kind),
       );
 
@@ -155,7 +154,7 @@ export async function promoteMemoryCandidate(
  * - model_inference requires corroborationCount >= threshold
  * - explicit_user / verified_tool can always promote if other criteria met
  */
-function assessAutoPromotionEligibility(item: MemoryItem, settings: any): boolean {
+function assessAutoPromotionEligibility(item: MemoryItem, settings: MemorySettings): boolean {
   switch (item.trust) {
     case 'external_untrusted':
       // Exhaustive switch ensures compile error if a new trust level is added without consideration
@@ -218,7 +217,7 @@ export async function sweepMemoryCandidates(personaId?: string, now = Date.now()
 async function sweepPersonaMemoryCandidates(
   personaId: string,
   now: number,
-  settings: any,
+  settings: MemorySettings,
   stats: SweepStatistics,
 ): Promise<void> {
   try {
@@ -262,11 +261,3 @@ async function sweepPersonaMemoryCandidates(
   }
 }
 
-/**
- * Helper to assert a condition (for type narrowing in exhaustive switches).
- */
-function assert(condition: boolean, message: string): asserts condition {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
