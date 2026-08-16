@@ -57,7 +57,7 @@ export interface RetentionResult {
  * @param now Current time in milliseconds.
  * @returns {compacted: count, remaining: count}.
  */
-export async function applyRetentionPolicy<T extends { id: string; updatedAt: number }>(
+export async function applyRetention<T extends { id: string; updatedAt: number }>(
   records: readonly T[],
   policy: RetentionPolicy<T>,
   now: number = Date.now(),

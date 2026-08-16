@@ -1553,6 +1553,7 @@ export const PersonaLeaseSchema = z.object({
   renewedAt: TimestampSchema,
   expiresAt: TimestampSchema,
   releasedAt: TimestampSchema.optional(),
+  compactedAt: TimestampSchema.optional(),
 }).strict().superRefine((record, ctx) => {
   if (record.renewedAt < record.acquiredAt) {
     ctx.addIssue({
@@ -1587,6 +1588,14 @@ export const PersonaLeaseSchema = z.object({
       code: 'custom',
       message: 'Only a released lease may have releasedAt.',
       path: ['releasedAt'],
+    });
+  }
+  // Compaction invariants (issue #453).
+  if (record.compactedAt !== undefined && record.status !== 'released') {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Only released leases may be compacted (archived).',
+      path: ['compactedAt'],
     });
   }
 });

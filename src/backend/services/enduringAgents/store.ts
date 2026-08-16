@@ -1161,6 +1161,23 @@ export async function listPersonaActivities(personaId: string): Promise<PersonaA
   return records.filter((record) => record.personaId === personaId);
 }
 
+export function savePersonaActivity(value: PersonaActivity): Promise<PersonaActivity> {
+  const record = parseRecord('PersonaActivity', PersonaActivitySchema, value);
+  return recordMutation(ENDURING_AGENT_COLLECTIONS.activities, record.id, async () => {
+    const existing = await getPersonaActivity(record.id);
+    if (existing) {
+      if (existing.personaId !== record.personaId || existing.createdAt !== record.createdAt) {
+        throw new Error('PersonaActivity changed immutable ownership.');
+      }
+      if (record.updatedAt < existing.updatedAt) {
+        throw new Error('PersonaActivity updatedAt moved backwards.');
+      }
+    }
+    await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.activities, record.id, record);
+    return record;
+  });
+}
+
 export function getPersonaWorkItem(id: string): Promise<PersonaWorkItem | null> {
   return getRecord({
     collection: ENDURING_AGENT_COLLECTIONS.workItems,
@@ -1515,6 +1532,23 @@ export async function listPersonaMailboxItems(personaId: string): Promise<Person
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
+export function savePersonaMailboxItem(value: PersonaMailboxItem): Promise<PersonaMailboxItem> {
+  const record = parseRecord('PersonaMailboxItem', PersonaMailboxItemSchema, value);
+  return recordMutation(ENDURING_AGENT_COLLECTIONS.mailboxItems, record.id, async () => {
+    const existing = await getPersonaMailboxItem(record.id);
+    if (existing) {
+      if (existing.personaId !== record.personaId || existing.createdAt !== record.createdAt) {
+        throw new Error('PersonaMailboxItem changed immutable ownership.');
+      }
+      if (record.updatedAt < existing.updatedAt) {
+        throw new Error('PersonaMailboxItem updatedAt moved backwards.');
+      }
+    }
+    await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.mailboxItems, record.id, record);
+    return record;
+  });
+}
+
 /**
  * A lease is looked up by Persona ownership rather than by a caller-provided
  * lease id. The at-most-one invariant is checked even though lease mutation is
@@ -1579,6 +1613,23 @@ export async function listPersonaLeaseRecords(personaId: string): Promise<Person
     }
   }
   return records.filter((record) => record.personaId === personaId);
+}
+
+export function savePersonaLease(value: PersonaLease): Promise<PersonaLease> {
+  const record = parseRecord('PersonaLease', PersonaLeaseSchema, value);
+  return recordMutation(ENDURING_AGENT_COLLECTIONS.leaseHistory, record.id, async () => {
+    const existing = await getPersonaLeaseRecord(record.id);
+    if (existing) {
+      if (existing.personaId !== record.personaId || existing.acquiredAt !== record.acquiredAt) {
+        throw new Error('PersonaLease changed immutable ownership.');
+      }
+      if (record.renewedAt < existing.renewedAt) {
+        throw new Error('PersonaLease renewedAt moved backwards.');
+      }
+    }
+    await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.leaseHistory, record.id, record);
+    return record;
+  });
 }
 
 export interface PersonaBundle {

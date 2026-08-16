@@ -320,6 +320,7 @@ export interface PersonaFlowDispatchRecord {
   updatedAt: number;
   startedAt?: number;
   completedAt?: number;
+  compactedAt?: number;
 }
 
 export interface SubmitPersonaFlowDispatchInput {
