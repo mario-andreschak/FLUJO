@@ -169,7 +169,8 @@ export function hybridScore(lexical: number, semantic: number): number {
  *   score = lexical
  *         * contentLengthFactor(item.content.length)
  *         * trustWeight(item.trust)
- *         * recencyMultiplier(item.updatedAt, asOf, { core })\n *         + (core ? coreBonus : 0)
+ *         * recencyMultiplier(item.updatedAt, asOf, { core })
+ *         + (core ? coreBonus : 0)
  *
  * When semantic embedding score is provided, combines with lexical via hybridScore().
  */
@@ -214,4 +215,26 @@ export function scoreMemoryCandidate(opts: {
   const trust = trustWeight(item.trust);
   const recency = recencyMultiplier(item.updatedAt, asOf, { core });
 
-  let score = bl
+  let score = blended * lengthFactor * trust * recency;
+
+  // Core bonus (additive, so pinned items cannot be multiplied away)
+  if (core) {
+    score += MEMORY_RANKING_WEIGHTS.coreBonus;
+  }
+
+  return score;
+}
+
+/**
+ * @deprecated Use `scoreMemoryCandidate` instead. Kept for backwards compatibility.
+ * Computes the pre-#450 lexical score without recency decay, trust weighting, or length normalisation.
+ */
+export function lexicalScore(item: MemoryItem, terms: readonly string[]): number {
+  const contentLC = item.content.toLocaleLowerCase();
+  let score = item.importance * MEMORY_RANKING_WEIGHTS.importanceWeight + item.confidence * MEMORY_RANKING_WEIGHTS.confidenceWeight;
+  for (const term of terms) {
+    if (contentLC === term) score += MEMORY_RANKING_WEIGHTS.exactContentMatchBonus;
+    else if (contentLC.includes(term)) score += MEMORY_RANKING_WEIGHTS.termHitBonus;
+  }
+  return score;
+}
