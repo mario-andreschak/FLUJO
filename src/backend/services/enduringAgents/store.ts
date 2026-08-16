@@ -48,6 +48,14 @@ import {
   snapshotBehaviorFlow,
 } from './behaviorRevisions';
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
+import {
+  getMailboxIndex,
+  getMemoryIndex,
+  removeMailboxIndexEntry,
+  removeMemoryIndexEntry,
+  updateMailboxIndex,
+  updateMemoryIndex,
+} from './indexing';
 import { personaAppGrantId, personaDeletionTombstoneId } from './ids';
 import {
   UnsupportedEnduringAgentSchemaError,
@@ -1379,12 +1387,28 @@ export function getMemoryItem(id: string): Promise<MemoryItem | null> {
 
 export async function listMemoryItems(personaId: string): Promise<MemoryItem[]> {
   assertSafeCollectionId(personaId);
-  const records = await listRecords({
-    collection: ENDURING_AGENT_COLLECTIONS.memoryItems,
-    recordKind: 'MemoryItem',
-    schema: MemoryItemSchema,
-  });
-  return records.filter((record) => record.personaId === personaId);
+  // Phase 3 (Issue #449): Use per-Persona index instead of full-collection scan.
+  // Index is lazy-built on first read if missing (backward-compatible).
+  const index = await getMemoryIndex();
+  const entries = index.entries.filter((e) => e.personaId === personaId);
+
+  // Load only the records for this Persona (keyed by index entry id).
+  const itemIds = new Set(entries.map((e) => e.id));
+  const records = await Promise.all(
+    Array.from(itemIds).map((id) =>
+      getRecord({
+        collection: ENDURING_AGENT_COLLECTIONS.memoryItems,
+        id,
+        recordKind: 'MemoryItem',
+        schema: MemoryItemSchema,
+      }),
+    ),
+  );
+
+  // Filter out any null results (deleted items) and sort by id for consistency.
+  return records
+    .filter((record): record is MemoryItem => record !== null)
+    .sort((a, b) => a.id.localeCompare(b.id));
 }
 
 export function createMemoryItem(record: MemoryItem): Promise<MemoryItem> {
@@ -1434,6 +1458,8 @@ export function saveMemoryItem(value: MemoryItem): Promise<MemoryItem> {
     }
     await assertValidMemoryReferences(record);
     await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.memoryItems, record.id, record);
+    // Phase 2 (Issue #449): Update index sidecar after successful save.
+    await updateMemoryIndex(record);
     return record;
   });
 }
@@ -1449,13 +1475,28 @@ export function getPersonaMailboxItem(id: string): Promise<PersonaMailboxItem | 
 
 export async function listPersonaMailboxItems(personaId: string): Promise<PersonaMailboxItem[]> {
   assertSafeCollectionId(personaId);
-  const records = await listRecords({
-    collection: ENDURING_AGENT_COLLECTIONS.mailboxItems,
-    recordKind: 'PersonaMailboxItem',
-    schema: PersonaMailboxItemSchema,
-    strict: true,
-  });
-  return records.filter((record) => record.personaId === personaId);
+  // Phase 3 (Issue #449): Use per-Persona index instead of full-collection scan.
+  // Index is lazy-built on first read if missing (backward-compatible).
+  const index = await getMailboxIndex();
+  const entries = index.entries.filter((e) => e.personaId === personaId);
+
+  // Load only the records for this Persona (keyed by index entry id).
+  const itemIds = new Set(entries.map((e) => e.id));
+  const records = await Promise.all(
+    Array.from(itemIds).map((id) =>
+      getRecord({
+        collection: ENDURING_AGENT_COLLECTIONS.mailboxItems,
+        id,
+        recordKind: 'PersonaMailboxItem',
+        schema: PersonaMailboxItemSchema,
+      }),
+    ),
+  );
+
+  // Filter out any null results (deleted items) and sort by id for consistency.
+  return records
+    .filter((record): record is PersonaMailboxItem => record !== null)
+    .sort((a, b) => a.id.localeCompare(b.id));
 }
 
 /**
