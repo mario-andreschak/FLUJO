@@ -119,6 +119,25 @@ describe('meeting transcript projection', () => {
     expect(markdown).toContain('Vote · Strategist: yes');
   });
 
+  it('exports a participant message as an ordinary human message', () => {
+    const meeting = {
+      title: 'Launch council', status: 'running', phase: 'discussion', createdAt: 1,
+      openingPrompt: 'Choose a launch date.',
+      participants: [{ id: 'agent-1', name: 'Strategist' }],
+    } as MeetingRecord;
+    const message: MeetingEvent = {
+      ...base,
+      type: 'moderator:intervention',
+      content: 'Compare the two launch dates.',
+    };
+
+    const markdown = meetingLogMarkdown(meeting, [message]);
+
+    expect(markdown).toContain('### You');
+    expect(markdown).toContain('Compare the two launch dates.');
+    expect(markdown).not.toContain('Steering prompt');
+  });
+
   it('builds follow-up context with an outcome summary and a full transcript attachment', () => {
     const meeting = {
       title: 'Launch council', status: 'completed', phase: 'completed', createdAt: 1,

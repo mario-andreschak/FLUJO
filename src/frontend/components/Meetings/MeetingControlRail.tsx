@@ -21,7 +21,7 @@ import {
   Typography,
 } from '@mui/material';
 import { alpha, useTheme } from '@mui/material/styles';
-import { HowToVoteRounded, LockRounded, SendRounded, TuneRounded } from '@mui/icons-material';
+import { HowToVoteRounded, LockRounded, SendRounded } from '@mui/icons-material';
 import type { MeetingMotion, MeetingMotionKind, MeetingRecord } from '@/shared/types/meeting';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
@@ -138,7 +138,7 @@ export default function MeetingControlRail({ meeting, onPrivateNote, onSteer, on
             <Tooltip title={steerLabel}>
               <span>
                 <IconButton color="primary" disabled={(!live && !terminal) || !message.trim() || Boolean(busyAction)} onClick={() => void submit('steer')} aria-label={steerLabel}>
-                  {busyAction === 'steer' ? <CircularProgress size={21} /> : <TuneRounded />}
+                  {busyAction === 'steer' ? <CircularProgress size={21} /> : <SendRounded />}
                 </IconButton>
               </span>
             </Tooltip>
@@ -147,7 +147,7 @@ export default function MeetingControlRail({ meeting, onPrivateNote, onSteer, on
         <Stack direction="row" spacing={1.3} sx={{ mt: 0.7, px: 0.5 }}>
           <Typography variant="caption" color="text.secondary"><LockRounded sx={{ fontSize: 12, verticalAlign: -2, mr: 0.3 }} />{t('meetings.control.privateNote')}</Typography>
           <Typography variant="caption" color="text.secondary"><HowToVoteRounded sx={{ fontSize: 12, verticalAlign: -2, mr: 0.3 }} />{t('meetings.control.proposeMotion')}</Typography>
-          <Typography variant="caption" color="text.secondary"><TuneRounded sx={{ fontSize: 12, verticalAlign: -2, mr: 0.3 }} />{steerLabel}</Typography>
+          <Typography variant="caption" color="text.secondary"><SendRounded sx={{ fontSize: 12, verticalAlign: -2, mr: 0.3 }} />{steerLabel}</Typography>
         </Stack>
         {feedback && <Alert severity={feedback.severity} onClose={() => setFeedback(null)} sx={{ mt: 1 }}>{feedback.message}</Alert>}
       </Paper>

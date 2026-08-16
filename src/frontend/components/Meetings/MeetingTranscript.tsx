@@ -29,7 +29,6 @@ import {
   PauseCircleOutlineRounded,
   RecordVoiceOverRounded,
   ReplayRounded,
-  TuneRounded,
 } from '@mui/icons-material';
 import { VariableSizeList, type ListChildComponentProps } from 'react-window';
 import type { ModelMediaPart } from '@/shared/types/model/media';
@@ -79,7 +78,7 @@ function eventAnnouncement(event: MeetingEvent): string {
     case 'participant:spoke': return `${event.participantName}: ${event.content}`;
     case 'participant:error': return `${event.participantName}: ${event.error}`;
     case 'private-note': return `Private note: ${event.content}`;
-    case 'moderator:intervention': return `Steering prompt: ${event.content}`;
+    case 'moderator:intervention': return `You: ${event.content}`;
     case 'meeting:resumed': return `Meeting continued: ${event.direction ?? ''}`;
     case 'motion:opened': return `Motion: ${event.motion.proposal ?? event.motion.kind}`;
     case 'meeting:error': return event.error;
@@ -109,7 +108,6 @@ function SystemEvent({ event }: { event: MeetingEvent }) {
     case 'breakout:started': text = t('meetings.transcript.breakoutStarted', { topic: event.topic }); color = 'secondary'; break;
     case 'breakout:completed': text = t('meetings.transcript.breakoutCompleted', { summary: event.summary }); color = 'secondary'; break;
     case 'private-note': text = event.content; icon = <LockRounded fontSize="small" />; color = 'secondary'; break;
-    case 'moderator:intervention': text = event.content; icon = <TuneRounded fontSize="small" />; color = 'primary'; break;
     default: return null;
   }
   return (
@@ -230,6 +228,36 @@ function TranscriptListRow({ index, style, data }: ListChildComponentProps<RowDa
       </MeasuredTranscriptRow>
     );
   }
+  if (event.type === 'moderator:intervention') {
+    return (
+      <MeasuredTranscriptRow data={data} index={index} rowId={row.id} style={style}>
+        <Box sx={{ px: 1.5, py: 0.6 }}>
+          <Stack direction="row" justifyContent="flex-end">
+            <Paper
+              variant="outlined"
+              sx={{
+                width: 'fit-content',
+                maxWidth: 800,
+                px: 1.6,
+                py: 1.2,
+                borderRadius: '18px 4px 18px 18px',
+                borderColor: alpha(theme.palette.primary.main, 0.35),
+                bgcolor: alpha(theme.palette.primary.main, 0.07),
+              }}
+            >
+              <Stack direction="row" spacing={0.8} alignItems="center" sx={{ mb: 0.45 }}>
+                <Typography variant="caption" fontWeight={780} color="primary.main">{t('meetings.transcript.you')}</Typography>
+                <Typography variant="caption" color="text.disabled">{data.formatDate(event.timestamp, { hour: '2-digit', minute: '2-digit' })}</Typography>
+              </Stack>
+              <Box className="meeting-markdown" sx={{ overflowWrap: 'anywhere', '& > :first-of-type': { mt: 0 }, '& > :last-child': { mb: 0 }, '& p': { my: 0.7 } }}>
+                <ChatMarkdownContent>{event.content}</ChatMarkdownContent>
+              </Box>
+            </Paper>
+          </Stack>
+        </Box>
+      </MeasuredTranscriptRow>
+    );
+  }
   if (event.type === 'private-message') {
     const sender = data.meeting.participants.find((person) => person.id === event.fromParticipantId);
     const recipients = event.toParticipantIds.map((id) => data.meeting.participants.find((person) => person.id === id)?.name).filter(Boolean).join(', ');
@@ -308,6 +336,7 @@ export default function MeetingTranscript({ meeting, events }: MeetingTranscript
       return Math.min(520, 112 + Math.max(1, lines) * 21 + (event.media?.length ? 170 : 0));
     }
     if (event.type === 'private-message') return Math.min(260, 90 + Math.ceil(event.content.length / 90) * 20);
+    if (event.type === 'moderator:intervention') return Math.min(260, 74 + Math.ceil(event.content.length / 90) * 20);
     return 52;
   }, [collapsedSpeakers, rows]);
 

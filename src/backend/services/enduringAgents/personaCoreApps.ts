@@ -163,6 +163,9 @@ export async function projectPersonaCoreAppsIntoFlow(
 ): Promise<Flow> {
   if (frozenAppRefs.length === 0) return structuredClone(source);
 
+  const grantsByServer = new Map(
+    (await listPersonaAppGrants(personaId)).map((grant) => [grant.mcpServerName, grant]),
+  );
   const projectedNodes: MCPNodeReference[] = [];
   for (const mcpServerName of unique(frozenAppRefs)) {
     await authorizePersonaCoreAppAccess(personaId, frozenAppRefs, mcpServerName);
@@ -180,11 +183,19 @@ export async function projectPersonaCoreAppsIntoFlow(
       );
     }
 
+    const liveToolNames = unique((listed.tools ?? []).map((tool) => tool.name));
+    const grant = grantsByServer.get(mcpServerName);
+    const enabledTools = grant?.enabledTools === undefined
+      ? liveToolNames
+      : grant.enabledTools.filter((toolName) => liveToolNames.includes(toolName));
     projectedNodes.push({
       id: personaCoreAppNodeId(mcpServerName),
       properties: {
         boundServer: mcpServerName,
-        enabledTools: unique((listed.tools ?? []).map((tool) => tool.name)),
+        enabledTools,
+        ...(grant?.toolParameterPresets !== undefined
+          ? { toolParameterPresets: grant.toolParameterPresets }
+          : {}),
         enabledResources: 'all',
       },
     });

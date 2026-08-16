@@ -940,6 +940,14 @@ export interface FlowExecutionAuthority {
      * the write fence remain captured in the host-owned closure.
      */
     commitPersonaMemoryMaintenance?: (outputText: string) => Promise<unknown>;
+    /**
+     * Maintenance-only model-facing proposal gateway. The `remember` tool sends
+     * untrusted arguments through this callback; the dispatcher owns evidence
+     * validation, limits, idempotency, and the durable candidate write.
+     */
+    proposePersonaMemoryMaintenance?: (
+      proposal: Record<string, unknown>,
+    ) => Promise<{ success: boolean; data?: unknown; error?: string }>;
     /** Fetch durable related input only at a transcript-safe runFlow boundary. */
     pollRelatedInputs?: () => Promise<void>;
     /** ACK stable ids only after their messages are durably folded once. */

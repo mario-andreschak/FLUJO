@@ -39,8 +39,12 @@ interface MCPNodeToolListProps {
   onToggle: (toolName: string) => void;
   onActivateAll: () => void;
   onDeactivateAll: () => void;
+  allowedToolsTitle?: string;
+  toolsHelp?: string;
   parameterPresets?: MCPToolParameterPresets;
   onParameterPresetsChange?: (value: MCPToolParameterPresets) => void;
+  parameterPresetsTitle?: string;
+  parameterPresetsDescription?: string;
   workspaceRoots?: string[];
 }
 
@@ -76,8 +80,12 @@ const MCPNodeToolList: React.FC<MCPNodeToolListProps> = ({
   onToggle,
   onActivateAll,
   onDeactivateAll,
+  allowedToolsTitle,
+  toolsHelp,
   parameterPresets,
   onParameterPresetsChange,
+  parameterPresetsTitle,
+  parameterPresetsDescription,
   workspaceRoots,
 }) => {
   const { t } = useI18n();
@@ -103,9 +111,9 @@ const MCPNodeToolList: React.FC<MCPNodeToolListProps> = ({
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap' }}>
         <Box>
-          <Typography variant="h6">{t('flows.mcpNode.allowedTools')}</Typography>
+          <Typography variant="h6">{allowedToolsTitle ?? t('flows.mcpNode.allowedTools')}</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-            {t('flows.mcpNode.toolsHelp')}
+            {toolsHelp ?? t('flows.mcpNode.toolsHelp')}
           </Typography>
         </Box>
         <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', rowGap: 1 }}>
@@ -298,8 +306,8 @@ const MCPNodeToolList: React.FC<MCPNodeToolListProps> = ({
             value={parameterPresets}
             onChange={onParameterPresetsChange}
             workspaceRoots={workspaceRoots}
-            title="Step-specific tool parameters"
-            description="These values apply only to this MCP node and override matching server-wide values. Fixed parameters are hidden from the model."
+            title={parameterPresetsTitle ?? 'Step-specific tool parameters'}
+            description={parameterPresetsDescription ?? 'These values apply only to this MCP node and override matching server-wide values. Fixed parameters are hidden from the model.'}
           />
         </>
       )}

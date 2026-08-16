@@ -161,6 +161,13 @@ export interface CompletionInput {
    */
   localToolExecutors?: Record<string, (args: Record<string, unknown>) => Promise<unknown>>;
   /**
+   * Cooperative successful-stop predicate for adapters that own an internal
+   * model/tool loop. Once true, no further tools may be dispatched and the
+   * adapter exits at its next safe event boundary. Meeting silence uses this to
+   * terminate one participant turn without reporting a user cancellation.
+   */
+  shouldEndAgenticTurn?: () => boolean;
+  /**
    * Upper bound on agentic turns for adapters that orchestrate their own tool
    * loop (Claude subscription). Ignored by the request/response adapters, where
    * FLUJO drives the loop. Falls back to a sane default when unset.

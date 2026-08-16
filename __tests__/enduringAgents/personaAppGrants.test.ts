@@ -155,6 +155,50 @@ describe('issue #415 phase 6 Persona direct-app grants', () => {
     });
   });
 
+  it('updates Core tool access and parameter presets with optimistic concurrency', async () => {
+    await inFreshWorkspace(async () => {
+      const { persona } = await createPersonaFromRole({
+        name: 'Jim',
+        idempotencyKey: 'phase6-tool-policy',
+      });
+      const grant = await grantPersonaAppAccess(persona.id, {
+        mcpServerName: 'github-jim',
+      });
+
+      const updated = await replacePersonaAppAccess(persona.id, grant.id, {
+        mcpServerName: grant.mcpServerName,
+        enabledTools: ['search_issues'],
+        toolParameterPresets: {
+          search_issues: {
+            owner: '@app.name',
+            conversation: '@conversation.id',
+            limit: 25,
+          },
+        },
+        expectedUpdatedAt: grant.updatedAt,
+      });
+
+      expect(updated).toMatchObject({
+        id: grant.id,
+        enabledTools: ['search_issues'],
+        toolParameterPresets: {
+          search_issues: {
+            owner: '@app.name',
+            conversation: '@conversation.id',
+            limit: 25,
+          },
+        },
+      });
+      expect(updated.updatedAt).toBeGreaterThan(grant.updatedAt);
+      await expect(replacePersonaAppAccess(persona.id, grant.id, {
+        mcpServerName: grant.mcpServerName,
+        enabledTools: [],
+        expectedUpdatedAt: grant.updatedAt,
+      })).rejects.toMatchObject({ code: 'PERSONA_APP_STALE_WRITE' });
+      await expect(listPersonaDirectAppGrants(persona.id)).resolves.toEqual([updated]);
+    });
+  });
+
   it('serializes launch authorization with immediate revocation', async () => {
     await inFreshWorkspace(async () => {
       const { persona } = await createPersonaFromRole({

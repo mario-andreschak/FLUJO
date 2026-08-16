@@ -115,14 +115,25 @@ const TOOL_DEFINITIONS: Record<PersonaToolName, ToolDefinition> = {
 export function isPersonaToolName(value: string): value is PersonaToolName {
   return PersonaToolNameSchema.safeParse(value).success;
 }
-export function buildPersonaTools(requested: unknown): ToolDefinition[] {
+export function buildPersonaTools(
+  requested: unknown,
+  options: { maintenanceMemoryProposal?: boolean } = {},
+): ToolDefinition[] {
   if (!Array.isArray(requested)) return [];
   const names = [...new Set(requested.filter(
     (value): value is PersonaToolName => typeof value === 'string' && isPersonaToolName(value),
   ))];
-  return PERSONA_TOOL_NAMES.filter((name) => names.includes(name)).map(
-    (name) => structuredClone(TOOL_DEFINITIONS[name]),
-  );
+  return PERSONA_TOOL_NAMES.filter((name) => names.includes(name)).map((name) => {
+    const definition = structuredClone(TOOL_DEFINITIONS[name]);
+    if (name === 'remember' && options.maintenanceMemoryProposal) {
+      const required = Array.isArray(definition.inputSchema.required)
+        ? definition.inputSchema.required.filter((value): value is string => typeof value === 'string')
+        : [];
+      definition.inputSchema.required = [...new Set([...required, 'evidence_ids'])];
+      definition.description = 'Submit one evidence-backed candidate memory during post-Activity maintenance. Invalid proposals are rejected without writing and may be corrected and retried.';
+    }
+    return definition;
+  });
 }
 
 export interface PersonaToolContext {

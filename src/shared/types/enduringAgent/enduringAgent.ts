@@ -1,4 +1,5 @@
 import type { Flow } from '@/shared/types/flow';
+import type { MCPToolParameterPresets } from '@/shared/types/mcp';
 
 export const ENDURING_AGENT_SCHEMA_VERSION = 1 as const;
 /** Affected product records advance independently from durable runtime records. */
@@ -554,9 +555,9 @@ export interface ActivateBehaviorRevisionInput {
 }
 
 /**
- * Optional direct-device authorization for one concrete, workspace-owned MCP
- * configuration. This record is intentionally independent from Behavior Flow
- * nodes: it never contributes boundServer, enabledTools, roots, or permissions.
+ * Optional authorization for one concrete, workspace-owned MCP configuration.
+ * The grant is projected only into the Persona's Activity-local Core Flow and
+ * never mutates a persisted Core or Behavior Flow.
  */
 export interface PersonaAppGrant {
   schemaVersion: typeof ENDURING_AGENT_SCHEMA_VERSION;
@@ -564,17 +565,25 @@ export interface PersonaAppGrant {
   personaId: string;
   /** Exact MCP configuration identity, for example `github-jim`. */
   mcpServerName: string;
+  /** Omitted on legacy/default grants means every currently discovered tool. */
+  enabledTools?: string[];
+  /** Persona-Core overrides for server-wide fixed tool arguments. */
+  toolParameterPresets?: MCPToolParameterPresets;
   createdAt: number;
   updatedAt: number;
 }
 
 export interface CreatePersonaAppGrantInput {
   mcpServerName: string;
+  enabledTools?: string[];
+  toolParameterPresets?: MCPToolParameterPresets;
 }
 
 /** Compare-and-swap input for replacing one exact Persona App configuration. */
 export interface ReplacePersonaAppGrantInput {
   mcpServerName: string;
+  enabledTools?: string[];
+  toolParameterPresets?: MCPToolParameterPresets;
   expectedUpdatedAt: number;
 }
 

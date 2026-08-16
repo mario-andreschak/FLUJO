@@ -53,7 +53,11 @@ import {
   appendMeetingParticipantProtocol,
   buildMeetingTools,
   executeMeetingTool,
+  hasLiveMeetingTurn,
+  isLiveMeetingTurnSilent,
   isMeetingToolName,
+  isMeetingTurnSilent,
+  isSilentMeetingControlRequest,
   normalizeMeetingToolAction,
 } from '@/backend/execution/flow/handlers/meetingTools';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
@@ -165,6 +169,8 @@ describe('fixed meeting tool contract', () => {
     for (const name of MEETING_TOOL_NAMES) expect(isMeetingToolName(name)).toBe(true);
     expect(isMeetingToolName('meeting_speak')).toBe(false);
     expect(isMeetingToolName('todo')).toBe(false);
+    expect(isSilentMeetingControlRequest(MEETING_CONTROL_TOOL_NAME, { action: 'silent' })).toBe(true);
+    expect(isSilentMeetingControlRequest(MEETING_CONTROL_TOOL_NAME, { action: 'leave' })).toBe(false);
   });
 
   it('appends a stable protocol without interpolating participant data', () => {
@@ -245,12 +251,12 @@ describe('meeting action normalization and live turn buffer', () => {
     )).resolves.toMatchObject({ success: false, error: expect.stringContaining('active meeting turn') });
   });
 
-  it('appends validated actions in call order to the live turn', async () => {
+  it('makes silence terminal for later meeting actions in the same round', async () => {
     const state = participantState();
     liveStates.set('conv-1', state);
 
     await executeMeetingTool(MEETING_CONTROL_TOOL_NAME, { action: 'silent' }, { conversationId: 'conv-1' });
-    await executeMeetingTool(
+    const afterSilence = await executeMeetingTool(
       MEETING_CAST_VOTE_TOOL_NAME,
       { motionId: 'motion-1', choice: 'abstain' },
       { conversationId: 'conv-1' },
@@ -258,8 +264,14 @@ describe('meeting action normalization and live turn buffer', () => {
 
     expect(state.meetingTurn?.actions).toEqual([
       { type: 'control', action: 'silent' },
-      { type: 'cast-vote', motionId: 'motion-1', choice: 'abstain' },
     ]);
+    expect(afterSilence).toMatchObject({
+      success: false,
+      error: expect.stringContaining('ended silently'),
+    });
+    expect(isMeetingTurnSilent(state.meetingTurn)).toBe(true);
+    expect(hasLiveMeetingTurn('conv-1')).toBe(true);
+    expect(isLiveMeetingTurnSilent('conv-1')).toBe(true);
   });
 });
 
@@ -329,7 +341,36 @@ describe('meeting tool dispatch', () => {
     expect(callMcpToolMock).not.toHaveBeenCalled();
   });
 
-  it('provides the same executors to self-orchestrating adapters', async () => {
+  it('does not dispatch tool calls placed after silence in the same assistant batch', async () => {
+    const state = participantState();
+    liveStates.set('conv-1', state);
+
+    const result = await ModelHandler.processToolCalls({
+      conversationId: 'conv-1',
+      toolNameMap: {
+        explore_code: { server: 'workers', tool: 'explore_code' },
+      },
+      toolCalls: [
+        toolCall('call-silent', MEETING_CONTROL_TOOL_NAME, { action: 'silent' }),
+        toolCall('call-vote', MEETING_CAST_VOTE_TOOL_NAME, {
+          motionId: 'motion-1', choice: 'yes',
+        }),
+        toolCall('call-explorer', 'explore_code', { task: 'Narrate the codebase.' }),
+      ],
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error(result.error.message);
+    expect(result.value.toolCallMessages).toHaveLength(3);
+    expect(result.value.toolCallMessages[1].content).toContain('not executed');
+    expect(result.value.toolCallMessages[2].content).toContain('not executed');
+    expect(state.meetingTurn?.actions).toEqual([
+      { type: 'control', action: 'silent' },
+    ]);
+    expect(callMcpToolMock).not.toHaveBeenCalled();
+  });
+
+  it('provides terminal silence signaling to self-orchestrating adapters', async () => {
     const state = participantState();
     liveStates.set('conv-1', state);
     getModelMock.mockResolvedValue({
@@ -340,13 +381,32 @@ describe('meeting tool dispatch', () => {
     });
     createCompletionMock.mockImplementationOnce(async (input: {
       localToolExecutors?: Record<string, (args: Record<string, unknown>) => Promise<unknown>>;
+      shouldEndAgenticTurn?: () => boolean;
     }) => {
       const localNames = Object.keys(input.localToolExecutors ?? {}).filter(isMeetingToolName);
       expect(localNames).toEqual(MEETING_TOOL_NAMES);
-      await input.localToolExecutors?.[MEETING_CAST_VOTE_TOOL_NAME]({
-        motionId: 'motion-9', choice: 'no', rationale: 'Needs evidence',
-      });
-      return completion();
+      expect(input.shouldEndAgenticTurn?.()).toBe(false);
+      await input.localToolExecutors?.[MEETING_CONTROL_TOOL_NAME]({ action: 'silent' });
+      expect(input.shouldEndAgenticTurn?.()).toBe(true);
+      return {
+        ...completion(''),
+        transcript: [
+          {
+            id: 'silent-call',
+            role: 'assistant',
+            content: '',
+            tool_calls: [toolCall('call-silent', MEETING_CONTROL_TOOL_NAME, { action: 'silent' })],
+            timestamp: 2,
+          },
+          {
+            id: 'silent-result',
+            role: 'tool',
+            tool_call_id: 'call-silent',
+            content: JSON.stringify({ accepted: true, turnEnded: true }),
+            timestamp: 3,
+          },
+        ],
+      };
     });
 
     const result = await ModelHandler.callModel({
@@ -363,7 +423,7 @@ describe('meeting tool dispatch', () => {
 
     expect(result.success).toBe(true);
     expect(state.meetingTurn?.actions).toEqual([{
-      type: 'cast-vote', motionId: 'motion-9', choice: 'no', rationale: 'Needs evidence',
+      type: 'control', action: 'silent',
     }]);
     expect(callMcpToolMock).not.toHaveBeenCalled();
   });

@@ -84,7 +84,13 @@ import { isRunResourceToolName, executeRunResourceTool, buildReadResourceTool, W
 import { isQuestionToolName, executeQuestionTool, QUESTION_TOOL_NAME } from './runQuestionTool';
 import { isTodoToolName, executeTodoTool, TODO_TOOL_NAME } from './todoTool';
 import { isPersonaToolName, executePersonaTool } from './personaTools';
-import { isMeetingToolName, executeMeetingTool } from './meetingTools';
+import {
+  executeMeetingTool,
+  hasLiveMeetingTurn,
+  isLiveMeetingTurnSilent,
+  isMeetingToolName,
+  isSilentMeetingControlRequest,
+} from './meetingTools';
 import { isMCPResourceToolName, executeMCPResourceTool, LIST_MCP_RESOURCES_TOOL_NAME } from './mcpResourceTools';
 import { isSubflowToolName, executeSubflowToolCall } from './subflowToolInvocation';
 import { isBehaviorToolName, executeBehaviorToolCall } from './behaviorToolInvocation';
@@ -1352,6 +1358,9 @@ export class ModelHandler {
           .map((t) => t.function.name)
       : [];
     const hasMeetingTool = meetingToolCallNames.length > 0;
+    const shouldEndAgenticTurn = conversationId && hasMeetingTool
+      ? () => isLiveMeetingTurnSilent(conversationId)
+      : undefined;
     // Issue #385: `call_subflow_<slug>` tool names are per-target-node and
     // dynamic (unlike the fixed-name synthetic tools above), so they can't be
     // hard-coded keys in the object literal below — collect every advertised
@@ -1547,6 +1556,7 @@ export class ModelHandler {
       codexSession,
       onCodexSessionChange,
       localToolExecutors,
+      shouldEndAgenticTurn,
       runResourceMarkers,
       sessionResume,
       onFinalWire,
@@ -1813,6 +1823,9 @@ export class ModelHandler {
       /** Executors for caller-defined virtual tools (e.g. write_resource, issue
        * #161) run in-loop by self-orchestrating adapters. */
       localToolExecutors?: Record<string, (args: Record<string, unknown>) => Promise<unknown>>;
+      /** End a self-orchestrated provider loop successfully at its next safe
+       * boundary. Meeting silence uses this to make the current round terminal. */
+      shouldEndAgenticTurn?: () => boolean;
       /** Captured run resources for oversized prior tool results/args, keyed by
        * the producing tool_call_id; used by self-orchestrating adapters for
        * resource-aware truncation markers (issue #168). */
@@ -2609,6 +2622,7 @@ export class ModelHandler {
               maxTokens: opts?.maxTokens ?? normalizeMaxTokens(model.maxTokens),
               toolNameMap: opts?.toolNameMap,
               localToolExecutors,
+              shouldEndAgenticTurn: opts?.shouldEndAgenticTurn,
               maxTurns: opts?.maxTurns,
               requestToolApproval: opts?.requestToolApproval,
               onTranscriptMessage,
@@ -2770,7 +2784,18 @@ export class ModelHandler {
             (typeof choice.message?.content === 'string' &&
               choice.message.content.trim().length > 0) ||
             (Array.isArray(choice.message?.content) && choice.message.content.length > 0);
-          if (choice.finish_reason === 'stop' && !hasToolCalls && !hasGeneratedMedia && !hasTextContent) {
+          // A self-orchestrating adapter can intentionally stop after executing
+          // a terminal local control (meeting silence). Its completion envelope
+          // is text-empty, but the returned transcript contains the valid
+          // assistant/tool exchange and must not be mistaken for provider loss.
+          const hasTranscriptActivity = Boolean(transcript?.length);
+          if (
+            choice.finish_reason === 'stop'
+            && !hasToolCalls
+            && !hasGeneratedMedia
+            && !hasTextContent
+            && !hasTranscriptActivity
+          ) {
             attemptError = { type: 'provider_response' };
             log.error('API reported finish_reason "stop" with an empty message, no media, and no tool calls.', { modelId });
             return {
@@ -3107,6 +3132,24 @@ export class ModelHandler {
       type ProcessedToolCall = { name: string; args: Record<string, unknown>; id: string; result: string };
       const results: Array<FlujoChatMessage | null> = new Array(toolCalls.length).fill(null);
       const processed: Array<ProcessedToolCall | null> = new Array(toolCalls.length).fill(null);
+      // A valid meeting_control(silent) is a terminal barrier inside this tool
+      // batch. Calls before it retain their authored order/semantics; calls
+      // after it are paired with synthetic results but never dispatched. This
+      // closes the same-response loophole where silence and a large explorer
+      // fan-out were emitted together.
+      let terminalSilentCallIndex = -1;
+      for (let index = 0; conversationId && hasLiveMeetingTurn(conversationId) && index < toolCalls.length; index++) {
+        const call = toolCalls[index];
+        try {
+          const args = JSON.parse(call.function.arguments || '{}');
+          if (isSilentMeetingControlRequest(call.function.name, args)) {
+            terminalSilentCallIndex = index;
+            break;
+          }
+        } catch {
+          // The ordinary dispatch path below returns the malformed-args error.
+        }
+      }
 
       // Per-server concurrency caps (MCPManagerConfig.maxConcurrency). Loaded once
       // up front; a server that declares none (or a non-positive value) uses the
@@ -4036,6 +4079,7 @@ export class ModelHandler {
       // and run the groups concurrently. Local synthetic tools share one group.
       const groups = new Map<string, number[]>();
       for (let i = 0; i < toolCalls.length; i++) {
+        if (terminalSilentCallIndex >= 0 && i > terminalSilentCallIndex) continue;
         const key = groupKeyForCall(toolCalls[i]);
         const bucket = groups.get(key);
         if (bucket) bucket.push(i);
@@ -4046,6 +4090,33 @@ export class ModelHandler {
           runWithConcurrency(indices, limitForGroup(key), executeOneToolCall)
         )
       );
+
+      if (terminalSilentCallIndex >= 0) {
+        const reason = 'Meeting turn ended silently before this tool call; it was not executed.';
+        for (let i = terminalSilentCallIndex + 1; i < toolCalls.length; i++) {
+          const call = toolCalls[i];
+          results[i] = {
+            id: uuidv4(),
+            role: 'tool',
+            tool_call_id: call.id,
+            content: `Error: ${reason}`,
+            timestamp: Date.now(),
+          };
+          processed[i] = {
+            name: call.function.name,
+            args: {},
+            id: call.id,
+            result: `Error: ${reason}`,
+          };
+          emit?.({
+            type: 'tool:result',
+            toolCallId: call.id,
+            name: call.function.name,
+            result: reason,
+            isError: true,
+          });
+        }
+      }
 
       // Defensive: any still-empty slot (a call that never ran) is answered with
       // a synthetic cancelled message so every tool_call id stays answered.

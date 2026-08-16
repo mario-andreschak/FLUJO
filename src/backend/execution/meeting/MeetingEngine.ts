@@ -9,6 +9,7 @@ import {
 import { withConversationExecutionLock } from '@/backend/execution/flow/conversationExecutionLock';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
+import { enqueueSteeringMessage } from '@/backend/execution/flow/steeringInbox';
 import { cancelAllToolCalls } from '@/backend/execution/flow/toolCancelRegistry';
 import { flowService } from '@/backend/services/flow';
 import {
@@ -398,8 +399,6 @@ function contributionLine(event: MeetingEvent, meeting: MeetingRecord): string |
       return `[${event.participantName}]\n${event.content}`;
     case 'private-message':
       return `[Private message from ${meeting.participants.find((item) => item.id === event.fromParticipantId)?.name ?? event.fromParticipantId}]\n${event.content}`;
-    case 'moderator:intervention':
-      return `[Human steering instruction]\n${event.content}`;
     case 'meeting:resumed':
       return event.direction
         ? `[The moderator continued this meeting]\n${event.direction}`
@@ -423,6 +422,21 @@ function contributionLine(event: MeetingEvent, meeting: MeetingRecord): string |
     default:
       return null;
   }
+}
+
+function participantMessageFromIntervention(
+  event: Extract<MeetingEvent, { type: 'moderator:intervention' }>,
+  participantId: string,
+  processNodeId?: string,
+): FlujoChatMessage {
+  return {
+    role: 'user',
+    content: event.content,
+    id: `${event.eventId}:participant:${participantId}`,
+    timestamp: event.timestamp,
+    injected: true,
+    ...(processNodeId ? { processNodeId } : {}),
+  };
 }
 
 function participantOrder(meeting: MeetingRecord, participants: MeetingParticipant[]): MeetingParticipant[] {
@@ -541,20 +555,35 @@ async function copyMediaForParticipant(
   }));
 }
 
-async function buildTurnMessage(
+async function buildTurnMessages(
   meeting: MeetingRecord,
   participant: MeetingParticipant,
   round: MeetingRound,
   events: MeetingEvent[],
   startNodeId: string,
   executionAuthority: FlowExecutionAuthority,
-): Promise<FlujoChatMessage> {
+  existingMessageIds: ReadonlySet<string>,
+): Promise<FlujoChatMessage[]> {
   const visible = events.filter((event) =>
     event.seq > participant.lastDeliveredSeq
     &&
     event.seq <= round.snapshotSeq
     && visibleTo(event, participant.id)
     && !eventIsFromParticipant(event, participant.id));
+  // A human message is a real user turn in every participant conversation, not
+  // prose embedded in the synthetic meeting_context block. The route also puts
+  // this stable id in the live steering inbox so an in-flight agent receives it
+  // immediately. Rebuilding it here is the durable process-boundary fallback;
+  // the id check makes the two delivery paths converge without duplication.
+  const participantMessages = visible
+    .filter((event): event is Extract<MeetingEvent, { type: 'moderator:intervention' }> =>
+      event.type === 'moderator:intervention')
+    .map((event) => participantMessageFromIntervention(
+      event,
+      participant.id,
+      startNodeId,
+    ))
+    .filter((message) => !existingMessageIds.has(message.id ?? ''));
   const contributions = visible
     .map((event) => contributionLine(event, meeting))
     .filter((line): line is string => Boolean(line));
@@ -601,7 +630,7 @@ async function buildTurnMessage(
     '</meeting_context>',
   ].filter(Boolean).join('\n\n');
 
-  return {
+  const contextMessage = {
     role: 'user',
     content,
     id: randomUUID(),
@@ -609,6 +638,9 @@ async function buildTurnMessage(
     processNodeId: startNodeId,
     ...(media.length ? { media } : {}),
   } as FlujoChatMessage;
+  // Keep the ordinary human message last so it remains the immediate request
+  // being answered, just as it would when folded into an already-running turn.
+  return [contextMessage, ...participantMessages];
 }
 
 function lastNewAssistantMessage(
@@ -675,13 +707,14 @@ async function runParticipantTurn(
         participant.id,
         handle,
       );
-      const turnMessage = await buildTurnMessage(
+      const turnMessages = await buildTurnMessages(
         meeting,
         participant,
         round,
         events,
         startNodeId,
         executionAuthority,
+        previousIds,
       );
 
       const result = await runFlow({
@@ -691,7 +724,7 @@ async function runParticipantTurn(
         conversationId: participant.conversationId,
         title: `${meeting.title} · ${participant.name}`,
         mode: 'conversation',
-        messages: [...previousMessages, turnMessage],
+        messages: [...previousMessages, ...turnMessages],
         processNodeId: startNodeId,
         flujo: true,
         requireApproval: false,
@@ -1505,6 +1538,52 @@ export class MeetingEngine {
       return meeting;
     }
     return handle.promise;
+  }
+
+  /**
+   * Send one ordinary user message to every active participant conversation.
+   *
+   * The append-only meeting event is the durable source of truth. The live
+   * inbox fan-out makes the message available to participant runs immediately;
+   * buildTurnMessages reconstructs the same stable ids on a later round if the
+   * meeting route and runtime happen to live in different processes.
+   */
+  async messageParticipants(meetingId: string, content: string): Promise<MeetingEvent> {
+    const normalizedContent = content.trim();
+    if (!normalizedContent || normalizedContent.length > 12_000) {
+      throw new Error('Participant message must contain between 1 and 12,000 characters.');
+    }
+
+    return withControlLock(meetingId, async () => {
+      const meeting = await getMeeting(meetingId);
+      if (!meeting) throw new Error(`Meeting ${meetingId} not found.`);
+      if (meeting.status !== 'running') {
+        throw new Error('Only a live meeting can be messaged.');
+      }
+
+      const event = await this.emit(meeting, {
+        type: 'moderator:intervention',
+        audience: 'public',
+        content: normalizedContent,
+        eventId: `${meetingId}:intervention:${randomUUID()}`,
+      });
+      if (event.type !== 'moderator:intervention') {
+        throw new Error('Could not create the participant message event.');
+      }
+      for (const participant of meeting.participants) {
+        if (
+          participant.status === 'left'
+          || participant.status === 'error'
+          || participant.personaArchived
+          || participant.personaRetired
+        ) continue;
+        enqueueSteeringMessage(
+          participant.conversationId,
+          participantMessageFromIntervention(event, participant.id),
+        );
+      }
+      return event;
+    });
   }
 
   /**

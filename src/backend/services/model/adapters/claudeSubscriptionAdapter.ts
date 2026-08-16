@@ -309,6 +309,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     tools,
     toolNameMap,
     localToolExecutors,
+    shouldEndAgenticTurn,
     maxTurns,
     requestToolApproval,
     onTranscriptMessage,
@@ -437,6 +438,11 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // model turn. Spawnable targets instead end when the model stops calling.
     let endSpawning = false;
     const abortController = new AbortController();
+    let endedByCaller = false;
+    const endedToolResult = (): CallToolResult => ({
+      content: [{ type: 'text', text: 'This agentic turn has ended; no further tools may run.' }],
+      isError: true,
+    });
     // Chain the caller's cancellation signal (Stop button) onto the controller
     // that owns the whole agentic loop — this is the largest otherwise
     // un-interruptible window (the SDK can run tools/turns for a long time).
@@ -540,6 +546,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           );
           // Keep the exact name so FLUJO's `handoff_to_<nodeId>` routing matches.
           return tool(fnName, description, schemaShape, async (args: Record<string, unknown>): Promise<CallToolResult> => {
+            if (shouldEndAgenticTurn?.()) return endedToolResult();
             // Spawn-with-brief (issue #156): EVERY handoff call counts — a model
             // splitting work calls the same spawn tool once per brief, and
             // dropping the extras silently discarded its work.
@@ -582,6 +589,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           // hand its JSON result back to the SDK. Keep the exact name — these
           // names are already OpenAI-safe and the caller keys executors by them.
           return tool(fnName, description, schemaShape, async (args: Record<string, unknown>): Promise<CallToolResult> => {
+            if (shouldEndAgenticTurn?.()) return endedToolResult();
             log.debug('Claude subscription local tool call', { tool: fnName });
             const callId = takeToolCall(fnName, args);
             const toolStartedAt = Date.now();
@@ -632,6 +640,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           context,
         });
         return tool(readableName, description, schemaShape, async (args: Record<string, unknown>): Promise<CallToolResult> => {
+          if (shouldEndAgenticTurn?.()) return endedToolResult();
           log.debug('Claude subscription tool call', { server, tool: originalTool, exposedAs: readableName });
           const callId = takeToolCall(readableName, args);
           const toolStartedAt = Date.now();
@@ -828,6 +837,12 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           }
           const readableName = toolName.replace(`mcp__${SDK_SERVER_NAME}__`, '');
           const args = (input ?? {}) as Record<string, unknown>;
+          if (shouldEndAgenticTurn?.()) {
+            return {
+              behavior: 'deny',
+              message: 'This agentic turn has ended; no further tools may run.',
+            };
+          }
           // Handoffs are materialized once at the routing boundary below. Every
           // executable tool, however, becomes visible before approval/execution.
           if (!isHandoffName(readableName) && !recordedToolCallIds.has(opts.toolUseID)) {
@@ -1031,6 +1046,14 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // waiting out the subprocess teardown.
     const messageLoop = async (): Promise<void> => {
       for await (const message of response) {
+        // Terminal controls such as meeting silence flip this predicate from a
+        // local tool executor. Stop before forwarding steering, recording prose,
+        // or allowing the SDK to begin another model/tool turn.
+        if (shouldEndAgenticTurn?.()) {
+          endedByCaller = true;
+          abortController.abort();
+          break;
+        }
         // This also runs for partial stream events, so a correction does not
         // wait for a long agentic SDK call to finish before reaching Claude.
         await forwardSteeringMessages();
@@ -1223,7 +1246,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     } catch (err) {
       // A handoff aborts the run on purpose; only genuine errors (including an
       // external cancellation, mapped to 'cancelled' by ModelHandler) propagate.
-      if (handoffCalls.length === 0) {
+      if (handoffCalls.length === 0 && !endedByCaller) {
         dispatchOutcome = signal?.aborted ? 'cancelled' : 'error';
         // Drop any tracked session on a genuine error/cancellation so a later
         // turn never resumes a corrupted or half-torn-down session (#154 — the
@@ -1282,7 +1305,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     }
     if (finalToolCalls) {
       recordMessage({ role: 'assistant', content: null, tool_calls: finalToolCalls });
-    } else if (!streamedText) {
+    } else if (!streamedText && !endedByCaller) {
       recordMessage({ role: 'assistant', content: finalText || '' });
     }
 
@@ -1304,7 +1327,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           leadingSystemMessageCount,
         ),
       );
-      if (handoffCalls.length > 0 || !capturedSessionId) {
+      if (endedByCaller || handoffCalls.length > 0 || !capturedSessionId) {
         invalidateSession(sessionTracking.key);
       } else {
         recordSession(sessionTracking.key, {
@@ -1330,6 +1353,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         cacheWriteTokens,
         completionTokens,
         endedByHandoff: handoffCalls.length > 0,
+        endedByCaller,
       });
     }
 

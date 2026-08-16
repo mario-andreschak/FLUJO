@@ -682,11 +682,33 @@ export const McpServerConfigNameSchema = z.string().min(1).max(200).refine(
   { message: 'Invalid MCP server configuration name.' },
 );
 
+const PersonaAppToolNameSchema = z.string().trim().min(1).max(512);
+const PersonaAppEnabledToolsSchema = z.array(PersonaAppToolNameSchema).max(512)
+  .refine((tools) => new Set(tools).size === tools.length, 'Enabled tools must be unique.');
+const SafeToolParameterKeySchema = z.string().min(1).max(512).refine(
+  (key) => key !== '__proto__' && key !== 'prototype' && key !== 'constructor',
+  'Unsafe tool parameter key.',
+);
+const PersonaAppToolParameterPresetsSchema = z.record(
+  PersonaAppToolNameSchema,
+  z.record(SafeToolParameterKeySchema, z.unknown()).superRefine((parameters, ctx) => {
+    if (Object.keys(parameters).length > 256) {
+      ctx.addIssue({ code: 'custom', message: 'A tool may pre-set at most 256 parameters.' });
+    }
+  }),
+).superRefine((presets, ctx) => {
+  if (Object.keys(presets).length > 512) {
+    ctx.addIssue({ code: 'custom', message: 'At most 512 tools may have parameter presets.' });
+  }
+});
+
 export const PersonaAppGrantSchema = z.object({
   schemaVersion: z.literal(ENDURING_AGENT_SCHEMA_VERSION),
   id: EnduringAgentIdSchema,
   personaId: EnduringAgentIdSchema,
   mcpServerName: McpServerConfigNameSchema,
+  enabledTools: PersonaAppEnabledToolsSchema.optional(),
+  toolParameterPresets: PersonaAppToolParameterPresetsSchema.optional(),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
 }).strict().refine(
@@ -696,10 +718,14 @@ export const PersonaAppGrantSchema = z.object({
 
 export const CreatePersonaAppGrantInputSchema = z.object({
   mcpServerName: McpServerConfigNameSchema,
+  enabledTools: PersonaAppEnabledToolsSchema.optional(),
+  toolParameterPresets: PersonaAppToolParameterPresetsSchema.optional(),
 }).strict();
 
 export const ReplacePersonaAppGrantInputSchema = z.object({
   mcpServerName: McpServerConfigNameSchema,
+  enabledTools: PersonaAppEnabledToolsSchema.optional(),
+  toolParameterPresets: PersonaAppToolParameterPresetsSchema.optional(),
   expectedUpdatedAt: TimestampSchema,
 }).strict();
 

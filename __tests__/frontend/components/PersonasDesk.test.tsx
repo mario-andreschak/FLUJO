@@ -8,6 +8,7 @@ const rolesMock = jest.fn();
 const replaceMock = jest.fn();
 const pushMock = jest.fn();
 const grantAppMock = jest.fn();
+const configureAppMock = jest.fn();
 const revokeAppMock = jest.fn();
 const authorizeAppLaunchMock = jest.fn();
 const emitLaunchGlobalMcpAppMock = jest.fn();
@@ -65,6 +66,7 @@ jest.mock('@/frontend/services/personas', () => ({
     controlWorkItem: (...args: unknown[]) => controlWorkItemMock(...args),
     activateBehavior: jest.fn(),
     grantApp: (...args: unknown[]) => grantAppMock(...args),
+    configureApp: (...args: unknown[]) => configureAppMock(...args),
     revokeApp: (...args: unknown[]) => revokeAppMock(...args),
     authorizeAppLaunch: (...args: unknown[]) => authorizeAppLaunchMock(...args),
     recoverRuntime: (...args: unknown[]) => recoverRuntimeMock(...args),
@@ -74,6 +76,56 @@ jest.mock('@/frontend/services/personas', () => ({
 
 jest.mock('@/frontend/components/mcp/useMcpAppsDiscovery', () => ({
   useMcpAppsDiscovery: () => mockDiscoveryState,
+}));
+
+jest.mock('@/frontend/hooks/useServerTools', () => ({
+  useServerTools: (serverName: string | null) => ({
+    tools: serverName ? [
+      {
+        name: 'list_issues',
+        title: 'List issues',
+        description: 'List repository issues.',
+        inputSchema: {
+          type: 'object',
+          properties: { owner: { type: 'string', description: 'Repository owner.' } },
+        },
+        annotations: { readOnlyHint: true },
+      },
+      {
+        name: 'delete_issue',
+        title: 'Delete issue',
+        description: 'Delete an issue.',
+        inputSchema: { type: 'object', properties: {} },
+        annotations: { readOnlyHint: false, destructiveHint: true },
+      },
+    ] : [],
+    toolsServerName: serverName,
+    isLoading: false,
+    error: null,
+    retryLoadTools: jest.fn(),
+  }),
+}));
+
+jest.mock('@/frontend/components/shared/GlobalReferenceEditor', () => ({
+  __esModule: true,
+  default: ({
+    value,
+    onChange,
+    ariaLabel,
+    disabled,
+  }: {
+    value: string;
+    onChange: (value: string) => void;
+    ariaLabel?: string;
+    disabled?: boolean;
+  }) => (
+    <input
+      aria-label={ariaLabel}
+      value={value}
+      disabled={disabled}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  ),
 }));
 
 jest.mock('@/frontend/utils/quickActions', () => ({
@@ -222,6 +274,12 @@ beforeEach(() => {
   getMock.mockResolvedValue(detail);
   rolesMock.mockResolvedValue({ roleDefinitions: [], roleVersions: [detail.roleVersion] });
   grantAppMock.mockResolvedValue(detail.appGrants[0]);
+  configureAppMock.mockResolvedValue({
+    ...detail.appGrants[0],
+    enabledTools: ['list_issues'],
+    toolParameterPresets: { list_issues: { owner: '@app.name' } },
+    updatedAt: 5,
+  });
   revokeAppMock.mockResolvedValue(undefined);
   recoverRuntimeMock.mockResolvedValue(detail.runtime);
   executionPreviewMock.mockResolvedValue({
@@ -331,6 +389,36 @@ it('shows exact account identity and launches only through a grant-scoped descri
     uri: 'ui://github/dashboard',
   });
   expect(screen.getByText(/never add tools or permissions/i)).toBeInTheDocument();
+});
+
+it('configures Persona Core tools and @-aware fixed parameters on a grant', async () => {
+  render(<PersonasDesk initialPersonaId="jim" />);
+  expect(await screen.findByRole('heading', { name: 'Jim' })).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('tab', { name: /Apps/i }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Configure tools' }));
+  expect(await screen.findByRole('heading', { name: 'Tools for github-jim' })).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Toggle Delete issue' }));
+  fireEvent.click(screen.getByRole('button', {
+    name: /Fixed parameters for List issues Configure values hidden from the model/,
+  }));
+  fireEvent.click(screen.getByRole('checkbox', { name: /owner/ }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'Fixed value for list_issues.owner' }), {
+    target: { value: '@app.name' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+  await waitFor(() => expect(configureAppMock).toHaveBeenCalledWith(
+    'jim',
+    'appgrant_jim',
+    {
+      mcpServerName: 'github-jim',
+      enabledTools: ['list_issues'],
+      toolParameterPresets: { list_issues: { owner: '@app.name' } },
+      expectedUpdatedAt: 4,
+    },
+  ));
 });
 
 it('turns a plain-language goal into durable work and immediately assigns it', async () => {

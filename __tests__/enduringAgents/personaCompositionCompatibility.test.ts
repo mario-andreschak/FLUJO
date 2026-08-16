@@ -87,14 +87,11 @@ describe('Persona composition compatibility', () => {
       .toEqual(expect.arrayContaining(['primary', 'maintain_memory']));
     const maintenance = roleVersion.behaviorSlots.find((slot) => slot.key === 'maintain_memory');
     const process = maintenance?.flowTemplate.nodes.find((node) => node.type === 'process');
-    expect(process?.data.properties?.personaTools).toEqual([]);
-    expect(process?.data.properties?.captureVariable).toBe('persona_memory_candidates');
-    expect(maintenance?.flowTemplate.nodes).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        type: 'static',
-        data: expect.objectContaining({ label: 'Validate and commit memory' }),
-      }),
-    ]));
+    expect(process?.data.properties?.personaTools).toEqual(['remember']);
+    expect(process?.data.properties?.captureVariable).toBeUndefined();
+    expect(maintenance?.flowTemplate.nodes.some((node) => (
+      node.type === 'static' && node.data.label === 'Validate and commit memory'
+    ))).toBe(false);
   });
 
   it('rejects unsupported future record versions', () => {

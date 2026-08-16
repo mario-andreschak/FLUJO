@@ -165,6 +165,7 @@ export class CodexAdapter implements CompletionAdapter {
       tools,
       toolNameMap,
       localToolExecutors,
+      shouldEndAgenticTurn,
       requestToolApproval,
       onTranscriptMessage,
       consumeSteeringMessages,
@@ -194,6 +195,11 @@ export class CodexAdapter implements CompletionAdapter {
     const { systemPrompt } = fullInput;
 
     const abortController = new AbortController();
+    let endedByCaller = false;
+    const endedToolResult = (): CallToolResult => ({
+      content: [{ type: 'text', text: 'This agentic turn has ended; no further tools may run.' }],
+      isError: true,
+    });
     const onExternalAbort = () => abortController.abort();
     if (signal?.aborted) {
       abortController.abort();
@@ -316,6 +322,7 @@ export class CodexAdapter implements CompletionAdapter {
             description,
             inputSchema,
             handler: async (args) => {
+              if (shouldEndAgenticTurn?.()) return endedToolResult();
               await beforeToolDispatch?.();
               const toolStartedAt = Date.now();
               handoffCalls.push({ name: fnName, args: args ?? {} });
@@ -353,6 +360,7 @@ export class CodexAdapter implements CompletionAdapter {
             description,
             inputSchema,
             handler: async (args) => {
+              if (shouldEndAgenticTurn?.()) return endedToolResult();
               const callId = `call_${uuidv4()}`;
               const argsJson = JSON.stringify(args ?? {});
               // The bridge receives a call only after Codex has assembled its
@@ -410,6 +418,7 @@ export class CodexAdapter implements CompletionAdapter {
           inputSchema,
           ...(annotations ? { annotations } : {}),
           handler: async (args) => {
+            if (shouldEndAgenticTurn?.()) return endedToolResult();
             const callId = `call_${uuidv4()}`;
             const argsJson = JSON.stringify(args ?? {});
             // Emit before the approval gate and mcpService call. Large/slow tools
@@ -791,6 +800,14 @@ export class CodexAdapter implements CompletionAdapter {
 
           for await (const event of events) {
             if (signal?.aborted) break;
+            // A terminal local control (meeting silence) ends this SDK turn at
+            // the first safe event boundary, before post-control narration or
+            // another tool dispatch can be observed.
+            if (shouldEndAgenticTurn?.()) {
+              endedByCaller = true;
+              turnAbortController.abort();
+              break;
+            }
             if (event.type === 'thread.started') {
               capturedThreadId = event.thread_id;
               continue;
@@ -896,7 +913,7 @@ export class CodexAdapter implements CompletionAdapter {
         } finally {
           abortController.signal.removeEventListener('abort', abortTurn);
           if (dispatchId && onSdkRequestResult) {
-            const outcome = handoffCalls.length > 0
+            const outcome = endedByCaller || handoffCalls.length > 0
               ? 'completed'
               : steeringMessages.length > 0 || signal?.aborted
                 ? 'cancelled'
@@ -911,7 +928,7 @@ export class CodexAdapter implements CompletionAdapter {
           }
         }
 
-        if (signal?.aborted && handoffCalls.length === 0) {
+        if (signal?.aborted && handoffCalls.length === 0 && !endedByCaller) {
           throw new Error('Codex run cancelled by user.');
         }
         if (steeringMessages.length > 0) {
@@ -931,7 +948,7 @@ export class CodexAdapter implements CompletionAdapter {
           });
           continue;
         }
-        if (!attemptFailure || handoffCalls.length > 0) break;
+        if (endedByCaller || !attemptFailure || handoffCalls.length > 0) break;
         if (!connectionRetryUsed && !abortController.signal.aborted && isRetryableCodexConnectionClose(attemptFailure)) {
           connectionRetryUsed = true;
           nextTurnInput = continuationInput;
@@ -942,7 +959,7 @@ export class CodexAdapter implements CompletionAdapter {
         break;
       }
 
-      if (failure && handoffCalls.length === 0) {
+      if (failure && handoffCalls.length === 0 && !endedByCaller) {
         throw new Error(`Codex run failed: ${failure}`);
       }
     } catch (err) {
@@ -952,7 +969,7 @@ export class CodexAdapter implements CompletionAdapter {
       }
       // A stale/missing persisted thread must not lose the current user request.
       // Retry exactly once from the full flattened history on a new SDK thread.
-      if (resumeThreadId && handoffCalls.length === 0) {
+      if (resumeThreadId && handoffCalls.length === 0 && !endedByCaller) {
         log.warn('Codex SDK thread resume failed; retrying on a fresh thread', {
           conversationId,
           nodeId,
@@ -962,7 +979,7 @@ export class CodexAdapter implements CompletionAdapter {
         return this.createCompletion({ ...input, codexSession: undefined });
       }
       // A handoff aborts the stream on purpose; only genuine errors propagate.
-      if (handoffCalls.length === 0) throw err;
+      if (handoffCalls.length === 0 && !endedByCaller) throw err;
     } finally {
       signal?.removeEventListener('abort', onExternalAbort);
       await bridge?.close().catch(() => undefined);
@@ -982,7 +999,7 @@ export class CodexAdapter implements CompletionAdapter {
     }
     if (finalToolCalls) {
       recordMessage({ role: 'assistant', content: null, tool_calls: finalToolCalls });
-    } else if (!streamedText) {
+    } else if (!streamedText && !endedByCaller) {
       recordMessage({ role: 'assistant', content: resultText || '' });
     }
 
@@ -991,6 +1008,7 @@ export class CodexAdapter implements CompletionAdapter {
         completedTurn &&
         !failure &&
         !signal?.aborted &&
+        !endedByCaller &&
         handoffCalls.length === 0 &&
         capturedThreadId;
       if (reusable) {
@@ -1019,6 +1037,7 @@ export class CodexAdapter implements CompletionAdapter {
         transcriptMessages: transcript.length,
         watermark: messages.length + transcript.length,
         endedByHandoff: handoffCalls.length > 0,
+        endedByCaller,
       });
     }
 

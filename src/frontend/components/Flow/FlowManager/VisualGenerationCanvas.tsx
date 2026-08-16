@@ -297,14 +297,14 @@ function ExpertPreviewPanel({
           <Typography variant="subtitle2" fontWeight={850}>{t('flows.generator.visualExpertPreview')}</Typography>
           <Typography variant="caption" color="text.secondary" noWrap>{agentName}</Typography>
         </Box>
-        <Chip size="small" variant="outlined" color="primary" label={t('flows.generator.visualAutoAligned')} />
+        <Chip size="small" variant="outlined" color="primary" label={t('flows.builder.relayout')} />
       </Stack>
       <Box sx={{ position: 'relative', flex: 1, minHeight: 0 }}>
         {preview ? (
           <FlowPreview
             key={preview.flow.id}
             flow={preview.flow}
-            autoLayout
+            relayoutTopToBottom
             fitViewOnChange
           />
         ) : (

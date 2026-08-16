@@ -55,9 +55,6 @@ export const SHIPPED_MCP_SERVERS: readonly ShippedMcpServerDescriptor[] = [
     packageDirectory: 'browser',
     icons: [{ src: '/mcp-icons/browser.svg', mimeType: 'image/svg+xml' }],
     enableMcpApps: true,
-    disabledByDefault: (env) => !/^(1|true|yes|on)$/i.test(
-      env.FLUJO_BROWSER_ENABLED?.trim() ?? '',
-    ),
   },
 ] as const;
 

@@ -189,6 +189,42 @@ describe('ClaudeSubscriptionAdapter — mid-run steering', () => {
   });
 });
 
+describe('ClaudeSubscriptionAdapter — cooperative terminal controls', () => {
+  it('stops before another SDK turn can narrate after a terminal local control', async () => {
+    let turnEnded = false;
+    queryMock.mockImplementation(() => (async function* () {
+      yield { type: 'system', session_id: 'sess-1' };
+      turnEnded = true;
+      yield {
+        type: 'assistant',
+        session_id: 'sess-1',
+        uuid: 'post-control-turn',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'This narration must not escape.' }],
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      };
+      yield {
+        type: 'result',
+        subtype: 'success',
+        result: 'This narration must not escape.',
+        session_id: 'sess-1',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    })());
+
+    const result = await new ClaudeSubscriptionAdapter().createCompletion(baseInput({
+      shouldEndAgenticTurn: () => turnEnded,
+    }));
+
+    expect(result.transcript).toEqual([]);
+    expect(result.completion.choices[0].message.content).toBeNull();
+    const abortController = capturedOptions().abortController as AbortController;
+    expect(abortController.signal.aborted).toBe(true);
+  });
+});
+
 describe('ClaudeSubscriptionAdapter — malformed tool-call prose quarantine (#298)', () => {
   it('keeps a contaminated SDK turn out of the transcript and live callback', async () => {
     const malformed =

@@ -23,7 +23,6 @@ import type { Flow } from '@/shared/types/flow';
 import {
   PERSONA_MEMORY_GATEWAY_SERVER,
   PERSONA_MEMORY_MAINTENANCE_COMMIT_TOOL,
-  PERSONA_MEMORY_MAINTENANCE_OUTPUT_VARIABLE,
 } from '@/shared/types/enduringAgent/personaMemoryGateway';
 import {
   EnduringAgentIdSchema,
@@ -112,8 +111,11 @@ import { getCoreMemory } from './memoryKernel';
 import {
   MemoryMaintenancePlanSchema,
   MemoryMaintenanceResultSchema,
+  aggregateMemoryMaintenanceResults,
   buildMemoryMaintenancePlan,
   persistMemoryMaintenanceOutput,
+  persistMemoryMaintenanceProposal,
+  renderMemoryMaintenanceConversationMessage,
   renderMemoryMaintenancePrompt,
   type MemoryMaintenancePlan,
   type MemoryMaintenanceResult,
@@ -877,6 +879,37 @@ async function listDispatchRecords(workspaceId: string): Promise<PersonaFlowDisp
   });
 }
 
+async function appendPersonaConversationMessage(
+  conversationId: string,
+  message: FlujoChatMessage,
+  executionAuthority: FlowExecutionAuthority,
+): Promise<void> {
+  const [
+    { appendRawForState },
+    { upsertMessageById },
+    { loadConversationState },
+    { persistConversationState },
+  ] = await Promise.all([
+    import('@/backend/execution/flow/conversationLog'),
+    import('@/backend/execution/flow/conversationMessages'),
+    import('@/backend/execution/flow/loadConversationState'),
+    import('@/backend/execution/flow/persistConversationState'),
+  ]);
+  const state = await loadConversationState(conversationId);
+  if (!state) {
+    throw new Error(`Conversation ${JSON.stringify(conversationId)} was not available for a maintenance result update.`);
+  }
+  state.executionAuthority = executionAuthority;
+  upsertMessageById(state.messages, message);
+  state.lastResponse = typeof message.content === 'string' ? message.content : state.lastResponse;
+  state.updatedAt = Math.max(Date.now(), state.updatedAt ?? 0);
+  await appendRawForState(state, [{ type: 'message', message }]);
+  await persistConversationState(
+    `conversations/${conversationId}` as Parameters<typeof persistConversationState>[0],
+    state,
+  );
+}
+
 export interface PersonaFlowDispatcherDependencies {
   routePersonaMailboxItem: (
     value: unknown,
@@ -923,6 +956,7 @@ export interface PersonaFlowDispatcherDependencies {
   snapshotPersonaCoreAppRefs: typeof snapshotPersonaCoreAppRefs;
   projectPersonaCoreAppsIntoFlow: typeof projectPersonaCoreAppsIntoFlow;
   readConversationLog: typeof readConversationLog;
+  appendConversationMessage: typeof appendPersonaConversationMessage;
   runFlow: (input: FlowRunInput) => Promise<FlowRunResult>;
 }
 
@@ -964,6 +998,7 @@ const DEFAULT_DEPENDENCIES: PersonaFlowDispatcherDependencies = {
   snapshotPersonaCoreAppRefs,
   projectPersonaCoreAppsIntoFlow,
   readConversationLog,
+  appendConversationMessage: appendPersonaConversationMessage,
   runFlow,
 };
 
@@ -1017,8 +1052,9 @@ function isMemoryMaintenanceCommitNode(node: Flow['nodes'][number]): boolean {
 
 /**
  * Apply the platform-owned maintenance boundary to any frozen replacement Flow.
- * Old revisions gain the deterministic commit step in-memory; the immutable
- * authored snapshot is never rewritten.
+ * The model receives only the proposal-oriented `remember` tool. Legacy
+ * captured-output/static-commit nodes are removed in-memory; immutable authored
+ * snapshots are never rewritten.
  */
 export function restrictedMaintenanceFlow(source: Flow): Flow {
   const flow = structuredClone(source);
@@ -1032,55 +1068,25 @@ export function restrictedMaintenanceFlow(source: Flow): Flow {
     };
     data.properties = {
       ...(data.properties ?? {}),
-      personaTools: [],
-      captureVariable: PERSONA_MEMORY_MAINTENANCE_OUTPUT_VARIABLE,
+      personaTools: ['remember'],
     };
+    delete data.properties.captureVariable;
   }
 
-  if (flow.nodes.some(isMemoryMaintenanceCommitNode)) return flow;
-
-  const finishNodes = flow.nodes.filter((node) => node.type === 'finish');
-  for (const [index, finish] of finishNodes.entries()) {
-    const commitNodeId = `persona_memory_validate_commit_${index}`;
-    const incoming = flow.edges.filter((edge) => edge.target === finish.id);
-    for (const edge of incoming) {
-      edge.target = commitNodeId;
-      edge.targetHandle = 'static-top';
+  const legacyCommitNodes = flow.nodes.filter(isMemoryMaintenanceCommitNode);
+  for (const commitNode of legacyCommitNodes) {
+    const outgoing = flow.edges.find((edge) => edge.source === commitNode.id);
+    const fallbackFinish = flow.nodes.find((node) => node.type === 'finish');
+    const targetId = outgoing?.target ?? fallbackFinish?.id;
+    if (targetId) {
+      for (const incoming of flow.edges.filter((edge) => edge.target === commitNode.id)) {
+        incoming.target = targetId;
+        incoming.targetHandle = outgoing?.targetHandle ?? 'finish-top';
+      }
     }
-    flow.nodes.push({
-      id: commitNodeId,
-      type: 'static',
-      position: {
-        x: Math.max(0, finish.position.x - 280),
-        y: finish.position.y,
-      },
-      data: {
-        label: 'Validate and commit memory',
-        type: 'static',
-        description: 'Platform-owned deterministic validation and candidate-memory commit.',
-        properties: {
-          injectOnce: true,
-          entries: [{
-            kind: 'toolCall',
-            executionMode: 'real',
-            serverName: PERSONA_MEMORY_GATEWAY_SERVER,
-            toolName: PERSONA_MEMORY_MAINTENANCE_COMMIT_TOOL,
-            argumentsJson: JSON.stringify({
-              candidate_variable: PERSONA_MEMORY_MAINTENANCE_OUTPUT_VARIABLE,
-            }),
-            result: '',
-          }],
-        },
-      },
-    });
-    flow.edges.push({
-      id: `${commitNodeId}_${finish.id}`,
-      source: commitNodeId,
-      target: finish.id,
-      sourceHandle: 'static-bottom',
-      targetHandle: 'finish-top',
-    });
+    flow.edges = flow.edges.filter((edge) => edge.source !== commitNode.id);
   }
+  flow.nodes = flow.nodes.filter((node) => !isMemoryMaintenanceCommitNode(node));
   return flow;
 }
 
@@ -2623,6 +2629,9 @@ export class PersonaFlowDispatcher {
     const heartbeat = this.beginHeartbeat(fence, record.id, abortController);
     let maintenanceCommitResult: MemoryMaintenanceResult | undefined;
     let maintenanceCommitPromise: Promise<MemoryMaintenanceResult> | undefined;
+    const maintenanceProposalResults: MemoryMaintenanceResult[] = [];
+    const maintenanceCreatedIds = new Set<string>();
+    let maintenanceProposalChain: Promise<void> = Promise.resolve();
     try {
     if (await this.interruptionRequested(fence)) {
       abortController.abort();
@@ -2663,6 +2672,68 @@ export class PersonaFlowDispatcher {
             return committed;
           });
           return maintenanceCommitPromise;
+        },
+        proposePersonaMemoryMaintenance: (proposal: Record<string, unknown>) => {
+          const submission = maintenanceProposalChain.then(async () => {
+            if (maintenanceCreatedIds.size >= record.maintenancePlan!.candidateLimit) {
+              const limited = MemoryMaintenanceResultSchema.parse({
+                status: 'rejected',
+                proposedCount: 1,
+                createdCount: 0,
+                rejectedCount: 1,
+                created: [],
+                issues: [{
+                  code: 'invalid_schema',
+                  path: 'remember',
+                  message: `This maintenance run accepts at most ${record.maintenancePlan!.candidateLimit} candidate memories.`,
+                }],
+              }) as MemoryMaintenanceResult;
+              maintenanceProposalResults.push(limited);
+              return {
+                success: false,
+                error: renderMemoryMaintenanceConversationMessage(limited),
+              };
+            }
+            let persisted: MemoryMaintenanceResult;
+            try {
+              persisted = await this.inWorkspace(() => persistMemoryMaintenanceProposal({
+                personaId: record.personaId,
+                plan: record.maintenancePlan!,
+                proposal,
+                executionAuthority: authority,
+              }));
+            } catch (error) {
+              persisted = MemoryMaintenanceResultSchema.parse({
+                status: 'rejected',
+                proposedCount: 1,
+                createdCount: 0,
+                rejectedCount: 1,
+                created: [],
+                issues: [{
+                  code: 'persistence_error',
+                  path: 'remember',
+                  message: error instanceof Error ? error.message : 'The candidate memory could not be stored.',
+                }],
+              }) as MemoryMaintenanceResult;
+            }
+            maintenanceProposalResults.push(persisted);
+            for (const created of persisted.created) maintenanceCreatedIds.add(created.id);
+            if (persisted.status !== 'saved') {
+              return {
+                success: false,
+                error: renderMemoryMaintenanceConversationMessage(persisted),
+              };
+            }
+            return {
+              success: true,
+              data: {
+                stored: true,
+                candidate: persisted.created[0],
+              },
+            };
+          });
+          maintenanceProposalChain = submission.then(() => undefined, () => undefined);
+          return submission;
         },
       } : {}),
       pollRelatedInputs: () => this.pollRelatedInputs(fence, conversationId),
@@ -2910,16 +2981,12 @@ export class PersonaFlowDispatcher {
         && claim.activity.kind === 'maintenance'
         && (result.status === 'completed' || result.status === 'capped')
       ) {
-        // Current maintenance Flows commit through the visible deterministic
-        // Static node. The fallback preserves recovery for an old/incomplete
-        // snapshot or a mocked runner that never traversed the injected node.
+        await maintenanceProposalChain;
+        // Legacy in-flight snapshots may still invoke the former one-shot
+        // captured-output gateway. Current Flows aggregate the outcomes of their
+        // schema-bearing remember tool calls instead.
         maintenanceResult = maintenanceCommitResult
-          ?? await this.inWorkspace(() => persistMemoryMaintenanceOutput({
-            personaId: record.personaId,
-            plan: record.maintenancePlan!,
-            outputText: result.outputText,
-            executionAuthority: authority,
-          }));
+          ?? aggregateMemoryMaintenanceResults(maintenanceProposalResults);
         const maintenanceLog = {
           dispatchId: record.id,
           activityId: record.activityId,
@@ -2940,6 +3007,19 @@ export class PersonaFlowDispatcher {
         } else {
           log.info('Memory maintenance persistence completed.', maintenanceLog);
         }
+        await this.inWorkspace(() => this.dependencies.appendConversationMessage(
+          conversationId,
+          {
+            id: `memory_maintenance_result_${record.id}`,
+            role: 'assistant',
+            content: renderMemoryMaintenanceConversationMessage(maintenanceResult!),
+            timestamp: Date.now(),
+            ...(result.sharedState.currentNodeId
+              ? { processNodeId: result.sharedState.currentNodeId }
+              : {}),
+          },
+          authority,
+        ));
       }
       await heartbeat.stop();
       control.activeAbort = undefined;

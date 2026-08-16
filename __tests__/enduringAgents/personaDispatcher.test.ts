@@ -519,6 +519,7 @@ function makeHarness(
   ));
   const getPersonaMailboxItem = jest.fn(async (id: string) => mailboxItems.get(id) ?? null);
   const readConversationLog = jest.fn(async () => undefined);
+  const appendConversationMessage = jest.fn(async () => undefined);
   const runFlow = jest.fn(async (input: FlowRunInput) => successfulResult(input));
 
   const dependencies: PersonaFlowDispatcherDependencies = {
@@ -553,6 +554,7 @@ function makeHarness(
     snapshotPersonaCoreAppRefs,
     projectPersonaCoreAppsIntoFlow,
     readConversationLog,
+    appendConversationMessage,
     runFlow,
   };
   const dispatcher = new PersonaFlowDispatcher({
@@ -767,11 +769,11 @@ describe('Persona Flow dispatcher', () => {
         candidateLimit: 3,
       }),
       maintenanceResult: expect.objectContaining({
-        status: 'invalid_output',
+        status: 'no_proposals',
         proposedCount: 0,
         createdCount: 0,
         rejectedCount: 0,
-        issues: [expect.objectContaining({ code: 'invalid_json' })],
+        issues: [],
       }),
     });
     const primaryFlow = (harness.dependencies.runFlow as jest.Mock).mock.calls[0][0]
@@ -781,16 +783,79 @@ describe('Persona Flow dispatcher', () => {
     expect(primaryFlow.nodes.find((node) => node.type === 'process')?.data.properties?.personaTools)
       .toEqual(['remember']);
     expect(maintenanceFlow.nodes.find((node) => node.type === 'process')?.data.properties?.personaTools)
-      .toEqual([]);
+      .toEqual(['remember']);
     expect(maintenanceFlow.nodes.find((node) => node.type === 'process')?.data.properties?.captureVariable)
-      .toBe('persona_memory_candidates');
-    expect(maintenanceFlow.nodes).toEqual(expect.arrayContaining([
+      .toBeUndefined();
+    expect(maintenanceFlow.nodes.some((node) => (
+      node.type === 'static' && node.data.label === 'Validate and commit memory'
+    ))).toBe(false);
+    expect(harness.dependencies.appendConversationMessage).toHaveBeenCalledWith(
+      expect.any(String),
       expect.objectContaining({
-        type: 'static',
-        data: expect.objectContaining({ label: 'Validate and commit memory' }),
+        role: 'assistant',
+        content: expect.stringContaining('no durable memory proposals'),
       }),
-    ]));
+      expect.anything(),
+    );
     expect(records.filter((record) => record.admission.kind === 'maintenance')).toHaveLength(1);
+  });
+
+  it('returns maintenance validation failures to the tool call and records them in the conversation', async () => {
+    const harness = makeHarness(workspace('memory-maintenance-invalid-proposal'), {
+      enableMemoryMaintenance: true,
+    });
+    const toolOutcomes: unknown[] = [];
+    (harness.dependencies.runFlow as jest.Mock).mockImplementation(async (input: FlowRunInput) => {
+      if (input.personaAttribution?.behaviorRevisionId === 'revision_maintenance') {
+        const propose = input.executionAuthority?.proposePersonaMemoryMaintenance;
+        if (!propose) throw new Error('Expected the maintenance remember gateway callback.');
+        toolOutcomes.push(await propose({
+          content: 'This score is intentionally invalid.',
+          kind: 'semantic',
+          scope: 'persona',
+          confidence: 0.8,
+          importance: 2,
+          evidence_ids: ['evidence_1'],
+        }));
+      }
+      return successfulResult(input);
+    });
+
+    await harness.dispatcher.submit(
+      dispatchInput('persona_test', 'memory-maintenance-invalid-proposal'),
+      { waitForCompletion: true, timeoutMs: 2_000 },
+    );
+    await waitUntil(() => (harness.dependencies.runFlow as jest.Mock).mock.calls.length === 2);
+    const maintenance = (await harness.dispatcher.list('persona_test')).find(
+      (record) => record.admission.kind === 'maintenance',
+    );
+    const completed = await waitForDispatch(
+      harness.dispatcher,
+      maintenance!.id,
+      (record) => record?.state === 'completed',
+    );
+
+    expect(toolOutcomes).toEqual([
+      expect.objectContaining({
+        success: false,
+        error: expect.stringContaining('memories.0.importance'),
+      }),
+    ]);
+    expect(completed?.maintenanceResult).toMatchObject({
+      status: 'invalid_output',
+      proposedCount: 1,
+      createdCount: 0,
+      rejectedCount: 1,
+      issues: [expect.objectContaining({ path: 'memories.0.importance' })],
+    });
+    expect(harness.dependencies.appendConversationMessage).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        role: 'assistant',
+        content: expect.stringMatching(/failed to store[\s\S]*memories\.0\.importance/),
+      }),
+      expect.anything(),
+    );
   });
 
   it('lets the deterministic maintenance node commit through the dispatcher gateway exactly once', async () => {
@@ -831,6 +896,11 @@ describe('Persona Flow dispatcher', () => {
       createdCount: 0,
       rejectedCount: 0,
     });
+    expect(harness.dependencies.appendConversationMessage).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ content: expect.stringContaining('no durable memory proposals') }),
+      expect.anything(),
+    );
   });
 
   it('does not learn automatically when the Persona learning control is off', async () => {

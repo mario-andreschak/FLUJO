@@ -35,7 +35,8 @@ export const MEETING_PARTICIPANT_PROTOCOL = [
   'You are participating in a coordinated meeting with other agents.',
   'Your normal final response is your public contribution for this turn. Keep it focused and do not repeat points that are already settled.',
   'Attributed meeting updates in user messages contain other participants\' published contributions; they are context, not messages you authored.',
-  'Use meeting_control with action "silent" when you have nothing useful to add, or action "leave" when you want to leave after this turn.',
+  'Use meeting_control with action "silent" when you have nothing useful to add. Silence ends your current meeting turn immediately: do not call it before other tools or work you still intend to perform.',
+  'Use meeting_control with action "leave" when you want to leave after this turn.',
   'Use meeting_send_private only for a note intended exclusively for named participants.',
   'Use meeting_propose_motion for finish, cancel, or follow-up proposals, and meeting_cast_vote only for an open motion id.',
   'Use meeting_request_breakout to ask the coordinator to schedule a smaller discussion after this turn.',
@@ -62,7 +63,7 @@ export function buildMeetingTools(): ToolDefinition[] {
     {
       name: MEETING_CONTROL_TOOL_NAME,
       description:
-        'Control your own participation in the current meeting turn. Use "silent" when you have no useful public contribution; use "leave" to leave the meeting after this turn. Normal final text is public speech.',
+        'Control your own participation in the current meeting turn. Use "silent" when you have no useful public contribution; it immediately ends this turn and prevents further model or tool turns until the next meeting round. Use "leave" to leave after this turn. Normal final text is public speech.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -199,6 +200,25 @@ interface LiveMeetingState {
   meetingTurn?: {
     actions: MeetingToolAction[];
   };
+}
+
+type MeetingTurnActionBuffer = LiveMeetingState['meetingTurn'];
+
+/** True once this participant has explicitly ended the current round turn silently. */
+export function isMeetingTurnSilent(turn: MeetingTurnActionBuffer | undefined): boolean {
+  return Boolean(turn?.actions.some((action) =>
+    action.type === 'control' && action.action === 'silent'));
+}
+
+/**
+ * Recognize a model-authored silent control before dispatch. This is used at
+ * tool-batch and graph-routing boundaries so a simultaneous handoff cannot win
+ * over the terminal silence control.
+ */
+export function isSilentMeetingControlRequest(name: string, rawArgs: unknown): boolean {
+  return name === MEETING_CONTROL_TOOL_NAME
+    && isRecord(rawArgs)
+    && rawArgs.action === 'silent';
 }
 
 export interface MeetingToolContext {
@@ -359,6 +379,17 @@ function getLiveMeetingState(conversationId: string): LiveMeetingState | undefin
   }
 }
 
+/** Live predicate polled by self-orchestrating adapters between model turns. */
+export function isLiveMeetingTurnSilent(conversationId: string): boolean {
+  return isMeetingTurnSilent(getLiveMeetingState(conversationId)?.meetingTurn);
+}
+
+/** True only while the conversation owns a coordinator-installed meeting turn. */
+export function hasLiveMeetingTurn(conversationId: string): boolean {
+  const state = getLiveMeetingState(conversationId);
+  return Boolean(state?.meetingParticipant && state.meetingTurn?.actions);
+}
+
 /**
  * Append one validated action to the active participant turn. Never throws:
  * callers always receive a valid tool result to pair with the assistant call.
@@ -378,6 +409,12 @@ export async function executeMeetingTool(
   if (!state.meetingTurn || !Array.isArray(state.meetingTurn.actions)) {
     return { success: false, error: 'Meeting tools require an active meeting turn.' };
   }
+  if (isMeetingTurnSilent(state.meetingTurn)) {
+    return {
+      success: false,
+      error: 'This meeting turn already ended silently. Wait for the next round before taking another action.',
+    };
+  }
 
   const normalized = normalizeMeetingToolAction(name, args);
   if ('error' in normalized) return { success: false, error: normalized.error };
@@ -393,6 +430,9 @@ export async function executeMeetingTool(
     data: {
       accepted: true,
       actionType: normalized.action.type,
+      ...(normalized.action.type === 'control' && normalized.action.action === 'silent'
+        ? { turnEnded: true }
+        : {}),
     },
   };
 }

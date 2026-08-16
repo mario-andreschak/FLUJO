@@ -33,6 +33,7 @@ import {
   getPersonaAppGrant,
   getPersonaDeletionTombstone,
   listPersonaAppGrants,
+  updatePersonaAppGrant,
   updatePersonaWithinRuntimeLock,
 } from './store';
 
@@ -127,6 +128,10 @@ export async function grantPersonaAppAccess(
       id,
       personaId,
       mcpServerName: input.mcpServerName,
+      ...(input.enabledTools !== undefined ? { enabledTools: input.enabledTools } : {}),
+      ...(input.toolParameterPresets !== undefined
+        ? { toolParameterPresets: input.toolParameterPresets }
+        : {}),
       createdAt: now,
       updatedAt: now,
     }));
@@ -166,7 +171,18 @@ export async function replacePersonaAppAccess(
 
     // Revalidate inside the lock so a failed target never removes the working App.
     await requireSelectableMcpConfig(input.mcpServerName);
-    if (grant.mcpServerName === input.mcpServerName) return grant;
+    if (grant.mcpServerName === input.mcpServerName) {
+      if (input.enabledTools === undefined && input.toolParameterPresets === undefined) return grant;
+      const updated = PersonaAppGrantSchema.parse({
+        ...grant,
+        ...(input.enabledTools !== undefined ? { enabledTools: input.enabledTools } : {}),
+        ...(input.toolParameterPresets !== undefined
+          ? { toolParameterPresets: input.toolParameterPresets }
+          : {}),
+        updatedAt: Math.max(Date.now(), grant.updatedAt + 1),
+      });
+      return updatePersonaAppGrant(updated);
+    }
 
     const replacementId = personaAppGrantId(personaId, input.mcpServerName);
     if (await getPersonaAppGrant(replacementId)) {
@@ -182,6 +198,10 @@ export async function replacePersonaAppAccess(
       id: replacementId,
       personaId,
       mcpServerName: input.mcpServerName,
+      ...(input.enabledTools !== undefined ? { enabledTools: input.enabledTools } : {}),
+      ...(input.toolParameterPresets !== undefined
+        ? { toolParameterPresets: input.toolParameterPresets }
+        : {}),
       createdAt: grant.createdAt,
       updatedAt: now,
     });

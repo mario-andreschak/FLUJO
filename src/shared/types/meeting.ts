@@ -397,7 +397,7 @@ export interface MeetingPrivateNoteEvent extends MeetingEventBase {
   content: string;
 }
 
-/** Human steering instruction delivered to every participant on the next round snapshot. */
+/** Human user message fanned out to every active participant conversation. */
 export interface MeetingModeratorInterventionEvent extends MeetingEventBase {
   type: 'moderator:intervention';
   content: string;

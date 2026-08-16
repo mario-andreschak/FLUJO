@@ -43,7 +43,7 @@ describe('shipped MCP package migration (#347)', () => {
       expect(servers[descriptor.defaultName]).toMatchObject({
         transport: 'stdio',
         command: 'node',
-        disabled: descriptor.defaultName === 'browser',
+        disabled: false,
         exposeAsMcpServer: true,
         enableMcpApps: descriptor.enableMcpApps ?? false,
         roots: [],
@@ -144,7 +144,7 @@ describe('shipped MCP package migration (#347)', () => {
     expect(servers.flujo).toEqual({ transport: 'streamable', url: 'https://custom.test' });
     expect(servers.browser).toMatchObject({
       command: 'node',
-      disabled: true,
+      disabled: false,
       source: { type: 'marketplace', id: '@mario.andreschak/mcp-browser' },
     });
     expect(path.isAbsolute(servers.browser.rootPath as string)).toBe(true);

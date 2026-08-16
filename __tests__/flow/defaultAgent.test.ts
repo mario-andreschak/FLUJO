@@ -12,6 +12,8 @@ import {
   buildDefaultFlujoAgent,
   DEFAULT_FLUJO_AGENT_ID,
   DEFAULT_FLUJO_AGENT_SERVERS,
+  DEFAULT_FLUJO_AGENT_TOOLS,
+  DEFAULT_FLUJO_AGENT_VERSION,
   ensureDefaultFlujoAgent,
 } from '@/backend/services/flow/defaultAgent';
 
@@ -45,12 +47,17 @@ describe('default FLUJO Agent', () => {
     expect(process?.data.properties).toMatchObject({
       promptTemplate: '',
       inputMode: 'full-history',
+      defaultAgentVersion: DEFAULT_FLUJO_AGENT_VERSION,
     });
     expect(process?.data.properties).not.toHaveProperty('boundModel');
 
     expect(mcpNodes.map((node) => node.data.properties?.boundServer)).toEqual(
       DEFAULT_FLUJO_AGENT_SERVERS,
     );
+    expect(Object.fromEntries(mcpNodes.map((node) => [
+      node.data.properties?.boundServer,
+      node.data.properties?.enabledTools,
+    ]))).toEqual(DEFAULT_FLUJO_AGENT_TOOLS);
     expect(mcpNodes.every((node) =>
       flow.edges.some((edge) =>
         edge.source === process?.id
@@ -84,5 +91,35 @@ describe('default FLUJO Agent', () => {
     const seeded = await ensureDefaultFlujoAgent();
     expect(seeded.id).toBe(DEFAULT_FLUJO_AGENT_ID);
     expect(saveFlowMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('upgrades the prior toolless default without replacing other agent fields', async () => {
+    const legacy = buildDefaultFlujoAgent();
+    const process = legacy.nodes.find((node) => node.type === 'process')!;
+    process.data.properties = {
+      ...process.data.properties,
+      promptTemplate: 'Keep my prompt',
+    };
+    delete process.data.properties.defaultAgentVersion;
+    for (const node of legacy.nodes.filter((candidate) => candidate.type === 'mcp')) {
+      node.data.properties = { ...node.data.properties, enabledTools: [] };
+    }
+    getFlowMock.mockResolvedValueOnce(legacy);
+
+    const upgraded = await ensureDefaultFlujoAgent();
+
+    expect(upgraded.nodes.find((node) => node.type === 'process')?.data.properties)
+      .toMatchObject({
+        promptTemplate: 'Keep my prompt',
+        defaultAgentVersion: DEFAULT_FLUJO_AGENT_VERSION,
+      });
+    expect(Object.fromEntries(upgraded.nodes
+      .filter((node) => node.type === 'mcp')
+      .map((node) => [
+        node.data.properties?.boundServer,
+        node.data.properties?.enabledTools,
+      ])))
+      .toEqual(DEFAULT_FLUJO_AGENT_TOOLS);
+    expect(saveFlowMock).toHaveBeenCalledWith(upgraded);
   });
 });

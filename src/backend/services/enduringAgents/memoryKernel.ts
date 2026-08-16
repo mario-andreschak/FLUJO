@@ -191,7 +191,15 @@ async function createMemoryWithinMutation(
   return saveMemoryItem(record);
 }
 
-export async function rememberMemory(
+/**
+ * Trusted storage boundary for a validated memory candidate.
+ *
+ * Model-facing callers should use the `remember` Persona tool instead of
+ * invoking this operation directly. Keeping the mutation name distinct from
+ * the proposal tool makes the trust boundary explicit while the compatibility
+ * wrapper below preserves the existing service API.
+ */
+export async function storeMemoryCandidate(
   input: CreateMemoryItemInput,
   options: MemoryMutationOptions = {},
 ): Promise<MemoryItem> {
@@ -200,6 +208,14 @@ export async function rememberMemory(
     assertPersonaMayChangeMemory(persona, options);
     return createMemoryWithinMutation(parsed, options, activity?.id);
   });
+}
+
+/** @deprecated Prefer `storeMemoryCandidate` for new internal persistence code. */
+export async function rememberMemory(
+  input: CreateMemoryItemInput,
+  options: MemoryMutationOptions = {},
+): Promise<MemoryItem> {
+  return storeMemoryCandidate(input, options);
 }
 
 export async function getPersonaMemory(personaId: string, memoryId: string): Promise<MemoryItem> {

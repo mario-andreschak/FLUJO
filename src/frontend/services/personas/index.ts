@@ -473,6 +473,22 @@ class PersonasService {
     ), 'PATCH', { mcpServerName, expectedUpdatedAt });
   }
 
+  configureApp(
+    personaId: string,
+    grantId: string,
+    input: {
+      mcpServerName: string;
+      enabledTools: string[];
+      toolParameterPresets: NonNullable<PersonaAppGrant['toolParameterPresets']>;
+      expectedUpdatedAt: number;
+    },
+  ): Promise<PersonaAppGrant> {
+    return jsonRequest(personaPath(
+      personaId,
+      `/app-grants/${encodeURIComponent(grantId)}`,
+    ), 'PATCH', input);
+  }
+
   authorizeAppLaunch(
     personaId: string,
     grantId: string,

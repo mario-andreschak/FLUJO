@@ -121,7 +121,12 @@ function projectedBindings(flow: Flow, processId: string) {
   const node = flow.nodes.find((candidate) => candidate.id === processId);
   return (node?.data.properties?.mcpNodes ?? []) as Array<{
     id: string;
-    properties: { boundServer?: string; enabledTools?: string[]; enabledResources?: string[] | 'all' };
+    properties: {
+      boundServer?: string;
+      enabledTools?: string[];
+      toolParameterPresets?: Record<string, Record<string, unknown>>;
+      enabledResources?: string[] | 'all';
+    };
   }>;
 }
 
@@ -216,5 +221,49 @@ describe('Persona Core App flow projection', () => {
       'disabled-tools',
       'missing',
     ])).resolves.toEqual(['tools-only']);
+  });
+
+  it('projects the grant tool allow-list and fixed parameters into the Core binding', async () => {
+    listPersonaAppGrantsMock.mockResolvedValue([{
+      schemaVersion: 1,
+      id: 'appgrant_computer',
+      personaId: PERSONA_ID,
+      mcpServerName: COMPUTER,
+      enabledTools: ['computer_list', 'tool_removed_from_server'],
+      toolParameterPresets: {
+        computer_list: {
+          root: '@folder.id',
+          conversation: '@conversation.id',
+        },
+      },
+      createdAt: 1,
+      updatedAt: 2,
+    }]);
+
+    const projected = await projectPersonaCoreAppsIntoFlow(PERSONA_ID, [COMPUTER], sourceFlow());
+
+    expect(projectedBindings(projected, 'process-projected')).toEqual([
+      {
+        id: 'legacy-stale-computer',
+        properties: {
+          boundServer: COMPUTER,
+          enabledTools: ['legacy_only'],
+        },
+      },
+      {
+        id: personaCoreAppNodeId(COMPUTER),
+        properties: {
+          boundServer: COMPUTER,
+          enabledTools: ['computer_list'],
+          toolParameterPresets: {
+            computer_list: {
+              root: '@folder.id',
+              conversation: '@conversation.id',
+            },
+          },
+          enabledResources: 'all',
+        },
+      },
+    ]);
   });
 });

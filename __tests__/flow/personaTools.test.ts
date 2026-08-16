@@ -24,6 +24,7 @@ jest.mock('@/backend/services/enduringAgents/memoryKernel', () => ({
   pinMemoryToCore: jest.fn(),
   rememberMemory: (...args: unknown[]) => rememberMemoryMock(...args),
   searchPersonaMemory: (...args: unknown[]) => searchPersonaMemoryMock(...args),
+  storeMemoryCandidate: (...args: unknown[]) => rememberMemoryMock(...args),
   unpinMemoryFromCore: (...args: unknown[]) => unpinMemoryFromCoreMock(...args),
 }));
 
@@ -75,6 +76,30 @@ describe('authored Persona tools', () => {
       .toEqual(PERSONA_NATIVE_ABILITY_IDS);
   });
 
+  it('requires evidence ids on the maintenance-only remember facade', () => {
+    const [remember] = buildPersonaTools(['remember'], { maintenanceMemoryProposal: true });
+
+    expect(remember).toMatchObject({
+      name: 'remember',
+      description: expect.stringContaining('post-Activity maintenance'),
+      inputSchema: {
+        required: expect.arrayContaining([
+          'content',
+          'kind',
+          'scope',
+          'confidence',
+          'importance',
+          'evidence_ids',
+        ]),
+        properties: {
+          confidence: expect.objectContaining({ minimum: 0, maximum: 1 }),
+          importance: expect.objectContaining({ minimum: 0, maximum: 1 }),
+          evidence_ids: expect.objectContaining({ minItems: 1, maxItems: 10 }),
+        },
+      },
+    });
+  });
+
   it.each([
     'remember',
     'recall',
@@ -122,6 +147,37 @@ describe('authored Persona tools', () => {
         uri: 'flujo://conversation/conversation_persona',
       }],
     }), { executionAuthority });
+  });
+
+  it('routes maintenance remember calls through the dispatcher validator without direct storage', async () => {
+    const executionAuthority = authority();
+    executionAuthority.proposePersonaMemoryMaintenance = jest.fn(async () => ({
+      success: false,
+      error: 'memories.0.importance: Expected number to be less than or equal to 1',
+    }));
+    const proposal = {
+      content: 'Candidate fact',
+      kind: 'semantic',
+      scope: 'persona',
+      confidence: 0.75,
+      importance: 2,
+      evidence_ids: ['evidence_1'],
+    };
+
+    await expect(executePersonaTool('remember', proposal, {
+      conversationId: 'conversation_maintenance',
+      executionAuthority,
+      personaAttribution: {
+        personaId: 'persona_test',
+        activityId: 'activity_maintenance',
+        behaviorRevisionId: 'revision_maintenance',
+      },
+    })).resolves.toEqual({
+      success: false,
+      error: 'memories.0.importance: Expected number to be less than or equal to 1',
+    });
+    expect(executionAuthority.proposePersonaMemoryMaintenance).toHaveBeenCalledWith(proposal);
+    expect(rememberMemoryMock).not.toHaveBeenCalled();
   });
 
   it('dispatches an advertised Persona tool through ModelHandler with the same fence', async () => {

@@ -54,6 +54,7 @@ import { buildConversationTitle, isDefaultConversationTitle, DEFAULT_CONVERSATIO
 import { setElicitationContext, clearElicitationContext } from '@/backend/services/mcp/elicitationContext';
 import { decodeToolName } from '@/backend/execution/flow/handlers/toolNamespace';
 import { GRACEFUL_CAP_SUMMARY_INSTRUCTION, GRACEFUL_CAP_TOOL_RESULT } from '@/backend/execution/flow/handlers/gracefulCap';
+import { isMeetingTurnSilent } from '@/backend/execution/flow/handlers/meetingTools';
 import { DEFAULT_AGENTIC_MAX_TURNS } from '@/shared/types/model/model';
 import {
   classifyStatisticsError,
@@ -2028,6 +2029,17 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
           break;
         }
 
+        // meeting_control(silent) is a terminal control for this participant's
+        // current barrier round. The action buffer is freshly installed for
+        // every round, so this stops only this run and naturally resets on the
+        // next coordinator turn.
+        if (isMeetingTurnSilent(sharedState.meetingTurn)) {
+          log.info(`Meeting participant ended the current round silently for conv ${effectiveConvId}.`);
+          sharedState.status = 'completed';
+          currentAction = FINAL_RESPONSE_ACTION;
+          break;
+        }
+
         // A heartbeat can fail or another owner can recover an expired lease
         // between loop iterations without this process receiving an abort event.
         // Verify the authoritative fence before doing more Persona work.
@@ -2395,6 +2407,15 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
           log.info(`[Action Handling] Step ${internalIterations}: Handling FINAL_RESPONSE_ACTION for conv ${effectiveConvId}`);
           log.info(`Final response action received at step ${internalIterations} for conv ${effectiveConvId}`);
 
+          // Self-orchestrating adapters execute meeting_control locally inside
+          // one provider call. When they return, do not let unattended routing,
+          // steering, or another graph step reopen the participant's turn.
+          if (isMeetingTurnSilent(sharedState.meetingTurn)) {
+            sharedState.status = 'completed';
+            log.info(`Meeting silence completed the current round turn for conv ${effectiveConvId}.`);
+            break;
+          }
+
           // Graceful landing (issue #253): this FINAL_RESPONSE is the forced
           // text-only summary we requested when the turn budget was spent. Mark
           // the run `capped` (a success-like terminal state distinct from error,
@@ -2574,6 +2595,12 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
                 FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
                 emitNewMessages();
                 await commitToolCheckpoint(storageKey, sharedState, lastAssistantMsg.tool_calls, 'completed', recoveryEmit);
+                if (isMeetingTurnSilent(sharedState.meetingTurn)) {
+                  sharedState.status = 'completed';
+                  currentAction = FINAL_RESPONSE_ACTION;
+                  log.info(`Meeting silence stopped the agentic tool loop for conv ${effectiveConvId}.`);
+                  break;
+                }
                 const attachedAfterTool = await pauseForAttachAtSafePoint('after-tool', {
                   operation: 'tool',
                   phase: 'after',

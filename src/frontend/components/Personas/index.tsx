@@ -20,6 +20,7 @@ import {
   RefreshRounded,
   ReplayRounded,
   StopCircleRounded,
+  TuneRounded,
   WorkOutlineRounded,
 } from '@mui/icons-material';
 import {
@@ -58,6 +59,7 @@ import CardPickerGrid from '@/frontend/components/shared/CardPickerGrid';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n/messages';
 import PersonaCreationWizard from './PersonaCreationWizard';
+import PersonaAppToolsDialog from './PersonaAppToolsDialog';
 import PersonaDetailShell from './PersonaDetailShell';
 import PersonaFlowsArea from './PersonaFlowsArea';
 import PersonaMemoryArea from './PersonaMemoryArea';
@@ -204,9 +206,11 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
       await action();
       await refreshSelected();
       if (success) setNotice(success);
+      return true;
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : t('personas.action.failed'));
       await refreshSelected().catch(() => undefined);
+      return false;
     } finally {
       setBusy(false);
     }
@@ -419,7 +423,7 @@ function AreaShell({ title, icon, action, children }: { title: string; icon: Rea
 
 
 
-function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolean; mutate: (action: () => Promise<unknown>, success?: string) => Promise<void> }) {
+function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolean; mutate: (action: () => Promise<unknown>, success?: string) => Promise<boolean> }) {
   const { t, formatDate } = useI18n();
   const current = detail.presentation.current;
   const queuedTasks = detail.presentation.tasks.filter((task) => task.state === 'waiting');
@@ -878,7 +882,7 @@ function draftForWorkItem(item?: PersonaWorkItem): WorkDraft {
   } : { title: '', description: '', priority: 'normal', nextAction: '', deadline: '', dependencyIds: [] };
 }
 
-function WorkArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolean; mutate: (action: () => Promise<unknown>, success?: string) => Promise<void> }) {
+function WorkArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolean; mutate: (action: () => Promise<unknown>, success?: string) => Promise<boolean> }) {
   const { t, formatDate } = useI18n();
   const [draft, setDraft] = useState<WorkDraft | null>(null);
   const [assignmentNotice, setAssignmentNotice] = useState<string | null>(null);
@@ -1060,12 +1064,13 @@ function WorkItemDialog({ draft, items, busy, onChange, onClose, onSave }: { dra
 function AppsArea({ detail, busy, mutate }: {
   detail: PersonaDetail;
   busy: boolean;
-  mutate: (action: () => Promise<unknown>, success?: string) => Promise<void>;
+  mutate: (action: () => Promise<unknown>, success?: string) => Promise<boolean>;
 }) {
   const { t } = useI18n();
   const [selectedConfig, setSelectedConfig] = useState('');
   const [launching, setLaunching] = useState<string | null>(null);
   const [launchError, setLaunchError] = useState<string | null>(null);
+  const [configuredGrant, setConfiguredGrant] = useState<PersonaDetail['appGrants'][number] | null>(null);
   const { servers, loading, refreshing, error, refresh } = useMcpAppsDiscovery({
     active: true,
     includeAllServers: true,
@@ -1244,6 +1249,13 @@ function AppsArea({ detail, busy, mutate }: {
                       </Button>
                     ) : null}
                     <Button
+                      startIcon={<TuneRounded />}
+                      disabled={busy || !server || !!server.error}
+                      onClick={() => setConfiguredGrant(grant)}
+                    >
+                      {t('personas.apps.configureTools')}
+                    </Button>
+                    <Button
                       disabled={busy || !selectedConfig}
                       onClick={() => void mutate(
                         () => personasService.replaceApp(
@@ -1273,6 +1285,27 @@ function AppsArea({ detail, busy, mutate }: {
             })}
           </Stack>
         )}
+        <PersonaAppToolsDialog
+          open={!!configuredGrant}
+          grant={configuredGrant}
+          workspaceRoots={configuredGrant
+            ? servers.find((server) => server.name === configuredGrant.mcpServerName)?.config?.roots
+            : undefined}
+          busy={busy}
+          onClose={() => setConfiguredGrant(null)}
+          onSave={async ({ enabledTools, toolParameterPresets }) => {
+            if (!configuredGrant) return false;
+            return mutate(
+              () => personasService.configureApp(detail.persona.id, configuredGrant.id, {
+                mcpServerName: configuredGrant.mcpServerName,
+                enabledTools,
+                toolParameterPresets,
+                expectedUpdatedAt: configuredGrant.updatedAt,
+              }),
+              t('personas.apps.toolsSaved'),
+            );
+          }}
+        />
       </Stack>
     </AreaShell>
   );

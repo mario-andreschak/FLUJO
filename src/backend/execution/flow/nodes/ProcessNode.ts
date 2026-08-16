@@ -12,6 +12,7 @@ import {
   appendMeetingParticipantProtocol,
   buildMeetingTools,
   isMeetingToolName,
+  isSilentMeetingControlRequest,
 } from '../handlers/meetingTools';
 import { buildListMCPResourcesTool, LIST_MCP_RESOURCES_TOOL_NAME } from '../handlers/mcpResourceTools';
 import { RUN_RESOURCE_SCHEME } from '@/shared/types/runResources';
@@ -23,7 +24,6 @@ import { buildSubflowTool } from '../handlers/subflowToolInvocation';
 import { buildBehaviorToolDefinitions } from '../handlers/behaviorToolInvocation';
 import { buildPersonaTools } from '../handlers/personaTools';
 import { buildDetachedSubflowTool, SUBFLOW_DETACHED_TOOL_PREFIX } from '../handlers/subflowDetachedInvocation';
-import { buildPersonaTools, isPersonaToolName } from '../handlers/personaTools';
 import { flowService } from '@/backend/services/flow/index';
 import { modelService } from '@/backend/services/model';
 import { FlowNode } from '@/shared/types/flow';
@@ -583,13 +583,20 @@ export class ProcessNode extends BaseNode {
     // Persona-native abilities are authored into the immutable Process snapshot.
     // Definitions stay in canonical order and are denied before advertisement;
     // ModelHandler remains the fenced execution boundary.
-    const personaTools = buildPersonaTools(node_params?.properties?.personaTools).filter(
-      (tool) => !(sharedState.permissionRules ?? []).some((rule) => (
-        rule.effect === 'deny'
-        && (rule.action === '*' || rule.action === tool.name)
-        && (rule.resource === '*' || rule.resource === undefined)
-      )),
-    );
+    const personaTools = sharedState.personaAttribution
+      && sharedState.executionAuthority?.commitPersonaMutation
+      ? buildPersonaTools(node_params?.properties?.personaTools, {
+          maintenanceMemoryProposal: Boolean(
+            sharedState.executionAuthority.proposePersonaMemoryMaintenance,
+          ),
+        }).filter(
+          (tool) => !(sharedState.permissionRules ?? []).some((rule) => (
+            rule.effect === 'deny'
+            && (rule.action === '*' || rule.action === tool.name)
+            && (rule.resource === '*' || rule.resource === undefined)
+          )),
+        )
+      : [];
     const existingToolNames = new Set(availableTools.map((tool) => tool.name));
     const collision = personaTools.find((tool) => existingToolNames.has(tool.name));
     if (collision) {
@@ -633,22 +640,6 @@ export class ProcessNode extends BaseNode {
     if (node_params?.properties?.enableTodoTool === true &&
         !availableTools.some((t) => t.name === TODO_TOOL_NAME)) {
       availableTools = [...availableTools, buildTodoTool()];
-    }
-
-    // Persona-native abilities are local, fenced function tools rather than MCP
-    // tools. Advertise only the abilities authored on this Process and only when
-    // the run carries both trusted Persona attribution and mutation authority.
-    // Replace colliding definitions so an external tool cannot impersonate a
-    // native Persona capability.
-    const personaTools = sharedState.personaAttribution
-      && sharedState.executionAuthority?.commitPersonaMutation
-      ? buildPersonaTools(node_params?.properties?.personaTools)
-      : [];
-    if (personaTools.length > 0) {
-      availableTools = [
-        ...availableTools.filter((tool) => !isPersonaToolName(tool.name)),
-        ...personaTools,
-      ];
     }
 
     // Meeting tools are coordinator-owned capabilities. Replace any colliding
@@ -1701,9 +1692,30 @@ export class ProcessNode extends BaseNode {
       });
     }
 
-    // Process tool calls to check for handoff requests FIRST
-    const handoffRequested = this.processHandoffToolCalls(execResult.toolCalls, sharedState); // Uses the modified processHandoffToolCalls
-    if (handoffRequested && sharedState.handoffRequested) {
+    // Silence is terminal for this participant's current meeting round. If the
+    // model emitted it in the same provider response as a handoff, route the
+    // batch through the normal local-tool dispatcher first; runFlow will accept
+    // the silence and end the turn without entering the handoff target.
+    const silentMeetingControlRequested = Boolean(
+      sharedState.meetingParticipant
+      && sharedState.meetingTurn
+      && execResult.toolCalls?.some((call) =>
+        isSilentMeetingControlRequest(call.name, call.args)),
+    );
+
+    // Process tool calls to check for handoff requests FIRST, except when the
+    // same response explicitly ended this meeting turn silently.
+    const handoffRequested = silentMeetingControlRequested
+      ? false
+      : this.processHandoffToolCalls(execResult.toolCalls, sharedState); // Uses the modified processHandoffToolCalls
+    const nonHandoffToolCalls = execResult.toolCalls?.filter(
+      tc => tc.name !== 'handoff' && !tc.name.startsWith('handoff_to_'),
+    );
+    const mustProcessMaintenanceProposal = Boolean(
+      sharedState.executionAuthority?.proposePersonaMemoryMaintenance
+      && nonHandoffToolCalls?.some((call) => call.name === 'remember'),
+    );
+    if (handoffRequested && sharedState.handoffRequested && !mustProcessMaintenanceProposal) {
       const edgeId = sharedState.handoffRequested.edgeId;
       log.info(`Handoff requested via tool call, returning edge ID: ${edgeId}`);
       // The service layer will clear sharedState.handoffRequested after transition
@@ -1711,7 +1723,6 @@ export class ProcessNode extends BaseNode {
     }
 
     // If no handoff, check for other tool calls (excluding handoff tools already processed)
-    const nonHandoffToolCalls = execResult.toolCalls?.filter(tc => !tc.name.startsWith('handoff_to_'));
     if (nonHandoffToolCalls && nonHandoffToolCalls.length > 0) {
       log.info('Non-handoff tool calls detected, returning TOOL_CALL_ACTION');
       return TOOL_CALL_ACTION; // Return tool call action

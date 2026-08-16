@@ -4,8 +4,8 @@ import {
   correctMemory,
   forgetMemory,
   pinMemoryToCore,
-  rememberMemory,
   searchPersonaMemory,
+  storeMemoryCandidate,
   unpinMemoryFromCore,
 } from '@/backend/services/enduringAgents/memoryKernel';
 import type {
@@ -49,8 +49,17 @@ export const PERSONA_MEMORY_TOOL_DEFINITIONS: Record<PersonaMemoryToolName, Tool
         scope: { type: 'string', enum: ['persona', 'activity', 'workspace', 'relationship'] },
         confidence: { type: 'number', minimum: 0, maximum: 1 },
         importance: { type: 'number', minimum: 0, maximum: 1 },
+        evidence_ids: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 10,
+          uniqueItems: true,
+          items: { type: 'string', minLength: 1, maxLength: 128 },
+          description: 'Maintenance evidence ids supporting this proposal. Required during post-Activity memory maintenance.',
+        },
       },
       required: ['content', 'kind', 'scope', 'confidence', 'importance'],
+      additionalProperties: false,
     },
   },
   recall: {
@@ -182,7 +191,10 @@ export async function executePersonaMemoryGatewayTool(
     }];
     switch (toolName) {
       case 'remember': {
-        const memory = await rememberMemory({
+        if (trusted.executionAuthority.proposePersonaMemoryMaintenance) {
+          return await trusted.executionAuthority.proposePersonaMemoryMaintenance(args);
+        }
+        const memory = await storeMemoryCandidate({
           personaId: trusted.personaId,
           kind: args.kind as never,
           scope: args.scope as never,

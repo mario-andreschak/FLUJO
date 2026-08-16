@@ -1216,6 +1216,26 @@ export function createPersonaAppGrant(value: PersonaAppGrant): Promise<PersonaAp
   });
 }
 
+/** Replace the policy on an existing exact Persona/config grant. */
+export function updatePersonaAppGrant(value: PersonaAppGrant): Promise<PersonaAppGrant> {
+  const record = parseRecord('PersonaAppGrant', PersonaAppGrantSchema, value);
+  assertSafeCollectionId(record.id);
+  const expectedId = personaAppGrantId(record.personaId, record.mcpServerName);
+  if (record.id !== expectedId) {
+    throw new Error('PersonaAppGrant id does not match its Persona and MCP config identity.');
+  }
+
+  return recordMutation(ENDURING_AGENT_COLLECTIONS.appGrants, record.id, async () => {
+    await requireWritablePersona(record.personaId, `PersonaAppGrant ${JSON.stringify(record.id)}`);
+    const existing = await getPersonaAppGrant(record.id);
+    if (!existing || existing.personaId !== record.personaId) {
+      throw new Error(`PersonaAppGrant ${JSON.stringify(record.id)} does not exist.`);
+    }
+    await saveCollectionItem(ENDURING_AGENT_COLLECTIONS.appGrants, record.id, record);
+    return record;
+  });
+}
+
 export function deletePersonaAppGrantRecord(id: string): Promise<void> {
   assertSafeCollectionId(id);
   return recordMutation(ENDURING_AGENT_COLLECTIONS.appGrants, id, () => (

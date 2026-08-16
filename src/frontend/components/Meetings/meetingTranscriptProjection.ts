@@ -135,7 +135,7 @@ export function meetingLogMarkdown(meeting: MeetingRecord, events: MeetingEvent[
       case 'participant:spoke': lines.push(`### ${event.participantName} · ${time}`, '', event.content, ''); break;
       case 'private-message': lines.push(`> Private · ${participantName(event.fromParticipantId)} → ${event.toParticipantIds.map(participantName).join(', ')}: ${event.content}`, ''); break;
       case 'private-note': lines.push(`> Private note · ${time}: ${event.content}`, ''); break;
-      case 'moderator:intervention': lines.push(`> Steering prompt · ${time}: ${event.content}`, ''); break;
+      case 'moderator:intervention': lines.push(`### You · ${time}`, '', event.content, ''); break;
       case 'meeting:resumed': lines.push(`> Meeting continued · ${time}: ${event.direction ?? 'No additional direction.'}`, ''); break;
       case 'motion:opened': lines.push(`> Motion opened · ${event.motion.kind}: ${event.motion.proposal ?? event.motion.reason ?? ''}`, ''); break;
       case 'vote:cast': lines.push(`> Vote · ${participantName(event.participantId)}: ${event.choice}${event.rationale ? ` — ${event.rationale}` : ''}`, ''); break;

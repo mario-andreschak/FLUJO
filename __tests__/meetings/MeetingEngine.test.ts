@@ -2,6 +2,10 @@ import { randomUUID } from 'crypto';
 
 import type { FlowRunInput, FlowRunResult } from '@/backend/execution/flow/runFlow';
 import type { SharedState } from '@/backend/execution/flow/types';
+import {
+  clearSteeringInbox,
+  peekSteeringMessages,
+} from '@/backend/execution/flow/steeringInbox';
 import { meetingEngine } from '@/backend/execution/meeting';
 import {
   MEETING_START_INTENT_TTL_MS,
@@ -227,6 +231,71 @@ describe('MeetingEngine', () => {
       const latest = (input.messages as FlujoChatMessage[]).at(-1);
       expect(String(latest?.content)).toContain('Challenge the renderer decision.');
       expect(input.conversationId).toBe(conversationIds.find((id) => id === input.conversationId));
+    }
+  });
+
+  it('fans a human meeting message into every active participant chat inbox', async () => {
+    const meeting = await createMeeting(1);
+    meeting.status = 'running';
+    await saveMeeting(meeting);
+
+    const event = await meetingEngine.messageParticipants(
+      meeting.id,
+      'Compare the two launch dates.',
+    );
+
+    expect(event).toMatchObject({
+      type: 'moderator:intervention',
+      content: 'Compare the two launch dates.',
+    });
+    for (const participant of meeting.participants) {
+      expect(peekSteeringMessages(participant.conversationId)).toEqual([
+        expect.objectContaining({
+          role: 'user',
+          content: 'Compare the two launch dates.',
+          injected: true,
+          id: `${event.eventId}:participant:${participant.id}`,
+        }),
+      ]);
+      clearSteeringInbox(participant.conversationId);
+    }
+  });
+
+  it('rebuilds an undrained meeting message as a normal user turn without embedding it in meeting context', async () => {
+    const meeting = await createMeeting(1);
+    meeting.status = 'running';
+    await saveMeeting(meeting);
+    const event = await meetingEngine.messageParticipants(
+      meeting.id,
+      'Use the production measurements.',
+    );
+
+    // Simulate the API and meeting runtime living in different processes: the
+    // durable event remains, while this process has no live inbox delivery.
+    for (const participant of meeting.participants) {
+      clearSteeringInbox(participant.conversationId);
+    }
+    meeting.status = 'draft';
+    await saveMeeting(meeting);
+
+    await meetingEngine.runToCompletion(meeting.id);
+
+    expect(runFlowMock).toHaveBeenCalledTimes(2);
+    for (const [input] of runFlowMock.mock.calls) {
+      const participantId = input.meetingParticipant!.participantId;
+      const userMessages = (input.messages as FlujoChatMessage[])
+        .filter((message) => message.role === 'user');
+      const humanMessages = userMessages.filter((message) =>
+        message.content === 'Use the production measurements.');
+      expect(humanMessages).toEqual([
+        expect.objectContaining({
+          id: `${event.eventId}:participant:${participantId}`,
+          injected: true,
+        }),
+      ]);
+      expect(String(userMessages[0].content)).not.toContain('Use the production measurements.');
+      expect(String(userMessages[0].content)).not.toContain('Human steering instruction');
+      expect(userMessages.at(-1)?.content).toBe('Use the production measurements.');
     }
   });
 

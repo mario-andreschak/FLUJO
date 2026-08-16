@@ -438,6 +438,29 @@ const mcpTool: OpenAI.ChatCompletionFunctionTool = {
   },
 };
 
+describe('CodexAdapter — cooperative terminal controls', () => {
+  it('stops before another SDK turn can narrate after a terminal local control', async () => {
+    let turnEnded = false;
+    runStreamedMock.mockImplementationOnce(async () => ({
+      events: (async function* () {
+        yield threadStarted('thread-terminal-control');
+        turnEnded = true;
+        yield agentMessage('This narration must not escape.');
+        yield turnCompleted({ input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 });
+      })(),
+    }));
+
+    const result = await new CodexAdapter().createCompletion(baseInput({
+      shouldEndAgenticTurn: () => turnEnded,
+    }));
+
+    expect(result.transcript).toEqual([]);
+    expect(result.completion.choices[0].message.content).toBeNull();
+    const options = runStreamedMock.mock.calls[0][1] as { signal: AbortSignal };
+    expect(options.signal.aborted).toBe(true);
+  });
+});
+
 describe('CodexAdapter — tool bridging', () => {
   it('exposes MCP tools on the bridge under readable names and wires the config', async () => {
     await new CodexAdapter().createCompletion(
