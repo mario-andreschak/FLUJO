@@ -43,6 +43,7 @@ import { deletePersonaHome, inspectPersonaHome } from './namespaces';
 import { listPersonaFlowDispatches } from './personaDispatcher';
 import { withPersonaRuntimeLock } from './runtimeLock';
 import { deletePersonaRuntimeEvents } from './runtimeEvents';
+import { deletePersonaEmbeddings, countPersonaEmbeddings } from './memoryEmbeddingStore';
 import {
   getPersona,
   getPersonaDeletionTombstone,
@@ -210,6 +211,7 @@ async function buildPreview(personaId: string): Promise<PersonaDeletionPreview> 
     behaviorMaintenanceRuns,
     appGrants,
     memoryItems,
+    memoryEmbeddingsCount,
     workItems,
     activities,
     mailboxItems,
@@ -225,6 +227,7 @@ async function buildPreview(personaId: string): Promise<PersonaDeletionPreview> 
     listBehaviorMaintenanceRuns(personaId),
     listPersonaAppGrants(personaId),
     listMemoryItems(personaId),
+    countPersonaEmbeddings(personaId),
     listPersonaWorkItems(personaId),
     listPersonaActivities(personaId),
     listPersonaMailboxItems(personaId),
@@ -250,6 +253,7 @@ async function buildPreview(personaId: string): Promise<PersonaDeletionPreview> 
     behaviorMaintenanceRuns: behaviorMaintenanceRuns.length,
     appGrants: appGrants.length,
     memoryItems: memoryItems.length,
+    memoryEmbeddings: memoryEmbeddingsCount,
     workItems: workItems.length,
     liveActivities: activities.length - archivedActivities,
     archivedActivities,
@@ -270,6 +274,7 @@ async function buildPreview(personaId: string): Promise<PersonaDeletionPreview> 
     behaviorMaintenanceRuns: behaviorMaintenanceRuns.map((item) => [item.id, item.updatedAt, item.state]),
     appGrants: appGrants.map((item) => [item.id, item.updatedAt, item.mcpServerName]),
     memoryItems: memoryItems.map((item) => [item.id, item.updatedAt, item.status]),
+    memoryEmbeddingsCount,
     workItems: workItems.map((item) => [item.id, item.updatedAt, item.status]),
     activities: activities.map((item) => [item.id, item.updatedAt, item.status]),
     mailboxItems: mailboxItems.map((item) => [item.id, item.updatedAt, item.status]),
@@ -397,6 +402,7 @@ async function erasePersonaOwnedState(personaId: string): Promise<void> {
     deleteCollectionItem(ENDURING_AGENT_COLLECTIONS.leases, personaId),
     deletePersonaRuntimeEvents(personaId),
     deletePersonaHome(personaId),
+    deletePersonaEmbeddings(personaId),
   ]);
 }
 

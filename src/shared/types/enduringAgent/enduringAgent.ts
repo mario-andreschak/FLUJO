@@ -1161,6 +1161,7 @@ export interface PersonaDeletionCounts {
   behaviorMaintenanceRuns: number;
   appGrants: number;
   memoryItems: number;
+  memoryEmbeddings: number;
   workItems: number;
   liveActivities: number;
   archivedActivities: number;
