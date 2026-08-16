@@ -67,3 +67,41 @@ remain available for a later gated rollout, but issue #444 does not enable them.
 - Deletion previews, digests, and erasure include maintenance runs.
 - Automatic Behavior activation and probation are deferred until explicit product
   and security approval.
+
+## Kill switch and staged rollout
+
+Two independent layers stop Persona self-improvement. Either one alone is
+sufficient; neither overrides the other.
+
+1. **Global rollout gates** in `src/config/features.ts`:
+   - `ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION` — admits durable
+     post-Activity maintenance records. Off means `admitBehaviorMaintenanceRun`
+     is a no-write call.
+   - `ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS` — permits diagnosis and
+     proposal drafting after admission. Off means every active run is
+     terminalized as `completed` / `shadow_admission_only`, and
+     `recordBehaviorMaintenanceDiagnosis` refuses outright.
+2. **Per-Persona autonomy** (`persona.autonomyLevel`): `locked` blocks admission,
+   procedural hints, and proposals; `learn_hints` allows hints but refuses every
+   Behavior override. These checks live in `behaviorLearning.ts` and are enforced
+   regardless of the global gates, so enabling a gate never widens what a
+   `locked` or `learn_hints` Persona may do.
+
+**Operational caveat.** The gates have no environment-variable, config-file, or
+admin override. They are plain module constants, so changing one is a source
+edit plus a rebuild and restart — a deploy, not a runtime operation. This is the
+intended shape for a developer-driven shadow rollout; a supported runtime
+override is a separate piece of work.
+
+**Mid-flight semantics.** Turning either gate off while runs are active does not
+strand them. Every completed Activity reconciles that Persona's maintenance runs
+unconditionally (`PersonaFlowDispatcher.commitTerminal`), independently of
+whether admission produced a run, and `startPersonaFlowDispatcher()` performs an
+ungated sweep at process start. Whichever happens first terminalizes the
+in-flight runs. There is no periodic sweep beyond these two triggers.
+
+**Retention is compaction, not deletion.** After
+`BEHAVIOR_MAINTENANCE_RETENTION_MS` (30 days), or beyond the newest
+`BEHAVIOR_MAINTENANCE_DETAILED_RUN_LIMIT` (100) detailed runs, private evidence
+pointers are dropped. Audit identity, hashes, decisions, proposal links, and
+counters remain durable, so record count still grows over time.

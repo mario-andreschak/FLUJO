@@ -33,6 +33,7 @@ import {
   PERSONA_ACTIVITY_SOURCE_KINDS,
   PERSONA_PRIORITIES,
   PersonaInstructionContextSchema,
+  type BehaviorMaintenanceRun,
   type BehaviorRevision,
   type MemoryItem,
   type Persona,
@@ -2268,22 +2269,25 @@ export class PersonaFlowDispatcher {
       } else {
         await this.recordBehaviorOutcome(completion.activity);
       }
+      let maintenanceRun: BehaviorMaintenanceRun | null = null;
       try {
         // The rollout gate defaults off, making this a no-write call. When
         // enabled, admission occurs only after the source terminal commit.
-        const maintenanceRun = await this.inWorkspace(() => (
+        maintenanceRun = await this.inWorkspace(() => (
           admitBehaviorMaintenanceRun(completion!.activity)
         ));
-        if (maintenanceRun) {
-          void this.inWorkspace(() => (
-            reconcileBehaviorMaintenanceRuns(maintenanceRun.personaId)
-          )).catch((error) => {
-            log.warn(`Deferred Behavior maintenance diagnosis for ${fence.activityId}:`, error);
-          });
-        }
       } catch (error) {
         log.warn(`Deferred Behavior maintenance admission for ${fence.activityId}:`, error);
       }
+      // Reconcile unconditionally for this Persona. Admission returns null when
+      // its gate is turned off mid-flight, and previously active runs would
+      // otherwise stay stranded until the next process start.
+      const maintenancePersonaId = maintenanceRun?.personaId ?? completion.activity.personaId;
+      void this.inWorkspace(() => (
+        reconcileBehaviorMaintenanceRuns(maintenancePersonaId)
+      )).catch((error) => {
+        log.warn(`Deferred Behavior maintenance diagnosis for ${fence.activityId}:`, error);
+      });
     }
     return terminal;
   }

@@ -407,6 +407,98 @@ describe('Behavior maintenance lifecycle', () => {
     });
   });
 
+  it('terminalizes an in-flight run when diagnosis is disabled mid-flight', async () => {
+    await inFreshWorkspace(async () => {
+      const setup = await setupPersona();
+      const now = Date.now();
+      const source = activity({
+        id: 'activity_midflight_diagnosis_off',
+        personaId: setup.persona.id,
+        behaviorRevisionId: setup.revision.id,
+        now,
+      });
+      await persistActivity(source);
+      const pending = await admitBehaviorMaintenanceRun(source, now);
+      if (!pending) throw new Error('Expected queued maintenance admission.');
+      expect(pending).toMatchObject({ state: 'queued', reasonCode: 'diagnosis_pending' });
+
+      maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = false;
+      await reconcileBehaviorMaintenanceRuns(setup.persona.id, now + 1);
+
+      expect(await getBehaviorMaintenanceRun(pending.id)).toMatchObject({
+        id: pending.id,
+        state: 'completed',
+        reasonCode: 'shadow_admission_only',
+        updatedAt: now + 1,
+        completedAt: now + 1,
+      });
+      expect(await listBehaviorMaintenanceRuns(setup.persona.id)).toHaveLength(1);
+    });
+  });
+
+  it('terminalizes an in-flight run when admission is disabled mid-flight', async () => {
+    await inFreshWorkspace(async () => {
+      const setup = await setupPersona();
+      const now = Date.now();
+      const source = activity({
+        id: 'activity_midflight_admission_off',
+        personaId: setup.persona.id,
+        behaviorRevisionId: setup.revision.id,
+        now,
+      });
+      await persistActivity(source);
+      const pending = await admitBehaviorMaintenanceRun(source, now);
+      if (!pending) throw new Error('Expected queued maintenance admission.');
+
+      maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = false;
+      maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = false;
+      const later = activity({
+        id: 'activity_midflight_admission_off_two',
+        personaId: setup.persona.id,
+        behaviorRevisionId: setup.revision.id,
+        now: now + 1,
+      });
+      await persistActivity(later);
+      await expect(admitBehaviorMaintenanceRun(later, now + 1)).resolves.toBeNull();
+
+      await reconcileBehaviorMaintenanceRuns(setup.persona.id, now + 2);
+
+      expect(await getBehaviorMaintenanceRun(pending.id)).toMatchObject({
+        id: pending.id,
+        state: 'completed',
+        reasonCode: 'shadow_admission_only',
+        completedAt: now + 2,
+      });
+      expect(await listBehaviorMaintenanceRuns(setup.persona.id)).toHaveLength(1);
+    });
+  });
+
+  it('never strands or duplicates a run across repeated disabled reconciles', async () => {
+    await inFreshWorkspace(async () => {
+      const setup = await setupPersona();
+      const now = Date.now();
+      const source = activity({
+        id: 'activity_midflight_idempotent',
+        personaId: setup.persona.id,
+        behaviorRevisionId: setup.revision.id,
+        now,
+      });
+      await persistActivity(source);
+      const pending = await admitBehaviorMaintenanceRun(source, now);
+      if (!pending) throw new Error('Expected queued maintenance admission.');
+
+      maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = false;
+      maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = false;
+      await reconcileBehaviorMaintenanceRuns(setup.persona.id, now + 1);
+      const first = await getBehaviorMaintenanceRun(pending.id);
+      expect(first).toMatchObject({ state: 'completed', attempts: 0 });
+
+      await reconcileBehaviorMaintenanceRuns(setup.persona.id, now + 2);
+      expect(await getBehaviorMaintenanceRun(pending.id)).toEqual(first);
+      expect(await listBehaviorMaintenanceRuns(setup.persona.id)).toHaveLength(1);
+    });
+  });
+
   it('does not repair a queued shadow admission while diagnosis is enabled', async () => {
     await inFreshWorkspace(async () => {
       const setup = await setupPersona();

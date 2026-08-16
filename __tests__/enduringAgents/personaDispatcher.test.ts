@@ -15,7 +15,18 @@ import type {
   PersonaLeaseFence,
   RoutePersonaMailboxResult,
 } from '@/backend/services/enduringAgents/activityRuntime';
+import { ENDURING_AGENT_COLLECTIONS } from '@/backend/services/enduringAgents/collections';
+import {
+  getBehaviorMaintenanceRun,
+  saveBehaviorMaintenanceRun,
+} from '@/backend/services/enduringAgents/store';
+import { saveCollectionItem } from '@/utils/storage/backend';
+import {
+  BEHAVIOR_MAINTENANCE_RUN_SCHEMA_VERSION,
+  BehaviorMaintenanceRunSchema,
+} from '@/shared/types/enduringAgent';
 import type {
+  BehaviorMaintenanceRun,
   BehaviorRevision,
   Persona,
   PersonaActivity,
@@ -707,6 +718,90 @@ describe('Persona Flow dispatcher', () => {
 
     expect(submission.dispatch.state).toBe('completed');
     expect(harness.dependencies.runFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it('reconciles Behavior maintenance runs on completion even when admission is disabled', async () => {
+    // Both rollout gates are off here (their production default), so admission
+    // is a no-write call. A run admitted before the gate was turned off must
+    // still be terminalized instead of being stranded until the next restart.
+    const workspaceId = workspace('maintenance-reconcile');
+    const strandedRunId = 'maint_stranded_midflight';
+    // Maintenance records are only writable for a Persona that exists durably
+    // in this workspace; the harness Persona is dependency-injected only.
+    await runWithWorkspace(workspaceId, () => saveCollectionItem(
+      ENDURING_AGENT_COLLECTIONS.personas,
+      'persona_test',
+      {
+        schemaVersion: 1,
+        id: 'persona_test',
+        name: 'Test Persona',
+        roleVersionId: 'role_version',
+        mission: 'Represent the user with concise, evidence-backed updates.',
+        lifecycleState: 'idle',
+        autonomyLevel: 'learn_hints',
+        interruptionPolicy: 'queue',
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ));
+    await runWithWorkspace(workspaceId, () => saveBehaviorMaintenanceRun(
+      BehaviorMaintenanceRunSchema.parse({
+        schemaVersion: BEHAVIOR_MAINTENANCE_RUN_SCHEMA_VERSION,
+        id: strandedRunId,
+        workspaceId,
+        personaId: 'persona_test',
+        sourceActivityIds: [],
+        sourceWindowDigest: 'a'.repeat(64),
+        behaviorSlotKey: 'primary',
+        baseRevisionId: 'revision_pinned',
+        baseContentHash: 'b'.repeat(64),
+        detectorVersion: 'activity-outcome-v2',
+        policyVersion: 'shadow-manual-v2',
+        evaluationSuiteVersion: 'instruction-only-v1',
+        state: 'queued',
+        reasonCode: 'diagnosis_pending',
+        evidenceTrust: {
+          trustedCount: 1,
+          untrustedCount: 0,
+          missingCount: 0,
+          externallyTainted: false,
+        },
+        relatedProposalIds: [],
+        attempts: 0,
+        modelCalls: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        durationMs: 0,
+        createdAt: 1,
+        updatedAt: 1,
+      }) as BehaviorMaintenanceRun,
+    ));
+
+    const harness = makeHarness(workspaceId);
+    const submission = await harness.dispatcher.submit(
+      dispatchInput('persona_test', 'maintenance-reconcile'),
+      { waitForCompletion: true, timeoutMs: 2_000 },
+    );
+    expect(submission.dispatch.state).toBe('completed');
+
+    const deadline = Date.now() + 2_000;
+    let reconciled: BehaviorMaintenanceRun | null = null;
+    for (;;) {
+      reconciled = await runWithWorkspace(
+        workspaceId,
+        () => getBehaviorMaintenanceRun(strandedRunId),
+      );
+      if (reconciled?.state === 'completed') break;
+      if (Date.now() >= deadline) {
+        throw new Error('Timed out waiting for the maintenance run to be terminalized.');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(reconciled).toMatchObject({
+      id: strandedRunId,
+      state: 'completed',
+      reasonCode: 'shadow_admission_only',
+    });
   });
 
   it('synchronizes a failed assignment before exposing the terminal dispatch', async () => {
